@@ -1,0 +1,141 @@
+{
+  "app_name": "Back-On",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "Stable, trustworthy, and functional enterprise utility with clear hierarchy and zero visual clutter.",
+  "color": {
+    "surface": "#F9F9F9",
+    "onSurface": "#1A1A1A",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#1A1A1A",
+    "surfaceTertiary": "#F2F2F2",
+    "onSurfaceTertiary": "#404040",
+    "surfaceInverse": "#1A1A1A",
+    "onSurfaceInverse": "#FFFFFF",
+    "brand": "#4A5D23",
+    "brandPrimary": "#4A5D23",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#6B7F4B",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#E5EBE0",
+    "onBrandTertiary": "#4A5D23",
+    "success": "#3F5222",
+    "onSuccess": "#FFFFFF",
+    "warning": "#C27A29",
+    "onWarning": "#FFFFFF",
+    "error": "#A33C3C",
+    "onError": "#FFFFFF",
+    "border": "#E5E5E5",
+    "borderStrong": "#CCCCCC",
+    "divider": "#EEEEEE"
+  },
+  "typography": {
+    "displayFontFamily": "Geist",
+    "textFontFamily": "Geist",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous vertical padding between form groups; tight grouping within label-to-input.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "stack_only",
+  "icon_set": "Phosphor",
+  "glassmorphism": {
+    "enabled": "true",
+    "do's": [
+      "Use on sticky bottom button containers over scrollable views",
+      "Use on bottom sheet handles/headers"
+    ],
+    "dont's": [
+      "Never use on form inputs",
+      "Never use on list cards"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Splash",
+      "purpose": "App entry and logic router (checks external file/storage for connections).",
+      "states": {
+        "loading": "Full bleed abstract architecture image with dark gradient scrim and centered app wordmark + spinner."
+      },
+      "layout": "Use a full-screen expo-image with absolute expo-linear-gradient scrim (transparent to surfaceInverse). Position 'Back-On' wordmark in the center."
+    },
+    {
+      "name": "Login",
+      "purpose": "Authenticate user to the selected enterprise server.",
+      "states": {
+        "loading": "Spinner on 'Entrar' button.",
+        "empty": "N/A",
+        "error": "Inline text below inputs or alert banner."
+      },
+      "layout": "Top safe area with 'Conexões' icon button on the right. Main container: Title ('Bem-vindo') at top, followed by 3 form fields in a single column (Empresa, Usuário, Senha). 'Empresa' must be a read-only input that opens a bottom-sheet picker of saved connections. Bottom safe area: Sticky 'Entrar' button."
+    },
+    {
+      "name": "Connections",
+      "purpose": "CRUD management of server profiles.",
+      "states": {
+        "loading": "Skeleton rows.",
+        "empty": "Centered desk photo placeholder + 'Nenhuma conexão configurada' + primary CTA.",
+        "error": "Error loading connections message."
+      },
+      "layout": "Header with 'Voltar' (Back). List of saved connections as simple cards showing Empresa and Servidor. A 'Nova Conexão' button sticky at bottom or floating. A modal/bottom sheet opens to add/edit connections containing 'Empresa' and 'Servidor' text inputs + 'Salvar' button."
+    }
+  ],
+  "images": {
+    "splash_bg": {
+      "url": "https://images.unsplash.com/photo-1531972111231-7482a960e109?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1NzZ8MHwxfHNlYXJjaHwyfHxtaW5pbWFsaXN0JTIwbW9kZXJuJTIwZ2xhc3MlMjBvZmZpY2UlMjBhcmNoaXRlY3R1cmV8ZW58MHx8fHwxNzgxMTE2MTU3fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Minimalist modern glass architecture"
+    },
+    "empty_connections": {
+      "url": "https://images.unsplash.com/photo-1449247709967-d4461a6a6103?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2Mzl8MHwxfHNlYXJjaHwxfHxjbGVhbiUyMGVtcHR5JTIwZGVzayUyMG1pbmltYWxpc3R8ZW58MHx8fHwxNzgxMTE2MTU3fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "Clean empty desk"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Strictly follow the <Colors> rule: No blue or purple. The primary brand color is a moss/sage green (#4A5D23). Default fallback for missing hues is near-black or grey.",
+    "Implement AsyncStorage or Expo FileSystem to act as the 'external file' to save Connections (Empresa, Servidor).",
+    "App Flow Logic: On Splash mount, read connections. If connections array is empty -> Auto-navigate to Connections screen. If connections exist -> Navigate to Login.",
+    "Login Screen: The 'Empresa' field is NOT a free-text input. It must display the selected connection from the saved list. When tapped, open a BottomSheet or Picker to select one.",
+    "Login Screen: Place the 'Conexões' icon button (e.g. Phosphor 'sliders' or 'hard-drives') prominently (either header right or inline near Empresa field) so users can manage servers.",
+    "Connections Screen: Support full CRUD. List saved servers. Provide a way to Add new (Empresa name, Servidor URL) and Delete existing.",
+    "Ensure max font weight is 500 across all text. Let font size dictate hierarchy.",
+    "Wrap screens with scrollable content in a container with a sticky button pinned at the bottom safe-area, utilizing glassmorphism where applicable.",
+    "All form fields should have labels placed above the inputs. Do not use floating labels."
+  ],
+  "haptics": {
+    "primary_button_press": "impactLight",
+    "connection_selected": "selection",
+    "connection_deleted": "notificationWarning",
+    "connection_saved": "notificationSuccess"
+  }
+}
