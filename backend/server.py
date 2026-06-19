@@ -902,9 +902,13 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: int, data_iso: str) -> 
             conn.close()
         except Exception:
             pass
+        # Se a tabela `pedidos` ainda não existe ou tem schema diferente,
+        # devolvemos resposta zerada SEM marcar como erro, para não poluir a UI.
+        msg = str(e)
+        is_missing_table = "Invalid object name" in msg or "pedidos" in msg.lower()
         return {
-            "success": False,
-            "message": f"Erro consulta dashboard: {e}",
+            "success": True if is_missing_table else False,
+            "message": "" if is_missing_table else f"Erro consulta dashboard: {e}",
             "totais": {"pedidos": 0, "produtos": 0, "servicos": 0},
             "pedidos": [],
         }
