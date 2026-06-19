@@ -341,6 +341,42 @@ export default function ClienteFormScreen() {
     setCgcCpf(maskCgcCpf(txt));
   };
 
+  // -------- Busca cliente existente por CGC/CPF (ao perder foco / blur).
+  // Se encontrado e ainda estamos em novo cadastro, oferece carregar para edição.
+  const buscarPorCgc = useCallback(async () => {
+    if (editing) return; // já editando, nada a fazer
+    const raw = onlyAlnumUpper(cgcCpf);
+    if (!raw) return;
+    // Só busca se passou pela validação (CPF 11 ou CNPJ 14)
+    const isValid =
+      (raw.length === 11 && validCPF(raw)) ||
+      (raw.length === 14 && validCNPJ(raw));
+    if (!isValid) return;
+    if (!conn) return;
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const url =
+        `${base}/api/clientes/find/by-cgc` +
+        `?servidor=${encodeURIComponent(conn.servidor)}` +
+        `&banco=${encodeURIComponent(conn.banco)}` +
+        `&cgc=${encodeURIComponent(raw)}`;
+      const r = await fetch(url);
+      const j = await r.json();
+      if (j?.success && j?.found && j?.codigo) {
+        // Recarrega a tela em modo edição (substitui rota — assim o useEffect inicial roda)
+        showToast(`Cliente já cadastrado: #${j.codigo}. Carregando...`, "info");
+        setTimeout(() => {
+          router.replace({
+            pathname: "/cliente-form",
+            params: { codigo: String(j.codigo) },
+          });
+        }, 600);
+      }
+    } catch {
+      /* silencioso — busca é opcional */
+    }
+  }, [cgcCpf, conn, editing, router, showToast]);
+
   const handleCepChange = (txt: string) => {
     const d = txt.replace(/\D/g, "").slice(0, 8);
     setEndereco((prev) => ({ ...prev, cep: d }));
@@ -530,6 +566,7 @@ export default function ClienteFormScreen() {
               <TextInput
                 value={cgcCpf}
                 onChangeText={handleCgcCpfChange}
+                onBlur={buscarPorCgc}
                 placeholder="CPF (11) ou CNPJ (14, aceita letras)"
                 placeholderTextColor={colors.muted}
                 style={styles.input}

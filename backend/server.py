@@ -160,8 +160,9 @@ def _build_master_session(empresa: str, servidor: str, banco: str) -> LoginRespo
             "nome": "KONTACTO Sistemas",
             "administrador": 1,
             "administrador_label": "Sim",
-            "classe": 9,
-            "classe_label": "Administrador",
+            "classe": 0,
+            "classe_descricao": "Master",
+            "classe_label": "0 - Master",
             "controla_carteira": False,
             "situacao": "A",
             "situacao_label": "Ativo",
@@ -197,11 +198,18 @@ def _enrich_usuario(row: Optional[dict]) -> Optional[dict]:
     out = dict(row)
     if "administrador" in out and out["administrador"] is not None:
         out["administrador_label"] = "Sim" if int(out["administrador"]) == 1 else "Não"
-    # Descrição do grupo vem do JOIN classes_usuarios (campo classe_descricao)
-    if out.get("classe_descricao"):
-        out["classe_label"] = str(out["classe_descricao"]).strip()
-    elif "classe" in out and out["classe"] is not None:
-        out["classe_label"] = f"Classe {out['classe']}"
+    # Descrição do grupo vem do JOIN classes_usuarios (campo classe_descricao).
+    # Monta classe_label no formato "código - descrição" (ex: "3 - SÓCIO").
+    descr = (out.get("classe_descricao") or "").strip() if out.get("classe_descricao") else ""
+    classe_num = out.get("classe")
+    if descr:
+        out["classe_descricao"] = descr  # normaliza (strip)
+        if classe_num is not None:
+            out["classe_label"] = f"{classe_num} - {descr}"
+        else:
+            out["classe_label"] = descr
+    elif classe_num is not None:
+        out["classe_label"] = f"Classe {classe_num}"
     return out
 
 
@@ -479,6 +487,52 @@ def _validate_cgc_cpf(value: str) -> tuple[bool, str]:
     return False, "CGC/CPF deve ter 11 (CPF) ou 14 (CNPJ) caracteres."
 
 
+# ---------- Descobre tamanhos máximos das colunas dinamicamente ----------
+_COLUMN_SIZES_CACHE: dict[tuple[str, str], dict[str, int]] = {}
+
+
+def _get_col_sizes(conn, banco: str, table: str) -> dict[str, int]:
+    """Retorna {coluna: tamanho_máximo} para colunas char/varchar/nchar/nvarchar.
+    Resultado em cache por (banco, tabela). -1 indica nvarchar(MAX)."""
+    key = (banco.lower(), table.lower())
+    if key in _COLUMN_SIZES_CACHE:
+        return _COLUMN_SIZES_CACHE[key]
+    sizes: dict[str, int] = {}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT COLUMN_NAME, CHARACTER_MAXIMUM_LENGTH "
+            "FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_NAME = %s AND DATA_TYPE IN ('varchar','nvarchar','char','nchar')",
+            (table,),
+        )
+        for r in cur.fetchall():
+            cname = (r.get("COLUMN_NAME") or "").lower()
+            mlen = r.get("CHARACTER_MAXIMUM_LENGTH")
+            if cname:
+                sizes[cname] = int(mlen) if mlen is not None else -1
+        cur.close()
+    except Exception:
+        pass
+    _COLUMN_SIZES_CACHE[key] = sizes
+    return sizes
+
+
+def _trunc(value, sizes: dict[str, int], col: str, fallback: int = 60):
+    """Trunca valor para o tamanho máximo da coluna (ou fallback se desconhecida)."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return value
+    s = value
+    maxlen = sizes.get(col.lower())
+    if maxlen is None:
+        maxlen = fallback
+    elif maxlen < 0:
+        return s  # nvarchar(MAX) — sem limite
+    return s[:maxlen]
+
+
 def _list_clientes_sync(req: ClientesRequest) -> dict:
     try:
         conn = _open_conn(req.servidor, req.banco)
@@ -624,6 +678,45 @@ async def get_cliente(codigo: int, servidor: str, banco: str):
     return await asyncio.to_thread(_get_cliente_sync, servidor, banco, codigo)
 
 
+# Busca cliente por CGC/CPF (alfanumérico, sem máscara). Retorna codigo se achar.
+def _find_by_cgc_sync(servidor: str, banco: str, cgc: str) -> dict:
+    raw = _only_alnum_upper(cgc)
+    if not raw:
+        return {"success": False, "message": "CGC/CPF vazio."}
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT TOP 1 codigo, nome FROM cliente WHERE cgc_cpf = %s",
+            (raw,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return {"success": True, "found": False}
+        return {
+            "success": True,
+            "found": True,
+            "codigo": int(row["codigo"]),
+            "nome": (row.get("nome") or "").strip(),
+        }
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+@api_router.get("/clientes/find/by-cgc")
+async def find_cliente_by_cgc(servidor: str, banco: str, cgc: str):
+    return await asyncio.to_thread(_find_by_cgc_sync, servidor, banco, cgc)
+
+
 # =====================================================================
 # CREATE / UPDATE cliente (cliente + cliente_end + cliente_tel)
 # =====================================================================
@@ -691,10 +784,15 @@ def _save_cliente_sync(
     try:
         cur = conn.cursor()
 
+        # Descobre tamanhos reais das colunas (cache por (banco, tabela)).
+        sz_cli = _get_col_sizes(conn, req.banco, "cliente")
+        sz_end = _get_col_sizes(conn, req.banco, "cliente_end")
+        sz_tel = _get_col_sizes(conn, req.banco, "cliente_tel")
+
         # Telefone primário (replicado nos campos inline ddd_cli/telefone_cli)
         primary = telefones[0] if telefones else None
-        ddd_cli = ((primary.ddd or "").strip()[:4]) if primary else ""
-        tel_cli = ((primary.tel or "").strip()[:10]) if primary else ""
+        ddd_cli = _trunc((primary.ddd or "").strip(), sz_cli, "ddd_cli", 4) if primary else ""
+        tel_cli = _trunc((primary.tel or "").strip(), sz_cli, "telefone_cli", 10) if primary else ""
 
         usuario_cad = req.usuario_cadastro if req.usuario_cadastro is not None else req.vendedor
         usuario_alt = req.usuario_alteracao if req.usuario_alteracao is not None else req.vendedor
@@ -708,16 +806,16 @@ def _save_cliente_sync(
                 "OUTPUT INSERTED.codigo "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CAST(GETDATE() AS DATE), 'A', %s, %s)",
                 (
-                    (cgc or "")[:14] or None,
-                    nome[:60],
-                    ((req.e_mail or "").strip()[:60]) or None,
-                    ((req.inscre or "").strip()[:15]) or None,
-                    ((req.tipo or "").strip()[:2]) or None,
+                    _trunc(cgc, sz_cli, "cgc_cpf", 14) or None,
+                    _trunc(nome, sz_cli, "nome", 60),
+                    _trunc((req.e_mail or "").strip(), sz_cli, "e_mail", 60) or None,
+                    _trunc((req.inscre or "").strip(), sz_cli, "inscr_est", 15) or None,
+                    _trunc((req.tipo or "").strip(), sz_cli, "cliente_forn", 2) or None,
                     1 if req.aceita_email else 0,
                     req.vendedor,
                     usuario_cad,
-                    (ddd_cli or "")[:4] or None,
-                    (tel_cli or "")[:10] or None,
+                    ddd_cli or None,
+                    tel_cli or None,
                 ),
             )
             new_id_row = cur.fetchone()
@@ -736,16 +834,16 @@ def _save_cliente_sync(
                 " ddd_cli=%s, telefone_cli=%s "
                 "WHERE codigo=%s",
                 (
-                    (cgc or "")[:14] or None,
-                    nome[:60],
-                    ((req.e_mail or "").strip()[:60]) or None,
-                    ((req.inscre or "").strip()[:15]) or None,
-                    ((req.tipo or "").strip()[:2]) or None,
+                    _trunc(cgc, sz_cli, "cgc_cpf", 14) or None,
+                    _trunc(nome, sz_cli, "nome", 60),
+                    _trunc((req.e_mail or "").strip(), sz_cli, "e_mail", 60) or None,
+                    _trunc((req.inscre or "").strip(), sz_cli, "inscr_est", 15) or None,
+                    _trunc((req.tipo or "").strip(), sz_cli, "cliente_forn", 2) or None,
                     1 if req.aceita_email else 0,
                     req.vendedor,
                     usuario_alt,
-                    (ddd_cli or "")[:4] or None,
-                    (tel_cli or "")[:10] or None,
+                    ddd_cli or None,
+                    tel_cli or None,
                     codigo,
                 ),
             )
@@ -770,11 +868,11 @@ def _save_cliente_sync(
                 (
                     cliente_codigo,
                     int(endereco.tipo or 0),
-                    (endereco.endereco or "").strip()[:60] or None,
+                    _trunc((endereco.endereco or "").strip(), sz_end, "endereco", 60) or None,
                     endereco.numero,
-                    (endereco.complemento or "").strip()[:30] or None,
-                    (endereco.bairro or "").strip()[:35] or None,
-                    (endereco.cidade or "").strip()[:35] or None,
+                    _trunc((endereco.complemento or "").strip(), sz_end, "complemento", 30) or None,
+                    _trunc((endereco.bairro or "").strip(), sz_end, "bairro", 35) or None,
+                    _trunc((endereco.cidade or "").strip(), sz_end, "cidade", 35) or None,
                     uf or None,
                     cep or None,
                 ),
@@ -782,8 +880,8 @@ def _save_cliente_sync(
 
         # INSERT telefones (até 3)
         for tel in telefones[:3]:
-            ddd_n = (tel.ddd or "").strip()[:4]
-            tel_n = (tel.tel or "").strip()[:10]
+            ddd_n = _trunc((tel.ddd or "").strip(), sz_tel, "ddd", 4)
+            tel_n = _trunc((tel.tel or "").strip(), sz_tel, "tel", 10)
             if not tel_n:
                 continue
             cur.execute(
@@ -793,7 +891,7 @@ def _save_cliente_sync(
                     cliente_codigo,
                     ddd_n or "21",
                     tel_n,
-                    (tel.descricao or "").strip()[:15] or None,
+                    _trunc((tel.descricao or "").strip(), sz_tel, "descricao", 15) or None,
                 ),
             )
 
