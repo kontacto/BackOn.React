@@ -136,7 +136,12 @@ export default function ClientesScreen() {
         }
         renderItem={({ item }) => (
           <Pressable
-            onPress={() => router.push(`/cliente-form?codigo=${item.codigo}`)}
+            onPress={() =>
+              router.push({
+                pathname: "/cliente-form",
+                params: { codigo: String(item.codigo) },
+              })
+            }
             style={({ pressed }) => [styles.card, pressed && { opacity: 0.7 }]}
             testID={`cliente-${item.codigo}`}
           >

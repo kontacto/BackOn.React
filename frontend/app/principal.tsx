@@ -13,6 +13,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { Session, clearSession, getSession } from "@/src/utils/storage/session";
+import { listConnections } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 function pickFirst(obj: Record<string, unknown> | null | undefined, keys: string[]): string | null {
@@ -26,35 +27,25 @@ function pickFirst(obj: Record<string, unknown> | null | undefined, keys: string
   return null;
 }
 
-function formatValue(v: unknown): string {
-  if (v === null || v === undefined) return "—";
-  if (typeof v === "boolean") return v ? "Sim" : "Não";
-  return String(v);
+function formatBRL(v: number): string {
+  return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-function entries(obj: Record<string, unknown> | null | undefined): [string, unknown][] {
-  if (!obj) return [];
-  // Esconder: senha (segurança), campos enriquecidos auxiliares (já mostrados no resumo),
-  // e DDD separados (mostrados junto do telefone como 'celular'/'telefone')
-  const hidden = new Set([
-    "senha",
-    "administrador_label",
-    "classe_label",
-    "situacao_label",
-    "ddd_prof",
-    "ddd_cel_prof",
-  ]);
-  return Object.entries(obj).filter(([k]) => !hidden.has(k.toLowerCase()));
-}
+type DashboardTotals = { pedidos: number; produtos: number; servicos: number };
+type DashboardPedido = { pedido: number; cliente: string; valor: number };
 
 export default function PrincipalScreen() {
   const router = useRouter();
   const [session, setSessionState] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showAllUsuario, setShowAllUsuario] = useState(false);
-  const [showAllFuncionario, setShowAllFuncionario] = useState(false);
 
-  const load = useCallback(async () => {
+  // Dashboard
+  const [totais, setTotais] = useState<DashboardTotals>({ pedidos: 0, produtos: 0, servicos: 0 });
+  const [pedidos, setPedidos] = useState<DashboardPedido[]>([]);
+  const [dashLoading, setDashLoading] = useState(false);
+  const [dashError, setDashError] = useState<string | null>(null);
+
+  const loadSession = useCallback(async () => {
     setLoading(true);
     const s = await getSession();
     if (!s) {
@@ -65,15 +56,54 @@ export default function PrincipalScreen() {
     setLoading(false);
   }, [router]);
 
+  const loadDashboard = useCallback(async (s: Session) => {
+    setDashLoading(true);
+    setDashError(null);
+    try {
+      const conns = await listConnections();
+      const conn = conns.find((c) => c.empresa === s.empresa);
+      if (!conn) {
+        setDashError("Conexão não encontrada.");
+        return;
+      }
+      const vendedor = s.funcionario?.codigo_int;
+      if (vendedor === undefined || vendedor === null) {
+        setDashError("Vendedor não identificado na sessão.");
+        return;
+      }
+      const apiBase = conn.api.replace(/\/+$/, "");
+      const url =
+        `${apiBase}/api/dashboard/me` +
+        `?servidor=${encodeURIComponent(conn.servidor)}` +
+        `&banco=${encodeURIComponent(conn.banco)}` +
+        `&vendedor=${encodeURIComponent(String(vendedor))}`;
+      const r = await fetch(url);
+      const j = await r.json();
+      if (!j?.success) {
+        setDashError(j?.message || "Não foi possível obter os totais.");
+      }
+      setTotais(j?.totais || { pedidos: 0, produtos: 0, servicos: 0 });
+      setPedidos(Array.isArray(j?.pedidos) ? j.pedidos : []);
+    } catch (e) {
+      setDashError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setDashLoading(false);
+    }
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [load])
+      loadSession();
+    }, [loadSession])
   );
 
   useEffect(() => {
-    load();
-  }, [load]);
+    loadSession();
+  }, [loadSession]);
+
+  useEffect(() => {
+    if (session) loadDashboard(session);
+  }, [session, loadDashboard]);
 
   const handleLogout = async () => {
     await clearSession();
@@ -82,61 +112,18 @@ export default function PrincipalScreen() {
 
   const displayName = useMemo(() => {
     if (!session) return "";
-    const funcName = pickFirst(session.funcionario, [
-      "nome",
-      "nome_guerra",
-      "nome_completo",
-      "apelido",
-    ]);
+    const funcName = pickFirst(session.funcionario, ["nome", "nome_guerra", "nome_completo", "apelido"]);
     const usrName = pickFirst(session.usuario, ["nome", "usuario"]);
     return funcName || usrName || "";
   }, [session]);
-
-  const cargo = useMemo(
-    () =>
-      pickFirst(session?.funcionario, [
-        "cod_funcao",
-        "codcargo",
-        "cargo",
-        "funcao",
-        "setor",
-      ]) || null,
-    [session]
-  );
 
   const nomeGuerra = useMemo(
     () => pickFirst(session?.funcionario, ["nome_guerra"]) || null,
     [session]
   );
 
-  const situacao = useMemo(
-    () =>
-      pickFirst(session?.funcionario, ["situacao_label", "situacao"]) || null,
-    [session]
-  );
-
-  const celular = useMemo(
-    () => pickFirst(session?.funcionario, ["celular", "tel_cel_prof"]) || null,
-    [session]
-  );
-
-  const email = useMemo(
-    () => pickFirst(session?.funcionario, ["email"]) || null,
-    [session]
-  );
-
-  const empresaCodigo = useMemo(
-    () => pickFirst(session?.funcionario, ["empresa"]) || null,
-    [session]
-  );
-
   const classe = useMemo(
     () => pickFirst(session?.usuario, ["classe_label", "classe"]) || null,
-    [session]
-  );
-
-  const isAdmin = useMemo(
-    () => pickFirst(session?.usuario, ["administrador_label"]) === "Sim",
     [session]
   );
 
@@ -150,13 +137,6 @@ export default function PrincipalScreen() {
     );
   }
 
-  const usuarioEntries = entries(session.usuario);
-  const funcionarioEntries = entries(session.funcionario);
-  const usuarioShown = showAllUsuario ? usuarioEntries : usuarioEntries.slice(0, 6);
-  const funcionarioShown = showAllFuncionario
-    ? funcionarioEntries
-    : funcionarioEntries.slice(0, 6);
-
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="principal-screen">
       <View style={styles.header}>
@@ -168,7 +148,7 @@ export default function PrincipalScreen() {
         </View>
         <Pressable
           onPress={handleLogout}
-          style={({ pressed }) => [styles.logoutBtn, pressed && styles.pressed]}
+          style={({ pressed }) => [styles.logoutBtn, pressed && { opacity: 0.7 }]}
           hitSlop={12}
           testID="principal-logout-button"
         >
@@ -178,14 +158,10 @@ export default function PrincipalScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
+        {/* ======== Boas-vindas com classe (grupo) do usuário ======== */}
         <View style={styles.hero} testID="principal-welcome">
           {session.logo ? (
-            <Image
-              source={{ uri: session.logo }}
-              style={styles.avatar}
-              resizeMode="cover"
-              testID="principal-logo"
-            />
+            <Image source={{ uri: session.logo }} style={styles.avatar} resizeMode="cover" testID="principal-logo" />
           ) : (
             <View style={styles.avatar}>
               <Ionicons name="person" size={28} color={colors.onBrandPrimary} />
@@ -200,79 +176,17 @@ export default function PrincipalScreen() {
               <Text style={styles.heroSub}>@{nomeGuerra}</Text>
             ) : null}
             {classe ? (
-              <Text style={styles.heroSub}>Grupo do Sistema: {classe}</Text>
-            ) : cargo ? (
-              <Text style={styles.heroSub}>Função: {cargo}</Text>
+              <Text style={styles.heroSub} testID="principal-classe">
+                Grupo: {classe}
+              </Text>
             ) : null}
           </View>
         </View>
 
-        {/* Resumo (campos principais do banco BackOn) */}
-        <View style={styles.summary} testID="principal-summary">
-          {situacao ? (
-            <View style={styles.summaryRow}>
-              <Ionicons name="checkmark-circle-outline" size={14} color={colors.brandPrimary} />
-              <Text style={styles.summaryLabel}>Situação</Text>
-              <Text style={styles.summaryValue}>{situacao}</Text>
-            </View>
-          ) : null}
-          {classe ? (
-            <View style={styles.summaryRow}>
-              <Ionicons name="ribbon-outline" size={14} color={colors.brandPrimary} />
-              <Text style={styles.summaryLabel}>Classe</Text>
-              <Text style={styles.summaryValue}>{classe}</Text>
-            </View>
-          ) : null}
-          {isAdmin ? (
-            <View style={styles.summaryRow}>
-              <Ionicons name="shield-checkmark-outline" size={14} color={colors.success} />
-              <Text style={styles.summaryLabel}>Acesso</Text>
-              <Text style={[styles.summaryValue, { color: colors.success }]}>Administrador</Text>
-            </View>
-          ) : null}
-          {empresaCodigo ? (
-            <View style={styles.summaryRow}>
-              <Ionicons name="business-outline" size={14} color={colors.brandPrimary} />
-              <Text style={styles.summaryLabel}>Empresa</Text>
-              <Text style={styles.summaryValue}>#{empresaCodigo}</Text>
-            </View>
-          ) : null}
-          {email ? (
-            <View style={styles.summaryRow}>
-              <Ionicons name="mail-outline" size={14} color={colors.brandPrimary} />
-              <Text style={styles.summaryLabel}>E-mail</Text>
-              <Text style={styles.summaryValue} numberOfLines={1}>{email}</Text>
-            </View>
-          ) : null}
-          {celular ? (
-            <View style={styles.summaryRow}>
-              <Ionicons name="call-outline" size={14} color={colors.brandPrimary} />
-              <Text style={styles.summaryLabel}>Celular</Text>
-              <Text style={styles.summaryValue}>{celular}</Text>
-            </View>
-          ) : null}
-        </View>
-
-        <View style={styles.connRow}>
-          <View style={styles.connItem}>
-            <Ionicons name="server-outline" size={14} color={colors.muted} />
-            <Text style={styles.connText} numberOfLines={1}>
-              {session.server}
-            </Text>
-          </View>
-          <View style={styles.connItem}>
-            <Ionicons name="cube-outline" size={14} color={colors.muted} />
-            <Text style={styles.connText} numberOfLines={1}>
-              {session.database}
-            </Text>
-          </View>
-        </View>
-
         <Text style={styles.sectionTitle}>Tela Principal</Text>
-        <Text style={styles.sectionSub}>
-          Painel de controle. Os módulos do sistema serão exibidos abaixo.
-        </Text>
+        <Text style={styles.sectionSub}>Painel de controle. Os módulos do sistema são exibidos abaixo.</Text>
 
+        {/* ======== Tiles dos módulos ======== */}
         <View style={styles.tilesGrid}>
           {[
             { label: "Clientes", icon: "people-outline" as const, route: "/clientes" as const },
@@ -296,72 +210,62 @@ export default function PrincipalScreen() {
           ))}
         </View>
 
-        <View style={styles.card} testID="principal-usuario-card">
-          <View style={styles.cardHeader}>
-            <Ionicons name="id-card-outline" size={18} color={colors.brandPrimary} />
-            <Text style={styles.cardTitle}>Usuário (usuarioObj)</Text>
+        {/* ======== Totais do dia ======== */}
+        <Text style={styles.sectionTitle}>Totais de Hoje</Text>
+        <View style={styles.totalsRow} testID="principal-totals">
+          <View style={[styles.totalCard, { borderLeftColor: colors.brandPrimary }]}>
+            <Text style={styles.totalLabel}>Pedidos</Text>
+            <Text style={styles.totalValue} testID="totals-pedidos">
+              {dashLoading ? "…" : totais.pedidos}
+            </Text>
           </View>
-          {usuarioEntries.length === 0 ? (
-            <Text style={styles.emptyHint}>Sem dados.</Text>
-          ) : (
-            <>
-              {usuarioShown.map(([k, v]) => (
-                <View key={k} style={styles.kvRow}>
-                  <Text style={styles.kvKey}>{k}</Text>
-                  <Text style={styles.kvValue} numberOfLines={2}>
-                    {formatValue(v)}
-                  </Text>
-                </View>
-              ))}
-              {usuarioEntries.length > 6 ? (
-                <Pressable
-                  onPress={() => setShowAllUsuario((v) => !v)}
-                  style={({ pressed }) => [styles.toggle, pressed && styles.pressed]}
-                  testID="principal-usuario-toggle"
-                >
-                  <Text style={styles.toggleText}>
-                    {showAllUsuario ? "Mostrar menos" : `Mostrar mais (${usuarioEntries.length - 6})`}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </>
-          )}
+          <View style={[styles.totalCard, { borderLeftColor: colors.success }]}>
+            <Text style={styles.totalLabel}>Produtos</Text>
+            <Text style={[styles.totalValue, { fontSize: 16 }]} testID="totals-produtos">
+              {dashLoading ? "…" : formatBRL(totais.produtos)}
+            </Text>
+          </View>
+          <View style={[styles.totalCard, { borderLeftColor: colors.warning }]}>
+            <Text style={styles.totalLabel}>Serviços</Text>
+            <Text style={[styles.totalValue, { fontSize: 16 }]} testID="totals-servicos">
+              {dashLoading ? "…" : formatBRL(totais.servicos)}
+            </Text>
+          </View>
         </View>
 
-        <View style={styles.card} testID="principal-funcionario-card">
-          <View style={styles.cardHeader}>
-            <Ionicons name="briefcase-outline" size={18} color={colors.brandPrimary} />
-            <Text style={styles.cardTitle}>Funcionário (funcionarioObj)</Text>
+        {/* ======== Listagem de Pedidos do dia ======== */}
+        <View style={styles.pedidosHeader}>
+          <Text style={styles.sectionTitle}>Pedidos de Hoje</Text>
+          {dashLoading ? <ActivityIndicator size="small" color={colors.brandPrimary} /> : null}
+        </View>
+
+        {dashError ? (
+          <View style={styles.errorBox} testID="principal-dash-error">
+            <Ionicons name="alert-circle-outline" size={16} color={colors.error} />
+            <Text style={styles.errorText}>{dashError}</Text>
           </View>
-          {funcionarioEntries.length === 0 ? (
-            <Text style={styles.emptyHint}>
-              Nenhum funcionário vinculado a este usuário (funcionarios.nome_guerra = {""}
-              {(session.usuario?.usuario as string) || "?"}).
-            </Text>
+        ) : null}
+
+        <View style={styles.pedidosCard} testID="principal-pedidos-list">
+          <View style={styles.pedidosHead}>
+            <Text style={[styles.pedidoCell, { flex: 0.7 }]}>Pedido</Text>
+            <Text style={[styles.pedidoCell, { flex: 2 }]}>Cliente</Text>
+            <Text style={[styles.pedidoCell, { flex: 1.2, textAlign: "right" }]}>Valor</Text>
+          </View>
+          {pedidos.length === 0 && !dashLoading ? (
+            <Text style={styles.empty}>Nenhum pedido hoje.</Text>
           ) : (
-            <>
-              {funcionarioShown.map(([k, v]) => (
-                <View key={k} style={styles.kvRow}>
-                  <Text style={styles.kvKey}>{k}</Text>
-                  <Text style={styles.kvValue} numberOfLines={2}>
-                    {formatValue(v)}
-                  </Text>
-                </View>
-              ))}
-              {funcionarioEntries.length > 6 ? (
-                <Pressable
-                  onPress={() => setShowAllFuncionario((v) => !v)}
-                  style={({ pressed }) => [styles.toggle, pressed && styles.pressed]}
-                  testID="principal-funcionario-toggle"
-                >
-                  <Text style={styles.toggleText}>
-                    {showAllFuncionario
-                      ? "Mostrar menos"
-                      : `Mostrar mais (${funcionarioEntries.length - 6})`}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </>
+            pedidos.map((p) => (
+              <View key={p.pedido} style={styles.pedidoRow} testID={`pedido-${p.pedido}`}>
+                <Text style={[styles.pedidoCellValue, { flex: 0.7 }]}>#{p.pedido}</Text>
+                <Text style={[styles.pedidoCellValue, { flex: 2 }]} numberOfLines={1}>
+                  {p.cliente || "—"}
+                </Text>
+                <Text style={[styles.pedidoCellValue, { flex: 1.2, textAlign: "right", fontWeight: "500" }]}>
+                  {formatBRL(p.valor)}
+                </Text>
+              </View>
+            ))
           )}
         </View>
       </ScrollView>
@@ -373,176 +277,84 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.surface },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   header: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: spacing.xl,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.md,
-    backgroundColor: colors.brandPrimary,
-    gap: spacing.md,
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: spacing.xl, paddingTop: spacing.md, paddingBottom: spacing.md,
+    backgroundColor: colors.brandPrimary, gap: spacing.md,
   },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: "500",
-    color: colors.onBrandPrimary,
-    letterSpacing: -0.3,
-  },
-  headerSub: {
-    fontSize: 12,
-    color: "rgba(255,255,255,0.75)",
-    marginTop: 2,
-  },
+  headerTitle: { fontSize: 20, fontWeight: "500", color: colors.onBrandPrimary, letterSpacing: -0.3 },
+  headerSub: { fontSize: 12, color: "rgba(255,255,255,0.75)", marginTop: 2 },
   logoutBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
     backgroundColor: "rgba(255,255,255,0.15)",
     borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.25)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.25)",
   },
   logoutLabel: { color: colors.onBrandPrimary, fontWeight: "500", fontSize: 13 },
-  pressed: { opacity: 0.7 },
-  scroll: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.xxl,
-  },
+  scroll: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, paddingBottom: spacing.xxl },
   hero: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
+    flexDirection: "row", alignItems: "center", gap: spacing.md,
+    backgroundColor: colors.surfaceSecondary, borderRadius: radius.lg,
+    padding: spacing.lg, borderWidth: 1, borderColor: colors.border,
   },
   avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 56, height: 56, borderRadius: 28,
     backgroundColor: colors.brandPrimary,
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: "center", justifyContent: "center",
   },
-  welcome: { fontSize: 13, color: colors.muted },
-  heroName: {
-    fontSize: 22,
-    fontWeight: "500",
-    color: colors.onSurface,
-    letterSpacing: -0.3,
-  },
-  heroSub: { marginTop: 2, fontSize: 13, color: colors.onSurfaceTertiary },
-  summary: {
-    marginTop: spacing.md,
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-  },
-  summaryRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 8,
-    gap: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.divider,
-  },
-  summaryLabel: {
-    fontSize: 12,
-    color: colors.muted,
-    width: 80,
-  },
-  summaryValue: {
-    flex: 1,
-    fontSize: 13,
-    color: colors.onSurface,
-    fontWeight: "500",
-    textAlign: "right",
-  },
-  connRow: {
-    marginTop: spacing.md,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.lg,
-    paddingHorizontal: spacing.sm,
-  },
-  connItem: { flexDirection: "row", alignItems: "center", gap: 6 },
-  connText: { fontSize: 12, color: colors.muted, maxWidth: 250 },
+  welcome: { fontSize: 12, color: colors.muted },
+  heroName: { fontSize: 18, fontWeight: "500", color: colors.onSurface, marginTop: 2 },
+  heroSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
   sectionTitle: {
-    marginTop: spacing.xl,
-    fontSize: 18,
-    fontWeight: "500",
-    color: colors.onSurface,
+    fontSize: 13, fontWeight: "500", color: colors.onSurface,
+    marginTop: spacing.lg, marginBottom: spacing.sm,
+    textTransform: "uppercase", letterSpacing: 0.5,
   },
-  sectionSub: {
-    marginTop: 4,
-    fontSize: 13,
-    color: colors.onSurfaceTertiary,
-  },
-  tilesGrid: {
-    marginTop: spacing.md,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.md,
-  },
+  sectionSub: { fontSize: 13, color: colors.muted, marginBottom: spacing.md },
+  tilesGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md },
   tile: {
-    flexBasis: "47%",
-    flexGrow: 1,
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.md,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
+    width: "47%", backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md, padding: spacing.md,
+    borderWidth: 1, borderColor: colors.border, minHeight: 92,
+    justifyContent: "space-between",
   },
   tileIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.md,
+    width: 36, height: 36, borderRadius: radius.md,
     backgroundColor: colors.brandTertiary,
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: "center", justifyContent: "center", marginBottom: spacing.sm,
+  },
+  tileLabel: { fontSize: 14, fontWeight: "500", color: colors.onSurface },
+  tileHint: { fontSize: 11, color: colors.muted, marginTop: 2 },
+  totalsRow: { flexDirection: "row", gap: spacing.sm },
+  totalCard: {
+    flex: 1, backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md, padding: spacing.md,
+    borderWidth: 1, borderColor: colors.border,
+    borderLeftWidth: 4,
+  },
+  totalLabel: { fontSize: 11, color: colors.muted, textTransform: "uppercase", letterSpacing: 0.5 },
+  totalValue: { fontSize: 22, fontWeight: "600", color: colors.onSurface, marginTop: 4 },
+  pedidosHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  pedidosCard: {
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
+    overflow: "hidden",
+  },
+  pedidosHead: {
+    flexDirection: "row", paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+    backgroundColor: colors.brandTertiary, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  pedidoCell: { fontSize: 11, color: colors.brandPrimary, fontWeight: "500", textTransform: "uppercase", letterSpacing: 0.4 },
+  pedidoRow: {
+    flexDirection: "row", paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+    borderBottomWidth: 1, borderBottomColor: colors.border, alignItems: "center",
+  },
+  pedidoCellValue: { fontSize: 13, color: colors.onSurface },
+  empty: { textAlign: "center", color: colors.muted, paddingVertical: spacing.lg, fontSize: 13 },
+  errorBox: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    backgroundColor: "#fdecea", padding: spacing.sm, borderRadius: radius.sm,
     marginBottom: spacing.sm,
   },
-  tileLabel: { fontSize: 15, fontWeight: "500", color: colors.onSurface },
-  tileHint: { fontSize: 11, color: colors.muted, marginTop: 2 },
-  card: {
-    marginTop: spacing.xl,
-    backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  cardHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  cardTitle: { fontSize: 15, fontWeight: "500", color: colors.onSurface },
-  emptyHint: { fontSize: 13, color: colors.muted, lineHeight: 18 },
-  kvRow: {
-    flexDirection: "row",
-    paddingVertical: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.divider,
-  },
-  kvKey: { width: 130, fontSize: 12, color: colors.muted, paddingRight: spacing.sm },
-  kvValue: { flex: 1, fontSize: 13, color: colors.onSurface },
-  toggle: {
-    marginTop: spacing.md,
-    alignSelf: "flex-start",
-    paddingHorizontal: spacing.md,
-    paddingVertical: 8,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.brandPrimary,
-  },
-  toggleText: { color: colors.brandPrimary, fontSize: 12, fontWeight: "500" },
+  errorText: { color: colors.error, fontSize: 12, flex: 1 },
 });

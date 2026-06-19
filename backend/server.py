@@ -816,6 +816,118 @@ async def update_cliente(codigo: int, req: ClienteCreateRequest):
     )
 
 
+# =====================================================================
+# Dashboard — totais do dia + lista de pedidos do vendedor
+# =====================================================================
+def _dashboard_sync(servidor: str, banco: str, vendedor: int, data_iso: str) -> dict:
+    """Retorna totais e pedidos do dia para o vendedor. Schema esperado da tabela `pedidos`:
+        - codigo (int PK)
+        - data (date)
+        - vendedor (int)
+        - cliente (int FK -> cliente.codigo)
+        - valor_produtos, valor_servicos (decimal)
+    Caso o schema seja diferente, devolve estrutura zerada com 'message' explicando.
+    """
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Falha conexão: {e}",
+            "totais": {"pedidos": 0, "produtos": 0, "servicos": 0},
+            "pedidos": [],
+        }
+    try:
+        cur = conn.cursor(as_dict=True)
+        # Totais do dia
+        cur.execute(
+            "SELECT "
+            "  COUNT(*) AS qtd_pedidos, "
+            "  COALESCE(SUM(valor_produtos), 0) AS total_produtos, "
+            "  COALESCE(SUM(valor_servicos), 0) AS total_servicos "
+            "FROM pedidos "
+            "WHERE vendedor = %s AND CAST(data AS DATE) = %s",
+            (vendedor, data_iso),
+        )
+        tot_row = cur.fetchone() or {}
+        totais = {
+            "pedidos": int(tot_row.get("qtd_pedidos") or 0),
+            "produtos": float(tot_row.get("total_produtos") or 0),
+            "servicos": float(tot_row.get("total_servicos") or 0),
+        }
+
+        # Lista de pedidos do dia
+        cur.execute(
+            "SELECT TOP 50 "
+            "  p.codigo AS pedido, "
+            "  c.nome AS cliente, "
+            "  (COALESCE(p.valor_produtos, 0) + COALESCE(p.valor_servicos, 0)) AS valor "
+            "FROM pedidos p "
+            "LEFT JOIN cliente c ON c.codigo = p.cliente "
+            "WHERE p.vendedor = %s AND CAST(p.data AS DATE) = %s "
+            "ORDER BY p.codigo DESC",
+            (vendedor, data_iso),
+        )
+        pedidos = []
+        for r in cur.fetchall():
+            pedidos.append({
+                "pedido": int(r.get("pedido") or 0),
+                "cliente": (r.get("cliente") or "").strip() if r.get("cliente") else "",
+                "valor": float(r.get("valor") or 0),
+            })
+
+        cur.close()
+        conn.close()
+        return {"success": True, "totais": totais, "pedidos": pedidos}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {
+            "success": False,
+            "message": f"Erro consulta dashboard: {e}",
+            "totais": {"pedidos": 0, "produtos": 0, "servicos": 0},
+            "pedidos": [],
+        }
+
+
+@api_router.get("/dashboard/me")
+async def dashboard_me(servidor: str, banco: str, vendedor: int, data: Optional[str] = None):
+    # data padrão = hoje (YYYY-MM-DD)
+    from datetime import date  # noqa: E402
+    data_iso = data or date.today().isoformat()
+    return await asyncio.to_thread(_dashboard_sync, servidor, banco, vendedor, data_iso)
+
+
+# =====================================================================
+# DOWNLOAD TEMPORÁRIO — remover após sincronizar com GitHub
+# =====================================================================
+from fastapi.responses import PlainTextResponse  # noqa: E402
+
+_DEV_FILES = {
+    "server.py": "/app/backend/server.py",
+    "clientes.tsx": "/app/frontend/app/clientes.tsx",
+    "cliente-form.tsx": "/app/frontend/app/cliente-form.tsx",
+    "principal.tsx": "/app/frontend/app/principal.tsx",
+}
+
+
+@api_router.get("/dev/file")
+async def dev_file(name: str):
+    path = _DEV_FILES.get(name)
+    if not path:
+        return PlainTextResponse(
+            f"# arquivo não disponível: {name}\n# válidos: {list(_DEV_FILES.keys())}",
+            status_code=404,
+        )
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return PlainTextResponse(f.read())
+    except Exception as e:
+        return PlainTextResponse(f"# erro: {e}", status_code=500)
+
+
 app.include_router(api_router)
 
 app.add_middleware(
