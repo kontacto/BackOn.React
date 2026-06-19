@@ -708,16 +708,16 @@ def _save_cliente_sync(
                 "OUTPUT INSERTED.codigo "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CAST(GETDATE() AS DATE), 'A', %s, %s)",
                 (
-                    cgc or None,
-                    nome,
-                    (req.e_mail or "").strip() or None,
-                    (req.inscre or "").strip() or None,
-                    (req.tipo or "").strip() or None,
+                    (cgc or "")[:14] or None,
+                    nome[:60],
+                    ((req.e_mail or "").strip()[:60]) or None,
+                    ((req.inscre or "").strip()[:15]) or None,
+                    ((req.tipo or "").strip()[:2]) or None,
                     1 if req.aceita_email else 0,
                     req.vendedor,
                     usuario_cad,
-                    ddd_cli or None,
-                    tel_cli or None,
+                    (ddd_cli or "")[:4] or None,
+                    (tel_cli or "")[:10] or None,
                 ),
             )
             new_id_row = cur.fetchone()
@@ -736,16 +736,16 @@ def _save_cliente_sync(
                 " ddd_cli=%s, telefone_cli=%s "
                 "WHERE codigo=%s",
                 (
-                    cgc or None,
-                    nome,
-                    (req.e_mail or "").strip() or None,
-                    (req.inscre or "").strip() or None,
-                    (req.tipo or "").strip() or None,
+                    (cgc or "")[:14] or None,
+                    nome[:60],
+                    ((req.e_mail or "").strip()[:60]) or None,
+                    ((req.inscre or "").strip()[:15]) or None,
+                    ((req.tipo or "").strip()[:2]) or None,
                     1 if req.aceita_email else 0,
                     req.vendedor,
                     usuario_alt,
-                    ddd_cli or None,
-                    tel_cli or None,
+                    (ddd_cli or "")[:4] or None,
+                    (tel_cli or "")[:10] or None,
                     codigo,
                 ),
             )
@@ -770,9 +770,9 @@ def _save_cliente_sync(
                 (
                     cliente_codigo,
                     int(endereco.tipo or 0),
-                    (endereco.endereco or "").strip()[:64] or None,
+                    (endereco.endereco or "").strip()[:60] or None,
                     endereco.numero,
-                    (endereco.complemento or "").strip() or None,
+                    (endereco.complemento or "").strip()[:30] or None,
                     (endereco.bairro or "").strip()[:35] or None,
                     (endereco.cidade or "").strip()[:35] or None,
                     uf or None,
@@ -793,7 +793,7 @@ def _save_cliente_sync(
                     cliente_codigo,
                     ddd_n or "21",
                     tel_n,
-                    (tel.descricao or "").strip() or None,
+                    (tel.descricao or "").strip()[:15] or None,
                 ),
             )
 
