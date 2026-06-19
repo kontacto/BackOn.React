@@ -341,6 +341,22 @@ export default function ClienteFormScreen() {
     setCgcCpf(maskCgcCpf(txt));
   };
 
+  // Dispara a busca por CGC/CPF AUTOMATICAMENTE quando o número fica válido
+  // (debounce 350ms para evitar muitas chamadas durante a digitação).
+  useEffect(() => {
+    if (editing) return;
+    const raw = onlyAlnumUpper(cgcCpf);
+    const isValid =
+      (raw.length === 11 && validCPF(raw)) ||
+      (raw.length === 14 && validCNPJ(raw));
+    if (!isValid) return;
+    const t = setTimeout(() => {
+      buscarPorCgc();
+    }, 350);
+    return () => clearTimeout(t);
+    // buscarPorCgc é estável (useCallback) — deps são cgcCpf e editing
+  }, [cgcCpf, editing, buscarPorCgc]);
+
   // -------- Busca cliente existente por CGC/CPF (ao perder foco / blur).
   // Se encontrado e ainda estamos em novo cadastro, oferece carregar para edição.
   const buscarPorCgc = useCallback(async () => {
@@ -1105,12 +1121,15 @@ const styles = StyleSheet.create({
   },
   modalOptText: { color: colors.onSurface, fontSize: 14 },
   toast: {
-    position: "absolute", left: spacing.lg, right: spacing.lg, bottom: spacing.xl,
+    position: "absolute",
+    left: spacing.lg, right: spacing.lg,
+    top: "45%",
     backgroundColor: colors.brandSecondary,
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
     borderRadius: radius.md,
-    shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
+    shadowColor: "#000", shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 6 },
+    elevation: 12,
+    alignItems: "center",
   },
-  toastText: { color: colors.onBrandPrimary, fontSize: 13, fontWeight: "500" },
+  toastText: { color: colors.onBrandPrimary, fontSize: 14, fontWeight: "500", textAlign: "center" },
 });
