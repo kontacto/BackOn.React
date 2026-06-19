@@ -504,7 +504,7 @@ def _list_clientes_sync(req: ClientesRequest) -> dict:
         cur.execute(
             f"SELECT c.codigo, c.nome, c.cgc_cpf, c.ddd_cli, c.telefone_cli, c.e_mail, c.situacao, "
             f"       t.descricao AS tipo_descricao "
-            f"FROM cliente c LEFT JOIN tipo_cliente t ON t.codigo = TRY_CAST(c.tipo AS INT) "
+            f"FROM cliente c LEFT JOIN tipo_cliente t ON t.codigo = TRY_CAST(c.cliente_forn AS INT) "
             f"{where} "
             f"ORDER BY c.nome OFFSET {offset} ROWS FETCH NEXT {size} ROWS ONLY",
             params
@@ -570,12 +570,12 @@ def _get_cliente_sync(servidor: str, banco: str, codigo: int) -> dict:
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            "SELECT c.codigo, c.cgc_cpf, c.nome, c.e_mail, c.inscr_est AS inscre, c.tipo, "
+            "SELECT c.codigo, c.cgc_cpf, c.nome, c.e_mail, c.inscr_est AS inscre, c.cliente_forn AS tipo, "
             "       c.aceita_email, c.vendedor, c.situacao, "
             "       c.ddd_cli, c.telefone_cli, "
             "       t.descricao AS tipo_descricao "
             "FROM cliente c "
-            "LEFT JOIN tipo_cliente t ON t.codigo = TRY_CAST(c.tipo AS INT) "
+            "LEFT JOIN tipo_cliente t ON t.codigo = TRY_CAST(c.cliente_forn AS INT) "
             "WHERE c.codigo = %s",
             (codigo,),
         )
@@ -703,7 +703,7 @@ def _save_cliente_sync(
             # INSERT cliente
             cur.execute(
                 "INSERT INTO cliente "
-                "(cgc_cpf, nome, e_mail, inscr_est, tipo, aceita_email, vendedor, "
+                "(cgc_cpf, nome, e_mail, inscr_est, cliente_forn, aceita_email, vendedor, "
                 " usuario_cadastro, data, situacao, ddd_cli, telefone_cli) "
                 "OUTPUT INSERTED.codigo "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CAST(GETDATE() AS DATE), 'A', %s, %s)",
@@ -730,7 +730,7 @@ def _save_cliente_sync(
             # UPDATE cliente
             cur.execute(
                 "UPDATE cliente SET "
-                " cgc_cpf=%s, nome=%s, e_mail=%s, inscr_est=%s, tipo=%s, "
+                " cgc_cpf=%s, nome=%s, e_mail=%s, inscr_est=%s, cliente_forn=%s, "
                 " aceita_email=%s, vendedor=%s, usuario_alteracao=%s, "
                 " data_alteracao=CAST(GETDATE() AS DATE), "
                 " ddd_cli=%s, telefone_cli=%s "
