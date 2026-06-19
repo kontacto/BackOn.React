@@ -1,7 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
@@ -14,14 +13,30 @@ import asyncio
 import traceback
 import pymssql
 
+# MongoDB é opcional — usado só pelos endpoints legados /status.
+# Se motor não estiver instalado OU MONGO_URL não estiver no .env,
+# esses endpoints ficam desabilitados (não quebra o app).
+try:
+    from motor.motor_asyncio import AsyncIOMotorClient  # type: ignore
+    _MOTOR_AVAILABLE = True
+except Exception:
+    _MOTOR_AVAILABLE = False
+
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection (usado apenas pelo endpoint /api/status opcional)
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# MongoDB connection (opcional)
+mongo_url = os.environ.get('MONGO_URL')
+db_name = os.environ.get('DB_NAME')
+if _MOTOR_AVAILABLE and mongo_url and db_name:
+    client = AsyncIOMotorClient(mongo_url)
+    db = client[db_name]
+    _MONGO_ENABLED = True
+else:
+    client = None
+    db = None
+    _MONGO_ENABLED = False
 
 # =====================================================================
 # CREDENCIAIS SQL SERVER — ESTÁTICAS NO CÓDIGO
@@ -81,12 +96,15 @@ async def root():
 @api_router.post("/status", response_model=StatusCheck)
 async def create_status_check(input: StatusCheckCreate):
     status_obj = StatusCheck(**input.dict())
-    await db.status_checks.insert_one(status_obj.dict())
+    if _MONGO_ENABLED:
+        await db.status_checks.insert_one(status_obj.dict())
     return status_obj
 
 
 @api_router.get("/status", response_model=List[StatusCheck])
 async def get_status_checks():
+    if not _MONGO_ENABLED:
+        return []
     docs = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
     return [StatusCheck(**d) for d in docs]
 
@@ -898,6 +916,35 @@ async def dashboard_me(servidor: str, banco: str, vendedor: int, data: Optional[
     from datetime import date  # noqa: E402
     data_iso = data or date.today().isoformat()
     return await asyncio.to_thread(_dashboard_sync, servidor, banco, vendedor, data_iso)
+
+
+# =====================================================================
+# DOWNLOAD TEMPORÁRIO — remover após sincronizar com GitHub
+# =====================================================================
+from fastapi.responses import PlainTextResponse  # noqa: E402
+
+_DEV_FILES = {
+    "server.py": "/app/backend/server.py",
+    "requirements-windows.txt": "/app/backend/requirements-windows.txt",
+    "clientes.tsx": "/app/frontend/app/clientes.tsx",
+    "cliente-form.tsx": "/app/frontend/app/cliente-form.tsx",
+    "principal.tsx": "/app/frontend/app/principal.tsx",
+}
+
+
+@api_router.get("/dev/file")
+async def dev_file(name: str):
+    path = _DEV_FILES.get(name)
+    if not path:
+        return PlainTextResponse(
+            f"# arquivo não disponível: {name}\n# válidos: {list(_DEV_FILES.keys())}",
+            status_code=404,
+        )
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return PlainTextResponse(f.read())
+    except Exception as e:
+        return PlainTextResponse(f"# erro: {e}", status_code=500)
 
 
 app.include_router(api_router)

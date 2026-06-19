@@ -1,15 +1,11 @@
-# Dependências MÍNIMAS para rodar o backend BackOn em Windows (produção).
-# Use este arquivo em vez do requirements.txt (que tem libs internas da Emergent).
-#
-# Instalar:
-#   pip install -r requirements-windows.txt
-#
-# Versões deixadas SEM pin para o pip escolher o build compatível com
-# a sua versão do Python (Python 3.11, 3.12, 3.13 ou 3.14).
+# Dependências MÍNIMAS para rodar o backend BackOn no Windows
+# (sem pacotes Emergent que não estão no PyPI público)
+fastapi==0.119.2
+uvicorn[standard]==0.39.0
+python-dotenv==1.2.1
+pydantic==2.12.4
+pymssql==2.3.13
 
-fastapi
-uvicorn[standard]
-python-dotenv
-pydantic
-motor
-pymssql
+# Opcional — só se quiser habilitar os endpoints legados /api/status com MongoDB.
+# Sem isso o backend roda normalmente; os endpoints /status retornam vazio.
+# motor==3.7.1
