@@ -123,9 +123,24 @@ export default function PrincipalScreen() {
   );
 
   const classe = useMemo(
-    () => pickFirst(session?.usuario, ["classe_label", "classe"]) || null,
+    () => pickFirst(session?.usuario, ["classe_descricao", "classe_label", "classe"]) || null,
     [session]
   );
+
+  // Mapeia funcionarios.cod_funcao para label fixo (somente p/ uso interno em
+  // permissões de UI; não exibido na tela conforme regra de negócio).
+  // 01 -> Gerente, 02 -> Supervisor, 03 -> Vendedor.
+  const funcaoLabel = useMemo<"Gerente" | "Supervisor" | "Vendedor" | null>(() => {
+    const cod = pickFirst(session?.funcionario, ["cod_funcao"]);
+    if (!cod) return null;
+    const norm = cod.toString().padStart(2, "0");
+    if (norm === "01") return "Gerente";
+    if (norm === "02") return "Supervisor";
+    if (norm === "03") return "Vendedor";
+    return null;
+  }, [session]);
+  // funcaoLabel disponível para futura lógica de permissão (ex.: esconder tiles).
+  void funcaoLabel;
 
   if (loading || !session) {
     return (

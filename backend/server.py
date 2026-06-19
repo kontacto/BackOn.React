@@ -570,7 +570,7 @@ def _get_cliente_sync(servidor: str, banco: str, codigo: int) -> dict:
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            "SELECT c.codigo, c.cgc_cpf, c.nome, c.e_mail, c.inscre, c.tipo, "
+            "SELECT c.codigo, c.cgc_cpf, c.nome, c.e_mail, c.inscr_est AS inscre, c.tipo, "
             "       c.aceita_email, c.vendedor, c.situacao, "
             "       c.ddd_cli, c.telefone_cli, "
             "       t.descricao AS tipo_descricao "
@@ -703,7 +703,7 @@ def _save_cliente_sync(
             # INSERT cliente
             cur.execute(
                 "INSERT INTO cliente "
-                "(cgc_cpf, nome, e_mail, inscre, tipo, aceita_email, vendedor, "
+                "(cgc_cpf, nome, e_mail, inscr_est, tipo, aceita_email, vendedor, "
                 " usuario_cadastro, data, situacao, ddd_cli, telefone_cli) "
                 "OUTPUT INSERTED.codigo "
                 "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CAST(GETDATE() AS DATE), 'A', %s, %s)",
@@ -730,7 +730,7 @@ def _save_cliente_sync(
             # UPDATE cliente
             cur.execute(
                 "UPDATE cliente SET "
-                " cgc_cpf=%s, nome=%s, e_mail=%s, inscre=%s, tipo=%s, "
+                " cgc_cpf=%s, nome=%s, e_mail=%s, inscr_est=%s, tipo=%s, "
                 " aceita_email=%s, vendedor=%s, usuario_alteracao=%s, "
                 " data_alteracao=CAST(GETDATE() AS DATE), "
                 " ddd_cli=%s, telefone_cli=%s "
