@@ -1,11 +1,8 @@
 # Dependências MÍNIMAS para rodar o backend BackOn no Windows
 # (sem pacotes Emergent que não estão no PyPI público)
-fastapi==0.119.2
-uvicorn[standard]==0.39.0
-python-dotenv==1.2.1
-pydantic==2.12.4
-pymssql==2.3.13
-
-# Opcional — só se quiser habilitar os endpoints legados /api/status com MongoDB.
-# Sem isso o backend roda normalmente; os endpoints /status retornam vazio.
-# motor==3.7.1
+# Versões com piso (>=) — pega o mais recente disponível.
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-dotenv>=1.0.0
+pydantic>=2.7.0
+pymssql>=2.3.0
