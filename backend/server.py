@@ -816,33 +816,6 @@ async def update_cliente(codigo: int, req: ClienteCreateRequest):
     )
 
 
-# =====================================================================
-# DOWNLOAD TEMPORÁRIO — remover após sincronizar com GitHub
-# =====================================================================
-from fastapi.responses import PlainTextResponse  # noqa: E402
-
-_DEV_FILES = {
-    "server.py": "/app/backend/server.py",
-    "clientes.tsx": "/app/frontend/app/clientes.tsx",
-    "cliente-form.tsx": "/app/frontend/app/cliente-form.tsx",
-}
-
-
-@api_router.get("/dev/file")
-async def dev_file(name: str):
-    path = _DEV_FILES.get(name)
-    if not path:
-        return PlainTextResponse(
-            f"# arquivo não disponível: {name}\n# válidos: {list(_DEV_FILES.keys())}",
-            status_code=404,
-        )
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return PlainTextResponse(f.read())
-    except Exception as e:
-        return PlainTextResponse(f"# erro: {e}", status_code=500)
-
-
 app.include_router(api_router)
 
 app.add_middleware(
