@@ -205,8 +205,8 @@ export default function PrincipalScreen() {
         <View style={styles.tilesGrid}>
           {[
             { label: "Clientes", icon: "people-outline" as const, route: "/clientes" as const },
+            { label: "Produtos & Serviços", icon: "cube-outline" as const, route: "/produtos" as const },
             { label: "Pedidos", icon: "swap-horizontal-outline" as const, route: null },
-            { label: "Relatórios", icon: "bar-chart-outline" as const, route: null },
             { label: "Configurações", icon: "settings-outline" as const, route: null },
           ].map((t) => (
             <Pressable

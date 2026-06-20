@@ -726,6 +726,121 @@ async def find_cliente_by_cgc(servidor: str, banco: str, cgc: str):
 
 
 # =====================================================================
+# Produtos (pecas) + Serviços — lista unificada para uso futuro em pedidos.
+# =====================================================================
+def _list_produtos_servicos_sync(
+    servidor: str, banco: str, search: str, page: int, size: int, tipo: str
+) -> dict:
+    """tipo: 'all' | 'P' (produto/pecas) | 'S' (servico)"""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": [], "total": 0}
+    try:
+        cur = conn.cursor(as_dict=True)
+        items: list[dict] = []
+        total = 0
+        like = f"%{search.strip()}%" if search else None
+        offset = max(0, (page - 1) * size)
+
+        if tipo in ("all", "P"):
+            # PRODUTOS (pecas)
+            where_p = ""
+            params_p: tuple = ()
+            if like:
+                where_p = "WHERE p.descricao LIKE %s OR CAST(p.codigo_int AS NVARCHAR(20)) LIKE %s"
+                params_p = (like, like)
+            cur.execute(
+                f"SELECT 'P' AS tipo, p.codigo_int AS codigo, p.descricao, "
+                f"       p.p_venda AS valor, p.estoque "
+                f"FROM pecas p {where_p} "
+                f"ORDER BY p.descricao",
+                params_p,
+            )
+            for r in cur.fetchall():
+                items.append({
+                    "tipo": "P",
+                    "codigo": (r.get("codigo") or "").strip() if isinstance(r.get("codigo"), str) else str(r.get("codigo") or ""),
+                    "descricao": (r.get("descricao") or "").strip(),
+                    "valor": float(r.get("valor") or 0),
+                    "estoque": float(r.get("estoque") or 0),
+                })
+
+        if tipo in ("all", "S"):
+            # SERVIÇOS
+            where_s = ""
+            params_s: tuple = ()
+            if like:
+                where_s = "WHERE s.descricao LIKE %s OR CAST(s.codigo AS NVARCHAR(20)) LIKE %s"
+                params_s = (like, like)
+            cur.execute(
+                f"SELECT 'S' AS tipo, s.codigo, s.descricao, s.valor_hora AS valor "
+                f"FROM servicos s {where_s} "
+                f"ORDER BY s.descricao",
+                params_s,
+            )
+            for r in cur.fetchall():
+                items.append({
+                    "tipo": "S",
+                    "codigo": (r.get("codigo") or "").strip() if isinstance(r.get("codigo"), str) else str(r.get("codigo") or ""),
+                    "descricao": (r.get("descricao") or "").strip(),
+                    "valor": float(r.get("valor") or 0),
+                    "estoque": None,
+                })
+
+        total = len(items)
+        # Paginação em memória (BARESTEL fica abaixo de alguns milhares, ok p/ MVP).
+        items_page = items[offset:offset + size]
+
+        cur.close()
+        conn.close()
+        return {"success": True, "items": items_page, "total": total, "page": page, "size": size}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": [], "total": 0}
+
+
+@api_router.get("/produtos-servicos")
+async def list_produtos_servicos(
+    servidor: str,
+    banco: str,
+    search: str = "",
+    page: int = 1,
+    size: int = 40,
+    tipo: str = "all",
+):
+    return await asyncio.to_thread(
+        _list_produtos_servicos_sync, servidor, banco, search, page, size, tipo
+    )
+
+
+# Foto do produto — procura em pasta configurável (env FOTOS_PRODUTOS_DIR).
+# Default: /app/fotos_produtos (Linux) ou C:\desenv\fotos_produtos (Windows).
+# Aceita extensões: .jpg, .jpeg, .png, .webp. Nome do arquivo = codigo_int.
+import os as _os  # noqa: E402
+
+_FOTOS_DIR = _os.environ.get("FOTOS_PRODUTOS_DIR", "/app/fotos_produtos")
+
+
+@api_router.get("/produtos/foto/{codigo}")
+async def get_produto_foto(codigo: str):
+    from fastapi.responses import FileResponse, Response  # noqa: E402
+    # Sanitiza pra evitar path traversal
+    safe = "".join(c for c in codigo if c.isalnum() or c in "-_")
+    if not safe:
+        return Response(status_code=204)
+    for ext in (".jpg", ".jpeg", ".png", ".webp"):
+        path = _os.path.join(_FOTOS_DIR, f"{safe}{ext}")
+        if _os.path.exists(path):
+            return FileResponse(path)
+    # 204 No Content quando não tem foto (frontend mostra placeholder)
+    return Response(status_code=204)
+
+
+# =====================================================================
 # CREATE / UPDATE cliente (cliente + cliente_end + cliente_tel)
 # =====================================================================
 class TelefoneInput(BaseModel):
@@ -1056,6 +1171,7 @@ _DEV_FILES = {
     "clientes.tsx": "/app/frontend/app/clientes.tsx",
     "cliente-form.tsx": "/app/frontend/app/cliente-form.tsx",
     "principal.tsx": "/app/frontend/app/principal.tsx",
+    "produtos.tsx": "/app/frontend/app/produtos.tsx",
 }
 
 
