@@ -46,8 +46,9 @@ else:
 # (instância) e o nome do banco no momento do login; o backend completa
 # o objeto de conexão com estas credenciais antes de abrir a conexão.
 # =====================================================================
-SQL_ADMIN_USER = "sa"
-SQL_ADMIN_PASSWORD = "Cmslrav@155"
+SQL_ADMIN_USER = os.environ.get("SQL_ADMIN_USER", "sa")
+SQL_ADMIN_PASSWORD = os.environ.get("SQL_ADMIN_PASSWORD", "Cmslrav@155")
+SQL_TDS_VERSION = os.environ.get("SQL_TDS_VERSION", "7.4")
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -277,6 +278,7 @@ def _sql_login_sync(payload: LoginRequest) -> LoginResponse:
             database=payload.banco,                 # ← do app
             login_timeout=payload.timeout or 8,
             timeout=payload.timeout or 8,
+            tds_version=SQL_TDS_VERSION,
         )
     except pymssql.OperationalError as e:
         line, code = _err_origin()
@@ -324,7 +326,7 @@ def _sql_login_sync(payload: LoginRequest) -> LoginResponse:
                 attempted=attempted,
             )
 
-        usuario_obj = _to_json_safe(usuario_row)
+        usuario_obj = _enrich_usuario(_to_json_safe(usuario_row))
         if usuario_obj:
             for k in list(usuario_obj.keys()):
                 if k.lower() in {"senha", "password", "pwd", "hash_senha", "senha_hash"}:
@@ -412,6 +414,7 @@ def _open_conn(servidor: str, banco: str, timeout: int = 10):
         password=SQL_ADMIN_PASSWORD,
         database=banco,
         login_timeout=timeout, timeout=timeout,
+        tds_version=SQL_TDS_VERSION,
     )
 
 
@@ -556,9 +559,14 @@ def _list_clientes_sync(req: ClientesRequest) -> dict:
         total = cur.fetchone()["total"]
 
         cur.execute(
-            f"SELECT c.codigo, c.nome, c.cgc_cpf, c.ddd_cli, c.telefone_cli, c.e_mail, c.situacao, "
+            f"SELECT c.codigo, c.nome, c.cgc_cpf, "
+            f"       COALESCE(ct.ddd, CAST(c.ddd_cli AS NVARCHAR(4))) AS ddd_cli, "
+            f"       COALESCE(ct.tel, c.telefone_cli) AS telefone_cli, "
+            f"       c.e_mail, c.situacao, "
             f"       t.descricao AS tipo_descricao "
-            f"FROM cliente c LEFT JOIN tipo_cliente t ON t.codigo = TRY_CAST(c.cliente_forn AS INT) "
+            f"FROM cliente c "
+            f"OUTER APPLY (SELECT TOP 1 ddd, tel FROM cliente_tel WHERE codigo = c.codigo ORDER BY sequencia) ct "
+            f"LEFT JOIN tipo_cliente t ON t.codigo = TRY_CAST(c.cliente_forn AS INT) "
             f"{where} "
             f"ORDER BY c.nome OFFSET {offset} ROWS FETCH NEXT {size} ROWS ONLY",
             params
@@ -776,6 +784,14 @@ def _save_cliente_sync(
     if len(telefones) > 3:
         return {"success": False, "message": "Máximo de 3 telefones."}
 
+    # cliente.cliente_forn é SMALLINT no banco (FK p/ tipo_cliente.codigo)
+    tipo_int: Optional[int] = None
+    if req.tipo and str(req.tipo).strip():
+        try:
+            tipo_int = int(str(req.tipo).strip())
+        except ValueError:
+            tipo_int = None
+
     try:
         conn = _open_conn(req.servidor, req.banco)
     except Exception as e:
@@ -789,10 +805,19 @@ def _save_cliente_sync(
         sz_end = _get_col_sizes(conn, req.banco, "cliente_end")
         sz_tel = _get_col_sizes(conn, req.banco, "cliente_tel")
 
-        # Telefone primário (replicado nos campos inline ddd_cli/telefone_cli)
+        # Telefone primário — gravado nos campos inline (compat com legacy).
+        # cliente.ddd_cli é SMALLINT, cliente.telefone_cli é nvarchar(8).
         primary = telefones[0] if telefones else None
-        ddd_cli = _trunc((primary.ddd or "").strip(), sz_cli, "ddd_cli", 4) if primary else ""
-        tel_cli = _trunc((primary.tel or "").strip(), sz_cli, "telefone_cli", 10) if primary else ""
+        ddd_int: Optional[int] = None
+        tel_inline: Optional[str] = None
+        if primary:
+            try:
+                ddd_int = int((primary.ddd or "").strip()) if (primary.ddd or "").strip().isdigit() else None
+            except ValueError:
+                ddd_int = None
+            tel_raw = (primary.tel or "").strip()
+            if tel_raw:
+                tel_inline = _trunc(tel_raw, sz_cli, "telefone_cli", 8)
 
         usuario_cad = req.usuario_cadastro if req.usuario_cadastro is not None else req.vendedor
         usuario_alt = req.usuario_alteracao if req.usuario_alteracao is not None else req.vendedor
@@ -809,13 +834,13 @@ def _save_cliente_sync(
                     _trunc(cgc, sz_cli, "cgc_cpf", 14) or None,
                     _trunc(nome, sz_cli, "nome", 60),
                     _trunc((req.e_mail or "").strip(), sz_cli, "e_mail", 60) or None,
-                    _trunc((req.inscre or "").strip(), sz_cli, "inscr_est", 15) or None,
-                    _trunc((req.tipo or "").strip(), sz_cli, "cliente_forn", 2) or None,
+                    _trunc((req.inscre or "").strip(), sz_cli, "inscr_est", 18) or None,
+                    tipo_int,
                     1 if req.aceita_email else 0,
                     req.vendedor,
                     usuario_cad,
-                    ddd_cli or None,
-                    tel_cli or None,
+                    ddd_int,
+                    tel_inline,
                 ),
             )
             new_id_row = cur.fetchone()
@@ -837,13 +862,13 @@ def _save_cliente_sync(
                     _trunc(cgc, sz_cli, "cgc_cpf", 14) or None,
                     _trunc(nome, sz_cli, "nome", 60),
                     _trunc((req.e_mail or "").strip(), sz_cli, "e_mail", 60) or None,
-                    _trunc((req.inscre or "").strip(), sz_cli, "inscr_est", 15) or None,
-                    _trunc((req.tipo or "").strip(), sz_cli, "cliente_forn", 2) or None,
+                    _trunc((req.inscre or "").strip(), sz_cli, "inscr_est", 18) or None,
+                    tipo_int,
                     1 if req.aceita_email else 0,
                     req.vendedor,
                     usuario_alt,
-                    ddd_cli or None,
-                    tel_cli or None,
+                    ddd_int,
+                    tel_inline,
                     codigo,
                 ),
             )
