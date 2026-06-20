@@ -841,6 +841,279 @@ async def get_produto_foto(codigo: str):
 
 
 # =====================================================================
+# Pedidos (pedido_venda) — CRUD básico
+# =====================================================================
+SITUACAO_LABEL = {"A": "Aberto", "F": "Fechado", "C": "Cancelado", "PG": "Faturado"}
+
+
+class PedidosListRequest(BaseModel):
+    servidor: str
+    banco: str
+    search: Optional[str] = ""
+    situacao: Optional[str] = ""  # vazio = todos
+    page: int = 1
+    size: int = 20
+
+
+def _list_pedidos_sync(req: PedidosListRequest) -> dict:
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": [], "total": 0}
+    try:
+        cur = conn.cursor(as_dict=True)
+        where_parts: list[str] = []
+        params: list = []
+        term = (req.search or "").strip()
+        if term:
+            like = f"%{term}%"
+            where_parts.append(
+                "(c.nome LIKE %s OR c.cgc_cpf LIKE %s OR p.NOME_CLIENTE LIKE %s "
+                "OR p.TELEFONE_CLIENTE LIKE %s OR CAST(p.pedido AS NVARCHAR(20)) LIKE %s)"
+            )
+            params.extend([like, like, like, like, like])
+        if req.situacao:
+            where_parts.append("p.situacao = %s")
+            params.append(req.situacao)
+        where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+        # Total
+        cur.execute(
+            f"SELECT COUNT(*) c FROM pedido_venda p "
+            f"LEFT JOIN cliente c ON c.codigo = p.cliente {where}",
+            params,
+        )
+        total = int(cur.fetchone()["c"] or 0)
+
+        offset = max(0, (req.page - 1) * req.size)
+        cur.execute(
+            f"SELECT p.pedido, p.data, p.validade, p.situacao, p.total, p.cliente, "
+            f"       COALESCE(c.nome, p.NOME_CLIENTE) AS cliente_nome, "
+            f"       p.vendedor, f.nome AS vendedor_nome, p.hora_aberto "
+            f"FROM pedido_venda p "
+            f"LEFT JOIN cliente c ON c.codigo = p.cliente "
+            f"LEFT JOIN funcionarios f ON f.codigo_int = p.vendedor "
+            f"{where} "
+            f"ORDER BY p.pedido DESC OFFSET {offset} ROWS FETCH NEXT {req.size} ROWS ONLY",
+            params,
+        )
+        items: list[dict] = []
+        for r in cur.fetchall():
+            sit = (r.get("situacao") or "").strip()
+            items.append({
+                "pedido": int(r["pedido"] or 0),
+                "data": r["data"].isoformat() if r.get("data") else None,
+                "validade": r["validade"].isoformat() if r.get("validade") else None,
+                "situacao": sit,
+                "situacao_label": SITUACAO_LABEL.get(sit, sit),
+                "total": float(r.get("total") or 0),
+                "cliente": int(r["cliente"] or 0) if r.get("cliente") else None,
+                "cliente_nome": (r.get("cliente_nome") or "").strip(),
+                "vendedor": int(r["vendedor"] or 0) if r.get("vendedor") else None,
+                "vendedor_nome": (r.get("vendedor_nome") or "").strip(),
+                "hora_aberto": (r.get("hora_aberto") or "").strip(),
+            })
+        cur.close()
+        conn.close()
+        return {"success": True, "items": items, "total": total, "page": req.page, "size": req.size}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": [], "total": 0}
+
+
+@api_router.post("/pedidos")
+async def list_pedidos(req: PedidosListRequest):
+    return await asyncio.to_thread(_list_pedidos_sync, req)
+
+
+def _get_pedido_sync(servidor: str, banco: str, pedido: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT p.pedido, p.cliente, p.data, p.validade, p.vendedor, p.hora_aberto, "
+            "       p.obs, p.situacao, p.total, p.NOME_CLIENTE, p.TELEFONE_CLIENTE, "
+            "       c.nome AS cliente_nome, c.cgc_cpf AS cliente_cgc, "
+            "       f.nome AS vendedor_nome "
+            "FROM pedido_venda p "
+            "LEFT JOIN cliente c ON c.codigo = p.cliente "
+            "LEFT JOIN funcionarios f ON f.codigo_int = p.vendedor "
+            "WHERE p.pedido = %s",
+            (pedido,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return {"success": False, "message": "Pedido não encontrado."}
+        sit = (row.get("situacao") or "").strip()
+        return {
+            "success": True,
+            "pedido": {
+                "pedido": int(row["pedido"] or 0),
+                "cliente": int(row["cliente"] or 0) if row.get("cliente") else None,
+                "cliente_nome": (row.get("cliente_nome") or row.get("NOME_CLIENTE") or "").strip(),
+                "cliente_cgc": (row.get("cliente_cgc") or "").strip(),
+                "data": row["data"].isoformat() if row.get("data") else None,
+                "validade": row["validade"].isoformat() if row.get("validade") else None,
+                "vendedor": int(row["vendedor"] or 0) if row.get("vendedor") else None,
+                "vendedor_nome": (row.get("vendedor_nome") or "").strip(),
+                "hora_aberto": (row.get("hora_aberto") or "").strip(),
+                "obs": row.get("obs") or "",
+                "situacao": sit,
+                "situacao_label": SITUACAO_LABEL.get(sit, sit),
+                "total": float(row.get("total") or 0),
+            },
+        }
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+@api_router.get("/pedidos/{pedido}")
+async def get_pedido(pedido: int, servidor: str, banco: str):
+    return await asyncio.to_thread(_get_pedido_sync, servidor, banco, pedido)
+
+
+class PedidoSaveRequest(BaseModel):
+    servidor: str
+    banco: str
+    cliente: int                       # cliente.codigo
+    vendedor: int                      # funcionarios.codigo_int
+    validade: Optional[str] = None     # ISO date YYYY-MM-DD
+    obs: Optional[str] = ""
+
+
+def _save_pedido_sync(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> dict:
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        # Busca o nome e telefone do cliente para denormalizar em NOME_CLIENTE / TELEFONE_CLIENTE
+        cur.execute(
+            "SELECT TOP 1 c.nome, "
+            "  COALESCE((SELECT TOP 1 LTRIM(RTRIM(CAST(ddd AS NVARCHAR(4))) + tel) "
+            "            FROM cliente_tel WHERE codigo=c.codigo ORDER BY sequencia), "
+            "           LTRIM(RTRIM(CAST(c.ddd_cli AS NVARCHAR(4))) + ISNULL(c.telefone_cli,''))) AS tel "
+            "FROM cliente c WHERE c.codigo = %s",
+            (req.cliente,),
+        )
+        cli_row = cur.fetchone() or {}
+        nome_cli = (cli_row.get("nome") or "").strip()[:60]
+        tel_cli = (cli_row.get("tel") or "").strip()[:60]
+
+        validade = req.validade or None
+        obs = req.obs or ""
+
+        if pedido_codigo is None:
+            # pedido é IDENTITY — deixar o SQL gerar e retornar via OUTPUT INSERTED.pedido
+            cur.execute(
+                "INSERT INTO pedido_venda "
+                "(cliente, data, validade, vendedor, hora_aberto, obs, situacao, "
+                " NOME_CLIENTE, TELEFONE_CLIENTE, abertopor, total, tipo) "
+                "OUTPUT INSERTED.pedido "
+                "VALUES (%s, CAST(GETDATE() AS DATE), %s, %s, "
+                "        CONVERT(NVARCHAR(8), GETDATE(), 108), %s, 'A', %s, %s, %s, 0, 0)",
+                (req.cliente, validade, req.vendedor, obs, nome_cli, tel_cli, req.vendedor),
+            )
+            row = cur.fetchone()
+            if not row:
+                conn.rollback()
+                conn.close()
+                return {"success": False, "message": "Falha ao obter número do pedido."}
+            pedido_id = int(row["pedido"] if isinstance(row, dict) else row[0])
+        else:
+            # Update apenas dos campos editáveis (não mexe em situacao aqui).
+            cur.execute(
+                "UPDATE pedido_venda SET "
+                " cliente=%s, validade=%s, vendedor=%s, obs=%s, "
+                " NOME_CLIENTE=%s, TELEFONE_CLIENTE=%s "
+                "WHERE pedido=%s",
+                (req.cliente, validade, req.vendedor, obs, nome_cli, tel_cli, pedido_codigo),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                conn.close()
+                return {"success": False, "message": "Pedido não encontrado."}
+            pedido_id = pedido_codigo
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "pedido": pedido_id}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao gravar: {e}"}
+
+
+@api_router.post("/pedidos/create")
+async def create_pedido(req: PedidoSaveRequest):
+    return await asyncio.to_thread(_save_pedido_sync, req, None)
+
+
+@api_router.put("/pedidos/{pedido}")
+async def update_pedido(pedido: int, req: PedidoSaveRequest):
+    return await asyncio.to_thread(_save_pedido_sync, req, pedido)
+
+
+# Busca de cliente para o pedido — por nome, cgc/cpf ou telefone.
+def _find_clientes_for_pedido_sync(servidor: str, banco: str, term: str, limit: int = 15) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": []}
+    try:
+        cur = conn.cursor(as_dict=True)
+        like = f"%{(term or '').strip()}%"
+        cur.execute(
+            f"SELECT TOP {int(limit)} c.codigo, c.nome, c.cgc_cpf, "
+            f"       COALESCE(ct.tel, c.telefone_cli) AS telefone "
+            f"FROM cliente c "
+            f"OUTER APPLY (SELECT TOP 1 tel FROM cliente_tel WHERE codigo=c.codigo ORDER BY sequencia) ct "
+            f"WHERE c.nome LIKE %s OR c.cgc_cpf LIKE %s OR c.telefone_cli LIKE %s OR ct.tel LIKE %s "
+            f"ORDER BY c.nome",
+            (like, like, like, like),
+        )
+        items = [{
+            "codigo": int(r["codigo"]),
+            "nome": (r.get("nome") or "").strip(),
+            "cgc_cpf": (r.get("cgc_cpf") or "").strip(),
+            "telefone": (r.get("telefone") or "").strip(),
+        } for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return {"success": True, "items": items}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": []}
+
+
+@api_router.get("/clientes/find/search")
+async def find_clientes_search(servidor: str, banco: str, term: str = ""):
+    return await asyncio.to_thread(_find_clientes_for_pedido_sync, servidor, banco, term)
+
+
+# =====================================================================
 # CREATE / UPDATE cliente (cliente + cliente_end + cliente_tel)
 # =====================================================================
 class TelefoneInput(BaseModel):
@@ -1172,6 +1445,8 @@ _DEV_FILES = {
     "cliente-form.tsx": "/app/frontend/app/cliente-form.tsx",
     "principal.tsx": "/app/frontend/app/principal.tsx",
     "produtos.tsx": "/app/frontend/app/produtos.tsx",
+    "pedidos.tsx": "/app/frontend/app/pedidos.tsx",
+    "pedido-form.tsx": "/app/frontend/app/pedido-form.tsx",
 }
 
 

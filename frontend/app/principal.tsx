@@ -206,7 +206,7 @@ export default function PrincipalScreen() {
           {[
             { label: "Clientes", icon: "people-outline" as const, route: "/clientes" as const },
             { label: "Produtos & Serviços", icon: "cube-outline" as const, route: "/produtos" as const },
-            { label: "Pedidos", icon: "swap-horizontal-outline" as const, route: null },
+            { label: "Pedidos", icon: "receipt-outline" as const, route: "/pedidos" as const },
             { label: "Configurações", icon: "settings-outline" as const, route: null },
           ].map((t) => (
             <Pressable

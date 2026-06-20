@@ -168,7 +168,20 @@ export default function ClientesScreen() {
                 <Text style={styles.cardSub} numberOfLines={1}>Tipo: {item.tipo_descricao}</Text>
               ) : null}
             </View>
-            <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+            <Pressable
+              onPress={(e) => {
+                e.stopPropagation();
+                router.push({
+                  pathname: "/pedido-form",
+                  params: { cliente: String(item.codigo), cliente_nome: item.nome },
+                });
+              }}
+              style={({ pressed }) => [styles.novoPedidoBtn, pressed && { opacity: 0.7 }]}
+              hitSlop={6}
+              testID={`cliente-${item.codigo}-novo-pedido`}
+            >
+              <Ionicons name="add-circle" size={28} color={colors.brandPrimary} />
+            </Pressable>
           </Pressable>
         )}
       />
@@ -242,5 +255,9 @@ const styles = StyleSheet.create({
     shadowColor: "#000",
     shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
     elevation: 8,
+  },
+  novoPedidoBtn: {
+    padding: 4,
+    marginLeft: 4,
   },
 });

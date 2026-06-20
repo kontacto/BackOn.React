@@ -153,7 +153,7 @@ function useToast() {
 // ============================================================
 export default function ClienteFormScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ codigo?: string }>();
+  const params = useLocalSearchParams<{ codigo?: string; initial_nome?: string }>();
   const editing = !!params.codigo;
   const codigo = params.codigo ? parseInt(String(params.codigo), 10) : null;
 
@@ -165,7 +165,7 @@ export default function ClienteFormScreen() {
 
   // Dados principais
   const [cgcCpf, setCgcCpf] = useState("");
-  const [nome, setNome] = useState("");
+  const [nome, setNome] = useState(params.initial_nome ? String(params.initial_nome) : "");
   const [email, setEmail] = useState("");
   const [inscre, setInscre] = useState("");
   const [tipo, setTipo] = useState<string>(""); // codigo string FK
