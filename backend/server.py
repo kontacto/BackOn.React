@@ -851,6 +851,8 @@ class PedidosListRequest(BaseModel):
     banco: str
     search: Optional[str] = ""
     situacao: Optional[str] = ""  # vazio = todos
+    data_ini: Optional[str] = None  # ISO YYYY-MM-DD
+    data_fim: Optional[str] = None  # ISO YYYY-MM-DD
     page: int = 1
     size: int = 20
 
@@ -875,6 +877,12 @@ def _list_pedidos_sync(req: PedidosListRequest) -> dict:
         if req.situacao:
             where_parts.append("p.situacao = %s")
             params.append(req.situacao)
+        if req.data_ini:
+            where_parts.append("p.data >= %s")
+            params.append(req.data_ini)
+        if req.data_fim:
+            where_parts.append("p.data <= %s")
+            params.append(req.data_fim)
         where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
         # Total
@@ -938,12 +946,13 @@ def _get_pedido_sync(servidor: str, banco: str, pedido: int) -> dict:
         cur = conn.cursor(as_dict=True)
         cur.execute(
             "SELECT p.pedido, p.cliente, p.data, p.validade, p.vendedor, p.hora_aberto, "
-            "       p.obs, p.situacao, p.total, p.NOME_CLIENTE, p.TELEFONE_CLIENTE, "
+            "       p.obs, p.situacao, p.total, p.NOME_CLIENTE, p.TELEFONE_CLIENTE, p.area_atuacao, "
             "       c.nome AS cliente_nome, c.cgc_cpf AS cliente_cgc, "
-            "       f.nome AS vendedor_nome "
+            "       f.nome AS vendedor_nome, a.descricao AS area_descricao "
             "FROM pedido_venda p "
             "LEFT JOIN cliente c ON c.codigo = p.cliente "
             "LEFT JOIN funcionarios f ON f.codigo_int = p.vendedor "
+            "LEFT JOIN area_atuacao a ON a.area = p.area_atuacao "
             "WHERE p.pedido = %s",
             (pedido,),
         )
@@ -969,6 +978,8 @@ def _get_pedido_sync(servidor: str, banco: str, pedido: int) -> dict:
                 "situacao": sit,
                 "situacao_label": SITUACAO_LABEL.get(sit, sit),
                 "total": float(row.get("total") or 0),
+                "area_atuacao": int(row["area_atuacao"]) if row.get("area_atuacao") is not None else None,
+                "area_descricao": (row.get("area_descricao") or "").strip(),
             },
         }
     except Exception as e:
@@ -991,6 +1002,7 @@ class PedidoSaveRequest(BaseModel):
     vendedor: int                      # funcionarios.codigo_int
     validade: Optional[str] = None     # ISO date YYYY-MM-DD
     obs: Optional[str] = ""
+    area_atuacao: Optional[int] = None # area_atuacao.area (FK)
 
 
 def _save_pedido_sync(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> dict:
@@ -1000,6 +1012,19 @@ def _save_pedido_sync(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> d
         return {"success": False, "message": f"Falha conexão: {e}"}
     try:
         cur = conn.cursor(as_dict=True)
+
+        # Se for update, verifica situação — só pedido em 'A' (Aberto) pode ser editado.
+        if pedido_codigo is not None:
+            cur.execute("SELECT situacao FROM pedido_venda WHERE pedido=%s", (pedido_codigo,))
+            ex = cur.fetchone()
+            if not ex:
+                conn.close()
+                return {"success": False, "message": "Pedido não encontrado."}
+            sit_atual = (ex.get("situacao") or "").strip().upper()
+            if sit_atual != "A":
+                conn.close()
+                label = SITUACAO_LABEL.get(sit_atual, sit_atual)
+                return {"success": False, "message": f"Pedido com situação '{label}' não pode ser alterado."}
         # Busca o nome e telefone do cliente para denormalizar em NOME_CLIENTE / TELEFONE_CLIENTE
         cur.execute(
             "SELECT TOP 1 c.nome, "
@@ -1021,11 +1046,11 @@ def _save_pedido_sync(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> d
             cur.execute(
                 "INSERT INTO pedido_venda "
                 "(cliente, data, validade, vendedor, hora_aberto, obs, situacao, "
-                " NOME_CLIENTE, TELEFONE_CLIENTE, abertopor, total, tipo) "
+                " NOME_CLIENTE, TELEFONE_CLIENTE, abertopor, total, tipo, area_atuacao) "
                 "OUTPUT INSERTED.pedido "
                 "VALUES (%s, CAST(GETDATE() AS DATE), %s, %s, "
-                "        CONVERT(NVARCHAR(8), GETDATE(), 108), %s, 'A', %s, %s, %s, 0, 0)",
-                (req.cliente, validade, req.vendedor, obs, nome_cli, tel_cli, req.vendedor),
+                "        CONVERT(NVARCHAR(8), GETDATE(), 108), %s, 'A', %s, %s, %s, 0, 0, %s)",
+                (req.cliente, validade, req.vendedor, obs, nome_cli, tel_cli, req.vendedor, req.area_atuacao),
             )
             row = cur.fetchone()
             if not row:
@@ -1038,9 +1063,9 @@ def _save_pedido_sync(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> d
             cur.execute(
                 "UPDATE pedido_venda SET "
                 " cliente=%s, validade=%s, vendedor=%s, obs=%s, "
-                " NOME_CLIENTE=%s, TELEFONE_CLIENTE=%s "
+                " NOME_CLIENTE=%s, TELEFONE_CLIENTE=%s, area_atuacao=%s "
                 "WHERE pedido=%s",
-                (req.cliente, validade, req.vendedor, obs, nome_cli, tel_cli, pedido_codigo),
+                (req.cliente, validade, req.vendedor, obs, nome_cli, tel_cli, req.area_atuacao, pedido_codigo),
             )
             if cur.rowcount == 0:
                 conn.rollback()
@@ -1111,6 +1136,134 @@ def _find_clientes_for_pedido_sync(servidor: str, banco: str, term: str, limit: 
 @api_router.get("/clientes/find/search")
 async def find_clientes_search(servidor: str, banco: str, term: str = ""):
     return await asyncio.to_thread(_find_clientes_for_pedido_sync, servidor, banco, term)
+
+
+# Cliente — resumo com telefone + endereço (para exibir no form de pedido)
+def _cliente_resumo_sync(servidor: str, banco: str, codigo: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT c.codigo, c.nome, c.cgc_cpf, c.e_mail, "
+            "  COALESCE((SELECT TOP 1 LTRIM(RTRIM(CAST(ddd AS NVARCHAR(4))) + ' ' + tel) FROM cliente_tel WHERE codigo=c.codigo ORDER BY sequencia), '') AS telefone, "
+            "  (SELECT TOP 1 LTRIM(RTRIM(ISNULL(endereco,'')+', '+ISNULL(CAST(numero AS NVARCHAR(10)),'') + ' - ' + ISNULL(bairro,'') + ' - ' + ISNULL(cidade,'') + '/' + ISNULL(uf,''))) "
+            "    FROM cliente_end WHERE codigo=c.codigo ORDER BY sequencia) AS endereco "
+            "FROM cliente c WHERE c.codigo = %s",
+            (codigo,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return {"success": False, "message": "Cliente não encontrado."}
+        return {
+            "success": True,
+            "cliente": {
+                "codigo": int(row["codigo"]),
+                "nome": (row.get("nome") or "").strip(),
+                "cgc_cpf": (row.get("cgc_cpf") or "").strip(),
+                "e_mail": (row.get("e_mail") or "").strip(),
+                "telefone": (row.get("telefone") or "").strip(),
+                "endereco": (row.get("endereco") or "").strip(),
+            },
+        }
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+@api_router.get("/clientes/{codigo}/resumo")
+async def get_cliente_resumo(codigo: int, servidor: str, banco: str):
+    return await asyncio.to_thread(_cliente_resumo_sync, servidor, banco, codigo)
+
+
+# Área de atuação — dropdown
+def _list_area_atuacao_sync(servidor: str, banco: str) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": []}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT area AS codigo, descricao FROM area_atuacao ORDER BY descricao")
+        items = [{"codigo": int(r["codigo"]), "descricao": (r.get("descricao") or "").strip()} for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return {"success": True, "items": items}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": []}
+
+
+@api_router.get("/area-atuacao")
+async def list_area_atuacao(servidor: str, banco: str):
+    return await asyncio.to_thread(_list_area_atuacao_sync, servidor, banco)
+
+
+# Funcionários — dropdown de vendedores
+def _list_funcionarios_sync(servidor: str, banco: str) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": []}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT codigo_int AS codigo, nome, nome_guerra, cod_funcao "
+            "FROM funcionarios WHERE ISNULL(situacao,'A') <> 'I' ORDER BY nome"
+        )
+        items = [{
+            "codigo": int(r["codigo"]),
+            "nome": (r.get("nome") or "").strip(),
+            "nome_guerra": (r.get("nome_guerra") or "").strip(),
+            "cod_funcao": (r.get("cod_funcao") or "").strip(),
+        } for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return {"success": True, "items": items}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": []}
+
+
+@api_router.get("/funcionarios")
+async def list_funcionarios(servidor: str, banco: str):
+    return await asyncio.to_thread(_list_funcionarios_sync, servidor, banco)
+
+
+# DOWNLOAD TEMP — remover após sync
+from fastapi.responses import PlainTextResponse as _PTR  # noqa: E402
+
+_DEV_FILES_2 = {
+    "server.py": "/app/backend/server.py",
+    "clientes.tsx": "/app/frontend/app/clientes.tsx",
+    "pedido-form.tsx": "/app/frontend/app/pedido-form.tsx",
+    "pedidos.tsx": "/app/frontend/app/pedidos.tsx",
+}
+
+
+@api_router.get("/dev/file2")
+async def dev_file2(name: str):
+    path = _DEV_FILES_2.get(name)
+    if not path:
+        return _PTR(f"# nao encontrado: {name}", status_code=404)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return _PTR(f.read())
+    except Exception as e:
+        return _PTR(f"# erro: {e}", status_code=500)
 
 
 # =====================================================================

@@ -181,6 +181,7 @@ export default function ClientesScreen() {
               testID={`cliente-${item.codigo}-novo-pedido`}
             >
               <Ionicons name="add-circle" size={28} color={colors.brandPrimary} />
+              <Text style={styles.novoPedidoLabel}>Pedido</Text>
             </Pressable>
           </Pressable>
         )}
@@ -259,5 +260,12 @@ const styles = StyleSheet.create({
   novoPedidoBtn: {
     padding: 4,
     marginLeft: 4,
+    alignItems: "center",
+  },
+  novoPedidoLabel: {
+    fontSize: 10,
+    color: colors.brandPrimary,
+    fontWeight: "600",
+    marginTop: -2,
   },
 });

@@ -12,11 +12,15 @@ import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 type ClienteRow = { codigo: number; nome: string; cgc_cpf: string; telefone: string };
+type ClienteResumo = { codigo: number; nome: string; cgc_cpf: string; e_mail: string; telefone: string; endereco: string };
+type AreaAtuacao = { codigo: number; descricao: string };
+type Funcionario = { codigo: number; nome: string; nome_guerra: string; cod_funcao: string };
 type PedidoData = {
   pedido: number; cliente: number | null; cliente_nome: string; cliente_cgc: string;
   data: string | null; validade: string | null;
   vendedor: number | null; vendedor_nome: string;
   hora_aberto: string; obs: string; situacao: string; situacao_label: string; total: number;
+  area_atuacao: number | null; area_descricao: string;
 };
 
 const SIT_COLOR: Record<string, string> = { A: "#1e88e5", F: "#43a047", PG: "#8e24aa", C: "#e53935" };
