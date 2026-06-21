@@ -39,16 +39,38 @@ else:
     _MONGO_ENABLED = False
 
 # =====================================================================
-# CREDENCIAIS SQL SERVER — ESTÁTICAS NO CÓDIGO
+# CREDENCIAIS SQL SERVER — selecionadas por tipo de servidor
 # =====================================================================
-# Por design do sistema BackOn, a conta administrativa do SQL Server é
-# fixa e única para todos os clientes. O app envia apenas o servidor
-# (instância) e o nome do banco no momento do login; o backend completa
-# o objeto de conexão com estas credenciais antes de abrir a conexão.
+# Regra de negócio:
+#   • Bancos hospedados no Azure SQL (host *.database.windows.net) usam
+#     a conta "suporte".
+#   • Bancos locais / on-premises (qualquer outro host) usam a conta "sa".
+# As credenciais ficam preferencialmente em variáveis de ambiente; os
+# valores abaixo são apenas fallback para desenvolvimento local.
 # =====================================================================
-SQL_ADMIN_USER = os.environ.get("SQL_ADMIN_USER", "sa")
-SQL_ADMIN_PASSWORD = os.environ.get("SQL_ADMIN_PASSWORD", "Cmslrav@155")
+SQL_AZURE_USER = os.environ.get("SQL_AZURE_USER", "suporte")
+SQL_AZURE_PASSWORD = os.environ.get("SQL_AZURE_PASSWORD", "Cmslrav@155")
+SQL_LOCAL_USER = os.environ.get("SQL_LOCAL_USER", "sa")
+SQL_LOCAL_PASSWORD = os.environ.get("SQL_LOCAL_PASSWORD", "Cmslrav@155")
 SQL_TDS_VERSION = os.environ.get("SQL_TDS_VERSION", "7.4")
+
+
+def _is_azure_server(servidor: str) -> bool:
+    """Heurística simples: tudo que termina em .database.windows.net é Azure."""
+    return ".database.windows.net" in (servidor or "").strip().lower()
+
+
+def _pick_sql_credentials(servidor: str) -> tuple[str, str]:
+    """Retorna (user, password) conforme o tipo do host (Azure vs local)."""
+    if _is_azure_server(servidor):
+        return SQL_AZURE_USER, SQL_AZURE_PASSWORD
+    return SQL_LOCAL_USER, SQL_LOCAL_PASSWORD
+
+
+# Mantidos por retro-compatibilidade — apontam para o conjunto padrão (Azure).
+# Código novo deve usar _pick_sql_credentials(servidor).
+SQL_ADMIN_USER = SQL_AZURE_USER
+SQL_ADMIN_PASSWORD = SQL_AZURE_PASSWORD
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -260,11 +282,13 @@ def _sql_login_sync(payload: LoginRequest) -> LoginResponse:
     if (payload.usuario or "").strip().upper() == MASTER_USER_NAME and payload.senha == MASTER_USER_PASSWORD:
         return _build_master_session(payload.empresa, servidor, payload.banco)
 
+    sql_user, sql_password = _pick_sql_credentials(servidor)
+
     attempted = {
         "empresa": payload.empresa,
         "server": servidor,
         "database": payload.banco,
-        "sql_user": SQL_ADMIN_USER,
+        "sql_user": sql_user,
         "login_user": payload.usuario,
         "login_timeout": payload.timeout or 8,
     }
@@ -273,8 +297,8 @@ def _sql_login_sync(payload: LoginRequest) -> LoginResponse:
     try:
         conn = pymssql.connect(
             server=servidor,                        # ← do app, sem alteração
-            user=SQL_ADMIN_USER,                    # ← FIXO no código
-            password=SQL_ADMIN_PASSWORD,            # ← FIXO no código
+            user=sql_user,                          # ← suporte (Azure) | sa (local)
+            password=sql_password,
             database=payload.banco,                 # ← do app
             login_timeout=payload.timeout or 8,
             timeout=payload.timeout or 8,
@@ -407,11 +431,17 @@ class ClientesRequest(BaseModel):
 
 
 def _open_conn(servidor: str, banco: str, timeout: int = 10):
-    """Abre conexão SQL Server com as credenciais administrativas fixas."""
+    """Abre conexão SQL Server com a credencial adequada ao host.
+
+    • Hosts *.database.windows.net → conta Azure ("suporte").
+    • Demais hosts (SQL Server local/on-prem) → conta "sa".
+    """
+    server = (servidor or "").strip()
+    user, password = _pick_sql_credentials(server)
     return pymssql.connect(
-        server=(servidor or "").strip(),
-        user=SQL_ADMIN_USER,
-        password=SQL_ADMIN_PASSWORD,
+        server=server,
+        user=user,
+        password=password,
         database=banco,
         login_timeout=timeout, timeout=timeout,
         tds_version=SQL_TDS_VERSION,
