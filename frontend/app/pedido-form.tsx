@@ -10,9 +10,14 @@ import { Ionicons } from "@expo/vector-icons";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import DateField from "@/src/components/DateField";
+import SelectField, { SelectOption } from "@/src/components/SelectField";
 
 type ClienteRow = { codigo: number; nome: string; cgc_cpf: string; telefone: string };
-type ClienteResumo = { codigo: number; nome: string; cgc_cpf: string; e_mail: string; telefone: string; endereco: string };
+type ClienteResumo = {
+  codigo: number; nome: string; cgc_cpf: string; e_mail: string;
+  telefone: string; endereco: string;
+};
 type AreaAtuacao = { codigo: number; descricao: string };
 type Funcionario = { codigo: number; nome: string; nome_guerra: string; cod_funcao: string };
 type PedidoData = {
@@ -24,6 +29,9 @@ type PedidoData = {
 };
 
 const SIT_COLOR: Record<string, string> = { A: "#1e88e5", F: "#43a047", PG: "#8e24aa", C: "#e53935" };
+
+// Funções que podem alterar vendedor: 01 (Administrador) e 02 (Gerente)
+const VENDEDOR_EDIT_FUNCOES = ["01", "02"];
 
 function formatDateBR(iso: string | null) {
   if (!iso) return "—";
@@ -44,6 +52,7 @@ export default function PedidoFormScreen() {
   const [conn, setConn] = useState<Connection | null>(null);
   const [vendedor, setVendedor] = useState<number | null>(null);
   const [vendedorNome, setVendedorNome] = useState("");
+  const [vendedorCanEdit, setVendedorCanEdit] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ msg: string; tone: "info" | "error" | "success" } | null>(null);
@@ -56,8 +65,14 @@ export default function PedidoFormScreen() {
 
   const [pedido, setPedido] = useState<PedidoData | null>(null);
   const [cliente, setCliente] = useState<ClienteRow | null>(null);
-  const [validade, setValidade] = useState("");
+  const [clienteResumo, setClienteResumo] = useState<ClienteResumo | null>(null);
+  const [loadingResumo, setLoadingResumo] = useState(false);
+  const [validade, setValidade] = useState<string | null>(null);
   const [obs, setObs] = useState("");
+  const [areaAtuacao, setAreaAtuacao] = useState<number | null>(null);
+
+  const [areas, setAreas] = useState<AreaAtuacao[]>([]);
+  const [funcionarios, setFuncionarios] = useState<Funcionario[]>([]);
 
   // Modal de busca de cliente
   const [searchOpen, setSearchOpen] = useState(false);
@@ -72,13 +87,21 @@ export default function PedidoFormScreen() {
       const cs = await listConnections();
       const c = cs.find((x) => x.empresa === s?.empresa) || null;
       setConn(c);
+
+      // Vendedor da sessão
       const cod = s?.funcionario?.codigo_int;
-      if (typeof cod === "number") setVendedor(cod);
-      else if (typeof cod === "string" && /^\d+$/.test(cod)) setVendedor(parseInt(cod, 10));
+      const vCod = typeof cod === "number"
+        ? cod
+        : (typeof cod === "string" && /^\d+$/.test(cod) ? parseInt(cod, 10) : null);
+      setVendedor(vCod);
       const fnome = (s?.funcionario?.nome_guerra || s?.funcionario?.nome || "") as string;
       setVendedorNome(fnome);
 
-      // Pré-seleciona cliente vindo da rota (criação direto da lista de clientes)
+      // Quem pode alterar o vendedor: cod_funcao 01 ou 02
+      const codFuncao = String(s?.funcionario?.cod_funcao || "").trim().padStart(2, "0");
+      setVendedorCanEdit(VENDEDOR_EDIT_FUNCOES.includes(codFuncao));
+
+      // Pré-seleciona cliente vindo da rota
       if (!editing && params.cliente && params.cliente_nome) {
         setCliente({
           codigo: parseInt(String(params.cliente), 10),
@@ -87,25 +110,71 @@ export default function PedidoFormScreen() {
         });
       }
 
+      // Carrega listas (áreas e funcionários) em paralelo
+      if (c) {
+        const base = c.api.replace(/\/+$/, "");
+        const qs = `servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`;
+        try {
+          const [ra, rf] = await Promise.all([
+            fetch(`${base}/api/area-atuacao?${qs}`).then((r) => r.json()).catch(() => null),
+            fetch(`${base}/api/funcionarios?${qs}`).then((r) => r.json()).catch(() => null),
+          ]);
+          if (ra?.success) setAreas(ra.items || []);
+          if (rf?.success) setFuncionarios(rf.items || []);
+        } catch {
+          // silencioso — combobox vazio
+        }
+      }
+
+      // Carrega pedido em modo edição
       if (editing && pedidoId && c) {
-        const r = await fetch(
-          `${c.api.replace(/\/+$/, "")}/api/pedidos/${pedidoId}?servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`
-        );
-        const j = await r.json();
-        if (j?.success && j.pedido) {
-          const p: PedidoData = j.pedido;
-          setPedido(p);
-          if (p.cliente) setCliente({ codigo: p.cliente, nome: p.cliente_nome, cgc_cpf: p.cliente_cgc, telefone: "" });
-          setValidade(p.validade || "");
-          setObs(p.obs || "");
-        } else {
-          showToast(j?.message || "Erro ao carregar pedido.", "error");
+        try {
+          const r = await fetch(
+            `${c.api.replace(/\/+$/, "")}/api/pedidos/${pedidoId}?servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`
+          );
+          const j = await r.json();
+          if (j?.success && j.pedido) {
+            const p: PedidoData = j.pedido;
+            setPedido(p);
+            if (p.cliente) setCliente({ codigo: p.cliente, nome: p.cliente_nome, cgc_cpf: p.cliente_cgc, telefone: "" });
+            setValidade(p.validade || null);
+            setObs(p.obs || "");
+            setAreaAtuacao(p.area_atuacao ?? null);
+            if (p.vendedor != null) setVendedor(p.vendedor);
+            if (p.vendedor_nome) setVendedorNome(p.vendedor_nome);
+          } else {
+            showToast(j?.message || "Erro ao carregar pedido.", "error");
+          }
+        } catch (e) {
+          showToast(`Erro ao carregar: ${e instanceof Error ? e.message : String(e)}`, "error");
         }
       }
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // -------- Carrega resumo do cliente sempre que muda
+  useEffect(() => {
+    if (!conn || !cliente?.codigo) {
+      setClienteResumo(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingResumo(true);
+    const base = conn.api.replace(/\/+$/, "");
+    const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`;
+    fetch(`${base}/api/clientes/${cliente.codigo}/resumo?${qs}`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        if (j?.success && j.cliente) setClienteResumo(j.cliente);
+        else setClienteResumo(null);
+      })
+      .catch(() => { if (!cancelled) setClienteResumo(null); })
+      .finally(() => { if (!cancelled) setLoadingResumo(false); });
+    return () => { cancelled = true; };
+  }, [conn, cliente?.codigo]);
 
   // -------- Busca cliente (debounce)
   useEffect(() => {
@@ -129,17 +198,24 @@ export default function PedidoFormScreen() {
   const handleSave = async () => {
     if (!conn) return;
     if (!cliente) { showToast("Selecione um cliente.", "error"); return; }
-    if (vendedor == null) { showToast("Vendedor não identificado na sessão.", "error"); return; }
+    if (vendedor == null) { showToast("Vendedor não identificado.", "error"); return; }
     setSaving(true);
     try {
       const body = {
         servidor: conn.servidor, banco: conn.banco,
-        cliente: cliente.codigo, vendedor,
-        validade: validade || null, obs,
+        cliente: cliente.codigo,
+        vendedor,
+        validade: validade || null,
+        obs,
+        area_atuacao: areaAtuacao,
       };
       const base = conn.api.replace(/\/+$/, "");
       const url = editing && pedidoId ? `${base}/api/pedidos/${pedidoId}` : `${base}/api/pedidos/create`;
-      const r = await fetch(url, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const r = await fetch(url, {
+        method: editing ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
       const j = await r.json();
       if (!j?.success) {
         showToast(j?.message || "Falha ao gravar.", "error");
@@ -154,6 +230,32 @@ export default function PedidoFormScreen() {
 
   const sit = pedido?.situacao || "A";
   const sitColor = useMemo(() => SIT_COLOR[sit] || colors.muted, [sit]);
+
+  // Opções dos comboboxes
+  const areaOptions: SelectOption[] = useMemo(
+    () => areas.map((a) => ({ value: a.codigo, label: a.descricao })),
+    [areas]
+  );
+  const vendedorOptions: SelectOption[] = useMemo(
+    () => funcionarios.map((f) => ({
+      value: f.codigo,
+      label: f.nome_guerra || f.nome,
+      sub: `#${f.codigo}${f.nome_guerra && f.nome !== f.nome_guerra ? ` · ${f.nome}` : ""}`,
+    })),
+    [funcionarios]
+  );
+
+  // Se o vendedor atual não estiver na lista de ativos (ex.: usuário inativo),
+  // adiciona uma opção "ghost" para que seja exibido o label corretamente.
+  const vendedorOptionsWithGhost: SelectOption[] = useMemo(() => {
+    if (vendedor == null) return vendedorOptions;
+    const exists = vendedorOptions.some((o) => Number(o.value) === vendedor);
+    if (exists) return vendedorOptions;
+    return [
+      { value: vendedor, label: vendedorNome || `Funcionário #${vendedor}`, sub: `#${vendedor}` },
+      ...vendedorOptions,
+    ];
+  }, [vendedor, vendedorNome, vendedorOptions]);
 
   if (loading) return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
@@ -196,7 +298,7 @@ export default function PedidoFormScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.clienteNome} numberOfLines={1}>{cliente.nome}</Text>
                 <Text style={styles.clienteSub} numberOfLines={1}>
-                  #{cliente.codigo}{cliente.cgc_cpf ? ` · ${cliente.cgc_cpf}` : ""}{cliente.telefone ? ` · ${cliente.telefone}` : ""}
+                  #{cliente.codigo}{cliente.cgc_cpf ? ` · ${cliente.cgc_cpf}` : ""}
                 </Text>
               </View>
             ) : (
@@ -208,14 +310,66 @@ export default function PedidoFormScreen() {
             <Ionicons name="chevron-forward" size={18} color={colors.muted} />
           </Pressable>
 
-          {/* Vendedor (readonly da sessão) */}
-          <Text style={styles.sectionTitle}>Vendedor</Text>
-          <View style={styles.readonlyBox} testID="pedido-form-vendedor">
-            <Ionicons name="person-circle-outline" size={18} color={colors.brandPrimary} />
-            <Text style={styles.readonlyText}>
-              {vendedor != null ? `${vendedorNome || "Funcionário"} (#${vendedor})` : "Não identificado na sessão"}
-            </Text>
-          </View>
+          {/* Resumo do cliente: telefone + endereço */}
+          {cliente ? (
+            <View style={styles.resumoBox} testID="pedido-form-cliente-resumo">
+              {loadingResumo ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <ActivityIndicator size="small" color={colors.brandPrimary} />
+                  <Text style={styles.resumoText}>Carregando dados…</Text>
+                </View>
+              ) : clienteResumo ? (
+                <>
+                  <View style={styles.resumoRow}>
+                    <Ionicons name="call-outline" size={14} color={colors.brandPrimary} />
+                    <Text style={styles.resumoText} numberOfLines={1}>
+                      {clienteResumo.telefone || "Sem telefone"}
+                    </Text>
+                  </View>
+                  <View style={styles.resumoRow}>
+                    <Ionicons name="location-outline" size={14} color={colors.brandPrimary} />
+                    <Text style={styles.resumoText} numberOfLines={2}>
+                      {clienteResumo.endereco || "Sem endereço cadastrado"}
+                    </Text>
+                  </View>
+                  {clienteResumo.e_mail ? (
+                    <View style={styles.resumoRow}>
+                      <Ionicons name="mail-outline" size={14} color={colors.brandPrimary} />
+                      <Text style={styles.resumoText} numberOfLines={1}>{clienteResumo.e_mail}</Text>
+                    </View>
+                  ) : null}
+                </>
+              ) : (
+                <Text style={styles.resumoText}>Dados do cliente indisponíveis.</Text>
+              )}
+            </View>
+          ) : null}
+
+          {/* Vendedor */}
+          <Text style={styles.sectionTitle}>
+            Vendedor {!vendedorCanEdit ? <Text style={styles.lockHint}>(sem permissão para alterar)</Text> : null}
+          </Text>
+          <SelectField
+            value={vendedor}
+            onChange={(v) => setVendedor(v == null ? null : Number(v))}
+            options={vendedorOptionsWithGhost}
+            placeholder="Selecione o vendedor"
+            disabled={!vendedorCanEdit}
+            modalTitle="Selecionar Vendedor"
+            testID="pedido-form-vendedor"
+          />
+
+          {/* Área de atuação */}
+          <Text style={styles.sectionTitle}>Área de Atuação</Text>
+          <SelectField
+            value={areaAtuacao}
+            onChange={(v) => setAreaAtuacao(v == null ? null : Number(v))}
+            options={areaOptions}
+            placeholder="Selecione a área"
+            modalTitle="Selecionar Área de Atuação"
+            allowClear
+            testID="pedido-form-area"
+          />
 
           {/* Datas */}
           <View style={styles.row}>
@@ -229,15 +383,13 @@ export default function PedidoFormScreen() {
               </View>
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.sectionTitle}>Validade</Text>
-              <TextInput
+              <DateField
+                label="Validade"
                 value={validade}
-                onChangeText={(v) => setValidade(v.replace(/[^\d-]/g, "").slice(0, 10))}
-                placeholder="AAAA-MM-DD"
-                placeholderTextColor={colors.muted}
-                style={styles.input}
-                keyboardType="numbers-and-punctuation"
+                onChange={setValidade}
+                placeholder="DD/MM/AAAA"
                 testID="pedido-form-validade"
+                minimumDate={new Date()}
               />
             </View>
           </View>
@@ -346,7 +498,8 @@ const styles = StyleSheet.create({
   saveLabel: { color: colors.onBrandPrimary, fontWeight: "500", fontSize: 13 },
   scroll: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
   sectionTitle: { fontSize: 12, color: colors.muted, marginTop: spacing.md, marginBottom: 4, fontWeight: "500", textTransform: "uppercase", letterSpacing: 0.5 },
-  row: { flexDirection: "row", gap: 8, alignItems: "center" },
+  lockHint: { fontSize: 10, color: colors.muted, fontWeight: "400", textTransform: "none", letterSpacing: 0 },
+  row: { flexDirection: "row", gap: 8, alignItems: "flex-end" },
   headerMeta: { fontSize: 12, color: colors.muted },
   clienteBox: {
     flexDirection: "row", alignItems: "center", gap: 8,
@@ -355,6 +508,18 @@ const styles = StyleSheet.create({
   },
   clienteNome: { fontSize: 15, fontWeight: "500", color: colors.onSurface },
   clienteSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
+  resumoBox: {
+    backgroundColor: colors.brandTertiary,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    marginTop: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: 6,
+  },
+  resumoRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  resumoText: { fontSize: 13, color: colors.onSurface, flex: 1 },
   readonlyBox: {
     flexDirection: "row", alignItems: "center", gap: 8,
     backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,

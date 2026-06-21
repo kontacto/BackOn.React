@@ -202,3 +202,39 @@ agent_communication:
       (não acessível no preview Linux). O usuário deve rodar o backend no
       Windows com pymssql e testar contra BARESTEL para validar as queries
       e o fluxo end-to-end.
+
+
+  - agent: "main"
+    message: |
+      [2026-06-21] Implementadas as melhorias de UI do módulo Pedidos solicitadas pelo usuário:
+
+      Frontend novos componentes (/app/frontend/src/components/):
+      - DateField.tsx — wrapper para @react-native-community/datetimepicker (formato DD/MM/AAAA)
+      - SelectField.tsx — combobox/dropdown reutilizável com busca interna em modal bottom-sheet
+
+      Frontend (/app/frontend/app/pedido-form.tsx) — reescrito:
+      - Combobox de Vendedor consumindo GET /api/funcionarios
+      - Desabilitado se session.funcionario.cod_funcao NÃO está em ["01", "02"]
+      - Combobox de Área de Atuação consumindo GET /api/area-atuacao
+      - Card de resumo do cliente abaixo da seleção, consumindo GET /api/clientes/{c}/resumo
+        (mostra telefone, endereço completo, e-mail)
+      - Campo Validade trocado por DateField nativo (DD/MM/AAAA)
+      - Envio de area_atuacao no payload de POST /api/pedidos/create e PUT /api/pedidos/{id}
+
+      Frontend (/app/frontend/app/pedidos.tsx) — atualizado:
+      - Botão "options" no header para abrir/fechar painel de filtros
+      - Painel com filtros DE / ATÉ (DD/MM/AAAA) usando DateField nativo
+      - Envio de data_ini e data_fim no body de POST /api/pedidos
+      - Indicador visual (dot vermelho) quando filtros de data ativos
+      - Botão "Limpar" para resetar os filtros de data
+      - Chips de situação agora rolando horizontalmente
+
+      Validação web preview: tela /pedido-form e /pedidos renderizam todos os elementos
+      corretamente, sem erros de bundle ou lint.
+
+      Backend NÃO foi modificado — endpoints já existiam:
+      - GET /api/area-atuacao (já implementado)
+      - GET /api/funcionarios (já implementado)
+      - GET /api/clientes/{codigo}/resumo (já implementado)
+      - POST /api/pedidos com suporte a data_ini/data_fim (já implementado)
+      - POST/PUT /api/pedidos com area_atuacao (já implementado)

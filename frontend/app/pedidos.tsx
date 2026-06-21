@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   FlatList,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -15,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import DateField from "@/src/components/DateField";
 
 type Pedido = {
   pedido: number;
@@ -57,6 +59,9 @@ export default function PedidosScreen() {
   const [conn, setConn] = useState<Connection | null>(null);
   const [search, setSearch] = useState("");
   const [situacao, setSituacao] = useState("");
+  const [dataIni, setDataIni] = useState<string | null>(null);
+  const [dataFim, setDataFim] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
   const [items, setItems] = useState<Pedido[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -73,7 +78,10 @@ export default function PedidosScreen() {
   }, []);
 
   const load = useCallback(
-    async (term: string, sit: string, pg: number, append: boolean) => {
+    async (
+      term: string, sit: string, di: string | null, df: string | null,
+      pg: number, append: boolean,
+    ) => {
       if (!conn) return;
       if (aborter.current) aborter.current.abort();
       const ac = new AbortController();
@@ -87,7 +95,9 @@ export default function PedidosScreen() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             servidor: conn.servidor, banco: conn.banco,
-            search: term, situacao: sit, page: pg, size: 20,
+            search: term, situacao: sit,
+            data_ini: di, data_fim: df,
+            page: pg, size: 20,
           }),
           signal: ac.signal,
         });
@@ -117,21 +127,28 @@ export default function PedidosScreen() {
     if (!conn) return;
     const t = setTimeout(() => {
       setPage(1);
-      load(search, situacao, 1, false);
+      load(search, situacao, dataIni, dataFim, 1, false);
     }, 350);
     return () => clearTimeout(t);
-  }, [search, situacao, conn, load]);
+  }, [search, situacao, dataIni, dataFim, conn, load]);
 
   useFocusEffect(useCallback(() => {
-    if (conn) load(search, situacao, 1, false);
-  }, [conn, search, situacao, load]));
+    if (conn) load(search, situacao, dataIni, dataFim, 1, false);
+  }, [conn, search, situacao, dataIni, dataFim, load]));
 
   const loadMore = () => {
     if (loading || items.length >= total) return;
     const next = page + 1;
     setPage(next);
-    load(search, situacao, next, true);
+    load(search, situacao, dataIni, dataFim, next, true);
   };
+
+  const clearDateFilters = () => {
+    setDataIni(null);
+    setDataFim(null);
+  };
+
+  const hasDateFilter = !!(dataIni || dataFim);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="pedidos-screen">
@@ -140,7 +157,19 @@ export default function PedidosScreen() {
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
         <Text style={styles.headerTitle}>Pedidos ({total})</Text>
-        <View style={{ width: 40 }} />
+        <Pressable
+          onPress={() => setShowFilters((v) => !v)}
+          style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]}
+          hitSlop={12}
+          testID="pedidos-toggle-filters"
+        >
+          <Ionicons
+            name={showFilters ? "options" : "options-outline"}
+            size={22}
+            color={colors.onBrandPrimary}
+          />
+          {hasDateFilter ? <View style={styles.filterDot} /> : null}
+        </Pressable>
       </View>
 
       <View style={styles.searchWrap}>
@@ -155,7 +184,11 @@ export default function PedidosScreen() {
         />
       </View>
 
-      <View style={styles.chipsRow}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipsRow}
+      >
         {SITUACOES.map((s) => {
           const sel = situacao === s.value;
           return (
@@ -169,14 +202,49 @@ export default function PedidosScreen() {
             </Pressable>
           );
         })}
-      </View>
+      </ScrollView>
+
+      {showFilters ? (
+        <View style={styles.filterCard} testID="pedidos-filter-card">
+          <View style={styles.filterHeader}>
+            <Text style={styles.filterTitle}>Filtrar por data</Text>
+            {hasDateFilter ? (
+              <Pressable
+                onPress={clearDateFilters}
+                style={({ pressed }) => [styles.clearBtn, pressed && { opacity: 0.7 }]}
+                testID="pedidos-clear-dates"
+                hitSlop={6}
+              >
+                <Ionicons name="close-circle-outline" size={14} color={colors.brandPrimary} />
+                <Text style={styles.clearBtnText}>Limpar</Text>
+              </Pressable>
+            ) : null}
+          </View>
+          <View style={styles.filterRow}>
+            <DateField
+              label="De"
+              value={dataIni}
+              onChange={setDataIni}
+              testID="pedidos-data-ini"
+              maximumDate={dataFim ? new Date(dataFim) : undefined}
+            />
+            <DateField
+              label="Até"
+              value={dataFim}
+              onChange={setDataFim}
+              testID="pedidos-data-fim"
+              minimumDate={dataIni ? new Date(dataIni) : undefined}
+            />
+          </View>
+        </View>
+      ) : null}
 
       {error ? <Text style={styles.errorText} testID="pedidos-error">{error}</Text> : null}
 
       <FlatList
         data={items}
         keyExtractor={(p) => String(p.pedido)}
-        contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 100 }}
+        contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 100, paddingTop: spacing.sm }}
         ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
         onEndReached={loadMore}
         onEndReachedThreshold={0.6}
@@ -225,6 +293,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.md, gap: spacing.sm,
   },
   backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
+  filterDot: {
+    position: "absolute", top: 8, right: 8,
+    width: 8, height: 8, borderRadius: 4, backgroundColor: "#ff5252",
+  },
   headerTitle: { flex: 1, color: colors.onBrandPrimary, fontSize: 17, fontWeight: "500" },
   searchWrap: {
     flexDirection: "row", alignItems: "center", gap: spacing.sm,
@@ -235,8 +307,8 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, color: colors.onSurface, fontSize: 14 },
   chipsRow: {
-    flexDirection: "row", flexWrap: "wrap", gap: 8,
-    paddingHorizontal: spacing.lg, marginTop: spacing.md, marginBottom: spacing.sm,
+    gap: 8,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
   },
   chip: {
     paddingHorizontal: spacing.md, paddingVertical: 8,
@@ -245,6 +317,25 @@ const styles = StyleSheet.create({
   },
   chipSel: { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary },
   chipText: { fontSize: 13, color: colors.onSurface, fontWeight: "500" },
+  filterCard: {
+    marginHorizontal: spacing.lg,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.sm,
+  },
+  filterHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+  },
+  filterTitle: { fontSize: 13, fontWeight: "600", color: colors.onSurface },
+  clearBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
+  clearBtnText: { fontSize: 12, color: colors.brandPrimary, fontWeight: "500" },
+  filterRow: { flexDirection: "row", gap: 8 },
   errorText: { color: colors.error, fontSize: 13, marginHorizontal: spacing.lg, marginBottom: spacing.sm },
   card: {
     flexDirection: "row", alignItems: "center", gap: spacing.md,
