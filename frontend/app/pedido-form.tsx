@@ -372,7 +372,7 @@ export default function PedidoFormScreen() {
           />
 
           {/* Datas */}
-          <View style={styles.row}>
+          <View style={styles.dateRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.sectionTitle}>Data</Text>
               <View style={styles.readonlyBox}>
@@ -383,8 +383,8 @@ export default function PedidoFormScreen() {
               </View>
             </View>
             <View style={{ flex: 1 }}>
+              <Text style={styles.sectionTitle}>Validade</Text>
               <DateField
-                label="Validade"
                 value={validade}
                 onChange={setValidade}
                 placeholder="DD/MM/AAAA"
@@ -500,6 +500,7 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 12, color: colors.muted, marginTop: spacing.md, marginBottom: 4, fontWeight: "500", textTransform: "uppercase", letterSpacing: 0.5 },
   lockHint: { fontSize: 10, color: colors.muted, fontWeight: "400", textTransform: "none", letterSpacing: 0 },
   row: { flexDirection: "row", gap: 8, alignItems: "flex-end" },
+  dateRow: { flexDirection: "row", gap: 8, alignItems: "flex-start" },
   headerMeta: { fontSize: 12, color: colors.muted },
   clienteBox: {
     flexDirection: "row", alignItems: "center", gap: 8,
