@@ -132,6 +132,24 @@ export default function DateField({
     setOpen(false);
   }
 
+  // Atalhos rápidos (Amanhã / +7 dias / Fim do mês)
+  const shortcuts = useMemo(() => {
+    const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+    const plus7 = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 7);
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    return [
+      { key: "tomorrow", label: "Amanhã", date: tomorrow },
+      { key: "plus7", label: "+7 dias", date: plus7 },
+      { key: "eom", label: "Fim do mês", date: endOfMonth },
+    ];
+  }, [today]);
+
+  function handleShortcut(d: Date) {
+    if (isDisabled(d)) return;
+    onChange(dateToISO(d));
+    setOpen(false);
+  }
+
   // Lista de anos para o picker (centrado no atual, ±60 anos, respeitando limites).
   const yearRange = useMemo(() => {
     const base = viewYear;
@@ -290,6 +308,30 @@ export default function DateField({
                 </View>
               </>
             )}
+
+            {/* Atalhos rápidos */}
+            {!yearPickerOpen ? (
+              <View style={styles.shortcutsRow}>
+                {shortcuts.map((s) => {
+                  const disabled = isDisabled(s.date);
+                  return (
+                    <Pressable
+                      key={s.key}
+                      onPress={() => handleShortcut(s.date)}
+                      disabled={disabled}
+                      style={({ pressed }) => [
+                        styles.shortcutChip,
+                        pressed && !disabled && { opacity: 0.7 },
+                        disabled && { opacity: 0.35 },
+                      ]}
+                      testID={testID ? `${testID}-shortcut-${s.key}` : undefined}
+                    >
+                      <Text style={styles.shortcutText}>{s.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
 
             {/* Rodapé com ações */}
             <View style={styles.footer}>
@@ -482,6 +524,25 @@ const styles = StyleSheet.create({
   dayTextDisabled: { color: colors.muted, opacity: 0.3 },
 
   // Rodapé
+  shortcutsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    paddingTop: spacing.sm,
+  },
+  shortcutChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    backgroundColor: colors.brandTertiary,
+    borderWidth: 1,
+    borderColor: colors.brandTertiary,
+  },
+  shortcutText: {
+    fontSize: 12,
+    color: colors.brandPrimary,
+    fontWeight: "600",
+  },
   footer: {
     flexDirection: "row",
     alignItems: "center",
