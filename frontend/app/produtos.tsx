@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -345,13 +346,14 @@ export default function ProdutosScreen() {
                     <Text style={styles.fieldLabel}>Quantidade</Text>
                     <View style={styles.qtdInputRow}>
                       <TextInput value={selQtd} onChangeText={setSelQtd} keyboardType="decimal-pad" style={[styles.modalInput, { flex: 1 }]} testID="produtos-add-qtd" />
-                      <Pressable
+                      <TouchableOpacity
                         onPress={() => setSelQtd(String(parseNum(selQtd) + 1).replace(".", ","))}
-                        style={({ pressed }) => [styles.plusBtn, pressed && { opacity: 0.7 }]}
+                        activeOpacity={0.7}
+                        style={styles.plusBtn}
                         testID="produtos-add-qtd-plus"
                       >
                         <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
-                      </Pressable>
+                      </TouchableOpacity>
                     </View>
                   </View>
                   <View style={{ flex: 1 }}>

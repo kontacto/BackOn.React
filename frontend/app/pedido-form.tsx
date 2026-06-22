@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable,
-  ScrollView, StyleSheet, Text, TextInput, View,
+  ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
@@ -789,13 +789,14 @@ export default function PedidoFormScreen() {
                           style={[styles.input, { flex: 1 }]}
                           testID="pedido-form-add-qtd"
                         />
-                        <Pressable
+                        <TouchableOpacity
                           onPress={() => setAddQtd(fmtNum(parseNum(addQtd) + 1))}
-                          style={({ pressed }) => [styles.plusBtn, pressed && { opacity: 0.7 }]}
+                          activeOpacity={0.7}
+                          style={styles.plusBtn}
                           testID="pedido-form-add-qtd-plus"
                         >
                           <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
-                        </Pressable>
+                        </TouchableOpacity>
                       </View>
                     </View>
                     <View style={{ flex: 1 }}>
@@ -928,13 +929,14 @@ export default function PedidoFormScreen() {
                       <Text style={styles.fieldLabel}>Quantidade</Text>
                       <View style={styles.qtdInputRow}>
                         <TextInput value={editQtd} onChangeText={setEditQtd} keyboardType="decimal-pad" style={[styles.input, { flex: 1 }]} testID="pedido-form-edit-qtd" />
-                        <Pressable
+                        <TouchableOpacity
                           onPress={() => setEditQtd(fmtNum(parseNum(editQtd) + 1))}
-                          style={({ pressed }) => [styles.plusBtn, pressed && { opacity: 0.7 }]}
+                          activeOpacity={0.7}
+                          style={styles.plusBtn}
                           testID="pedido-form-edit-qtd-plus"
                         >
                           <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
-                        </Pressable>
+                        </TouchableOpacity>
                       </View>
                     </View>
                     <View style={{ flex: 1 }}>
