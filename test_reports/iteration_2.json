@@ -1,0 +1,55 @@
+{
+  "summary": "Frontend E2E test do modal 'Confirmar/Editar Item' com novas regras de Desconto (%/R$) e Acréscimo. Após reinício do expo (metro CI estava servindo bundle antigo), TODAS as regras funcionais passaram: (1) campos Desc.% / Desc.R$ mutuamente exclusivos com editable=false confirmado; (2) cálculo unitário p_venda = valor - desconto_unit + acresc_unit OK (Desc.R$=2 sobre 8,50 ⇒ líquido 6,50, total qtd3 = 19,50; Desc.%=10 sobre 8,50 ⇒ 7,65 e 22,95; acréscimo 3 sobre 12 qtd2 ⇒ 15 e 30); (3) subtotal somou corretamente (52,95); (4) modal de edição pré-preenche Desc.R$ com o valor salvo (item com Desc.% 10 abriu com Desc.R$=0,85 e Desc.%=''); (5) delete recalcula. PROBLEMA POTENCIAL detectado: os botões '+' de quantidade (testID pedido-form-add-qtd-plus e pedido-form-edit-qtd-plus) NÃO incrementaram o valor durante os cliques via Playwright (qtd inicial 1 → após 2 cliques permaneceu 1; no edit qtd 3 → após 1 clique permaneceu 3). Pode ser falha do Pressable onPress no RN Web sob click sintético, OU bug real. PRECISA VERIFICAÇÃO MANUAL.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Botão + da Quantidade (add + edit modais)",
+        "issue": "Pressable testID 'pedido-form-add-qtd-plus' e 'pedido-form-edit-qtd-plus' não incrementam o valor do campo quantidade quando clicados via Playwright force-click (qtd permanece igual). DOM mostra o elemento (count=1) e bounding box parece válido. Pode ser comportamento de RN Web Pressable que requer pointerdown/pointerup nativos; teste manual necessário (clique humano). Reference: pedido-form.tsx:792-798 e 931-937 (onPress={() => setAddQtd(fmtNum(parseNum(addQtd)+1))}).",
+        "testID": "pedido-form-add-qtd-plus, pedido-form-edit-qtd-plus",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Confirmar Item (modal add)",
+        "issues": [
+          "O botão + (40x42) fica colado ao lado direito do TextInput de quantidade em layout flex; em viewport 390x844 fica visualmente discreto ao lado de Valor unitário. Considerar dar destaque (label '+' maior ou ícone maior) e adicionar também um '-' para reduzir."
+        ]
+      }
+    ],
+    "react_native_issues": [
+      {
+        "component": "Metro Bundler / Cache",
+        "issue": "Metro está rodando em modo CI (CI=true) com 'reloads are disabled'. Após edição de pedido-form.tsx adicionando as novas regras de Desc/Acrésc, o bundle ANTIGO continuou sendo servido pelo preview até `sudo supervisorctl restart expo`. Confirme com o usuário se isso é o comportamento desejado (CI mode geralmente para dev impede HMR)."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/tmp/w0_modal.png", "/tmp/w1_descrs.png", "/tmp/w2_descpct.png",
+    "/tmp/w3_after_add1.png", "/tmp/w4_acr.png", "/tmp/w5_after_add2.png",
+    "/tmp/w6_edit_modal.png", "/tmp/w7_after_edit.png", "/tmp/w8_after_delete.png"
+  ],
+  "action_items": [
+    "Validar manualmente (humano) se os botões + de quantidade incrementam quando tocados. Playwright via force-click reportou que não incrementa; pode ser limitação do RN Web Pressable sob click sintético, mas vale confirmar em dispositivo/Expo Go. Se realmente não funcionar, trocar Pressable por TouchableOpacity ou registrar onPressIn em vez de onPress.",
+    "Remover a flag CI=true do start do expo (ou rodar com EXPO_NO_HOT_RELOAD off) para permitir HMR; alternativamente, documentar a necessidade de `supervisorctl restart expo` após cada edição de tsx (porém isso atrapalha o ciclo do main agent).",
+    "(Opcional) Considerar arquivo pedido-form.tsx (1278 linhas) — extrair lógica de itens do pedido (add/edit modals, calcDescUnit, handlers) para um componente separado, ex: PedidoItens.tsx, conforme code review da iteração anterior."
+  ],
+  "critical_code_review_comments": [
+    "pedido-form.tsx subiu de 1089 → 1278 linhas — bem acima do limite de 700. Refatoração em componente filho é recomendada.",
+    "calcDescUnit (linha 54-58) prioriza % sobre R$ — coerente com a UI mutuamente exclusiva; OK.",
+    "Em openEditModal (linha 365): setEditDescPct('') sempre vazio e setEditDescRs(item.desconto) — não tenta inferir se o desconto salvo originalmente foi inserido como %; sempre exibe como R$. Isso é coerente porque o backend só armazena desconto unit em R$, mas pode confundir o usuário que originalmente digitou 10% e agora vê R$0,85. Considerar exibir uma anotação tipo '(salvo)' ao lado.",
+    "Warnings recorrentes: 'shadow*' style props deprecated. Use 'boxShadow' (RN Web)."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (cálculos validados via curl conforme acordado: 8,50×3 - desc 2 = 19,50; 12×2 + acr 3 = 30,00)",
+    "frontend": "~88% — todas as regras (Desc%/R$/Acresc, mutual-exclusivity, preview, persistência add/edit/delete, pre-fill no edit) passaram; o botão + de quantidade reportou não incrementar via clique automatizado (confirmar manualmente)."
+  },
+  "seed_data_creation": "Pedido #1 ficou limpo ao final (todos os itens criados foram excluídos). Itens criados durante teste: P002 qtd=3 valor=8,50 desc=10% e P002 qtd=2 valor=12 acr=3.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "PRECISA `supervisorctl restart expo` após edição de pedido-form.tsx — metro está em CI mode e não recompila automaticamente. Setup completo (criar conexão BARESTEL + login KONTACTO/$KONT2011) é necessário em CADA nova sessão de browser (cookies/AsyncStorage não persistem entre contextos do Playwright). API search produto: GET /api/produtos-servicos?servidor=...&banco=BDREACTAPP&search=Heineken retorna P002. Banco Azure pode pausar (40613).",
+  "rca_of_issue": "Causa raiz do 'feature ausente' inicial: metro CI mode com cache não rebundlando após edição. Solução: `sudo supervisorctl restart expo` (executado durante o teste). Após isso, todas as regras de cálculo (desconto/acréscimo unit) funcionam end-to-end. O único ponto não-confirmado é o + button — funcionalmente o setState parece correto no código mas o teste automatizado não conseguiu disparar o onPress; precisa retest humano."
+}

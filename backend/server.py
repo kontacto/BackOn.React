@@ -1140,14 +1140,15 @@ async def update_pedido(pedido: int, req: PedidoSaveRequest):
 # Total do item = qtd_pedida * p_venda - desconto + acrescimo
 # pedido_venda.total = SUM dos itens não cancelados.
 # =====================================================================
-def _item_total(qtd, pv, desc, acr) -> float:
-    return round(float(qtd or 0) * float(pv or 0) - float(desc or 0) + float(acr or 0), 2)
+def _item_total(qtd, pv) -> float:
+    # p_venda já é o preço líquido unitário (= p_normal - desconto + acrescimo)
+    return round(float(qtd or 0) * float(pv or 0), 2)
 
 
 def _recalc_pedido_total(cur, pedido: int) -> float:
     cur.execute(
         "UPDATE pedido_venda SET total = ISNULL(("
-        "  SELECT SUM(qtd_pedida * p_venda - ISNULL(desconto,0) + ISNULL(acrescimo,0)) "
+        "  SELECT SUM(qtd_pedida * p_venda) "
         "  FROM pedido_venda_prod WHERE pedido=%s AND ISNULL(item_cancelado,0)=0"
         "), 0) WHERE pedido=%s",
         (pedido, pedido),
@@ -1212,7 +1213,7 @@ def _list_itens_sync(servidor: str, banco: str, pedido: int) -> dict:
             conn.close()
             return {"success": False, "message": "Pedido não encontrado.", "items": [], "subtotal": 0}
         cur.execute(
-            "SELECT i.codauto, i.produto, i.qtd_pedida, i.p_venda, i.desconto, i.acrescimo, "
+            "SELECT i.codauto, i.produto, i.qtd_pedida, i.p_venda, i.p_normal, i.desconto, i.acrescimo, "
             "       i.descricao_produto, i.unidade_pedido, "
             "       pe.descricao AS peca_desc, pe.codigo_fab AS peca_fab, "
             "       sv.descricao AS serv_desc "
@@ -1232,9 +1233,10 @@ def _list_itens_sync(servidor: str, banco: str, pedido: int) -> dict:
             complemento = (r.get("descricao_produto") or "").strip()
             qtd = float(r.get("qtd_pedida") or 0)
             pv = float(r.get("p_venda") or 0)
+            pnorm = float(r.get("p_normal") or 0)
             desc = float(r.get("desconto") or 0)
             acr = float(r.get("acrescimo") or 0)
-            tot = _item_total(qtd, pv, desc, acr)
+            tot = _item_total(qtd, pv)
             subtotal += tot
             items.append({
                 "codauto": int(r["codauto"]),
@@ -1245,6 +1247,7 @@ def _list_itens_sync(servidor: str, banco: str, pedido: int) -> dict:
                 "cod_fab": (r.get("peca_fab") or r.get("produto") or "").strip(),
                 "unidade": (r.get("unidade_pedido") or "").strip(),
                 "qtd": qtd,
+                "p_normal": pnorm,
                 "valor_unitario": pv,
                 "desconto": desc,
                 "acrescimo": acr,
@@ -1311,10 +1314,12 @@ def _add_item_sync(req: ItemSaveRequest, pedido: int) -> dict:
         if qtd <= 0:
             conn.close()
             return {"success": False, "message": "Quantidade deve ser maior que zero."}
-        pv = req.valor_unitario if req.valor_unitario is not None else prod["valor"]
-        pv = float(pv or 0)
+        # valor_unitario = p_normal (preço base/tabela no momento). desconto/acrescimo são UNITÁRIOS.
+        p_normal = req.valor_unitario if req.valor_unitario is not None else prod["valor"]
+        p_normal = float(p_normal or 0)
         desc = float(req.desconto or 0)
         acr = float(req.acrescimo or 0)
+        p_venda = round(p_normal - desc + acr, 4)  # preço líquido unitário
         complemento = (req.complemento or "").strip()
         unidade = prod["unidade"]
 
@@ -1324,7 +1329,7 @@ def _add_item_sync(req: ItemSaveRequest, pedido: int) -> dict:
             " descricao_produto, unidade_pedido, situacao_item, item_cancelado, data_inclusao_item) "
             "OUTPUT INSERTED.codauto "
             "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'A',0,CAST(GETDATE() AS DATE))",
-            (pedido, codigo, qtd, pv, prod["valor"], desc, acr, complemento, unidade),
+            (pedido, codigo, qtd, p_venda, p_normal, desc, acr, complemento, unidade),
         )
         row = cur.fetchone()
         codauto = int(row["codauto"] if isinstance(row, dict) else row[0])
@@ -1360,17 +1365,19 @@ def _update_item_sync(req: ItemSaveRequest, pedido: int, codauto: int) -> dict:
         if qtd <= 0:
             conn.close()
             return {"success": False, "message": "Quantidade deve ser maior que zero."}
-        pv = float(req.valor_unitario or 0)
+        # valor_unitario = p_normal (preço base). desconto/acrescimo são UNITÁRIOS.
+        p_normal = float(req.valor_unitario or 0)
         desc = float(req.desconto or 0)
         acr = float(req.acrescimo or 0)
+        p_venda = round(p_normal - desc + acr, 4)  # preço líquido unitário
         complemento = (req.complemento or "").strip()
 
         cur.execute(
             "UPDATE pedido_venda_prod SET "
-            " qtd_pedida=%s, p_venda=%s, desconto=%s, acrescimo=%s, "
+            " qtd_pedida=%s, p_normal=%s, p_venda=%s, desconto=%s, acrescimo=%s, "
             " descricao_produto=%s, data_alteracao_item=CAST(GETDATE() AS DATE) "
             "WHERE codauto=%s AND pedido=%s",
-            (qtd, pv, desc, acr, complemento, codauto, pedido),
+            (qtd, p_normal, p_venda, desc, acr, complemento, codauto, pedido),
         )
         if cur.rowcount == 0:
             conn.rollback(); conn.close()

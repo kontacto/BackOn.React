@@ -30,7 +30,7 @@ type PedidoData = {
 type ItemRow = {
   codauto: number; produto: string; tipo: "P" | "S" | "?";
   descricao: string; complemento: string; cod_fab: string; unidade: string;
-  qtd: number; valor_unitario: number; desconto: number; acrescimo: number; total: number;
+  qtd: number; p_normal: number; valor_unitario: number; desconto: number; acrescimo: number; total: number;
 };
 type ProdutoServico = {
   tipo: "P" | "S"; codigo: string; descricao: string; valor: number;
@@ -43,6 +43,18 @@ function formatBRL(v: number): string {
 function parseNum(s: string): number {
   const n = parseFloat(String(s).replace(/\./g, "").replace(",", "."));
   return isNaN(n) ? 0 : n;
+}
+function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+function fmtNum(n: number): string {
+  return String(Math.round((n + Number.EPSILON) * 1000) / 1000).replace(".", ",");
+}
+// Desconto unitário em R$: se % preenchido usa p_normal*%/100, senão usa o valor em R$.
+function calcDescUnit(pNormal: number, pctStr: string, rsStr: string): number {
+  const pct = parseNum(pctStr);
+  if (pct > 0) return round2((pNormal * pct) / 100);
+  return parseNum(rsStr);
 }
 
 const SIT_COLOR: Record<string, string> = { A: "#1e88e5", F: "#43a047", PG: "#8e24aa", C: "#e53935" };
@@ -110,6 +122,9 @@ export default function PedidoFormScreen() {
   const [selProd, setSelProd] = useState<ProdutoServico | null>(null);
   const [addQtd, setAddQtd] = useState("1");
   const [addValor, setAddValor] = useState("0,00");
+  const [addDescPct, setAddDescPct] = useState("");
+  const [addDescRs, setAddDescRs] = useState("");
+  const [addAcr, setAddAcr] = useState("");
   const [addCompl, setAddCompl] = useState("");
   const [addSaving, setAddSaving] = useState(false);
 
@@ -117,6 +132,9 @@ export default function PedidoFormScreen() {
   const [editItem, setEditItem] = useState<ItemRow | null>(null);
   const [editQtd, setEditQtd] = useState("1");
   const [editValor, setEditValor] = useState("0,00");
+  const [editDescPct, setEditDescPct] = useState("");
+  const [editDescRs, setEditDescRs] = useState("");
+  const [editAcr, setEditAcr] = useState("");
   const [editCompl, setEditCompl] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
@@ -298,6 +316,7 @@ export default function PedidoFormScreen() {
     setSelProd(p);
     setAddQtd("1");
     setAddValor(formatBRL(p.valor).replace("R$", "").trim());
+    setAddDescPct(""); setAddDescRs(""); setAddAcr("");
     setAddCompl("");
   };
 
@@ -305,6 +324,10 @@ export default function PedidoFormScreen() {
     if (!conn || !pedidoId || !selProd) return;
     const qtd = parseNum(addQtd);
     if (qtd <= 0) { showToast("Quantidade deve ser maior que zero.", "error"); return; }
+    const pNormal = parseNum(addValor);
+    const descUnit = calcDescUnit(pNormal, addDescPct, addDescRs);
+    const acr = parseNum(addAcr);
+    if (descUnit > pNormal + acr) { showToast("Desconto maior que o valor do item.", "error"); return; }
     setAddSaving(true);
     try {
       const base = conn.api.replace(/\/+$/, "");
@@ -315,7 +338,9 @@ export default function PedidoFormScreen() {
           servidor: conn.servidor, banco: conn.banco,
           produto: selProd.codigo,
           qtd,
-          valor_unitario: parseNum(addValor),
+          valor_unitario: pNormal,
+          desconto: descUnit,
+          acrescimo: acr,
           complemento: addCompl,
         }),
       });
@@ -334,8 +359,11 @@ export default function PedidoFormScreen() {
   const openEditModal = (it: ItemRow) => {
     if (!isAberto) { showToast("Pedido não pode ser alterado.", "error"); return; }
     setEditItem(it);
-    setEditQtd(String(it.qtd).replace(".", ","));
-    setEditValor(formatBRL(it.valor_unitario).replace("R$", "").trim());
+    setEditQtd(fmtNum(it.qtd));
+    setEditValor(formatBRL(it.p_normal || it.valor_unitario).replace("R$", "").trim());
+    setEditDescPct("");
+    setEditDescRs(it.desconto > 0 ? fmtNum(it.desconto) : "");
+    setEditAcr(it.acrescimo > 0 ? fmtNum(it.acrescimo) : "");
     setEditCompl(it.complemento || "");
   };
 
@@ -343,6 +371,10 @@ export default function PedidoFormScreen() {
     if (!conn || !pedidoId || !editItem) return;
     const qtd = parseNum(editQtd);
     if (qtd <= 0) { showToast("Quantidade deve ser maior que zero.", "error"); return; }
+    const pNormal = parseNum(editValor);
+    const descUnit = calcDescUnit(pNormal, editDescPct, editDescRs);
+    const acr = parseNum(editAcr);
+    if (descUnit > pNormal + acr) { showToast("Desconto maior que o valor do item.", "error"); return; }
     setEditSaving(true);
     try {
       const base = conn.api.replace(/\/+$/, "");
@@ -352,10 +384,10 @@ export default function PedidoFormScreen() {
         body: JSON.stringify({
           servidor: conn.servidor, banco: conn.banco,
           qtd,
-          valor_unitario: parseNum(editValor),
+          valor_unitario: pNormal,
           complemento: editCompl,
-          desconto: editItem.desconto,
-          acrescimo: editItem.acrescimo,
+          desconto: descUnit,
+          acrescimo: acr,
         }),
       });
       const j = await r.json();
@@ -740,63 +772,135 @@ export default function PedidoFormScreen() {
                 </Pressable>
               </>
             ) : (
-              <View style={{ gap: spacing.sm }}>
-                <View style={styles.selProdBox}>
-                  <Text style={styles.itemDesc} numberOfLines={2}>{selProd.descricao}</Text>
-                  <Text style={styles.resultSub}>#{selProd.codigo}{selProd.cod_fab ? ` · ${selProd.cod_fab}` : ""}</Text>
-                </View>
-                <View style={styles.qtdRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>Quantidade</Text>
-                    <TextInput
-                      value={addQtd}
-                      onChangeText={setAddQtd}
-                      keyboardType="decimal-pad"
-                      style={styles.input}
-                      testID="pedido-form-add-qtd"
-                    />
+              <ScrollView style={{ maxHeight: 520 }} keyboardShouldPersistTaps="handled">
+                <View style={{ gap: spacing.sm }}>
+                  <View style={styles.selProdBox}>
+                    <Text style={styles.itemDesc} numberOfLines={2}>{selProd.descricao}</Text>
+                    <Text style={styles.resultSub}>#{selProd.codigo}{selProd.cod_fab ? ` · ${selProd.cod_fab}` : ""}</Text>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>Valor unitário</Text>
-                    <TextInput
-                      value={addValor}
-                      onChangeText={setAddValor}
-                      keyboardType="decimal-pad"
-                      style={styles.input}
-                      testID="pedido-form-add-valor"
-                    />
+                  <View style={styles.qtdRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Quantidade</Text>
+                      <View style={styles.qtdInputRow}>
+                        <TextInput
+                          value={addQtd}
+                          onChangeText={setAddQtd}
+                          keyboardType="decimal-pad"
+                          style={[styles.input, { flex: 1 }]}
+                          testID="pedido-form-add-qtd"
+                        />
+                        <Pressable
+                          onPress={() => setAddQtd(fmtNum(parseNum(addQtd) + 1))}
+                          style={({ pressed }) => [styles.plusBtn, pressed && { opacity: 0.7 }]}
+                          testID="pedido-form-add-qtd-plus"
+                        >
+                          <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
+                        </Pressable>
+                      </View>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Valor unitário</Text>
+                      <TextInput
+                        value={addValor}
+                        onChangeText={setAddValor}
+                        keyboardType="decimal-pad"
+                        style={styles.input}
+                        testID="pedido-form-add-valor"
+                      />
+                    </View>
+                  </View>
+                  <View style={styles.qtdRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Desc. %</Text>
+                      <TextInput
+                        value={addDescPct}
+                        onChangeText={(v) => { setAddDescPct(v); if (parseNum(v) > 0) setAddDescRs(""); }}
+                        editable={parseNum(addDescRs) <= 0}
+                        keyboardType="decimal-pad"
+                        placeholder="0"
+                        placeholderTextColor={colors.muted}
+                        style={[styles.input, parseNum(addDescRs) > 0 && styles.inputDisabled]}
+                        testID="pedido-form-add-descpct"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Desc. R$ (unit.)</Text>
+                      <TextInput
+                        value={addDescRs}
+                        onChangeText={(v) => { setAddDescRs(v); if (parseNum(v) > 0) setAddDescPct(""); }}
+                        editable={parseNum(addDescPct) <= 0}
+                        keyboardType="decimal-pad"
+                        placeholder="0,00"
+                        placeholderTextColor={colors.muted}
+                        style={[styles.input, parseNum(addDescPct) > 0 && styles.inputDisabled]}
+                        testID="pedido-form-add-descrs"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Acrésc. R$ (unit.)</Text>
+                      <TextInput
+                        value={addAcr}
+                        onChangeText={setAddAcr}
+                        keyboardType="decimal-pad"
+                        placeholder="0,00"
+                        placeholderTextColor={colors.muted}
+                        style={styles.input}
+                        testID="pedido-form-add-acr"
+                      />
+                    </View>
+                  </View>
+                  <Text style={styles.fieldLabel}>Complemento (opcional)</Text>
+                  <TextInput
+                    value={addCompl}
+                    onChangeText={setAddCompl}
+                    placeholder="Descrição complementar"
+                    placeholderTextColor={colors.muted}
+                    style={styles.input}
+                    testID="pedido-form-add-compl"
+                  />
+                  {(() => {
+                    const pNormal = parseNum(addValor);
+                    const dUnit = calcDescUnit(pNormal, addDescPct, addDescRs);
+                    const acr = parseNum(addAcr);
+                    const pVenda = pNormal - dUnit + acr;
+                    const qtd = parseNum(addQtd);
+                    return (
+                      <View style={styles.liquidoBox}>
+                        <View style={styles.liquidoRow}>
+                          <Text style={styles.liquidoLabel}>Preço líquido unit.</Text>
+                          <Text style={styles.liquidoVal}>{formatBRL(pVenda)}</Text>
+                        </View>
+                        {dUnit > 0 ? (
+                          <View style={styles.liquidoRow}>
+                            <Text style={styles.liquidoLabel}>Desconto total ({fmtNum(qtd)}×)</Text>
+                            <Text style={[styles.liquidoVal, { color: colors.error }]}>- {formatBRL(dUnit * qtd)}</Text>
+                          </View>
+                        ) : null}
+                        <View style={styles.previewRow}>
+                          <Text style={styles.subtotalLabel}>Total do item</Text>
+                          <Text style={styles.subtotalValue}>{formatBRL(qtd * pVenda)}</Text>
+                        </View>
+                      </View>
+                    );
+                  })()}
+                  <View style={styles.modalBtns}>
+                    <Pressable
+                      onPress={() => setSelProd(null)}
+                      style={({ pressed }) => [styles.secondaryBtn, pressed && { opacity: 0.8 }]}
+                    >
+                      <Text style={styles.secondaryBtnText}>Voltar</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={handleAddItem}
+                      disabled={addSaving}
+                      style={({ pressed }) => [styles.primaryBtn, (pressed || addSaving) && { opacity: 0.8 }]}
+                      testID="pedido-form-add-confirm"
+                    >
+                      {addSaving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Adicionar</Text>}
+                    </Pressable>
                   </View>
                 </View>
-                <Text style={styles.fieldLabel}>Complemento (opcional)</Text>
-                <TextInput
-                  value={addCompl}
-                  onChangeText={setAddCompl}
-                  placeholder="Descrição complementar"
-                  placeholderTextColor={colors.muted}
-                  style={styles.input}
-                  testID="pedido-form-add-compl"
-                />
-                <View style={styles.previewRow}>
-                  <Text style={styles.subtotalLabel}>Total do item</Text>
-                  <Text style={styles.subtotalValue}>{formatBRL(parseNum(addQtd) * parseNum(addValor))}</Text>
-                </View>
-                <View style={styles.modalBtns}>
-                  <Pressable
-                    onPress={() => setSelProd(null)}
-                    style={({ pressed }) => [styles.secondaryBtn, pressed && { opacity: 0.8 }]}
-                  >
-                    <Text style={styles.secondaryBtnText}>Voltar</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={handleAddItem}
-                    disabled={addSaving}
-                    style={({ pressed }) => [styles.primaryBtn, (pressed || addSaving) && { opacity: 0.8 }]}
-                    testID="pedido-form-add-confirm"
-                  >
-                    {addSaving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Adicionar</Text>}
-                  </Pressable>
-                </View>
-              </View>
+              </ScrollView>
             )}
           </Pressable>
         </Pressable>
@@ -813,46 +917,118 @@ export default function PedidoFormScreen() {
               </Pressable>
             </View>
             {editItem ? (
-              <View style={{ gap: spacing.sm }}>
-                <View style={styles.selProdBox}>
-                  <Text style={styles.itemDesc} numberOfLines={2}>{editItem.descricao || editItem.produto}</Text>
-                  <Text style={styles.resultSub}>#{editItem.produto}{editItem.cod_fab ? ` · ${editItem.cod_fab}` : ""}</Text>
-                </View>
-                <View style={styles.qtdRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>Quantidade</Text>
-                    <TextInput value={editQtd} onChangeText={setEditQtd} keyboardType="decimal-pad" style={styles.input} testID="pedido-form-edit-qtd" />
+              <ScrollView style={{ maxHeight: 520 }} keyboardShouldPersistTaps="handled">
+                <View style={{ gap: spacing.sm }}>
+                  <View style={styles.selProdBox}>
+                    <Text style={styles.itemDesc} numberOfLines={2}>{editItem.descricao || editItem.produto}</Text>
+                    <Text style={styles.resultSub}>#{editItem.produto}{editItem.cod_fab ? ` · ${editItem.cod_fab}` : ""}</Text>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>Valor unitário</Text>
-                    <TextInput value={editValor} onChangeText={setEditValor} keyboardType="decimal-pad" style={styles.input} testID="pedido-form-edit-valor" />
+                  <View style={styles.qtdRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Quantidade</Text>
+                      <View style={styles.qtdInputRow}>
+                        <TextInput value={editQtd} onChangeText={setEditQtd} keyboardType="decimal-pad" style={[styles.input, { flex: 1 }]} testID="pedido-form-edit-qtd" />
+                        <Pressable
+                          onPress={() => setEditQtd(fmtNum(parseNum(editQtd) + 1))}
+                          style={({ pressed }) => [styles.plusBtn, pressed && { opacity: 0.7 }]}
+                          testID="pedido-form-edit-qtd-plus"
+                        >
+                          <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
+                        </Pressable>
+                      </View>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Valor unitário</Text>
+                      <TextInput value={editValor} onChangeText={setEditValor} keyboardType="decimal-pad" style={styles.input} testID="pedido-form-edit-valor" />
+                    </View>
+                  </View>
+                  <View style={styles.qtdRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Desc. %</Text>
+                      <TextInput
+                        value={editDescPct}
+                        onChangeText={(v) => { setEditDescPct(v); if (parseNum(v) > 0) setEditDescRs(""); }}
+                        editable={parseNum(editDescRs) <= 0}
+                        keyboardType="decimal-pad"
+                        placeholder="0"
+                        placeholderTextColor={colors.muted}
+                        style={[styles.input, parseNum(editDescRs) > 0 && styles.inputDisabled]}
+                        testID="pedido-form-edit-descpct"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Desc. R$ (unit.)</Text>
+                      <TextInput
+                        value={editDescRs}
+                        onChangeText={(v) => { setEditDescRs(v); if (parseNum(v) > 0) setEditDescPct(""); }}
+                        editable={parseNum(editDescPct) <= 0}
+                        keyboardType="decimal-pad"
+                        placeholder="0,00"
+                        placeholderTextColor={colors.muted}
+                        style={[styles.input, parseNum(editDescPct) > 0 && styles.inputDisabled]}
+                        testID="pedido-form-edit-descrs"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fieldLabel}>Acrésc. R$ (unit.)</Text>
+                      <TextInput
+                        value={editAcr}
+                        onChangeText={setEditAcr}
+                        keyboardType="decimal-pad"
+                        placeholder="0,00"
+                        placeholderTextColor={colors.muted}
+                        style={styles.input}
+                        testID="pedido-form-edit-acr"
+                      />
+                    </View>
+                  </View>
+                  <Text style={styles.fieldLabel}>Complemento (opcional)</Text>
+                  <TextInput value={editCompl} onChangeText={setEditCompl} placeholder="Descrição complementar" placeholderTextColor={colors.muted} style={styles.input} testID="pedido-form-edit-compl" />
+                  {(() => {
+                    const pNormal = parseNum(editValor);
+                    const dUnit = calcDescUnit(pNormal, editDescPct, editDescRs);
+                    const acr = parseNum(editAcr);
+                    const pVenda = pNormal - dUnit + acr;
+                    const qtd = parseNum(editQtd);
+                    return (
+                      <View style={styles.liquidoBox}>
+                        <View style={styles.liquidoRow}>
+                          <Text style={styles.liquidoLabel}>Preço líquido unit.</Text>
+                          <Text style={styles.liquidoVal}>{formatBRL(pVenda)}</Text>
+                        </View>
+                        {dUnit > 0 ? (
+                          <View style={styles.liquidoRow}>
+                            <Text style={styles.liquidoLabel}>Desconto total ({fmtNum(qtd)}×)</Text>
+                            <Text style={[styles.liquidoVal, { color: colors.error }]}>- {formatBRL(dUnit * qtd)}</Text>
+                          </View>
+                        ) : null}
+                        <View style={styles.previewRow}>
+                          <Text style={styles.subtotalLabel}>Total do item</Text>
+                          <Text style={styles.subtotalValue}>{formatBRL(qtd * pVenda)}</Text>
+                        </View>
+                      </View>
+                    );
+                  })()}
+                  <View style={styles.modalBtns}>
+                    <Pressable
+                      onPress={() => handleDeleteItem(editItem)}
+                      disabled={editSaving}
+                      style={({ pressed }) => [styles.deleteBtn, (pressed || editSaving) && { opacity: 0.8 }]}
+                      testID="pedido-form-edit-delete"
+                    >
+                      <Ionicons name="trash-outline" size={18} color={colors.error} />
+                    </Pressable>
+                    <Pressable
+                      onPress={handleUpdateItem}
+                      disabled={editSaving}
+                      style={({ pressed }) => [styles.primaryBtn, { flex: 1 }, (pressed || editSaving) && { opacity: 0.8 }]}
+                      testID="pedido-form-edit-save"
+                    >
+                      {editSaving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Salvar</Text>}
+                    </Pressable>
                   </View>
                 </View>
-                <Text style={styles.fieldLabel}>Complemento (opcional)</Text>
-                <TextInput value={editCompl} onChangeText={setEditCompl} placeholder="Descrição complementar" placeholderTextColor={colors.muted} style={styles.input} testID="pedido-form-edit-compl" />
-                <View style={styles.previewRow}>
-                  <Text style={styles.subtotalLabel}>Total do item</Text>
-                  <Text style={styles.subtotalValue}>{formatBRL(parseNum(editQtd) * parseNum(editValor))}</Text>
-                </View>
-                <View style={styles.modalBtns}>
-                  <Pressable
-                    onPress={() => handleDeleteItem(editItem)}
-                    disabled={editSaving}
-                    style={({ pressed }) => [styles.deleteBtn, (pressed || editSaving) && { opacity: 0.8 }]}
-                    testID="pedido-form-edit-delete"
-                  >
-                    <Ionicons name="trash-outline" size={18} color={colors.error} />
-                  </Pressable>
-                  <Pressable
-                    onPress={handleUpdateItem}
-                    disabled={editSaving}
-                    style={({ pressed }) => [styles.primaryBtn, { flex: 1 }, (pressed || editSaving) && { opacity: 0.8 }]}
-                    testID="pedido-form-edit-save"
-                  >
-                    {editSaving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Salvar</Text>}
-                  </Pressable>
-                </View>
-              </View>
+              </ScrollView>
             ) : null}
           </Pressable>
         </Pressable>
@@ -1059,6 +1235,20 @@ const styles = StyleSheet.create({
     padding: spacing.md, borderWidth: 1, borderColor: colors.border,
   },
   qtdRow: { flexDirection: "row", gap: spacing.sm },
+  qtdInputRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  plusBtn: {
+    width: 40, height: 42, borderRadius: radius.sm, backgroundColor: colors.brandPrimary,
+    alignItems: "center", justifyContent: "center",
+  },
+  inputDisabled: { backgroundColor: colors.surfaceSecondary, color: colors.muted },
+  liquidoBox: {
+    backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm, gap: 2,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  liquidoRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  liquidoLabel: { fontSize: 12, color: colors.muted },
+  liquidoVal: { fontSize: 13, color: colors.onSurface, fontWeight: "500" },
   fieldLabel: { fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "500" },
   previewRow: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",

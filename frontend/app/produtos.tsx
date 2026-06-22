@@ -343,7 +343,16 @@ export default function ProdutosScreen() {
                 <View style={styles.qtdRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.fieldLabel}>Quantidade</Text>
-                    <TextInput value={selQtd} onChangeText={setSelQtd} keyboardType="decimal-pad" style={styles.modalInput} testID="produtos-add-qtd" />
+                    <View style={styles.qtdInputRow}>
+                      <TextInput value={selQtd} onChangeText={setSelQtd} keyboardType="decimal-pad" style={[styles.modalInput, { flex: 1 }]} testID="produtos-add-qtd" />
+                      <Pressable
+                        onPress={() => setSelQtd(String(parseNum(selQtd) + 1).replace(".", ","))}
+                        style={({ pressed }) => [styles.plusBtn, pressed && { opacity: 0.7 }]}
+                        testID="produtos-add-qtd-plus"
+                      >
+                        <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
+                      </Pressable>
+                    </View>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.fieldLabel}>Valor unitário</Text>
@@ -498,6 +507,11 @@ const styles = StyleSheet.create({
     padding: spacing.md, borderWidth: 1, borderColor: colors.border,
   },
   qtdRow: { flexDirection: "row", gap: spacing.sm },
+  qtdInputRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  plusBtn: {
+    width: 40, height: 40, borderRadius: radius.sm, backgroundColor: colors.brandPrimary,
+    alignItems: "center", justifyContent: "center",
+  },
   fieldLabel: { fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "500" },
   modalInput: {
     backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm,
