@@ -987,7 +987,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
     paddingHorizontal: spacing.lg, paddingTop: spacing.lg, paddingBottom: spacing.xxl,
-    minHeight: 460,
+    maxHeight: "88%",
   },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
   modalTitle: { fontSize: 17, fontWeight: "600", color: colors.onSurface },
