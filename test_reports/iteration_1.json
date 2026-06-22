@@ -1,0 +1,58 @@
+{
+  "summary": "Frontend E2E test of 'Itens do Pedido' feature on pedido-form executed end-to-end via mobile viewport (390x844). Setup (create connection BARESTEL), login (KONTACTO master), open Pedido #1, and full items CRUD flow validated. Add via form, Edit, Delete and List-Selection (via /produtos?pedido=1) flows all work and are persisted in Azure SQL (verified via direct API check). The only deviation: login with user 'Estela / 26171' returns 'Usuário ou senha inválidos' — this user is NOT in the DB users table (master KONTACTO works fine). Deprecated style warnings ('shadow*' style props are deprecated. Use boxShadow.) noted on every screen but non-blocking.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Login com usuário 'Estela'",
+        "issue": "Backend retorna 'Usuário ou senha inválidos.' para Estela/26171 contra gibanweb.database.windows.net/BDREACTAPP. Curl direto no /api/login confirma o erro (error_step=query_usuarios). Banco está ativo (master KONTACTO loga e demais APIs respondem). Provavelmente o usuário 'Estela' não está cadastrado na tabela usuarios desse ambiente — apenas no test_credentials.md. Usei KONTACTO/$KONT2011 como alternativa válida.",
+        "affected_testIDs": ["login-usuario-input", "login-senha-input", "login-submit-button"]
+      },
+      {
+        "flow": "Lista de produtos modo seleção (?pedido=1)",
+        "issue": "Após confirmar adição em produtos.tsx (produtos-add-confirm) o item é persistido (verificado via API), mas a tela NÃO volta automaticamente para o pedido-form. Apenas mostra toast 'Adicionado ao pedido!'. O usuário precisa clicar voltar manualmente para enxergar o item recarregado (useFocusEffect funciona ao voltar). Não é bloqueante mas pode confundir UX — sugerir auto-navegar de volta ou exibir badge/contador na tela de produtos.",
+        "affected_testIDs": ["produtos-add-confirm"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Modais de adicionar/editar item (pedido-form)",
+        "issues": [
+          "Em viewport 390x844 o botão pedido-form-edit-save / pedido-form-add-confirm fica fora da viewport quando o teclado virtual hipotético abriria. Playwright reportou 'Element is outside of the viewport' — precisei usar scrollIntoView+click. Considerar limitar maxHeight do modalCard e ScrollView interno, ou aumentar KeyboardAvoidingView. minHeight: 460 no modalCard somado ao paddingBottom: spacing.xxl pode estourar a viewport em telas pequenas."
+        ]
+      }
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/20_form_loaded.png",
+    "/tmp/22_search_heineken.png",
+    "/tmp/24_after_add.png",
+    "/tmp/41_after_edit.png",
+    "/tmp/42_after_delete.png",
+    "/tmp/43_produtos.png"
+  ],
+  "action_items": [
+    "Confirmar se o usuário 'Estela' deveria existir no banco BDREACTAPP. Se sim, seed/insert; se não, atualizar test_credentials.md para refletir que apenas o master KONTACTO funciona neste ambiente.",
+    "(Opcional) Em produtos.tsx addToOrder: após sucesso, considerar chamar router.back() automaticamente OU manter um contador de itens adicionados visível na tela.",
+    "(Opcional) Reduzir minHeight do modalCard em pedido-form.tsx (linha ~991) para garantir que os botões de confirm/save/delete fiquem visíveis sem scroll em viewports menores."
+  ],
+  "critical_code_review_comments": [
+    "pedido-form.tsx tem 1089 linhas — acima do limite recomendado de 700. Recomendado quebrar a seção 'Itens do pedido' (modais de add/edit + handlers) em componente próprio (ex.: PedidoItens.tsx).",
+    "Console warning recorrente em todas as telas: 'shadow*' style props are deprecated. Use boxShadow. (React Native Web). Migrar para boxShadow."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "100% (todos os fluxos críticos do feature passaram: setup, login com master, pedido-form carrega, add via form, edit, delete, list-selection persistiu via API)"
+  },
+  "seed_data_creation": "Itens criados/editados durante o teste no Pedido #1 foram limpos ao final. Pedido #1 voltou ao estado original (apenas codauto=1 / Coca-Cola / qtd=5 / R$50,00).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Conexão BARESTEL já está salva no localStorage do preview. Login Estela/26171 NÃO funciona (usuário não existe no DB), usar KONTACTO/$KONT2011. Pedido #1 está em estado Aberto com cliente 'TESTE CLIENTE 9DIG'. Banco Azure SQL desperta na 1ª request (~5-10s). Itens são persistidos via /api/pedidos/{pedido}/itens. URL preview: https://cliente-crud.preview.emergentagent.com.",
+  "rca_of_issue": "N/A — funcionalidade implementada corretamente. Único ponto de atenção: descrepância entre test_credentials.md (Estela/26171) e o que existe no banco. Reprodução: curl -X POST .../api/login -d '{\"empresa\":\"BARESTEL\",...,\"usuario\":\"Estela\",\"senha\":\"26171\"}' → success=false, error_step=query_usuarios."
+}
