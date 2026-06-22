@@ -4,7 +4,7 @@ import {
   ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { getSession } from "@/src/utils/storage/session";
@@ -27,6 +27,23 @@ type PedidoData = {
   hora_aberto: string; obs: string; situacao: string; situacao_label: string; total: number;
   area_atuacao: number | null; area_descricao: string;
 };
+type ItemRow = {
+  codauto: number; produto: string; tipo: "P" | "S" | "?";
+  descricao: string; complemento: string; cod_fab: string; unidade: string;
+  qtd: number; valor_unitario: number; desconto: number; acrescimo: number; total: number;
+};
+type ProdutoServico = {
+  tipo: "P" | "S"; codigo: string; descricao: string; valor: number;
+  estoque: number | null; cod_fab?: string; unidade?: string;
+};
+
+function formatBRL(v: number): string {
+  return (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+function parseNum(s: string): number {
+  const n = parseFloat(String(s).replace(/\./g, "").replace(",", "."));
+  return isNaN(n) ? 0 : n;
+}
 
 const SIT_COLOR: Record<string, string> = { A: "#1e88e5", F: "#43a047", PG: "#8e24aa", C: "#e53935" };
 
@@ -79,6 +96,31 @@ export default function PedidoFormScreen() {
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState<ClienteRow[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+
+  // -------- Itens do pedido
+  const [itens, setItens] = useState<ItemRow[]>([]);
+  const [subtotal, setSubtotal] = useState(0);
+  const [itensLoading, setItensLoading] = useState(false);
+
+  // Modal de adicionar item (busca produto/serviço)
+  const [addOpen, setAddOpen] = useState(false);
+  const [prodTerm, setProdTerm] = useState("");
+  const [prodResults, setProdResults] = useState<ProdutoServico[]>([]);
+  const [prodLoading, setProdLoading] = useState(false);
+  const [selProd, setSelProd] = useState<ProdutoServico | null>(null);
+  const [addQtd, setAddQtd] = useState("1");
+  const [addValor, setAddValor] = useState("0,00");
+  const [addCompl, setAddCompl] = useState("");
+  const [addSaving, setAddSaving] = useState(false);
+
+  // Modal de editar item existente
+  const [editItem, setEditItem] = useState<ItemRow | null>(null);
+  const [editQtd, setEditQtd] = useState("1");
+  const [editValor, setEditValor] = useState("0,00");
+  const [editCompl, setEditCompl] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+
+  const isAberto = (pedido?.situacao || "A").toUpperCase() === "A";
 
   // -------- Init
   useEffect(() => {
@@ -195,6 +237,158 @@ export default function PedidoFormScreen() {
     return () => clearTimeout(t);
   }, [searchTerm, searchOpen, conn]);
 
+  // -------- Itens do pedido (carrega só em modo edição)
+  const loadItens = useCallback(async () => {
+    if (!conn || !editing || !pedidoId) return;
+    setItensLoading(true);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`;
+      const r = await fetch(`${base}/api/pedidos/${pedidoId}/itens?${qs}`);
+      const j = await r.json();
+      if (j?.success) {
+        setItens(j.items || []);
+        setSubtotal(j.subtotal || 0);
+      }
+    } catch {
+      // silencioso
+    } finally {
+      setItensLoading(false);
+    }
+  }, [conn, editing, pedidoId]);
+
+  // Recarrega itens ao focar a tela (ex.: voltar da lista de produtos)
+  useFocusEffect(
+    useCallback(() => {
+      loadItens();
+    }, [loadItens])
+  );
+
+  // -------- Busca produto/serviço (debounce) dentro do modal de adicionar
+  useEffect(() => {
+    if (!addOpen || !conn) return;
+    const t = setTimeout(async () => {
+      setProdLoading(true);
+      try {
+        const base = conn.api.replace(/\/+$/, "");
+        const url = `${base}/api/produtos-servicos?servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}&search=${encodeURIComponent(prodTerm)}&page=1&size=30&tipo=all`;
+        const r = await fetch(url);
+        const j = await r.json();
+        setProdResults(j?.items || []);
+      } catch {
+        setProdResults([]);
+      } finally {
+        setProdLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [prodTerm, addOpen, conn]);
+
+  const openAddModal = () => {
+    setSelProd(null);
+    setProdTerm("");
+    setProdResults([]);
+    setAddQtd("1");
+    setAddValor("0,00");
+    setAddCompl("");
+    setAddOpen(true);
+  };
+
+  const pickProduto = (p: ProdutoServico) => {
+    setSelProd(p);
+    setAddQtd("1");
+    setAddValor(formatBRL(p.valor).replace("R$", "").trim());
+    setAddCompl("");
+  };
+
+  const handleAddItem = async () => {
+    if (!conn || !pedidoId || !selProd) return;
+    const qtd = parseNum(addQtd);
+    if (qtd <= 0) { showToast("Quantidade deve ser maior que zero.", "error"); return; }
+    setAddSaving(true);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const r = await fetch(`${base}/api/pedidos/${pedidoId}/itens`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          servidor: conn.servidor, banco: conn.banco,
+          produto: selProd.codigo,
+          qtd,
+          valor_unitario: parseNum(addValor),
+          complemento: addCompl,
+        }),
+      });
+      const j = await r.json();
+      if (!j?.success) { showToast(j?.message || "Falha ao adicionar.", "error"); }
+      else {
+        setAddOpen(false);
+        showToast("Item adicionado.", "success");
+        loadItens();
+      }
+    } catch (e) {
+      showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
+    } finally { setAddSaving(false); }
+  };
+
+  const openEditModal = (it: ItemRow) => {
+    if (!isAberto) { showToast("Pedido não pode ser alterado.", "error"); return; }
+    setEditItem(it);
+    setEditQtd(String(it.qtd).replace(".", ","));
+    setEditValor(formatBRL(it.valor_unitario).replace("R$", "").trim());
+    setEditCompl(it.complemento || "");
+  };
+
+  const handleUpdateItem = async () => {
+    if (!conn || !pedidoId || !editItem) return;
+    const qtd = parseNum(editQtd);
+    if (qtd <= 0) { showToast("Quantidade deve ser maior que zero.", "error"); return; }
+    setEditSaving(true);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const r = await fetch(`${base}/api/pedidos/${pedidoId}/itens/${editItem.codauto}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          servidor: conn.servidor, banco: conn.banco,
+          qtd,
+          valor_unitario: parseNum(editValor),
+          complemento: editCompl,
+          desconto: editItem.desconto,
+          acrescimo: editItem.acrescimo,
+        }),
+      });
+      const j = await r.json();
+      if (!j?.success) { showToast(j?.message || "Falha ao salvar.", "error"); }
+      else {
+        setEditItem(null);
+        showToast("Item atualizado.", "success");
+        loadItens();
+      }
+    } catch (e) {
+      showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
+    } finally { setEditSaving(false); }
+  };
+
+  const handleDeleteItem = async (it: ItemRow) => {
+    if (!conn || !pedidoId) return;
+    setEditSaving(true);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`;
+      const r = await fetch(`${base}/api/pedidos/${pedidoId}/itens/${it.codauto}?${qs}`, { method: "DELETE" });
+      const j = await r.json();
+      if (!j?.success) { showToast(j?.message || "Falha ao remover.", "error"); }
+      else {
+        setEditItem(null);
+        showToast("Item removido.", "success");
+        loadItens();
+      }
+    } catch (e) {
+      showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
+    } finally { setEditSaving(false); }
+  };
+
   const handleSave = async () => {
     if (!conn) return;
     if (!cliente) { showToast("Selecione um cliente.", "error"); return; }
@@ -220,8 +414,16 @@ export default function PedidoFormScreen() {
       if (!j?.success) {
         showToast(j?.message || "Falha ao gravar.", "error");
       } else {
-        showToast(editing ? "Pedido atualizado." : `Pedido #${j.pedido} criado.`, "success");
-        setTimeout(() => router.back(), 700);
+        if (editing) {
+          showToast("Pedido atualizado.", "success");
+          setTimeout(() => router.back(), 700);
+        } else {
+          showToast(`Pedido #${j.pedido} criado. Adicione os itens.`, "success");
+          setTimeout(
+            () => router.replace({ pathname: "/pedido-form", params: { pedido: String(j.pedido) } }),
+            700
+          );
+        }
       }
     } catch (e) {
       showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
@@ -406,9 +608,255 @@ export default function PedidoFormScreen() {
             testID="pedido-form-obs"
           />
 
+          {/* Itens do Pedido */}
+          <View style={styles.itensHeader}>
+            <Text style={[styles.sectionTitle, { marginTop: spacing.lg }]}>
+              Itens do Pedido {itens.length ? `(${itens.length})` : ""}
+            </Text>
+            {editing && isAberto ? (
+              <Pressable
+                onPress={openAddModal}
+                style={({ pressed }) => [styles.addItemBtn, pressed && { opacity: 0.8 }]}
+                testID="pedido-form-add-item"
+              >
+                <Ionicons name="add" size={18} color={colors.onBrandPrimary} />
+                <Text style={styles.addItemBtnText}>Adicionar</Text>
+              </Pressable>
+            ) : null}
+          </View>
+
+          {!editing ? (
+            <View style={styles.itensHint}>
+              <Ionicons name="information-circle-outline" size={18} color={colors.muted} />
+              <Text style={styles.itensHintText}>Grave o pedido para adicionar itens.</Text>
+            </View>
+          ) : itensLoading && itens.length === 0 ? (
+            <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 16 }} />
+          ) : itens.length === 0 ? (
+            <View style={styles.itensHint}>
+              <Ionicons name="cube-outline" size={18} color={colors.muted} />
+              <Text style={styles.itensHintText}>Nenhum item adicionado.</Text>
+            </View>
+          ) : (
+            <View style={{ gap: 8 }}>
+              {itens.map((it) => (
+                <Pressable
+                  key={it.codauto}
+                  onPress={() => openEditModal(it)}
+                  style={({ pressed }) => [styles.itemRow, pressed && { opacity: 0.8 }]}
+                  testID={`pedido-form-item-${it.codauto}`}
+                >
+                  <View style={[styles.itemTipo, it.tipo === "P" ? styles.tagProd : styles.tagServ]}>
+                    <Ionicons
+                      name={it.tipo === "P" ? "cube" : "construct"}
+                      size={16}
+                      color={it.tipo === "P" ? colors.brandPrimary : colors.warning}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.itemDesc} numberOfLines={1}>{it.descricao || it.produto}</Text>
+                    {it.complemento ? (
+                      <Text style={styles.itemCompl} numberOfLines={1}>{it.complemento}</Text>
+                    ) : null}
+                    <Text style={styles.itemSub}>
+                      {it.cod_fab ? `${it.cod_fab} · ` : ""}{it.qtd.toLocaleString("pt-BR")} {it.unidade} × {formatBRL(it.valor_unitario)}
+                    </Text>
+                  </View>
+                  <Text style={styles.itemTotal}>{formatBRL(it.total)}</Text>
+                </Pressable>
+              ))}
+
+              <View style={styles.subtotalRow}>
+                <Text style={styles.subtotalLabel}>Subtotal</Text>
+                <Text style={styles.subtotalValue}>{formatBRL(subtotal)}</Text>
+              </View>
+            </View>
+          )}
+
           <View style={{ height: 80 }} />
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Modal adicionar item */}
+      <Modal visible={addOpen} transparent animationType="slide" onRequestClose={() => setAddOpen(false)}>
+        <Pressable style={styles.modalBg} onPress={() => setAddOpen(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{selProd ? "Confirmar Item" : "Adicionar Item"}</Text>
+              <Pressable onPress={() => setAddOpen(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+
+            {!selProd ? (
+              <>
+                <View style={styles.searchWrap}>
+                  <Ionicons name="search" size={16} color={colors.muted} />
+                  <TextInput
+                    value={prodTerm}
+                    onChangeText={setProdTerm}
+                    placeholder="Buscar produto ou serviço…"
+                    placeholderTextColor={colors.muted}
+                    style={styles.searchInput}
+                    autoFocus
+                    testID="pedido-form-prod-search"
+                  />
+                </View>
+                {prodLoading ? <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 12 }} /> : null}
+                <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+                  {prodResults.map((p) => (
+                    <Pressable
+                      key={`${p.tipo}-${p.codigo}`}
+                      onPress={() => pickProduto(p)}
+                      style={({ pressed }) => [styles.resultRow, pressed && { backgroundColor: colors.brandTertiary }]}
+                      testID={`pedido-form-prod-${p.codigo}`}
+                    >
+                      <View style={[styles.itemTipo, p.tipo === "P" ? styles.tagProd : styles.tagServ]}>
+                        <Ionicons name={p.tipo === "P" ? "cube" : "construct"} size={16} color={p.tipo === "P" ? colors.brandPrimary : colors.warning} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.resultNome} numberOfLines={1}>{p.descricao}</Text>
+                        <Text style={styles.resultSub} numberOfLines={1}>
+                          #{p.codigo}{p.cod_fab ? ` · ${p.cod_fab}` : ""}
+                        </Text>
+                      </View>
+                      <Text style={styles.itemTotal}>{formatBRL(p.valor)}</Text>
+                    </Pressable>
+                  ))}
+                  {!prodLoading && prodResults.length === 0 ? (
+                    <Text style={styles.emptyText}>Nenhum produto/serviço encontrado.</Text>
+                  ) : null}
+                </ScrollView>
+                <Pressable
+                  onPress={() => {
+                    setAddOpen(false);
+                    router.push({ pathname: "/produtos", params: { pedido: String(pedidoId) } });
+                  }}
+                  style={({ pressed }) => [styles.fullListBtn, pressed && { opacity: 0.8 }]}
+                  testID="pedido-form-open-produtos"
+                >
+                  <Ionicons name="grid-outline" size={16} color={colors.brandPrimary} />
+                  <Text style={styles.fullListText}>Abrir lista completa de produtos</Text>
+                </Pressable>
+              </>
+            ) : (
+              <View style={{ gap: spacing.sm }}>
+                <View style={styles.selProdBox}>
+                  <Text style={styles.itemDesc} numberOfLines={2}>{selProd.descricao}</Text>
+                  <Text style={styles.resultSub}>#{selProd.codigo}{selProd.cod_fab ? ` · ${selProd.cod_fab}` : ""}</Text>
+                </View>
+                <View style={styles.qtdRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Quantidade</Text>
+                    <TextInput
+                      value={addQtd}
+                      onChangeText={setAddQtd}
+                      keyboardType="decimal-pad"
+                      style={styles.input}
+                      testID="pedido-form-add-qtd"
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Valor unitário</Text>
+                    <TextInput
+                      value={addValor}
+                      onChangeText={setAddValor}
+                      keyboardType="decimal-pad"
+                      style={styles.input}
+                      testID="pedido-form-add-valor"
+                    />
+                  </View>
+                </View>
+                <Text style={styles.fieldLabel}>Complemento (opcional)</Text>
+                <TextInput
+                  value={addCompl}
+                  onChangeText={setAddCompl}
+                  placeholder="Descrição complementar"
+                  placeholderTextColor={colors.muted}
+                  style={styles.input}
+                  testID="pedido-form-add-compl"
+                />
+                <View style={styles.previewRow}>
+                  <Text style={styles.subtotalLabel}>Total do item</Text>
+                  <Text style={styles.subtotalValue}>{formatBRL(parseNum(addQtd) * parseNum(addValor))}</Text>
+                </View>
+                <View style={styles.modalBtns}>
+                  <Pressable
+                    onPress={() => setSelProd(null)}
+                    style={({ pressed }) => [styles.secondaryBtn, pressed && { opacity: 0.8 }]}
+                  >
+                    <Text style={styles.secondaryBtnText}>Voltar</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleAddItem}
+                    disabled={addSaving}
+                    style={({ pressed }) => [styles.primaryBtn, (pressed || addSaving) && { opacity: 0.8 }]}
+                    testID="pedido-form-add-confirm"
+                  >
+                    {addSaving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Adicionar</Text>}
+                  </Pressable>
+                </View>
+              </View>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Modal editar item */}
+      <Modal visible={!!editItem} transparent animationType="slide" onRequestClose={() => setEditItem(null)}>
+        <Pressable style={styles.modalBg} onPress={() => setEditItem(null)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Editar Item</Text>
+              <Pressable onPress={() => setEditItem(null)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+            {editItem ? (
+              <View style={{ gap: spacing.sm }}>
+                <View style={styles.selProdBox}>
+                  <Text style={styles.itemDesc} numberOfLines={2}>{editItem.descricao || editItem.produto}</Text>
+                  <Text style={styles.resultSub}>#{editItem.produto}{editItem.cod_fab ? ` · ${editItem.cod_fab}` : ""}</Text>
+                </View>
+                <View style={styles.qtdRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Quantidade</Text>
+                    <TextInput value={editQtd} onChangeText={setEditQtd} keyboardType="decimal-pad" style={styles.input} testID="pedido-form-edit-qtd" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Valor unitário</Text>
+                    <TextInput value={editValor} onChangeText={setEditValor} keyboardType="decimal-pad" style={styles.input} testID="pedido-form-edit-valor" />
+                  </View>
+                </View>
+                <Text style={styles.fieldLabel}>Complemento (opcional)</Text>
+                <TextInput value={editCompl} onChangeText={setEditCompl} placeholder="Descrição complementar" placeholderTextColor={colors.muted} style={styles.input} testID="pedido-form-edit-compl" />
+                <View style={styles.previewRow}>
+                  <Text style={styles.subtotalLabel}>Total do item</Text>
+                  <Text style={styles.subtotalValue}>{formatBRL(parseNum(editQtd) * parseNum(editValor))}</Text>
+                </View>
+                <View style={styles.modalBtns}>
+                  <Pressable
+                    onPress={() => handleDeleteItem(editItem)}
+                    disabled={editSaving}
+                    style={({ pressed }) => [styles.deleteBtn, (pressed || editSaving) && { opacity: 0.8 }]}
+                    testID="pedido-form-edit-delete"
+                  >
+                    <Ionicons name="trash-outline" size={18} color={colors.error} />
+                  </Pressable>
+                  <Pressable
+                    onPress={handleUpdateItem}
+                    disabled={editSaving}
+                    style={({ pressed }) => [styles.primaryBtn, { flex: 1 }, (pressed || editSaving) && { opacity: 0.8 }]}
+                    testID="pedido-form-edit-save"
+                  >
+                    {editSaving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Salvar</Text>}
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Modal busca de cliente */}
       <Modal visible={searchOpen} transparent animationType="slide" onRequestClose={() => setSearchOpen(false)}>
@@ -574,4 +1022,67 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   toastText: { color: colors.onBrandPrimary, fontSize: 14, fontWeight: "500", textAlign: "center" },
+  itensHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  addItemBtn: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    backgroundColor: colors.brandPrimary, paddingHorizontal: spacing.md, paddingVertical: 7,
+    borderRadius: radius.pill, marginTop: spacing.lg,
+  },
+  addItemBtnText: { color: colors.onBrandPrimary, fontWeight: "500", fontSize: 13 },
+  itensHint: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
+    padding: spacing.md, borderWidth: 1, borderColor: colors.border, marginTop: spacing.sm,
+  },
+  itensHintText: { color: colors.muted, fontSize: 13, flex: 1 },
+  itemRow: {
+    flexDirection: "row", alignItems: "center", gap: spacing.md,
+    backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
+    padding: spacing.md, borderWidth: 1, borderColor: colors.border,
+  },
+  itemTipo: { width: 36, height: 36, borderRadius: radius.sm, alignItems: "center", justifyContent: "center" },
+  tagProd: { backgroundColor: colors.brandTertiary },
+  tagServ: { backgroundColor: "#fff4e0" },
+  itemDesc: { fontSize: 14, fontWeight: "500", color: colors.onSurface },
+  itemCompl: { fontSize: 12, color: colors.brandPrimary, marginTop: 1, fontStyle: "italic" },
+  itemSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
+  itemTotal: { fontSize: 15, fontWeight: "600", color: colors.brandPrimary },
+  subtotalRow: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    paddingHorizontal: spacing.md, paddingVertical: spacing.md, marginTop: 4,
+    backgroundColor: colors.brandTertiary, borderRadius: radius.md,
+  },
+  subtotalLabel: { fontSize: 14, color: colors.onSurface, fontWeight: "500" },
+  subtotalValue: { fontSize: 18, fontWeight: "700", color: colors.brandPrimary },
+  selProdBox: {
+    backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
+    padding: spacing.md, borderWidth: 1, borderColor: colors.border,
+  },
+  qtdRow: { flexDirection: "row", gap: spacing.sm },
+  fieldLabel: { fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "500" },
+  previewRow: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    paddingVertical: spacing.sm, marginTop: 4,
+  },
+  modalBtns: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
+  primaryBtn: {
+    flex: 1, backgroundColor: colors.brandPrimary, borderRadius: radius.pill,
+    paddingVertical: 13, alignItems: "center", justifyContent: "center",
+  },
+  primaryBtnText: { color: colors.onBrandPrimary, fontWeight: "600", fontSize: 15 },
+  secondaryBtn: {
+    paddingHorizontal: spacing.lg, borderRadius: radius.pill, paddingVertical: 13,
+    alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.border,
+  },
+  secondaryBtnText: { color: colors.onSurface, fontWeight: "500", fontSize: 15 },
+  deleteBtn: {
+    width: 50, borderRadius: radius.pill, paddingVertical: 13,
+    alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.error,
+  },
+  fullListBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    marginTop: spacing.sm, paddingVertical: 12, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary,
+  },
+  fullListText: { color: colors.brandPrimary, fontWeight: "500", fontSize: 14 },
 });

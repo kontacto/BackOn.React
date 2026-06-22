@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   FlatList,
   Image,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -10,7 +11,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { getSession } from "@/src/utils/storage/session";
@@ -24,14 +25,30 @@ type Item = {
   descricao: string;
   valor: number;
   estoque: number | null;
+  cod_fab?: string;
+  unidade?: string;
 };
 
 function formatBRL(v: number): string {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
+function parseNum(s: string): number {
+  const n = parseFloat(String(s).replace(/\./g, "").replace(",", "."));
+  return isNaN(n) ? 0 : n;
+}
 
 export default function ProdutosScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ pedido?: string }>();
+  const selectPedido = params.pedido ? parseInt(String(params.pedido), 10) : null;
+  const selecting = !!selectPedido;
+
+  const [selItem, setSelItem] = useState<Item | null>(null);
+  const [selQtd, setSelQtd] = useState("1");
+  const [selValor, setSelValor] = useState("0,00");
+  const [selCompl, setSelCompl] = useState("");
+  const [selSaving, setSelSaving] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
   const [conn, setConn] = useState<Connection | null>(null);
   const [search, setSearch] = useState("");
   const [tipo, setTipo] = useState<Tipo>("all");
@@ -124,6 +141,47 @@ export default function ProdutosScreen() {
     return { p, s };
   }, [items]);
 
+  const showToast = useCallback((m: string) => {
+    setToast(m);
+    setTimeout(() => setToast(null), 2500);
+  }, []);
+
+  const pickForOrder = (item: Item) => {
+    setSelItem(item);
+    setSelQtd("1");
+    setSelValor(formatBRL(item.valor).replace("R$", "").trim());
+    setSelCompl("");
+  };
+
+  const addToOrder = async () => {
+    if (!conn || !selectPedido || !selItem) return;
+    const qtd = parseNum(selQtd);
+    if (qtd <= 0) { showToast("Quantidade inválida."); return; }
+    setSelSaving(true);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const r = await fetch(`${base}/api/pedidos/${selectPedido}/itens`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          servidor: conn.servidor, banco: conn.banco,
+          produto: selItem.codigo,
+          qtd,
+          valor_unitario: parseNum(selValor),
+          complemento: selCompl,
+        }),
+      });
+      const j = await r.json();
+      if (!j?.success) { showToast(j?.message || "Falha ao adicionar."); }
+      else {
+        setSelItem(null);
+        showToast("Adicionado ao pedido!");
+      }
+    } catch (e) {
+      showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`);
+    } finally { setSelSaving(false); }
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="produtos-screen">
       <View style={styles.header}>
@@ -134,9 +192,18 @@ export default function ProdutosScreen() {
         >
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
-        <Text style={styles.headerTitle}>Produtos & Serviços ({total})</Text>
+        <Text style={styles.headerTitle}>
+          {selecting ? `Adicionar ao Pedido #${selectPedido}` : `Produtos & Serviços (${total})`}
+        </Text>
         <View style={{ width: 40 }} />
       </View>
+
+      {selecting ? (
+        <View style={styles.selectBanner}>
+          <Ionicons name="cart-outline" size={16} color={colors.brandPrimary} />
+          <Text style={styles.selectBannerText}>Toque em um item para adicioná-lo ao pedido.</Text>
+        </View>
+      ) : null}
 
       <View style={styles.searchWrap}>
         <Ionicons name="search" size={16} color={colors.muted} />
@@ -201,8 +268,10 @@ export default function ProdutosScreen() {
           ) : null
         }
         renderItem={({ item }) => (
-          <View
-            style={styles.card}
+          <Pressable
+            onPress={() => { if (selecting) pickForOrder(item); }}
+            disabled={!selecting}
+            style={({ pressed }) => [styles.card, selecting && pressed && { opacity: 0.7 }]}
             testID={`item-${item.tipo}-${item.codigo}`}
           >
             {item.tipo === "P" ? (
@@ -248,9 +317,64 @@ export default function ProdutosScreen() {
                 )}
               </View>
             </View>
-          </View>
+            {selecting ? (
+              <Ionicons name="add-circle" size={26} color={colors.brandPrimary} />
+            ) : null}
+          </Pressable>
         )}
       />
+
+      {/* Modal de quantidade ao adicionar item ao pedido */}
+      <Modal visible={!!selItem} transparent animationType="slide" onRequestClose={() => setSelItem(null)}>
+        <Pressable style={styles.modalBg} onPress={() => setSelItem(null)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Adicionar ao Pedido</Text>
+              <Pressable onPress={() => setSelItem(null)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+            {selItem ? (
+              <View style={{ gap: spacing.sm }}>
+                <View style={styles.selProdBox}>
+                  <Text style={styles.itemDesc} numberOfLines={2}>{selItem.descricao}</Text>
+                  <Text style={styles.cardSub}>#{selItem.codigo}{selItem.cod_fab ? ` · ${selItem.cod_fab}` : ""}</Text>
+                </View>
+                <View style={styles.qtdRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Quantidade</Text>
+                    <TextInput value={selQtd} onChangeText={setSelQtd} keyboardType="decimal-pad" style={styles.modalInput} testID="produtos-add-qtd" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>Valor unitário</Text>
+                    <TextInput value={selValor} onChangeText={setSelValor} keyboardType="decimal-pad" style={styles.modalInput} testID="produtos-add-valor" />
+                  </View>
+                </View>
+                <Text style={styles.fieldLabel}>Complemento (opcional)</Text>
+                <TextInput value={selCompl} onChangeText={setSelCompl} placeholder="Descrição complementar" placeholderTextColor={colors.muted} style={styles.modalInput} testID="produtos-add-compl" />
+                <View style={styles.previewRow}>
+                  <Text style={styles.fieldLabel}>Total do item</Text>
+                  <Text style={styles.cardValor}>{formatBRL(parseNum(selQtd) * parseNum(selValor))}</Text>
+                </View>
+                <Pressable
+                  onPress={addToOrder}
+                  disabled={selSaving}
+                  style={({ pressed }) => [styles.primaryBtn, (pressed || selSaving) && { opacity: 0.8 }]}
+                  testID="produtos-add-confirm"
+                >
+                  {selSaving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Adicionar ao Pedido</Text>}
+                </Pressable>
+              </View>
+            ) : null}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {toast ? (
+        <View style={styles.toast} testID="produtos-toast">
+          <Text style={styles.toastText}>{toast}</Text>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -353,4 +477,47 @@ const styles = StyleSheet.create({
   tagServ: { backgroundColor: "#fff4e0" },
   tipoTagText: { fontSize: 10, fontWeight: "600", letterSpacing: 0.4 },
   empty: { textAlign: "center", color: colors.muted, fontSize: 14, marginTop: 40 },
+  selectBanner: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    backgroundColor: colors.brandTertiary, marginHorizontal: spacing.lg, marginTop: spacing.md,
+    paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  selectBannerText: { color: colors.onSurface, fontSize: 13, flex: 1 },
+  modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+  modalCard: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
+    paddingHorizontal: spacing.lg, paddingTop: spacing.lg, paddingBottom: spacing.xxl,
+  },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
+  modalTitle: { fontSize: 17, fontWeight: "600", color: colors.onSurface },
+  itemDesc: { fontSize: 14, fontWeight: "500", color: colors.onSurface },
+  selProdBox: {
+    backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
+    padding: spacing.md, borderWidth: 1, borderColor: colors.border,
+  },
+  qtdRow: { flexDirection: "row", gap: spacing.sm },
+  fieldLabel: { fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "500" },
+  modalInput: {
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm,
+    paddingHorizontal: spacing.md, paddingVertical: 10, fontSize: 14, color: colors.onSurface,
+  },
+  previewRow: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    paddingVertical: spacing.sm,
+  },
+  primaryBtn: {
+    backgroundColor: colors.brandPrimary, borderRadius: radius.pill,
+    paddingVertical: 13, alignItems: "center", justifyContent: "center", marginTop: spacing.sm,
+  },
+  primaryBtnText: { color: colors.onBrandPrimary, fontWeight: "600", fontSize: 15 },
+  toast: {
+    position: "absolute", left: spacing.lg, right: spacing.lg, bottom: spacing.xxl,
+    backgroundColor: colors.brandSecondary,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.md,
+    alignItems: "center",
+    shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 10,
+  },
+  toastText: { color: colors.onBrandPrimary, fontSize: 14, fontWeight: "500", textAlign: "center" },
 });

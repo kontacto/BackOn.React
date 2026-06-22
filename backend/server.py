@@ -782,7 +782,7 @@ def _list_produtos_servicos_sync(
                 params_p = (like, like)
             cur.execute(
                 f"SELECT 'P' AS tipo, p.codigo_int AS codigo, p.descricao, "
-                f"       p.p_venda AS valor, p.estoque "
+                f"       p.p_venda AS valor, p.estoque, p.codigo_fab, p.uni "
                 f"FROM pecas p {where_p} "
                 f"ORDER BY p.descricao",
                 params_p,
@@ -794,6 +794,8 @@ def _list_produtos_servicos_sync(
                     "descricao": (r.get("descricao") or "").strip(),
                     "valor": float(r.get("valor") or 0),
                     "estoque": float(r.get("estoque") or 0),
+                    "cod_fab": (r.get("codigo_fab") or "").strip(),
+                    "unidade": (r.get("uni") or "").strip(),
                 })
 
         if tipo in ("all", "S"):
@@ -1126,6 +1128,311 @@ async def create_pedido(req: PedidoSaveRequest):
 @api_router.put("/pedidos/{pedido}")
 async def update_pedido(pedido: int, req: PedidoSaveRequest):
     return await asyncio.to_thread(_save_pedido_sync, req, pedido)
+
+
+# =====================================================================
+# Itens do Pedido (pedido_venda_prod)
+# Relacionamentos:
+#   pedido_venda.pedido = pedido_venda_prod.pedido
+#   pedido_venda_prod.produto = pecas.codigo_int  (produto)  -> tipo 'P'
+#   pedido_venda_prod.produto = servicos.codigo    (serviço)  -> tipo 'S'
+# Política: só pedido com situacao='A' (Aberto) permite CRUD de itens.
+# Total do item = qtd_pedida * p_venda - desconto + acrescimo
+# pedido_venda.total = SUM dos itens não cancelados.
+# =====================================================================
+def _item_total(qtd, pv, desc, acr) -> float:
+    return round(float(qtd or 0) * float(pv or 0) - float(desc or 0) + float(acr or 0), 2)
+
+
+def _recalc_pedido_total(cur, pedido: int) -> float:
+    cur.execute(
+        "UPDATE pedido_venda SET total = ISNULL(("
+        "  SELECT SUM(qtd_pedida * p_venda - ISNULL(desconto,0) + ISNULL(acrescimo,0)) "
+        "  FROM pedido_venda_prod WHERE pedido=%s AND ISNULL(item_cancelado,0)=0"
+        "), 0) WHERE pedido=%s",
+        (pedido, pedido),
+    )
+    cur.execute("SELECT total FROM pedido_venda WHERE pedido=%s", (pedido,))
+    r = cur.fetchone()
+    return float((r.get("total") if isinstance(r, dict) else (r[0] if r else 0)) or 0)
+
+
+def _check_pedido_aberto(cur, pedido: int) -> tuple[bool, str]:
+    """Retorna (existe, situacao). Não levanta exceção."""
+    cur.execute("SELECT situacao FROM pedido_venda WHERE pedido=%s", (pedido,))
+    row = cur.fetchone()
+    if not row:
+        return (False, "")
+    return (True, (row.get("situacao") or "").strip().upper())
+
+
+def _resolve_produto(cur, codigo: str) -> Optional[dict]:
+    """Procura primeiro em pecas, depois em servicos. Retorna dados padrão do item."""
+    cur.execute(
+        "SELECT codigo_int AS codigo, descricao, codigo_fab, p_venda AS valor, uni "
+        "FROM pecas WHERE codigo_int=%s",
+        (codigo,),
+    )
+    r = cur.fetchone()
+    if r:
+        return {
+            "tipo": "P",
+            "codigo": (r.get("codigo") or "").strip(),
+            "descricao": (r.get("descricao") or "").strip(),
+            "cod_fab": (r.get("codigo_fab") or "").strip(),
+            "valor": float(r.get("valor") or 0),
+            "unidade": (r.get("uni") or "").strip()[:2] or "UN",
+        }
+    cur.execute(
+        "SELECT codigo, descricao, valor_hora AS valor FROM servicos WHERE codigo=%s",
+        (codigo,),
+    )
+    r = cur.fetchone()
+    if r:
+        return {
+            "tipo": "S",
+            "codigo": (r.get("codigo") or "").strip(),
+            "descricao": (r.get("descricao") or "").strip(),
+            "cod_fab": (r.get("codigo") or "").strip(),
+            "valor": float(r.get("valor") or 0),
+            "unidade": "HR",
+        }
+    return None
+
+
+def _list_itens_sync(servidor: str, banco: str, pedido: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": [], "subtotal": 0}
+    try:
+        cur = conn.cursor(as_dict=True)
+        existe, sit = _check_pedido_aberto(cur, pedido)
+        if not existe:
+            conn.close()
+            return {"success": False, "message": "Pedido não encontrado.", "items": [], "subtotal": 0}
+        cur.execute(
+            "SELECT i.codauto, i.produto, i.qtd_pedida, i.p_venda, i.desconto, i.acrescimo, "
+            "       i.descricao_produto, i.unidade_pedido, "
+            "       pe.descricao AS peca_desc, pe.codigo_fab AS peca_fab, "
+            "       sv.descricao AS serv_desc "
+            "FROM pedido_venda_prod i "
+            "LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
+            "LEFT JOIN servicos sv ON sv.codigo = i.produto "
+            "WHERE i.pedido = %s AND ISNULL(i.item_cancelado,0) = 0 "
+            "ORDER BY i.codauto",
+            (pedido,),
+        )
+        items = []
+        subtotal = 0.0
+        for r in cur.fetchall():
+            is_peca = r.get("peca_desc") is not None
+            tipo = "P" if is_peca else ("S" if r.get("serv_desc") is not None else "?")
+            base_desc = (r.get("peca_desc") if is_peca else r.get("serv_desc")) or ""
+            complemento = (r.get("descricao_produto") or "").strip()
+            qtd = float(r.get("qtd_pedida") or 0)
+            pv = float(r.get("p_venda") or 0)
+            desc = float(r.get("desconto") or 0)
+            acr = float(r.get("acrescimo") or 0)
+            tot = _item_total(qtd, pv, desc, acr)
+            subtotal += tot
+            items.append({
+                "codauto": int(r["codauto"]),
+                "produto": (r.get("produto") or "").strip(),
+                "tipo": tipo,
+                "descricao": base_desc.strip(),
+                "complemento": complemento,
+                "cod_fab": (r.get("peca_fab") or r.get("produto") or "").strip(),
+                "unidade": (r.get("unidade_pedido") or "").strip(),
+                "qtd": qtd,
+                "valor_unitario": pv,
+                "desconto": desc,
+                "acrescimo": acr,
+                "total": tot,
+            })
+        cur.close()
+        conn.close()
+        return {
+            "success": True,
+            "items": items,
+            "subtotal": round(subtotal, 2),
+            "situacao": sit,
+            "editavel": sit == "A",
+        }
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": [], "subtotal": 0}
+
+
+@api_router.get("/pedidos/{pedido}/itens")
+async def list_itens(pedido: int, servidor: str, banco: str):
+    return await asyncio.to_thread(_list_itens_sync, servidor, banco, pedido)
+
+
+class ItemSaveRequest(BaseModel):
+    servidor: str
+    banco: str
+    produto: Optional[str] = None          # obrigatório no create
+    qtd: float = 1
+    valor_unitario: Optional[float] = None # se None, usa preço padrão do produto
+    complemento: Optional[str] = ""
+    desconto: Optional[float] = 0
+    acrescimo: Optional[float] = 0
+
+
+def _add_item_sync(req: ItemSaveRequest, pedido: int) -> dict:
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        existe, sit = _check_pedido_aberto(cur, pedido)
+        if not existe:
+            conn.close()
+            return {"success": False, "message": "Pedido não encontrado."}
+        if sit != "A":
+            conn.close()
+            return {"success": False, "message": f"Pedido '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterado."}
+
+        codigo = (req.produto or "").strip()
+        if not codigo:
+            conn.close()
+            return {"success": False, "message": "Produto/serviço obrigatório."}
+        prod = _resolve_produto(cur, codigo)
+        if not prod:
+            conn.close()
+            return {"success": False, "message": f"Produto/serviço '{codigo}' não encontrado."}
+
+        qtd = float(req.qtd or 0)
+        if qtd <= 0:
+            conn.close()
+            return {"success": False, "message": "Quantidade deve ser maior que zero."}
+        pv = req.valor_unitario if req.valor_unitario is not None else prod["valor"]
+        pv = float(pv or 0)
+        desc = float(req.desconto or 0)
+        acr = float(req.acrescimo or 0)
+        complemento = (req.complemento or "").strip()
+        unidade = prod["unidade"]
+
+        cur.execute(
+            "INSERT INTO pedido_venda_prod "
+            "(pedido, produto, qtd_pedida, p_venda, p_normal, desconto, acrescimo, "
+            " descricao_produto, unidade_pedido, situacao_item, item_cancelado, data_inclusao_item) "
+            "OUTPUT INSERTED.codauto "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'A',0,CAST(GETDATE() AS DATE))",
+            (pedido, codigo, qtd, pv, prod["valor"], desc, acr, complemento, unidade),
+        )
+        row = cur.fetchone()
+        codauto = int(row["codauto"] if isinstance(row, dict) else row[0])
+        novo_total = _recalc_pedido_total(cur, pedido)
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "codauto": codauto, "total": novo_total}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao adicionar item: {e}"}
+
+
+def _update_item_sync(req: ItemSaveRequest, pedido: int, codauto: int) -> dict:
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        existe, sit = _check_pedido_aberto(cur, pedido)
+        if not existe:
+            conn.close()
+            return {"success": False, "message": "Pedido não encontrado."}
+        if sit != "A":
+            conn.close()
+            return {"success": False, "message": f"Pedido '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterado."}
+
+        qtd = float(req.qtd or 0)
+        if qtd <= 0:
+            conn.close()
+            return {"success": False, "message": "Quantidade deve ser maior que zero."}
+        pv = float(req.valor_unitario or 0)
+        desc = float(req.desconto or 0)
+        acr = float(req.acrescimo or 0)
+        complemento = (req.complemento or "").strip()
+
+        cur.execute(
+            "UPDATE pedido_venda_prod SET "
+            " qtd_pedida=%s, p_venda=%s, desconto=%s, acrescimo=%s, "
+            " descricao_produto=%s, data_alteracao_item=CAST(GETDATE() AS DATE) "
+            "WHERE codauto=%s AND pedido=%s",
+            (qtd, pv, desc, acr, complemento, codauto, pedido),
+        )
+        if cur.rowcount == 0:
+            conn.rollback(); conn.close()
+            return {"success": False, "message": "Item não encontrado."}
+        novo_total = _recalc_pedido_total(cur, pedido)
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "total": novo_total}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao atualizar item: {e}"}
+
+
+def _delete_item_sync(servidor: str, banco: str, pedido: int, codauto: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        existe, sit = _check_pedido_aberto(cur, pedido)
+        if not existe:
+            conn.close()
+            return {"success": False, "message": "Pedido não encontrado."}
+        if sit != "A":
+            conn.close()
+            return {"success": False, "message": f"Pedido '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterado."}
+        cur.execute("DELETE FROM pedido_venda_prod WHERE codauto=%s AND pedido=%s", (codauto, pedido))
+        if cur.rowcount == 0:
+            conn.rollback(); conn.close()
+            return {"success": False, "message": "Item não encontrado."}
+        novo_total = _recalc_pedido_total(cur, pedido)
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "total": novo_total}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao remover item: {e}"}
+
+
+@api_router.post("/pedidos/{pedido}/itens")
+async def add_item(pedido: int, req: ItemSaveRequest):
+    return await asyncio.to_thread(_add_item_sync, req, pedido)
+
+
+@api_router.put("/pedidos/{pedido}/itens/{codauto}")
+async def update_item(pedido: int, codauto: int, req: ItemSaveRequest):
+    return await asyncio.to_thread(_update_item_sync, req, pedido, codauto)
+
+
+@api_router.delete("/pedidos/{pedido}/itens/{codauto}")
+async def delete_item(pedido: int, codauto: int, servidor: str, banco: str):
+    return await asyncio.to_thread(_delete_item_sync, servidor, banco, pedido, codauto)
+
 
 
 # Busca de cliente para o pedido — por nome, cgc/cpf ou telefone.
