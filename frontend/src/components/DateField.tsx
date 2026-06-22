@@ -1,6 +1,12 @@
-import { useState } from "react";
-import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
-import DateTimePicker, { DateTimePickerEvent } from "@react-native-community/datetimepicker";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
@@ -15,21 +21,31 @@ type Props = {
   maximumDate?: Date;
 };
 
+const MONTHS_PT = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+];
+const WEEKDAYS_PT = ["D", "S", "T", "Q", "Q", "S", "S"];
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
 function isoToBR(iso: string | null): string {
   if (!iso) return "";
   const [y, m, d] = iso.split("-");
   return d && m && y ? `${d}/${m}/${y}` : "";
 }
-
 function dateToISO(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
-
-function parseISO(iso: string | null): Date {
-  if (!iso) return new Date();
+function parseISO(iso: string | null): Date | null {
+  if (!iso) return null;
   const [y, m, d] = iso.split("-").map((s) => parseInt(s, 10));
-  if (!y || !m || !d) return new Date();
+  if (!y || !m || !d) return null;
   return new Date(y, m - 1, d);
+}
+function stripTime(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
 export default function DateField({
@@ -43,18 +59,88 @@ export default function DateField({
   maximumDate,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const today = useMemo(() => stripTime(new Date()), []);
 
-  const handleChange = (event: DateTimePickerEvent, selected?: Date) => {
-    // Android fires once and we close. iOS keeps open (spinner) until OK pressed.
-    if (Platform.OS === "android") {
-      setOpen(false);
-      if (event.type === "set" && selected) {
-        onChange(dateToISO(selected));
-      }
-      return;
+  // Mês exibido no calendário. Inicia em value (se houver) ou no mês atual.
+  const initialView = useMemo(() => {
+    const d = parseISO(value) || new Date();
+    return { year: d.getFullYear(), month: d.getMonth() };
+  }, [value]);
+  const [viewYear, setViewYear] = useState(initialView.year);
+  const [viewMonth, setViewMonth] = useState(initialView.month);
+  const [yearPickerOpen, setYearPickerOpen] = useState(false);
+
+  // Sempre que abrir, sincroniza com o value atual.
+  useEffect(() => {
+    if (open) {
+      const d = parseISO(value) || new Date();
+      setViewYear(d.getFullYear());
+      setViewMonth(d.getMonth());
+      setYearPickerOpen(false);
     }
-    if (selected) onChange(dateToISO(selected));
-  };
+  }, [open, value]);
+
+  const minD = minimumDate ? stripTime(minimumDate) : null;
+  const maxD = maximumDate ? stripTime(maximumDate) : null;
+
+  function isDisabled(d: Date): boolean {
+    if (minD && d < minD) return true;
+    if (maxD && d > maxD) return true;
+    return false;
+  }
+
+  // Matriz 6x7 (42 células) do mês exibido.
+  const cells = useMemo(() => {
+    const firstDay = new Date(viewYear, viewMonth, 1);
+    const startWeekday = firstDay.getDay(); // 0=Dom
+    const start = new Date(viewYear, viewMonth, 1 - startWeekday);
+    const out: Date[] = [];
+    for (let i = 0; i < 42; i++) {
+      out.push(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+    }
+    return out;
+  }, [viewYear, viewMonth]);
+
+  const selectedDate = parseISO(value);
+
+  function goPrevMonth() {
+    if (viewMonth === 0) {
+      setViewYear(viewYear - 1);
+      setViewMonth(11);
+    } else {
+      setViewMonth(viewMonth - 1);
+    }
+  }
+  function goNextMonth() {
+    if (viewMonth === 11) {
+      setViewYear(viewYear + 1);
+      setViewMonth(0);
+    } else {
+      setViewMonth(viewMonth + 1);
+    }
+  }
+
+  function handlePick(d: Date) {
+    if (isDisabled(d)) return;
+    onChange(dateToISO(d));
+    setOpen(false);
+  }
+
+  function handleToday() {
+    if (isDisabled(today)) return;
+    onChange(dateToISO(today));
+    setOpen(false);
+  }
+
+  // Lista de anos para o picker (centrado no atual, ±60 anos, respeitando limites).
+  const yearRange = useMemo(() => {
+    const base = viewYear;
+    const minY = minD ? minD.getFullYear() : base - 60;
+    const maxY = maxD ? maxD.getFullYear() : base + 60;
+    const out: number[] = [];
+    for (let y = minY; y <= maxY; y++) out.push(y);
+    return out;
+  }, [viewYear, minD, maxD]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -62,7 +148,7 @@ export default function DateField({
       <View style={styles.row}>
         <Pressable
           onPress={() => setOpen(true)}
-          style={({ pressed }) => [styles.box, pressed && { opacity: 0.7 }]}
+          style={({ pressed }) => [styles.box, pressed && { opacity: 0.75 }]}
           testID={testID}
         >
           <Ionicons name="calendar-outline" size={16} color={colors.muted} />
@@ -82,49 +168,173 @@ export default function DateField({
         ) : null}
       </View>
 
-      {open && Platform.OS === "ios" ? (
-        <View style={styles.iosWrap}>
-          <DateTimePicker
-            value={parseISO(value)}
-            mode="date"
-            display="spinner"
-            onChange={handleChange}
-            minimumDate={minimumDate}
-            maximumDate={maximumDate}
-            locale="pt-BR"
-          />
-          <View style={styles.iosBtnRow}>
-            <Pressable onPress={() => setOpen(false)} style={styles.iosBtn}>
-              <Text style={styles.iosBtnText}>OK</Text>
-            </Pressable>
-          </View>
-        </View>
-      ) : null}
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <Pressable style={styles.modalBg} onPress={() => setOpen(false)}>
+          <Pressable
+            style={styles.modalCard}
+            onPress={(e) => e.stopPropagation()}
+            testID={testID ? `${testID}-modal` : undefined}
+          >
+            {/* Cabeçalho com mês/ano e navegação */}
+            <View style={styles.calHeader}>
+              <Pressable
+                onPress={goPrevMonth}
+                hitSlop={8}
+                style={({ pressed }) => [styles.navBtn, pressed && { opacity: 0.6 }]}
+                testID={testID ? `${testID}-prev` : undefined}
+              >
+                <Ionicons name="chevron-back" size={22} color={colors.brandPrimary} />
+              </Pressable>
 
-      {open && Platform.OS === "android" ? (
-        <DateTimePicker
-          value={parseISO(value)}
-          mode="date"
-          display="default"
-          onChange={handleChange}
-          minimumDate={minimumDate}
-          maximumDate={maximumDate}
-        />
-      ) : null}
+              <Pressable
+                onPress={() => setYearPickerOpen((v) => !v)}
+                style={({ pressed }) => [styles.titleBtn, pressed && { opacity: 0.75 }]}
+                testID={testID ? `${testID}-title` : undefined}
+              >
+                <Text style={styles.titleText}>
+                  {MONTHS_PT[viewMonth]} {viewYear}
+                </Text>
+                <Ionicons
+                  name={yearPickerOpen ? "chevron-up" : "chevron-down"}
+                  size={16}
+                  color={colors.brandPrimary}
+                />
+              </Pressable>
 
-      {open && Platform.OS === "web" ? (
-        <DateTimePicker
-          value={parseISO(value)}
-          mode="date"
-          onChange={(e, d) => {
-            setOpen(false);
-            if (d) onChange(dateToISO(d));
-          }}
-        />
-      ) : null}
+              <Pressable
+                onPress={goNextMonth}
+                hitSlop={8}
+                style={({ pressed }) => [styles.navBtn, pressed && { opacity: 0.6 }]}
+                testID={testID ? `${testID}-next` : undefined}
+              >
+                <Ionicons name="chevron-forward" size={22} color={colors.brandPrimary} />
+              </Pressable>
+            </View>
+
+            {yearPickerOpen ? (
+              <ScrollView
+                style={styles.yearList}
+                contentContainerStyle={styles.yearListContent}
+                testID={testID ? `${testID}-year-list` : undefined}
+              >
+                {yearRange.map((y) => {
+                  const sel = y === viewYear;
+                  return (
+                    <Pressable
+                      key={y}
+                      onPress={() => {
+                        setViewYear(y);
+                        setYearPickerOpen(false);
+                      }}
+                      style={({ pressed }) => [
+                        styles.yearCell,
+                        sel && styles.yearCellSel,
+                        pressed && { opacity: 0.7 },
+                      ]}
+                      testID={testID ? `${testID}-year-${y}` : undefined}
+                    >
+                      <Text style={[styles.yearText, sel && styles.yearTextSel]}>{y}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            ) : (
+              <>
+                {/* Dias da semana */}
+                <View style={styles.weekRow}>
+                  {WEEKDAYS_PT.map((w, i) => (
+                    <View key={i} style={styles.weekCell}>
+                      <Text style={styles.weekText}>{w}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                {/* Grid 6x7 */}
+                <View style={styles.grid}>
+                  {cells.map((d, i) => {
+                    const inMonth = d.getMonth() === viewMonth;
+                    const isToday = d.getTime() === today.getTime();
+                    const isSel =
+                      !!selectedDate &&
+                      d.getFullYear() === selectedDate.getFullYear() &&
+                      d.getMonth() === selectedDate.getMonth() &&
+                      d.getDate() === selectedDate.getDate();
+                    const disabled = isDisabled(d);
+                    return (
+                      <Pressable
+                        key={i}
+                        onPress={() => handlePick(d)}
+                        disabled={disabled}
+                        style={({ pressed }) => [
+                          styles.dayCell,
+                          isSel && styles.dayCellSel,
+                          !isSel && isToday && styles.dayCellToday,
+                          pressed && !disabled && !isSel && { backgroundColor: colors.brandTertiary },
+                        ]}
+                        testID={testID ? `${testID}-day-${dateToISO(d)}` : undefined}
+                      >
+                        <Text
+                          style={[
+                            styles.dayText,
+                            !inMonth && styles.dayTextOut,
+                            isSel && styles.dayTextSel,
+                            !isSel && isToday && styles.dayTextToday,
+                            disabled && styles.dayTextDisabled,
+                          ]}
+                        >
+                          {d.getDate()}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
+            )}
+
+            {/* Rodapé com ações */}
+            <View style={styles.footer}>
+              {allowClear && value ? (
+                <Pressable
+                  onPress={() => {
+                    onChange(null);
+                    setOpen(false);
+                  }}
+                  style={({ pressed }) => [styles.footerBtn, pressed && { opacity: 0.65 }]}
+                  testID={testID ? `${testID}-clear-action` : undefined}
+                >
+                  <Text style={styles.footerBtnText}>Limpar</Text>
+                </Pressable>
+              ) : (
+                <View style={{ flex: 1 }} />
+              )}
+              <Pressable
+                onPress={handleToday}
+                disabled={isDisabled(today)}
+                style={({ pressed }) => [
+                  styles.footerBtn,
+                  pressed && { opacity: 0.65 },
+                  isDisabled(today) && { opacity: 0.35 },
+                ]}
+                testID={testID ? `${testID}-today` : undefined}
+              >
+                <Text style={styles.footerBtnText}>Hoje</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setOpen(false)}
+                style={({ pressed }) => [styles.footerBtn, pressed && { opacity: 0.65 }]}
+                testID={testID ? `${testID}-cancel` : undefined}
+              >
+                <Text style={styles.footerBtnText}>Cancelar</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
+
+const CELL_SIZE = 38;
 
 const styles = StyleSheet.create({
   label: {
@@ -151,20 +361,147 @@ const styles = StyleSheet.create({
   },
   text: { fontSize: 14, color: colors.onSurface },
   clearBtn: { padding: 4 },
-  iosWrap: {
+
+  // Modal
+  modalBg: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: spacing.lg,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 360,
     backgroundColor: colors.surfaceSecondary,
-    borderRadius: radius.md,
-    padding: spacing.sm,
-    marginTop: spacing.sm,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
+  },
+
+  // Cabeçalho calendário
+  calHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+  },
+  navBtn: {
+    width: 36,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+  },
+  titleBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radius.sm,
+  },
+  titleText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.brandPrimary,
+    textTransform: "capitalize",
+  },
+
+  // Year picker
+  yearList: { maxHeight: 280, marginBottom: spacing.sm },
+  yearListContent: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 6,
+  },
+  yearCell: {
+    minWidth: 72,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: radius.sm,
+    alignItems: "center",
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
   },
-  iosBtnRow: { flexDirection: "row", justifyContent: "flex-end", marginTop: spacing.sm },
-  iosBtn: {
+  yearCellSel: {
     backgroundColor: colors.brandPrimary,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: 8,
-    borderRadius: radius.pill,
+    borderColor: colors.brandPrimary,
   },
-  iosBtnText: { color: colors.onBrandPrimary, fontWeight: "600", fontSize: 13 },
+  yearText: { fontSize: 14, color: colors.onSurface, fontWeight: "500" },
+  yearTextSel: { color: colors.onBrandPrimary, fontWeight: "700" },
+
+  // Semana
+  weekRow: { flexDirection: "row" },
+  weekCell: {
+    width: CELL_SIZE,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    flex: 1,
+  },
+  weekText: {
+    fontSize: 11,
+    color: colors.muted,
+    fontWeight: "600",
+    textTransform: "uppercase",
+  },
+
+  // Grid
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+  },
+  dayCell: {
+    width: `${100 / 7}%`,
+    height: CELL_SIZE,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.pill,
+    marginVertical: 2,
+  },
+  dayCellSel: {
+    backgroundColor: colors.brandPrimary,
+  },
+  dayCellToday: {
+    borderWidth: 1,
+    borderColor: colors.brandPrimary,
+  },
+  dayText: { fontSize: 14, color: colors.onSurface, fontWeight: "500" },
+  dayTextOut: { color: colors.muted, opacity: 0.45 },
+  dayTextSel: { color: colors.onBrandPrimary, fontWeight: "700" },
+  dayTextToday: { color: colors.brandPrimary, fontWeight: "700" },
+  dayTextDisabled: { color: colors.muted, opacity: 0.3 },
+
+  // Rodapé
+  footer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 4,
+    paddingTop: spacing.sm,
+    marginTop: spacing.xs,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
+  footerBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    borderRadius: radius.sm,
+  },
+  footerBtnText: {
+    fontSize: 13,
+    color: colors.brandPrimary,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
 });
