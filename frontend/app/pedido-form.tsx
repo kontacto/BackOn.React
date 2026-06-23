@@ -36,6 +36,10 @@ type ProdutoServico = {
   tipo: "P" | "S"; codigo: string; descricao: string; valor: number;
   estoque: number | null; cod_fab?: string; unidade?: string;
 };
+type DescontoRow = {
+  cod: number; tipo_desconto: string; tipo_label: string; descricao: string;
+  percentual: number; valor_unitario: number; qtd: number; valor_total: number; usuario: number;
+};
 
 function formatBRL(v: number): string {
   return (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -138,7 +142,21 @@ export default function PedidoFormScreen() {
   const [editCompl, setEditCompl] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
+  // Código do usuário logado p/ log de descontos (-2 = KONTACTO master)
+  const [usuarioCod, setUsuarioCod] = useState<number>(-2);
+
+  // Modal relatório de descontos
+  const [descModalOpen, setDescModalOpen] = useState(false);
+  const [descItems, setDescItems] = useState<DescontoRow[]>([]);
+  const [descTotalApi, setDescTotalApi] = useState(0);
+  const [descLoading, setDescLoading] = useState(false);
+
   const isAberto = (pedido?.situacao || "A").toUpperCase() === "A";
+
+  const descTotalItens = useMemo(
+    () => itens.reduce((s, it) => s + (it.desconto || 0) * (it.qtd || 0), 0),
+    [itens]
+  );
 
   // -------- Init
   useEffect(() => {
@@ -154,6 +172,8 @@ export default function PedidoFormScreen() {
         ? cod
         : (typeof cod === "string" && /^\d+$/.test(cod) ? parseInt(cod, 10) : null);
       setVendedor(vCod);
+      const isMaster = !!(s?.usuario as { master?: boolean } | undefined)?.master;
+      setUsuarioCod(isMaster ? -2 : (typeof vCod === "number" ? vCod : -2));
       const fnome = (s?.funcionario?.nome_guerra || s?.funcionario?.nome || "") as string;
       setVendedorNome(fnome);
 
@@ -340,7 +360,9 @@ export default function PedidoFormScreen() {
           qtd,
           valor_unitario: pNormal,
           desconto: descUnit,
+          desconto_pct: parseNum(addDescPct),
           acrescimo: acr,
+          usuario_codigo: usuarioCod,
           complemento: addCompl,
         }),
       });
@@ -387,7 +409,9 @@ export default function PedidoFormScreen() {
           valor_unitario: pNormal,
           complemento: editCompl,
           desconto: descUnit,
+          desconto_pct: parseNum(editDescPct),
           acrescimo: acr,
+          usuario_codigo: usuarioCod,
         }),
       });
       const j = await r.json();
@@ -420,6 +444,25 @@ export default function PedidoFormScreen() {
       showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally { setEditSaving(false); }
   };
+
+  const openDescontos = async () => {
+    if (!conn || !pedidoId) return;
+    setDescModalOpen(true);
+    setDescLoading(true);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`;
+      const r = await fetch(`${base}/api/pedidos/${pedidoId}/descontos?${qs}`);
+      const j = await r.json();
+      if (j?.success) {
+        setDescItems(j.items || []);
+        setDescTotalApi(j.total || 0);
+      }
+    } catch {
+      // silencioso
+    } finally { setDescLoading(false); }
+  };
+
 
   const handleSave = async () => {
     if (!conn) return;
@@ -697,6 +740,24 @@ export default function PedidoFormScreen() {
                   <Text style={styles.itemTotal}>{formatBRL(it.total)}</Text>
                 </Pressable>
               ))}
+
+              {descTotalItens > 0 ? (
+                <TouchableOpacity
+                  onPress={openDescontos}
+                  activeOpacity={0.8}
+                  style={styles.descBtn}
+                  testID="pedido-form-descontos-btn"
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Ionicons name="pricetag" size={15} color={colors.error} />
+                    <Text style={styles.descBtnLabel}>Descontos concedidos</Text>
+                  </View>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                    <Text style={styles.descBtnValue}>- {formatBRL(descTotalItens)}</Text>
+                    <Ionicons name="chevron-forward" size={16} color={colors.error} />
+                  </View>
+                </TouchableOpacity>
+              ) : null}
 
               <View style={styles.subtotalRow}>
                 <Text style={styles.subtotalLabel}>Subtotal</Text>
@@ -1036,6 +1097,46 @@ export default function PedidoFormScreen() {
         </Pressable>
       </Modal>
 
+      {/* Modal relatório de descontos concedidos */}
+      <Modal visible={descModalOpen} transparent animationType="slide" onRequestClose={() => setDescModalOpen(false)}>
+        <Pressable style={styles.modalBg} onPress={() => setDescModalOpen(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Descontos Concedidos</Text>
+              <Pressable onPress={() => setDescModalOpen(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+            {descLoading ? (
+              <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 24 }} />
+            ) : descItems.length === 0 ? (
+              <Text style={styles.emptyText}>Nenhum desconto registrado.</Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 420 }}>
+                {descItems.map((d) => (
+                  <View key={d.cod} style={styles.descRow} testID={`pedido-form-desc-${d.cod}`}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemDesc} numberOfLines={1}>{d.descricao}</Text>
+                      <Text style={styles.itemSub}>
+                        {d.tipo_label}{d.percentual > 0 ? ` · ${fmtNum(d.percentual)}%` : ""}
+                        {d.qtd > 0 ? ` · ${fmtNum(d.qtd)}× ${formatBRL(d.valor_unitario)}` : ""}
+                        {` · usuário ${d.usuario}`}
+                      </Text>
+                    </View>
+                    <Text style={[styles.itemTotal, { color: colors.error }]}>- {formatBRL(d.valor_total)}</Text>
+                  </View>
+                ))}
+                <View style={styles.subtotalRow}>
+                  <Text style={styles.subtotalLabel}>Total de descontos</Text>
+                  <Text style={[styles.subtotalValue, { color: colors.error }]}>- {formatBRL(descTotalApi)}</Text>
+                </View>
+              </ScrollView>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+
       {/* Modal busca de cliente */}
       <Modal visible={searchOpen} transparent animationType="slide" onRequestClose={() => setSearchOpen(false)}>
         <Pressable style={styles.modalBg} onPress={() => setSearchOpen(false)}>
@@ -1232,6 +1333,17 @@ const styles = StyleSheet.create({
   },
   subtotalLabel: { fontSize: 14, color: colors.onSurface, fontWeight: "500" },
   subtotalValue: { fontSize: 18, fontWeight: "700", color: colors.brandPrimary },
+  descBtn: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radius.md,
+    backgroundColor: "#fdecea", borderWidth: 1, borderColor: "#f5c6cb",
+  },
+  descBtnLabel: { fontSize: 13, color: colors.error, fontWeight: "500" },
+  descBtnValue: { fontSize: 14, color: colors.error, fontWeight: "700" },
+  descRow: {
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
   selProdBox: {
     backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
     padding: spacing.md, borderWidth: 1, borderColor: colors.border,

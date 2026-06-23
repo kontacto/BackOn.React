@@ -1282,8 +1282,27 @@ class ItemSaveRequest(BaseModel):
     qtd: float = 1
     valor_unitario: Optional[float] = None # se None, usa preço padrão do produto
     complemento: Optional[str] = ""
-    desconto: Optional[float] = 0
-    acrescimo: Optional[float] = 0
+    desconto: Optional[float] = 0          # desconto UNITÁRIO em R$
+    desconto_pct: Optional[float] = 0      # % informado (0 se foi em R$) — só para o log
+    acrescimo: Optional[float] = 0         # acréscimo UNITÁRIO em R$
+    usuario_codigo: Optional[int] = -2     # -2 = KONTACTO (master)
+
+
+def _log_desconto_item(cur, pedido: int, codauto: int, perc: float, valor_unit: float, usuario: int):
+    """Registra/atualiza o desconto de um item em descontos_concedidos.
+    Política: só removo ou adiciono (delete + insert). TIPO='PED', TIPO_DESCONTO='I'."""
+    cur.execute(
+        "DELETE FROM descontos_concedidos "
+        "WHERE TIPO='PED' AND CODIGO=%s AND CODIGO_PRODUTO=%s AND TIPO_DESCONTO='I'",
+        (pedido, codauto),
+    )
+    if float(valor_unit or 0) > 0:
+        cur.execute(
+            "INSERT INTO descontos_concedidos "
+            "(TIPO, CODIGO, CODIGO_PRODUTO, PERCENTUAL, VALOR, USUARIO, TIPO_DESCONTO) "
+            "VALUES ('PED', %s, %s, %s, %s, %s, 'I')",
+            (pedido, codauto, float(perc or 0), float(valor_unit or 0), int(usuario if usuario is not None else -2)),
+        )
 
 
 def _add_item_sync(req: ItemSaveRequest, pedido: int) -> dict:
@@ -1333,6 +1352,7 @@ def _add_item_sync(req: ItemSaveRequest, pedido: int) -> dict:
         )
         row = cur.fetchone()
         codauto = int(row["codauto"] if isinstance(row, dict) else row[0])
+        _log_desconto_item(cur, pedido, codauto, float(req.desconto_pct or 0), desc, req.usuario_codigo or -2)
         novo_total = _recalc_pedido_total(cur, pedido)
         conn.commit()
         cur.close()
@@ -1382,6 +1402,7 @@ def _update_item_sync(req: ItemSaveRequest, pedido: int, codauto: int) -> dict:
         if cur.rowcount == 0:
             conn.rollback(); conn.close()
             return {"success": False, "message": "Item não encontrado."}
+        _log_desconto_item(cur, pedido, codauto, float(req.desconto_pct or 0), desc, req.usuario_codigo or -2)
         novo_total = _recalc_pedido_total(cur, pedido)
         conn.commit()
         cur.close()
@@ -1413,6 +1434,11 @@ def _delete_item_sync(servidor: str, banco: str, pedido: int, codauto: int) -> d
         if cur.rowcount == 0:
             conn.rollback(); conn.close()
             return {"success": False, "message": "Item não encontrado."}
+        cur.execute(
+            "DELETE FROM descontos_concedidos "
+            "WHERE TIPO='PED' AND CODIGO=%s AND CODIGO_PRODUTO=%s AND TIPO_DESCONTO='I'",
+            (pedido, codauto),
+        )
         novo_total = _recalc_pedido_total(cur, pedido)
         conn.commit()
         cur.close()
@@ -1439,6 +1465,66 @@ async def update_item(pedido: int, codauto: int, req: ItemSaveRequest):
 @api_router.delete("/pedidos/{pedido}/itens/{codauto}")
 async def delete_item(pedido: int, codauto: int, servidor: str, banco: str):
     return await asyncio.to_thread(_delete_item_sync, servidor, banco, pedido, codauto)
+
+
+def _list_descontos_sync(servidor: str, banco: str, pedido: int) -> dict:
+    """Relatório de descontos concedidos do pedido (descontos_concedidos).
+    Junta com pedido_venda_prod (via CODIGO_PRODUTO = codauto) para descrição/qtd."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": [], "total": 0}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT d.COD_AUTO_DESCONTOS_CONCEDIDOS AS cod, d.TIPO_DESCONTO, d.CODIGO_PRODUTO, "
+            "       d.PERCENTUAL, d.VALOR, d.USUARIO, "
+            "       i.qtd_pedida, i.produto, "
+            "       pe.descricao AS peca_desc, sv.descricao AS serv_desc "
+            "FROM descontos_concedidos d "
+            "LEFT JOIN pedido_venda_prod i ON i.codauto = d.CODIGO_PRODUTO "
+            "LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
+            "LEFT JOIN servicos sv ON sv.codigo = i.produto "
+            "WHERE d.TIPO='PED' AND d.CODIGO=%s "
+            "ORDER BY d.COD_AUTO_DESCONTOS_CONCEDIDOS",
+            (pedido,),
+        )
+        items = []
+        total = 0.0
+        for r in cur.fetchall():
+            tipo_d = (r.get("TIPO_DESCONTO") or "").strip().upper()
+            qtd = float(r.get("qtd_pedida") or 0)
+            valor_unit = float(r.get("VALOR") or 0)
+            # 'I' = sobre item (valor é unitário → multiplica pela qtd); 'G' = geral (valor cheio)
+            valor_total = round(valor_unit * qtd, 2) if tipo_d == "I" else round(valor_unit, 2)
+            total += valor_total
+            desc = (r.get("peca_desc") or r.get("serv_desc") or r.get("produto") or "Desconto geral")
+            items.append({
+                "cod": int(r["cod"]),
+                "tipo_desconto": tipo_d,
+                "tipo_label": "Item" if tipo_d == "I" else ("Geral" if tipo_d == "G" else tipo_d),
+                "descricao": (desc or "").strip(),
+                "percentual": float(r.get("PERCENTUAL") or 0),
+                "valor_unitario": valor_unit,
+                "qtd": qtd,
+                "valor_total": valor_total,
+                "usuario": int(r.get("USUARIO") or 0),
+            })
+        cur.close()
+        conn.close()
+        return {"success": True, "items": items, "total": round(total, 2)}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": [], "total": 0}
+
+
+@api_router.get("/pedidos/{pedido}/descontos")
+async def list_descontos(pedido: int, servidor: str, banco: str):
+    return await asyncio.to_thread(_list_descontos_sync, servidor, banco, pedido)
+
 
 
 

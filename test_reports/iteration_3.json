@@ -1,0 +1,40 @@
+{
+  "summary": "Frontend E2E PASSOU 100%: Botão 'Descontos concedidos' (testID pedido-form-descontos-btn) e modal de relatório funcionam corretamente. (1) Heineken P002 qtd 2 com Desc.R$ 1,50 ⇒ desconto 3,00; (2) Coca P001 qtd 3 com Desc.% 10 ⇒ desconto 2,55; (3) Botão exibido na área do subtotal com '- R$ 5,55'; (4) Modal lista os 2 itens com descricao, '%', '3× R$ 0,85', 'usuário -2' e Total -R$ 5,55; (5) Editando Coca e zerando desconto: modal volta com APENAS Heineken e Total -R$ 3,00 (log removido via delete+insert); (6) Excluindo Heineken: botão de descontos some (count=0). Backend log em descontos_concedidos (TIPO='PED', TIPO_DESCONTO='I', USUARIO=-2) está coerente com a UI.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Pedido form (área do subtotal)",
+        "issues": [
+          "Estilo do descBtn usa background '#fdecea' com borda '#f5c6cb' hardcoded — considere extrair p/ token de tema (colors.errorBg/errorBorder). Referência: pedido-form.tsx:1336-1340."
+        ]
+      }
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/13_after_heineken.png", "/tmp/15_after_coca.png",
+    "/tmp/16_desc_modal.png (modal com 2 itens + total 5,55)",
+    "/tmp/31_after_edit_coca.png", "/tmp/32_modal_after_edit.png (modal só Heineken 3,00)",
+    "/tmp/33_after_delete_h.png (sem botão de descontos)"
+  ],
+  "action_items": [
+    "Nenhuma ação necessária para essa feature — fluxo aprovado end-to-end.",
+    "(Opcional / arrastado das iterações anteriores) pedido-form.tsx tem 1278+ linhas; considerar refatoração em componente filho PedidoItens.tsx.",
+    "(Opcional) Warnings 'shadow* props deprecated' continuam no console; migrar para 'boxShadow' quando conveniente."
+  ],
+  "critical_code_review_comments": [
+    "_log_desconto_item / endpoint /pedidos/{pedido}/descontos validados indiretamente via UI: os valores listados batem com o cálculo (Heineken 1,50×2=3,00; Coca 10% sobre 8,50 = 0,85×3=2,55; total 5,55).",
+    "descTotalItens local (linha 156-159) calcula a partir dos itens (desconto unit × qtd) — bate com descTotalApi vindo do backend nos testes; OK.",
+    "openEditModal pré-preenche Desc.R$ com o valor salvo (item Coca com 10% reaparece como R$ 0,85) — coerente com o backend que só persiste desconto unit em R$. Documentado em iteração anterior."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100% (via UI ponta-a-ponta)", "frontend": "100%" },
+  "seed_data_creation": "Pedido #1 ficou VAZIO ao final (todos os itens criados durante o teste foram excluídos — Heineken e Coca-Cola). Não há lixo em descontos_concedidos pois ao excluir os itens o backend remove os logs.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Cada sessão Playwright cria nova AsyncStorage — precisa re-criar conexão BARESTEL + login KONTACTO/$KONT2011 em CADA execução. Azure pode pausar (40613) — script faz retry com sleep 15-20s. testIDs principais: login-usuario-input, login-senha-input, login-submit-button, pedidos-screen, pedido-{id}, pedido-form-add-item, pedido-form-prod-search, pedido-form-prod-{codigo}, pedido-form-add-qtd, pedido-form-add-descpct, pedido-form-add-descrs, pedido-form-add-confirm, pedido-form-item-{codauto}, pedido-form-edit-descrs, pedido-form-edit-descpct, pedido-form-edit-save, pedido-form-edit-delete, pedido-form-descontos-btn. Para limpar Desc.% num item que tem Desc.R$ preenchido, lembre que os 2 campos são MUTUAMENTE EXCLUSIVOS (editable=false) — clear o campo editável (Desc.R$) primeiro.",
+  "rca_of_issue": "Nenhum bug encontrado. A feature (log de descontos + relatório) funciona conforme especificado: TIPO=PED, TIPO_DESCONTO=I, USUARIO=-2 para KONTACTO master; política delete+insert ao salvar/editar e delete ao excluir item está OK."
+}
