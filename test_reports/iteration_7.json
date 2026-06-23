@@ -1,0 +1,49 @@
+{
+  "summary": "E2E completo do dashboard (combobox vendedor + totais + lista) e navegação por TABS — TODOS OS REQUISITOS PASSARAM após correção de 1 bug crítico de TDZ no cliente-form. (1) DASHBOARD: usuário MASTER (KONTACTO) é tratado como gerente — combobox 'Filtrar por vendedor' (testID principal-vendedor-select) aparece com placeholder 'Todos os vendedores'. Abrir mostra modal 'Selecionar vendedor' listando CARLOS ALBERTO SILVA e MARIA SOUZA. Selecionar CARLOS dispara GET /api/dashboard/me?vendedor=1 (200 OK confirmado no log do backend) e o combobox passa a exibir 'CARLOS ALBERTO SILVA @CARLOS' com botão clear (X). Após criar Pedido #1 (TESTE CLIENTE 9DIG) os cards 'Totais de Hoje' (totals-pedidos, totals-produtos, totals-servicos) renderizam (inicialmente 0 / R$ 0,00 / R$ 0,00 pois pedido sem itens) e a lista principal-pedidos-list contém o pedido. (2) TABS: bottom-bar inferior com 4 ícones corretos — Início (home-outline), Clientes (people-outline), Pedidos (receipt-outline), Relatórios (bar-chart-outline). Cada tab navega para a respectiva rota e renderiza o testID esperado (principal-screen, clientes-screen, pedidos-screen, relatorios-screen). (3) DETALHE (stack por cima das tabs): pedido-form (Pedido #1) abre via tap em pedido-1 com back chevron-back funcional; cliente-form (Novo Cliente) abre via clientes-fab-new com cliente-form-back-button funcional; relatorio-descontos abre via tap em 'Descontos & Margem' com relatorio-back funcional; produtos-screen abre via tile 'Produtos & Serviços' na Início. (4) Após login, router.replace('/principal') leva corretamente para /principal (aba Início). NENHUM erro de bundling de rota.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/03_after_login.png (dashboard inicial — KONTACTO Master, combobox 'Todos os vendedores', cards 0/R$0,00, lista vazia, tabs visíveis)",
+    "/tmp/04_combo_open.png (modal 'Selecionar vendedor' com CARLOS e MARIA)",
+    "/tmp/05_after_filter.png (combobox mostrando 'CARLOS ALBERTO SILVA @CARLOS' com X de clear)",
+    "/tmp/09_pedidos_list.png (aba Pedidos com #1 Aberto TESTE CLIENTE 9DIG)",
+    "/tmp/10_pedido_form.png (pedido-form aberto com Pedido #1 — back chevron + Gravar)",
+    "/tmp/17_cliente_form_fixed.png (cliente-form Novo Cliente — pós correção)",
+    "/tmp/12_relatorio.png (relatorio-descontos com back funcional)",
+    "/tmp/13_produtos.png (produtos-screen com back funcional)"
+  ],
+  "action_items": [
+    "(REVISAR FIX APLICADO) Apliquei 1 correção em /app/frontend/app/cliente-form.tsx: o useEffect que chamava buscarPorCgc (linha ~346) estava DECLARADO ANTES do useCallback buscarPorCgc (linha ~362), causando ReferenceError 'Cannot access buscarPorCgc before initialization' em runtime — o cliente-form crashava na montagem com red screen. Movi o useEffect para depois do useCallback (agora linhas 380-394). Validação E2E confirmou: cliente-form-screen agora monta normalmente, exibe 'Novo Cliente' e o back retorna para /clientes. Vale revisão do main agent para confirmar a abordagem.",
+    "(MINOR / opcional) Falta testID no botão back do pedido-form.tsx:628 e do produtos.tsx:190. Atualmente o teste teve que clicar via coordenada (x=24,y=35). Adicionar testID=\"pedido-form-back\" e testID=\"produtos-back\" facilitaria automação futura.",
+    "(MINOR / opcional) O combobox principal-vendedor-select expõe um botão de clear (X) ao selecionar — não consegui localizar testID dedicado para ele dentro do SelectField. Considerar expor testID=\"principal-vendedor-clear\" para automação."
+  ],
+  "critical_code_review_comments": [
+    "BUG TDZ corrigido em cliente-form.tsx: useEffect com [buscarPorCgc] em deps estava acima da definição useCallback — Temporal Dead Zone em runtime. Padrão JS: const declarado por let/const não pode ser referenciado antes da declaração mesmo em escopo de função.",
+    "(tabs)/_layout.tsx (51 linhas): correto — 4 Tabs.Screen com ícones Ionicons e cores do tema. headerShown:false para que cada tela controle seu header.",
+    "(tabs)/principal.tsx (454 linhas): bem estruturado. isManager verifica session.usuario.master OR cod_funcao in [01,02] — MASTER tratado como gerente ✓. loadDashboard usa vendedor='all' para gerente sem filtro, str(id) com filtro, e codigo_int próprio para vendedor comum ✓. useFocusEffect + useEffect duplicam loadSession — pequena redundância sem efeito colateral.",
+    "(tabs)/pedidos.tsx (358 linhas): bom controle via AbortController para evitar race nas buscas. useEffect debounce 350ms + useFocusEffect para reload ao focar — OK.",
+    "(tabs)/clientes.tsx (264 linhas): debounce 400ms + reload em focus. OK.",
+    "(tabs)/relatorios.tsx (82 linhas): simples lista de tiles com 1 ativo e 2 'em breve'. OK.",
+    "_layout.tsx root: continua Stack — Stack engloba (tabs) group + telas de detalhe (cliente-form, pedido-form, etc.) ✓.",
+    "cliente-form.tsx (1136 linhas): >700 linhas — recomendado split em sub-componentes (DadosPrincipais, Telefones, Endereco, etc.).",
+    "pedido-form.tsx (1583 linhas): >700 — recomendado split (já apontado em iteration_6).",
+    "Warning persistente do react-native-web: 'shadow* style props are deprecated. Use boxShadow' e 'props.pointerEvents is deprecated' — não bloqueante."
+  ],
+  "updated_files": [
+    "/app/frontend/app/cliente-form.tsx (move useEffect debounce-CGC para DEPOIS do useCallback buscarPorCgc — corrige TDZ que crashava a tela)"
+  ],
+  "success_rate": {
+    "backend": "100% (smoke /api/funcionarios e /api/dashboard/me com vendedor=all e vendedor=1 — 200 OK)",
+    "frontend": "100% — dashboard + tabs + navegação para todas as telas de detalhe funcionando após fix do cliente-form"
+  },
+  "seed_data_creation": "Durante o teste foi criado 1 pedido (Pedido #1, TESTE CLIENTE 9DIG, vendedor CARLOS, sem itens, R$ 0,00, situação Aberto). Conexões e sessões são limpas entre execuções (AsyncStorage).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "AsyncStorage zera entre sessões Playwright — sempre recriar conn BARESTEL/gibanweb.database.windows.net/BDREACTAPP/https://cliente-crud.preview.emergentagent.com + login KONTACTO/$KONT2011. Para detalhes em stack sobre as tabs: tab bar inferior é SUBSTITUÍDA pela tela de detalhe quando se faz router.push('/pedido-form' | '/cliente-form' | '/relatorio-descontos' | '/produtos') — ou seja, para alternar tabs depois de abrir detalhe, é preciso pressionar o back primeiro. testIDs novos relevantes: principal-vendedor-select, principal-vendedor-filter, principal-pedidos-list, principal-totals, totals-pedidos, totals-produtos, totals-servicos, principal-screen, clientes-screen, pedidos-screen, relatorios-screen. Telas de detalhe sem testID no back: pedido-form-screen (back via chevron top-left, coordenadas) e produtos-screen (mesmo padrão). Telas com testID no back: cliente-form-back-button, relatorio-back. Pedido #1 atualmente vazio (sem itens) — diferente de iteration_6 (Heineken+Hambúrguer), pois /api/pedidos chamado neste teste criou novo registro.",
+  "rca_of_issue": "BUG (TDZ – Temporal Dead Zone) em /app/frontend/app/cliente-form.tsx: o useEffect (originalmente linhas 346-358) referenciava `buscarPorCgc` na sua dependency-array e chamava `buscarPorCgc()` dentro do setTimeout, mas a constante `buscarPorCgc = useCallback(...)` só era declarada na linha 362. Em runtime React executa o corpo do componente em ordem — ao chegar no useEffect, a referência `buscarPorCgc` ainda não foi inicializada (Cannot access 'X' before initialization). Resultado: crash imediato (red error overlay) ao montar /cliente-form via FAB ou via item da lista de clientes. RCA: reordenação inadequada de hooks durante refactor anterior. MITIGAÇÃO APLICADA: mover o useEffect para depois da declaração do useCallback (agora linhas 380-394). Validado E2E — cliente-form-screen monta normalmente, navegação e back funcionam."
+}

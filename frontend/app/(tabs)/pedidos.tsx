@@ -151,11 +151,9 @@ export default function PedidosScreen() {
   const hasDateFilter = !!(dataIni || dataFim);
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="pedidos-screen">
+    <SafeAreaView style={styles.safe} edges={["top"]} testID="pedidos-screen">
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]} hitSlop={12}>
-          <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
-        </Pressable>
+        <View style={{ width: 40 }} />
         <Text style={styles.headerTitle}>Pedidos ({total})</Text>
         <Pressable
           onPress={() => setShowFilters((v) => !v)}

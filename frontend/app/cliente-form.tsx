@@ -341,22 +341,6 @@ export default function ClienteFormScreen() {
     setCgcCpf(maskCgcCpf(txt));
   };
 
-  // Dispara a busca por CGC/CPF AUTOMATICAMENTE quando o número fica válido
-  // (debounce 350ms para evitar muitas chamadas durante a digitação).
-  useEffect(() => {
-    if (editing) return;
-    const raw = onlyAlnumUpper(cgcCpf);
-    const isValid =
-      (raw.length === 11 && validCPF(raw)) ||
-      (raw.length === 14 && validCNPJ(raw));
-    if (!isValid) return;
-    const t = setTimeout(() => {
-      buscarPorCgc();
-    }, 350);
-    return () => clearTimeout(t);
-    // buscarPorCgc é estável (useCallback) — deps são cgcCpf e editing
-  }, [cgcCpf, editing, buscarPorCgc]);
-
   // -------- Busca cliente existente por CGC/CPF (ao perder foco / blur).
   // Se encontrado e ainda estamos em novo cadastro, oferece carregar para edição.
   const buscarPorCgc = useCallback(async () => {
@@ -392,6 +376,22 @@ export default function ClienteFormScreen() {
       /* silencioso — busca é opcional */
     }
   }, [cgcCpf, conn, editing, router, showToast]);
+
+  // Dispara a busca por CGC/CPF AUTOMATICAMENTE quando o número fica válido
+  // (debounce 350ms para evitar muitas chamadas durante a digitação).
+  useEffect(() => {
+    if (editing) return;
+    const raw = onlyAlnumUpper(cgcCpf);
+    const isValid =
+      (raw.length === 11 && validCPF(raw)) ||
+      (raw.length === 14 && validCNPJ(raw));
+    if (!isValid) return;
+    const t = setTimeout(() => {
+      buscarPorCgc();
+    }, 350);
+    return () => clearTimeout(t);
+    // buscarPorCgc é estável (useCallback) — deps são cgcCpf e editing
+  }, [cgcCpf, editing, buscarPorCgc]);
 
   const handleCepChange = (txt: string) => {
     const d = txt.replace(/\D/g, "").slice(0, 8);

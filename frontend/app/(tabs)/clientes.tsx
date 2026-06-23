@@ -98,17 +98,9 @@ export default function ClientesScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="clientes-screen">
+    <SafeAreaView style={styles.safe} edges={["top"]} testID="clientes-screen">
       <View style={styles.header}>
-        <Pressable
-          onPress={() => router.back()}
-          style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]}
-          hitSlop={12}
-        >
-          <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
-        </Pressable>
         <Text style={styles.headerTitle}>Clientes ({total})</Text>
-        <View style={{ width: 40 }} />
       </View>
 
       <View style={styles.searchWrap}>

@@ -26,13 +26,9 @@ const REPORTS: ReportTile[] = [
 export default function RelatoriosScreen() {
   const router = useRouter();
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="relatorios-screen">
+    <SafeAreaView style={styles.safe} edges={["top"]} testID="relatorios-screen">
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backBtn} testID="relatorios-back">
-          <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
-        </Pressable>
         <Text style={styles.headerTitle}>Relatórios</Text>
-        <View style={{ width: 40 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>

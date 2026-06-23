@@ -66,40 +66,80 @@ export default function PrincipalScreen() {
     setLoading(false);
   }, [router]);
 
-  const loadDashboard = useCallback(async (s: Session) => {
-    setDashLoading(true);
-    setDashError(null);
+  const loadVendedores = useCallback(async (s: Session) => {
     try {
       const conns = await listConnections();
       const conn = conns.find((c) => c.empresa === s.empresa);
-      if (!conn) {
-        setDashError("Conexão não encontrada.");
-        return;
-      }
-      const vendedor = s.funcionario?.codigo_int;
-      if (vendedor === undefined || vendedor === null) {
-        setDashError("Vendedor não identificado na sessão.");
-        return;
-      }
+      if (!conn) return;
       const apiBase = conn.api.replace(/\/+$/, "");
       const url =
-        `${apiBase}/api/dashboard/me` +
+        `${apiBase}/api/funcionarios` +
         `?servidor=${encodeURIComponent(conn.servidor)}` +
-        `&banco=${encodeURIComponent(conn.banco)}` +
-        `&vendedor=${encodeURIComponent(String(vendedor))}`;
+        `&banco=${encodeURIComponent(conn.banco)}`;
       const r = await fetch(url);
       const j = await r.json();
-      if (!j?.success) {
-        setDashError(j?.message || "Não foi possível obter os totais.");
-      }
-      setTotais(j?.totais || { pedidos: 0, produtos: 0, servicos: 0 });
-      setPedidos(Array.isArray(j?.pedidos) ? j.pedidos : []);
-    } catch (e) {
-      setDashError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setDashLoading(false);
+      const items: { codigo: number; nome: string; nome_guerra: string }[] = Array.isArray(j?.items)
+        ? j.items
+        : [];
+      setVendedorOpts(
+        items.map((f) => ({
+          value: f.codigo,
+          label: f.nome || f.nome_guerra || `#${f.codigo}`,
+          sub: f.nome_guerra && f.nome_guerra !== f.nome ? `@${f.nome_guerra}` : undefined,
+        }))
+      );
+    } catch {
+      // silencioso — combobox apenas não popula
     }
   }, []);
+
+  const loadDashboard = useCallback(
+    async (s: Session, vendedorOverride?: string | number | null) => {
+      setDashLoading(true);
+      setDashError(null);
+      try {
+        const conns = await listConnections();
+        const conn = conns.find((c) => c.empresa === s.empresa);
+        if (!conn) {
+          setDashError("Conexão não encontrada.");
+          return;
+        }
+        // Gerente/Supervisor: respeita o filtro (null = todos). Vendedor comum: sempre o próprio.
+        let vendedorParam: string;
+        if (isManager) {
+          vendedorParam =
+            vendedorOverride === undefined || vendedorOverride === null
+              ? "all"
+              : String(vendedorOverride);
+        } else {
+          const own = s.funcionario?.codigo_int;
+          if (own === undefined || own === null) {
+            setDashError("Vendedor não identificado na sessão.");
+            return;
+          }
+          vendedorParam = String(own);
+        }
+        const apiBase = conn.api.replace(/\/+$/, "");
+        const url =
+          `${apiBase}/api/dashboard/me` +
+          `?servidor=${encodeURIComponent(conn.servidor)}` +
+          `&banco=${encodeURIComponent(conn.banco)}` +
+          `&vendedor=${encodeURIComponent(vendedorParam)}`;
+        const r = await fetch(url);
+        const j = await r.json();
+        if (!j?.success) {
+          setDashError(j?.message || "Não foi possível obter os totais.");
+        }
+        setTotais(j?.totais || { pedidos: 0, produtos: 0, servicos: 0 });
+        setPedidos(Array.isArray(j?.pedidos) ? j.pedidos : []);
+      } catch (e) {
+        setDashError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setDashLoading(false);
+      }
+    },
+    [isManager]
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -112,8 +152,18 @@ export default function PrincipalScreen() {
   }, [loadSession]);
 
   useEffect(() => {
-    if (session) loadDashboard(session);
-  }, [session, loadDashboard]);
+    if (session) {
+      loadDashboard(session, vendedorFiltro);
+      if (isManager) loadVendedores(session);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, isManager, loadDashboard, loadVendedores]);
+
+  // Recarrega ao trocar o filtro de vendedor (somente gerente/supervisor)
+  useEffect(() => {
+    if (session && isManager) loadDashboard(session, vendedorFiltro);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vendedorFiltro]);
 
   const handleLogout = async () => {
     await clearSession();
@@ -154,7 +204,7 @@ export default function PrincipalScreen() {
 
   if (loading || !session) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+      <SafeAreaView style={styles.safe} edges={["top"]}>
         <View style={styles.center}>
           <ActivityIndicator color={colors.brandPrimary} />
         </View>
@@ -163,7 +213,7 @@ export default function PrincipalScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="principal-screen">
+    <SafeAreaView style={styles.safe} edges={["top"]} testID="principal-screen">
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Back-On</Text>
@@ -235,6 +285,22 @@ export default function PrincipalScreen() {
             </Pressable>
           ))}
         </View>
+
+        {/* ======== Filtro por vendedor (apenas Gerente/Supervisor) ======== */}
+        {isManager ? (
+          <View style={styles.filterRow} testID="principal-vendedor-filter">
+            <SelectField
+              label="Filtrar por vendedor"
+              value={vendedorFiltro}
+              onChange={setVendedorFiltro}
+              options={vendedorOpts}
+              placeholder="Todos os vendedores"
+              modalTitle="Selecionar vendedor"
+              allowClear
+              testID="principal-vendedor-select"
+            />
+          </View>
+        ) : null}
 
         {/* ======== Totais do dia ======== */}
         <Text style={styles.sectionTitle}>Totais de Hoje</Text>
@@ -352,6 +418,7 @@ const styles = StyleSheet.create({
   tileLabel: { fontSize: 14, fontWeight: "500", color: colors.onSurface },
   tileHint: { fontSize: 11, color: colors.muted, marginTop: 2 },
   totalsRow: { flexDirection: "row", gap: spacing.sm },
+  filterRow: { flexDirection: "row", marginTop: spacing.md },
   totalCard: {
     flex: 1, backgroundColor: colors.surfaceSecondary,
     borderRadius: radius.md, padding: spacing.md,
