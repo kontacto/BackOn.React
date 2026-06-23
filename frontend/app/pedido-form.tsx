@@ -513,6 +513,7 @@ export default function PedidoFormScreen() {
       const j = await r.json();
       if (!j?.success) { showToast(j?.message || "Falha no desconto geral.", "error"); }
       else {
+        setGeralAtual(pct);
         setGeralModalOpen(false);
         showToast(pct > 0 ? "Desconto geral aplicado." : "Desconto geral removido.", "success");
         loadItens();
