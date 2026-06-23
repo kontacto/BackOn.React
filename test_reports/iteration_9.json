@@ -1,0 +1,37 @@
+{
+  "summary": "Validados TODOS os 4 ajustes solicitados na review_request (backend + frontend). (1) DASHBOARD: 'principal-pedidos-total' presente exibindo 'Total (1) R$ 54,50'; linha do pedido com testID='pedido-1' exibe '#1 TESTE CLIENTE 9DIG R$ 54,50' e ao tocar NAVEGA corretamente para /pedido-form?pedido=1 (verificado via URL). (2) RELATÓRIO Descontos & Margem (período padrão 01/06/2026..23/06/2026 que já cobre o pedido #1 datado 23/06/2026): Vendas R$ 54,50 / Descontos R$ 2,40 / Custo R$ 30,11 / Margem R$ 24,39 · 44.75% — custo NÃO-zero vindo de pecas.custo_reposicao e margem reflete custo+desconto. (3) FILTRO CLIENTE: 'rel-cliente'='TESTE' retorna o pedido #1 (1 pedido); 'ZZZNAOEXISTE' retorna lista vazia (0 pedidos) e mostra 'Nenhum pedido no período'. (4) FORMATAÇÃO 2 CASAS no modal de edição do item P002 (Heineken, com desconto 10%): Desc. R$ (unit.) = '1,20' ✓, Acrésc. R$ placeholder '0,00' ✓, Valor unit. '12,00' ✓. Modal Desconto Geral: placeholder '0,00' ✓ (campo vazio pois pedido não tem desconto geral aplicado — o código usa fmtMoney2(atual) quando há valor, conforme verificado em pedido-form.tsx:503). Backend curl validado em paralelo: /api/relatorios/descontos-margem com e sem cliente_nome retorna os mesmos números. Nenhum erro de console, nenhum red screen, nenhum testID faltando.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/B2_dashboard.png (dashboard com Total e pedido #1)",
+    "/tmp/B3_pedido_form.png (após tap em pedido-1, abriu pedido-form?pedido=1)",
+    "/tmp/R2_after_gerar.png (relatório com totais R$ 54,50 / R$ 2,40 / R$ 30,11 / R$ 24,39 44,75%)",
+    "/tmp/R3_zzz.png (filtro ZZZNAOEXISTE retorna vazio)",
+    "/tmp/G1_edit_modal.png (modal Editar Item P002: Desc R$ '1,20', Acrésc placeholder '0,00')",
+    "/tmp/H1_desconto_geral.png (modal Desconto Geral com placeholder '0,00')"
+  ],
+  "action_items": [
+    "Nenhuma ação obrigatória — todos os 4 ajustes (custo na margem, filtro cliente, formatação 2 casas, total + tap na linha do dashboard) estão funcionando conforme spec."
+  ],
+  "critical_code_review_comments": [
+    "principal.tsx (479 linhas, dentro do limite): totalPedidos via useMemo somando pedidos.reduce; linha de total renderizada condicionalmente apenas se pedidos.length>0 (testID 'principal-pedidos-total'); Pressable em cada pedido com testID dinâmico `pedido-${p.pedido}` e router.push para /pedido-form. ✓",
+    "relatorio-descontos.tsx: novo TextInput 'rel-cliente' adicionado com autoCapitalize='characters'; URL inclui &cliente_nome=encodeURIComponent(clienteFiltro.trim()) somente se não-vazio. ✓",
+    "pedido-form.tsx (1587 linhas — ACIMA do limite de 700; recomendado split em módulos futuramente, NÃO bloqueante para esta review): função fmtMoney2 implementada (linhas 57-60) usando Math.round((n+EPSILON)*100)/100).toFixed(2).replace('.',','); aplicada em editDescRs (linha 407), editAcr (linha 408), geralValor (linha 503). ✓",
+    "backend server.py /api/relatorios/descontos-margem: parâmetro cliente_nome aceita filtro 'nome contém' (LIKE %...%) — validado via curl, retorna 1 pedido para 'TESTE' e 0 para 'ZZZNAOEXISTE'. ✓"
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (3/3 endpoints validados via curl: descontos-margem sem filtro, descontos-margem com cliente_nome=TESTE, com cliente_nome=ZZZNAOEXISTE; dashboard/me retorna pedidos[0].valor=54.50)",
+    "frontend": "100% (4/4 ajustes validados via Playwright: total no dashboard, tap em pedido, filtro cliente, formatação 2 casas)"
+  },
+  "seed_data_creation": "Nenhuma nova seed criada — pedido #1 já existia com itens (P002 qtd 2 c/ desconto 10% = R$ 1,20/un, P003 qtd 1 = R$ 32,90), datado 23/06/2026 (HOJE), custo_reposicao já populado em pecas. Conexão BARESTEL recriada por sessão (AsyncStorage zera entre runs do Playwright).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Para reproduzir: criar conexão BARESTEL/gibanweb.database.windows.net/BDREACTAPP/https://cliente-crud.preview.emergentagent.com e logar KONTACTO/$KONT2011. testIDs-chave: 'principal-pedidos-total' (linha de total), 'pedido-1' (linha do pedido — onPress navega p/ /pedido-form?pedido=1), 'rel-cliente' (TextInput filtro cliente), 'rel-buscar' (gerar relatório), 'rel-totais' (card de totais), 'pedido-form-item-25' (P002 Heineken c/ desconto), 'pedido-form-edit-descrs' (campo Desc R$), 'pedido-form-edit-acr' (campo Acrésc), 'pedido-form-desconto-geral-btn', 'pedido-form-geral-valor' (campo Desconto Geral). Período padrão do relatório é mês atual; HOJE é 23/06/2026 então default cobre o pedido. pedido-form.tsx está com 1587 linhas — considerar refactoring futuro mas não bloqueante.",
+  "rca_of_issue": "N/A — nenhum bug encontrado nesta iteração. Todos os ajustes da review_request foram implementados corretamente pelo main agent E1."
+}

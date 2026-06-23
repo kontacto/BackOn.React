@@ -1680,9 +1680,13 @@ async def aplicar_desconto_geral(pedido: int, req: DescontoGeralRequest):
 
 
 def _relatorio_desc_margem_sync(servidor: str, banco: str, data_ini: str, data_fim: str,
-                                vendedor: Optional[str], pedido: Optional[int]) -> dict:
+                                vendedor: Optional[str], pedido: Optional[int],
+                                cliente_nome: Optional[str] = None) -> dict:
     """Relatório consolidado: por pedido (agrupado por vendedor) com venda, desconto,
-    custo (Σ custo_ped×qtd) e margem. Filtros: período + vendedor + pedido (opcionais)."""
+    custo e margem. O CUSTO usa o custo de reposição do cadastro (pecas.custo_reposicao /
+    servicos.custo_hora), com fallback para pedido_venda_prod.custo_ped. A venda é líquida
+    (p_venda já é descontado), então desconto E custo influenciam a margem.
+    Filtros: período + vendedor + pedido + nome do cliente (todos opcionais)."""
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
@@ -1697,6 +1701,9 @@ def _relatorio_desc_margem_sync(servidor: str, banco: str, data_ini: str, data_f
         if pedido:
             where.append("pv.pedido = %s")
             params.append(pedido)
+        if cliente_nome and cliente_nome.strip():
+            where.append("c.nome LIKE %s")
+            params.append(f"%{cliente_nome.strip()}%")
         cur.execute(
             "SELECT pv.pedido, pv.data, pv.vendedor, pv.situacao, "
             "       f.nome AS vendedor_nome, c.nome AS cliente_nome, "
@@ -1707,8 +1714,11 @@ def _relatorio_desc_margem_sync(servidor: str, banco: str, data_ini: str, data_f
             "OUTER APPLY (SELECT "
             "    SUM(i.p_venda * i.qtd_pedida) AS venda, "
             "    SUM(ISNULL(i.desconto,0) * i.qtd_pedida) AS desconto, "
-            "    SUM(ISNULL(i.custo_ped,0) * i.qtd_pedida) AS custo "
-            "  FROM pedido_venda_prod i WHERE i.pedido = pv.pedido AND ISNULL(i.item_cancelado,0)=0) ag "
+            "    SUM(COALESCE(NULLIF(pe.custo_reposicao,0), NULLIF(sv.custo_hora,0), NULLIF(i.custo_ped,0), 0) * i.qtd_pedida) AS custo "
+            "  FROM pedido_venda_prod i "
+            "  LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
+            "  LEFT JOIN servicos sv ON sv.codigo = i.produto "
+            "  WHERE i.pedido = pv.pedido AND ISNULL(i.item_cancelado,0)=0) ag "
             f"WHERE {' AND '.join(where)} "
             "ORDER BY pv.vendedor, pv.pedido",
             tuple(params),
@@ -1777,9 +1787,10 @@ def _relatorio_desc_margem_sync(servidor: str, banco: str, data_ini: str, data_f
 async def relatorio_descontos_margem(
     servidor: str, banco: str, data_ini: str, data_fim: str,
     vendedor: Optional[str] = None, pedido: Optional[int] = None,
+    cliente_nome: Optional[str] = None,
 ):
     return await asyncio.to_thread(
-        _relatorio_desc_margem_sync, servidor, banco, data_ini, data_fim, vendedor, pedido
+        _relatorio_desc_margem_sync, servidor, banco, data_ini, data_fim, vendedor, pedido, cliente_nome
     )
 
 

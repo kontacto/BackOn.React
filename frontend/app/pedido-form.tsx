@@ -54,6 +54,10 @@ function round2(n: number): number {
 function fmtNum(n: number): string {
   return String(Math.round((n + Number.EPSILON) * 1000) / 1000).replace(".", ",");
 }
+// Formata valores monetários (descontos, acréscimos, totais) sempre com 2 casas decimais.
+function fmtMoney2(n: number): string {
+  return (Math.round((n + Number.EPSILON) * 100) / 100).toFixed(2).replace(".", ",");
+}
 // Desconto unitário em R$: se % preenchido usa p_normal*%/100, senão usa o valor em R$.
 function calcDescUnit(pNormal: number, pctStr: string, rsStr: string): number {
   const pct = parseNum(pctStr);
@@ -400,8 +404,8 @@ export default function PedidoFormScreen() {
     setEditQtd(fmtNum(it.qtd));
     setEditValor(formatBRL(it.p_normal || it.valor_unitario).replace("R$", "").trim());
     setEditDescPct("");
-    setEditDescRs(it.desconto > 0 ? fmtNum(it.desconto) : "");
-    setEditAcr(it.acrescimo > 0 ? fmtNum(it.acrescimo) : "");
+    setEditDescRs(it.desconto > 0 ? fmtMoney2(it.desconto) : "");
+    setEditAcr(it.acrescimo > 0 ? fmtMoney2(it.acrescimo) : "");
     setEditCompl(it.complemento || "");
   };
 
@@ -496,7 +500,7 @@ export default function PedidoFormScreen() {
       const gRows = (rd?.items || []).filter((d: DescontoRow) => d.tipo_desconto === "G");
       const atual = gRows.reduce((s: number, d: DescontoRow) => s + (d.valor_total || 0), 0);
       setGeralAtual(atual);
-      setGeralValor(atual > 0 ? fmtNum(atual) : "");
+      setGeralValor(atual > 0 ? fmtMoney2(atual) : "");
     } catch {
       // silencioso
     }

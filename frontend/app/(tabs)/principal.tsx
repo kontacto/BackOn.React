@@ -182,6 +182,11 @@ export default function PrincipalScreen() {
     [session]
   );
 
+  const totalPedidos = useMemo(
+    () => pedidos.reduce((s, p) => s + (p.valor || 0), 0),
+    [pedidos]
+  );
+
   const classe = useMemo(
     () => pickFirst(session?.usuario, ["classe_descricao", "classe_label", "classe"]) || null,
     [session]
@@ -348,7 +353,12 @@ export default function PrincipalScreen() {
             <Text style={styles.empty}>Nenhum pedido hoje.</Text>
           ) : (
             pedidos.map((p) => (
-              <View key={p.pedido} style={styles.pedidoRow} testID={`pedido-${p.pedido}`}>
+              <Pressable
+                key={p.pedido}
+                onPress={() => router.push({ pathname: "/pedido-form", params: { pedido: String(p.pedido) } })}
+                style={({ pressed }) => [styles.pedidoRow, pressed && { backgroundColor: colors.brandTertiary }]}
+                testID={`pedido-${p.pedido}`}
+              >
                 <Text style={[styles.pedidoCellValue, { flex: 0.7 }]}>#{p.pedido}</Text>
                 <Text style={[styles.pedidoCellValue, { flex: 2 }]} numberOfLines={1}>
                   {p.cliente || "—"}
@@ -356,9 +366,17 @@ export default function PrincipalScreen() {
                 <Text style={[styles.pedidoCellValue, { flex: 1.2, textAlign: "right", fontWeight: "500" }]}>
                   {formatBRL(p.valor)}
                 </Text>
-              </View>
+              </Pressable>
             ))
           )}
+          {pedidos.length > 0 ? (
+            <View style={styles.pedidoTotalRow} testID="principal-pedidos-total">
+              <Text style={[styles.pedidoTotalLabel, { flex: 2.7 }]}>Total ({pedidos.length})</Text>
+              <Text style={[styles.pedidoTotalValue, { flex: 1.2, textAlign: "right" }]}>
+                {formatBRL(totalPedidos)}
+              </Text>
+            </View>
+          ) : null}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -443,6 +461,13 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: colors.border, alignItems: "center",
   },
   pedidoCellValue: { fontSize: 13, color: colors.onSurface },
+  pedidoTotalRow: {
+    flexDirection: "row", paddingHorizontal: spacing.md, paddingVertical: spacing.md,
+    backgroundColor: colors.brandTertiary, alignItems: "center",
+    borderTopWidth: 1, borderTopColor: colors.border,
+  },
+  pedidoTotalLabel: { fontSize: 13, fontWeight: "600", color: colors.brandPrimary },
+  pedidoTotalValue: { fontSize: 15, fontWeight: "700", color: colors.brandPrimary },
   empty: { textAlign: "center", color: colors.muted, paddingVertical: spacing.lg, fontSize: 13 },
   errorBox: {
     flexDirection: "row", alignItems: "center", gap: 6,

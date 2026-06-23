@@ -52,6 +52,7 @@ export default function RelatorioDescontosScreen() {
   const [dataFim, setDataFim] = useState<string | null>(todayISO());
   const [vendedorOpts, setVendedorOpts] = useState<SelectOption[]>([]);
   const [vendedor, setVendedor] = useState<string | number | null>(null);
+  const [clienteFiltro, setClienteFiltro] = useState<string>("");
   const [pedidoFiltro, setPedidoFiltro] = useState<string>(pedidoParam ? String(pedidoParam) : "");
 
   const [loading, setLoading] = useState(false);
@@ -99,6 +100,7 @@ export default function RelatorioDescontosScreen() {
       let url = `${base}/api/relatorios/descontos-margem?servidor=${encodeURIComponent(conn.servidor)}` +
         `&banco=${encodeURIComponent(conn.banco)}&data_ini=${di}&data_fim=${df}`;
       if (vendedor) url += `&vendedor=${encodeURIComponent(String(vendedor))}`;
+      if (clienteFiltro.trim()) url += `&cliente_nome=${encodeURIComponent(clienteFiltro.trim())}`;
       const pf = parseInt(pedidoFiltro, 10);
       if (Number.isFinite(pf) && pf > 0) url += `&pedido=${pf}`;
       const r = await fetch(url);
@@ -116,7 +118,7 @@ export default function RelatorioDescontosScreen() {
     } finally {
       setLoading(false);
     }
-  }, [conn, dataIni, dataFim, vendedor, pedidoFiltro]);
+  }, [conn, dataIni, dataFim, vendedor, pedidoFiltro, clienteFiltro]);
 
   // busca automática quando vier de um pedido específico (usa range amplo, sem depender do state)
   useEffect(() => {
@@ -200,6 +202,16 @@ export default function RelatorioDescontosScreen() {
               placeholder="Todos os vendedores"
               modalTitle="Selecione o vendedor"
               testID="rel-vendedor"
+            />
+            <Text style={styles.fieldLabel}>Cliente (nome contém — opcional)</Text>
+            <TextInput
+              value={clienteFiltro}
+              onChangeText={setClienteFiltro}
+              placeholder="Ex.: João, Mercado…"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+              autoCapitalize="characters"
+              testID="rel-cliente"
             />
             <Text style={styles.fieldLabel}>Código do pedido / pré-venda (opcional)</Text>
             <TextInput
