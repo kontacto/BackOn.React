@@ -14,6 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { Session, clearSession, getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
+import SelectField, { SelectOption } from "@/src/components/SelectField";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 function pickFirst(obj: Record<string, unknown> | null | undefined, keys: string[]): string | null {
@@ -44,6 +45,15 @@ export default function PrincipalScreen() {
   const [pedidos, setPedidos] = useState<DashboardPedido[]>([]);
   const [dashLoading, setDashLoading] = useState(false);
   const [dashError, setDashError] = useState<string | null>(null);
+  const [vendedorOpts, setVendedorOpts] = useState<SelectOption[]>([]);
+  const [vendedorFiltro, setVendedorFiltro] = useState<string | number | null>(null); // null = Todos
+
+  const isManager = useMemo(() => {
+    if ((session?.usuario as { master?: boolean } | undefined)?.master) return true;
+    const cod = pickFirst(session?.funcionario, ["cod_funcao"]);
+    const norm = cod ? cod.toString().padStart(2, "0") : "";
+    return norm === "01" || norm === "02"; // gerente ou supervisor
+  }, [session]);
 
   const loadSession = useCallback(async () => {
     setLoading(true);

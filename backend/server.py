@@ -2188,63 +2188,68 @@ async def update_cliente(codigo: int, req: ClienteCreateRequest):
 # =====================================================================
 # Dashboard — totais do dia + lista de pedidos do vendedor
 # =====================================================================
-def _dashboard_sync(servidor: str, banco: str, vendedor: int, data_iso: str) -> dict:
-    """Retorna totais e pedidos do dia para o vendedor. Schema esperado da tabela `pedidos`:
-        - codigo (int PK)
-        - data (date)
-        - vendedor (int)
-        - cliente (int FK -> cliente.codigo)
-        - valor_produtos, valor_servicos (decimal)
-    Caso o schema seja diferente, devolve estrutura zerada com 'message' explicando.
-    """
+def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso: str) -> dict:
+    """Totais e pedidos do dia (pedido_venda/pedido_venda_prod).
+    vendedor None/'' = todos; produtos/servicos = soma p_venda*qtd por tipo (pecas/servicos)."""
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
-        return {
-            "success": False,
-            "message": f"Falha conexão: {e}",
-            "totais": {"pedidos": 0, "produtos": 0, "servicos": 0},
-            "pedidos": [],
-        }
+        return {"success": False, "message": f"Falha conexão: {e}",
+                "totais": {"pedidos": 0, "produtos": 0, "servicos": 0}, "pedidos": []}
     try:
         cur = conn.cursor(as_dict=True)
-        # Totais do dia
+        vfilter = ""
+        vparams: list = []
+        if vendedor not in (None, "", "all"):
+            vfilter = " AND pv.vendedor = %s"
+            vparams = [vendedor]
+
+        # Quantidade de pedidos do dia
+        cur.execute(
+            f"SELECT COUNT(*) AS qtd FROM pedido_venda pv "
+            f"WHERE CAST(pv.data AS DATE) = %s{vfilter}",
+            tuple([data_iso] + vparams),
+        )
+        qtd = int((cur.fetchone() or {}).get("qtd") or 0)
+
+        # Totais de produtos x serviços do dia
         cur.execute(
             "SELECT "
-            "  COUNT(*) AS qtd_pedidos, "
-            "  COALESCE(SUM(valor_produtos), 0) AS total_produtos, "
-            "  COALESCE(SUM(valor_servicos), 0) AS total_servicos "
-            "FROM pedidos "
-            "WHERE vendedor = %s AND CAST(data AS DATE) = %s",
-            (vendedor, data_iso),
+            "  SUM(CASE WHEN pe.codigo_int IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS prod, "
+            "  SUM(CASE WHEN sv.codigo IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS serv "
+            "FROM pedido_venda pv "
+            "JOIN pedido_venda_prod i ON i.pedido = pv.pedido AND ISNULL(i.item_cancelado,0)=0 "
+            "LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
+            "LEFT JOIN servicos sv ON sv.codigo = i.produto "
+            f"WHERE CAST(pv.data AS DATE) = %s{vfilter}",
+            tuple([data_iso] + vparams),
         )
-        tot_row = cur.fetchone() or {}
+        tr = cur.fetchone() or {}
         totais = {
-            "pedidos": int(tot_row.get("qtd_pedidos") or 0),
-            "produtos": float(tot_row.get("total_produtos") or 0),
-            "servicos": float(tot_row.get("total_servicos") or 0),
+            "pedidos": qtd,
+            "produtos": float(tr.get("prod") or 0),
+            "servicos": float(tr.get("serv") or 0),
         }
 
         # Lista de pedidos do dia
         cur.execute(
-            "SELECT TOP 50 "
-            "  p.codigo AS pedido, "
-            "  c.nome AS cliente, "
-            "  (COALESCE(p.valor_produtos, 0) + COALESCE(p.valor_servicos, 0)) AS valor "
-            "FROM pedidos p "
-            "LEFT JOIN cliente c ON c.codigo = p.cliente "
-            "WHERE p.vendedor = %s AND CAST(p.data AS DATE) = %s "
-            "ORDER BY p.codigo DESC",
-            (vendedor, data_iso),
+            "SELECT TOP 50 pv.pedido, c.nome AS cliente, ISNULL(pv.total,0) AS valor, "
+            "       f.nome AS vendedor_nome "
+            "FROM pedido_venda pv "
+            "LEFT JOIN cliente c ON c.codigo = pv.cliente "
+            "LEFT JOIN funcionarios f ON f.codigo_int = pv.vendedor "
+            f"WHERE CAST(pv.data AS DATE) = %s{vfilter} "
+            "ORDER BY pv.pedido DESC",
+            tuple([data_iso] + vparams),
         )
         pedidos = []
         for r in cur.fetchall():
             pedidos.append({
                 "pedido": int(r.get("pedido") or 0),
-                "cliente": (r.get("cliente") or "").strip() if r.get("cliente") else "",
+                "cliente": (r.get("cliente") or "").strip(),
+                "vendedor_nome": (r.get("vendedor_nome") or "").strip(),
                 "valor": float(r.get("valor") or 0),
             })
-
         cur.close()
         conn.close()
         return {"success": True, "totais": totais, "pedidos": pedidos}
@@ -2253,21 +2258,13 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: int, data_iso: str) -> 
             conn.close()
         except Exception:
             pass
-        # Se a tabela `pedidos` ainda não existe ou tem schema diferente,
-        # devolvemos resposta zerada SEM marcar como erro, para não poluir a UI.
-        msg = str(e)
-        is_missing_table = "Invalid object name" in msg or "pedidos" in msg.lower()
-        return {
-            "success": True if is_missing_table else False,
-            "message": "" if is_missing_table else f"Erro consulta dashboard: {e}",
-            "totais": {"pedidos": 0, "produtos": 0, "servicos": 0},
-            "pedidos": [],
-        }
+        return {"success": False, "message": f"Erro consulta dashboard: {e}",
+                "totais": {"pedidos": 0, "produtos": 0, "servicos": 0}, "pedidos": []}
 
 
 @api_router.get("/dashboard/me")
-async def dashboard_me(servidor: str, banco: str, vendedor: int, data: Optional[str] = None):
-    # data padrão = hoje (YYYY-MM-DD)
+async def dashboard_me(servidor: str, banco: str, vendedor: Optional[str] = None, data: Optional[str] = None):
+    # data padrão = hoje (YYYY-MM-DD); vendedor vazio/None/all = todos
     from datetime import date  # noqa: E402
     data_iso = data or date.today().isoformat()
     return await asyncio.to_thread(_dashboard_sync, servidor, banco, vendedor, data_iso)
