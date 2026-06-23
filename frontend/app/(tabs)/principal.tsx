@@ -12,7 +12,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
-import { Session, clearSession, getSession } from "@/src/utils/storage/session";
+import {
+  Session,
+  clearSession,
+  getSession,
+  getSituacaoFiltro as getSituacaoPref,
+  setSituacaoFiltro as setSituacaoPref,
+} from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import { colors, radius, spacing } from "@/src/theme/colors";
@@ -56,6 +62,13 @@ export default function PrincipalScreen() {
   const [vendedorOpts, setVendedorOpts] = useState<SelectOption[]>([]);
   const [vendedorFiltro, setVendedorFiltro] = useState<string | number | null>(null); // null = Todos
   const [situacaoFiltro, setSituacaoFiltro] = useState<string>(""); // "" = Todos
+  const [fantasia, setFantasia] = useState<string | null>(null);
+
+  // Persiste a escolha do filtro de situação e recarrega
+  const handleSituacao = useCallback((value: string) => {
+    setSituacaoFiltro(value);
+    setSituacaoPref(value);
+  }, []);
 
   const isManager = useMemo(() => {
     if ((session?.usuario as { master?: boolean } | undefined)?.master) return true;
@@ -100,6 +113,32 @@ export default function PrincipalScreen() {
     } catch {
       // silencioso — combobox apenas não popula
     }
+  }, []);
+
+  const loadEmpresa = useCallback(async (s: Session) => {
+    try {
+      const conns = await listConnections();
+      const conn = conns.find((c) => c.empresa === s.empresa);
+      if (!conn) return;
+      const apiBase = conn.api.replace(/\/+$/, "");
+      const url =
+        `${apiBase}/api/controle/empresa` +
+        `?servidor=${encodeURIComponent(conn.servidor)}` +
+        `&banco=${encodeURIComponent(conn.banco)}`;
+      const r = await fetch(url);
+      const j = await r.json();
+      if (j?.success) setFantasia(j.fantasia || j.rz_social || null);
+    } catch {
+      // silencioso — usa o nome da conexão como fallback
+    }
+  }, []);
+
+  // Carrega o filtro de situação persistido (uma vez)
+  useEffect(() => {
+    (async () => {
+      const saved = await getSituacaoPref();
+      if (saved) setSituacaoFiltro(saved);
+    })();
   }, []);
 
   const loadDashboard = useCallback(
@@ -165,10 +204,11 @@ export default function PrincipalScreen() {
   useEffect(() => {
     if (session) {
       loadDashboard(session, vendedorFiltro);
+      loadEmpresa(session);
       if (isManager) loadVendedores(session);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, isManager, loadDashboard, loadVendedores]);
+  }, [session, isManager, loadDashboard, loadVendedores, loadEmpresa]);
 
   // Recarrega ao trocar qualquer filtro (vendedor — gerente/supervisor; situação — todos)
   useEffect(() => {
@@ -234,7 +274,7 @@ export default function PrincipalScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Back-On</Text>
           <Text style={styles.headerSub} numberOfLines={1}>
-            {session.empresa}
+            {fantasia || session.empresa}
           </Text>
         </View>
         <Pressable
@@ -259,7 +299,7 @@ export default function PrincipalScreen() {
             </View>
           )}
           <View style={{ flex: 1 }}>
-            <Text style={styles.welcome}>Bem-vindo,</Text>
+            <Text style={styles.welcome}>Bem-vindo à {fantasia || session.empresa}</Text>
             <Text style={styles.heroName} numberOfLines={1}>
               {displayName || "Usuário"}
             </Text>
@@ -323,7 +363,7 @@ export default function PrincipalScreen() {
             return (
               <Pressable
                 key={s.value || "all"}
-                onPress={() => setSituacaoFiltro(s.value)}
+                onPress={() => handleSituacao(s.value)}
                 style={[styles.sitChip, sel && styles.sitChipSel]}
                 testID={`principal-sit-${s.value || "todos"}`}
               >

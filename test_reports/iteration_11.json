@@ -1,0 +1,41 @@
+{
+  "summary": "Validados TODOS os 6 itens da review_request (backend + frontend, mobile viewport 390x844). (1) HEADER/WELCOME: header do Dashboard mostra 'Back-On' com subtítulo 'PISCINA BAR' (controle.fantasia via /api/controle/empresa — não 'BARESTEL'); welcome diz 'Bem-vindo à PISCINA BAR'. (2) RELATÓRIO DE PEDIDOS: rota /relatorio-pedidos acessada via aba Relatórios > tile 'Relatório de Pedidos'; com período default (01/06/2026 até hoje) e Gerar, lista 1 pedido(s): #1 Aberto, TESTE CLIENTE 9DIG, 23/06/2026, CARLOS ALBERTO SILVA, R$ 54,50. (3) EXPANSÃO: tocar em relpedidos-row-1 abre relpedidos-expand-1 com Margem: Venda R$ 54,50 / Desconto R$ 2,40 / Custo R$ 30,11 / Margem R$ 24,39 (44,75%) e Descontos concedidos: 'Heineken Long Neck · Item · 10,00% · qtd 2 · -R$ 2,40' — bate exatamente com a spec. (4) FILTRO SITUAÇÃO no relatório: 'Fechado' → 'Nenhum pedido no período/filtros.' (row #1 ausente); 'Aberto' → pedido #1 volta. Botão relpedidos-back retorna à tela relatorios-screen. (5) SELECTFIELD VENDEDOR (bug resolvido): ao abrir o dropdown SEM seleção a opção 'relpedidos-vendedor-opt-all' (placeholder 'Todos os vendedores') JÁ aparece no topo; após selecionar CARLOS (opt-1), reabrir o dropdown ainda mostra opt-all permitindo voltar a 'Todos'; o botão X 'relpedidos-vendedor-clear' existe ao lado do valor selecionado e também limpa. Ambos retornam o placeholder 'Todos os vendedores' (allowClear funcionando). (6) PERSISTÊNCIA situação no Dashboard: selecionado chip 'Aberto' (principal-sit-A) na aba Início — totals.pedidos=1; navegado para Clientes; volta para Início e o chip 'Aberto' permanece visualmente selecionado (borderColor brandPrimary rgb(11,42,91) ≠ chip 'Todos' rgb(215,222,236)) e totals.pedidos continua = 1 (filtro mantido entre tabs via AsyncStorage). Backend pytest: 9/9 tests pass (/api/controle/empresa fantasia='PISCINA BAR'; /api/relatorios/pedidos sem filtros / situacao A / situacao F (vazio) / vendedor=1 / vendedor=99999 (vazio) / período 1990 (vazio); /api/relatorios/descontos-margem?pedido=1 com Venda/Desconto/Custo/Margem batendo 54,50/2,40/30,11/24,39 e 44,75%; /api/pedidos/1/descontos com Heineken 10% R$ 2,40). Nenhum erro de console crítico, nenhum red screen.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter11_relatorios_empresa.py",
+    "/app/test_reports/pytest/iter11_results.xml",
+    "/tmp/iter11_principal.png (header 'Back-On / PISCINA BAR' + welcome 'Bem-vindo à PISCINA BAR')",
+    "/tmp/iter11_relped_default.png (Relatório de Pedidos com 1 pedido listado)",
+    "/tmp/iter11_relped_expand.png (linha expandida mostrando Margem 24,39/44,75% + Heineken Long Neck 10% -R$ 2,40)",
+    "/tmp/iter11_select_all.png (SelectField com opt-all funcionando)"
+  ],
+  "action_items": [
+    "Nenhuma ação obrigatória — todos os 6 ajustes da review_request (header.fantasia, welcome.fantasia, novo Relatório de Pedidos com expand, filtro situação no relatório, bug do SelectField vendedor com opt-all + X clear, persistência do filtro situação do dashboard) funcionam 100%."
+  ],
+  "critical_code_review_comments": [
+    "relatorio-pedidos.tsx (366 linhas, dentro do limite): testIDs presentes (relatorio-pedidos-screen, relpedidos-back, relpedidos-di/df, relpedidos-vendedor, relpedidos-sit-{todos,A,F,PG,C}, relpedidos-buscar, relpedidos-row-{id}, relpedidos-expand-{id}); usa SelectField com allowClear=true; expand chama 2 endpoints em paralelo (Promise.all) — bom. ✓",
+    "(tabs)/relatorios.tsx: tile 'Relatório de Pedidos' adicionado no topo com rota /relatorio-pedidos; testID = `relatorio-${label}` (encontra 'relatorio-Relatório de Pedidos'). ✓",
+    "SelectField.tsx: quando allowClear=true e search vazio, renderiza opção placeholder com testID `${testID}-opt-all` no topo do ScrollView, independente de já ter seleção (linhas 139-155) — bug do 'sem volta para Todos' resolvido. X-clear renderiza ao lado do valor (linhas 94-106). ✓",
+    "(tabs)/principal.tsx (585 linhas, próximo do limite — considerar split): loadEmpresa() lê controle.fantasia e seta state.fantasia; header e welcome usam `fantasia || session.empresa`; handleSituacao persiste via setSituacaoPref (AsyncStorage @back_on/dashboard_situacao); useEffect inicial lê getSituacaoPref e hidrata. ✓",
+    "session.ts: helpers getSituacaoFiltro/setSituacaoFiltro usam AsyncStorage com key '@back_on/dashboard_situacao'. ✓",
+    "server.py: _get_empresa_sync retorna fantasia='PISCINA BAR'; _relatorio_pedidos_sync filtra por data + vendedor + situacao via SELECT TOP 300 com LEFT JOIN cliente/funcionarios, retornando pedido/data/situacao/situacao_label/total/cliente/vendedor_cod/vendedor_nome — exatamente o consumido pelo frontend. ✓"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter11_relatorios_empresa.py (novo arquivo de pytest)"
+  ],
+  "success_rate": {
+    "backend": "100% (9/9 pytest)",
+    "frontend": "100% (6/6 fluxos: header fantasia, welcome fantasia, relatório de pedidos lista+filtros, expansão com margem+descontos, SelectField vendedor opt-all + X clear, persistência situação ao trocar de aba)"
+  },
+  "seed_data_creation": "Nenhuma seed nova — reutilizado pedido #1 (Aberto, R$ 54,50, margem R$ 24,39/44,75%, com 1 desconto de 10% Heineken Long Neck R$ 2,40). Conexão BARESTEL criada via UI durante o teste.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Bug do SelectField (não voltar a 'Todos' após selecionar) RESOLVIDO via prop allowClear=true que renderiza '${testID}-opt-all' no topo do dropdown E o X de clear ao lado do valor. Para usar em outros relatórios: passar allowClear={true} no SelectField + placeholder descritivo. testIDs-chave desta iteração: relatorio-pedidos-screen, relpedidos-{back,di,df,vendedor,sit-todos/A/F/PG/C,buscar,row-{n},expand-{n},vendedor-opt-all,vendedor-opt-{cod},vendedor-clear}. AsyncStorage do filtro situação do Dashboard: key '@back_on/dashboard_situacao'. /api/controle/empresa retorna fantasia 'PISCINA BAR'. Fluxo de login Playwright: como AsyncStorage zera entre runs, fazer connection-new → empresa=BARESTEL/servidor=gibanweb.../banco=BDREACTAPP/api=https://cliente-crud.preview.emergentagent.com → connections-back-button → login KONTACTO/$KONT2011 (até 5 tentativas para Azure 40613).",
+  "rca_of_issue": "N/A — nenhum bug. Todos os 6 ajustes solicitados (header fantasia, welcome fantasia, Relatório de Pedidos com expand de margem/descontos, filtro situação no relatório, opção 'Todos' no SelectField + X clear, persistência do filtro situação Dashboard) implementados corretamente pelo main agent E1."
+}

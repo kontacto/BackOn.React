@@ -1569,6 +1569,98 @@ async def desconto_limites(servidor: str, banco: str):
     return await asyncio.to_thread(_get_limites_sync, servidor, banco)
 
 
+def _get_empresa_sync(servidor: str, banco: str) -> dict:
+    """Dados da empresa (tabela controle, registro único): fantasia/razão social."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT TOP 1 empresa, fantasia, rz_social FROM controle")
+        r = cur.fetchone() or {}
+        cur.close(); conn.close()
+        return {
+            "success": True,
+            "empresa": (r.get("empresa") or "").strip() or None,
+            "fantasia": (r.get("fantasia") or "").strip() or None,
+            "rz_social": (r.get("rz_social") or "").strip() or None,
+        }
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+@api_router.get("/controle/empresa")
+async def controle_empresa(servidor: str, banco: str):
+    return await asyncio.to_thread(_get_empresa_sync, servidor, banco)
+
+
+_SIT_LABELS = {"A": "Aberto", "F": "Fechado", "PG": "Faturado", "C": "Cancelado"}
+
+
+def _relatorio_pedidos_sync(servidor: str, banco: str, data_ini: str, data_fim: str,
+                            vendedor: Optional[str], situacao: Optional[str]) -> dict:
+    """Lista de pedidos por período + filtros (vendedor/situação) para o Relatório de Pedidos.
+    Campos: pedido, cliente, data, vendedor (nome), situacao. A análise (descontos/margem)
+    é carregada sob demanda pelos endpoints já existentes ao expandir cada registro."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "pedidos": []}
+    try:
+        cur = conn.cursor(as_dict=True)
+        where = ["CAST(pv.data AS DATE) BETWEEN %s AND %s"]
+        params: list = [data_ini, data_fim]
+        if vendedor not in (None, "", "all"):
+            where.append("pv.vendedor = %s")
+            params.append(vendedor)
+        if situacao not in (None, "", "all"):
+            where.append("pv.situacao = %s")
+            params.append(situacao)
+        cur.execute(
+            "SELECT TOP 300 pv.pedido, pv.data, pv.situacao, ISNULL(pv.total,0) AS total, "
+            "       c.nome AS cliente, pv.vendedor AS vendedor_cod, f.nome AS vendedor_nome "
+            "FROM pedido_venda pv "
+            "LEFT JOIN cliente c ON c.codigo = pv.cliente "
+            "LEFT JOIN funcionarios f ON f.codigo_int = pv.vendedor "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY pv.data DESC, pv.pedido DESC",
+            tuple(params),
+        )
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+        pedidos = []
+        for r in rows:
+            d = r.get("data")
+            pedidos.append({
+                "pedido": r.get("pedido"),
+                "data": d.isoformat() if hasattr(d, "isoformat") else (str(d) if d else None),
+                "situacao": (r.get("situacao") or "").strip(),
+                "situacao_label": _SIT_LABELS.get((r.get("situacao") or "").strip(), r.get("situacao") or "—"),
+                "total": float(r.get("total") or 0),
+                "cliente": (r.get("cliente") or "").strip() or "—",
+                "vendedor_cod": r.get("vendedor_cod"),
+                "vendedor_nome": (r.get("vendedor_nome") or "").strip() or "—",
+            })
+        return {"success": True, "pedidos": pedidos}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "pedidos": []}
+
+
+@api_router.get("/relatorios/pedidos")
+async def relatorio_pedidos(servidor: str, banco: str, data_ini: str, data_fim: str,
+                            vendedor: Optional[str] = None, situacao: Optional[str] = None):
+    return await asyncio.to_thread(_relatorio_pedidos_sync, servidor, banco, data_ini, data_fim, vendedor, situacao)
+
+
 def _limite_por_funcao(lim: dict, funcao: int) -> float:
     # funcao: 1=gerente, 2=supervisor, 3=vendedor (master = gerente)
     if funcao == 2:

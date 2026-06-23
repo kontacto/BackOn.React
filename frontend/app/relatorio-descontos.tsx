@@ -201,6 +201,7 @@ export default function RelatorioDescontosScreen() {
               options={vendedorOpts}
               placeholder="Todos os vendedores"
               modalTitle="Selecione o vendedor"
+              allowClear
               testID="rel-vendedor"
             />
             <Text style={styles.fieldLabel}>Cliente (nome contém — opcional)</Text>

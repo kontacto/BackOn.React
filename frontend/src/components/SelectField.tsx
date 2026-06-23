@@ -136,6 +136,23 @@ export default function SelectField({
             ) : null}
 
             <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+              {allowClear && !term.trim() ? (
+                <Pressable
+                  onPress={() => {
+                    onChange(null);
+                    setOpen(false);
+                  }}
+                  style={({ pressed }) => [styles.optRow, !selected && styles.optRowSel, pressed && { opacity: 0.7 }]}
+                  testID={testID ? `${testID}-opt-all` : undefined}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.optLabel, !selected && { color: colors.brandPrimary, fontWeight: "600" }]}>
+                      {placeholder}
+                    </Text>
+                  </View>
+                  {!selected ? <Ionicons name="checkmark" size={20} color={colors.brandPrimary} /> : null}
+                </Pressable>
+              ) : null}
               {filtered.length === 0 ? (
                 <Text style={styles.empty}>Nenhuma opção.</Text>
               ) : (

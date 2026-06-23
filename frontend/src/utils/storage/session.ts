@@ -29,3 +29,21 @@ export async function setSession(s: Session): Promise<void> {
 export async function clearSession(): Promise<void> {
   await AsyncStorage.removeItem(SESSION_KEY);
 }
+
+const SIT_FILTER_KEY = "@back_on/dashboard_situacao";
+
+export async function getSituacaoFiltro(): Promise<string> {
+  try {
+    return (await AsyncStorage.getItem(SIT_FILTER_KEY)) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export async function setSituacaoFiltro(value: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(SIT_FILTER_KEY, value);
+  } catch {
+    // ignora falha de persistência
+  }
+}

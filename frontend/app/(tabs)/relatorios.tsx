@@ -9,10 +9,16 @@ type ReportTile = {
   label: string;
   desc: string;
   icon: keyof typeof Ionicons.glyphMap;
-  route: "/relatorio-descontos" | null;
+  route: "/relatorio-descontos" | "/relatorio-pedidos" | null;
 };
 
 const REPORTS: ReportTile[] = [
+  {
+    label: "Relatório de Pedidos",
+    desc: "Pedidos por período/vendedor/situação. Expanda para ver descontos e margem.",
+    icon: "documents-outline",
+    route: "/relatorio-pedidos",
+  },
   {
     label: "Descontos & Margem",
     desc: "Consolidado por vendedor: vendas, descontos, custo e margem.",
@@ -20,7 +26,6 @@ const REPORTS: ReportTile[] = [
     route: "/relatorio-descontos",
   },
   { label: "Vendas (em breve)", desc: "Resumo de vendas por período.", icon: "cart-outline", route: null },
-  { label: "Custos (em breve)", desc: "Análise de custos.", icon: "pricetags-outline", route: null },
 ];
 
 export default function RelatoriosScreen() {
