@@ -1664,6 +1664,110 @@ async def aplicar_desconto_geral(pedido: int, req: DescontoGeralRequest):
     return await asyncio.to_thread(_aplicar_desconto_geral_sync, req, pedido)
 
 
+def _relatorio_desc_margem_sync(servidor: str, banco: str, data_ini: str, data_fim: str,
+                                vendedor: Optional[str], pedido: Optional[int]) -> dict:
+    """Relatório consolidado: por pedido (agrupado por vendedor) com venda, desconto,
+    custo (Σ custo_ped×qtd) e margem. Filtros: período + vendedor + pedido (opcionais)."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "vendedores": [], "totais": {}}
+    try:
+        cur = conn.cursor(as_dict=True)
+        where = ["CAST(pv.data AS DATE) BETWEEN %s AND %s"]
+        params: list = [data_ini, data_fim]
+        if vendedor:
+            where.append("pv.vendedor = %s")
+            params.append(vendedor)
+        if pedido:
+            where.append("pv.pedido = %s")
+            params.append(pedido)
+        cur.execute(
+            "SELECT pv.pedido, pv.data, pv.vendedor, pv.situacao, "
+            "       f.nome AS vendedor_nome, c.nome AS cliente_nome, "
+            "       ISNULL(ag.venda,0) AS venda, ISNULL(ag.desconto,0) AS desconto, ISNULL(ag.custo,0) AS custo "
+            "FROM pedido_venda pv "
+            "LEFT JOIN funcionarios f ON f.codigo_int = pv.vendedor "
+            "LEFT JOIN cliente c ON c.codigo = pv.cliente "
+            "OUTER APPLY (SELECT "
+            "    SUM(i.p_venda * i.qtd_pedida) AS venda, "
+            "    SUM(ISNULL(i.desconto,0) * i.qtd_pedida) AS desconto, "
+            "    SUM(ISNULL(i.custo_ped,0) * i.qtd_pedida) AS custo "
+            "  FROM pedido_venda_prod i WHERE i.pedido = pv.pedido AND ISNULL(i.item_cancelado,0)=0) ag "
+            f"WHERE {' AND '.join(where)} "
+            "ORDER BY pv.vendedor, pv.pedido",
+            tuple(params),
+        )
+        grupos: dict = {}
+        tot_venda = tot_desc = tot_custo = 0.0
+        for r in cur.fetchall():
+            vcod = str(r.get("vendedor") or "").strip()
+            vnome = (r.get("vendedor_nome") or "").strip() or (f"Vendedor {vcod}" if vcod else "Sem vendedor")
+            venda = float(r.get("venda") or 0)
+            desc = float(r.get("desconto") or 0)
+            custo = float(r.get("custo") or 0)
+            margem = round(venda - custo, 2)
+            margem_pct = round((margem / venda * 100), 2) if venda > 0 else 0.0
+            data_val = r.get("data")
+            data_str = data_val.strftime("%Y-%m-%d") if hasattr(data_val, "strftime") else (str(data_val)[:10] if data_val else "")
+            ped_obj = {
+                "pedido": int(r["pedido"]),
+                "data": data_str,
+                "situacao": (r.get("situacao") or "").strip(),
+                "cliente": (r.get("cliente_nome") or "").strip(),
+                "venda": round(venda, 2),
+                "desconto": round(desc, 2),
+                "custo": round(custo, 2),
+                "margem": margem,
+                "margem_pct": margem_pct,
+            }
+            g = grupos.setdefault(vcod, {
+                "vendedor": vcod, "vendedor_nome": vnome, "pedidos": [],
+                "sub_venda": 0.0, "sub_desconto": 0.0, "sub_custo": 0.0, "sub_margem": 0.0,
+            })
+            g["pedidos"].append(ped_obj)
+            g["sub_venda"] += venda
+            g["sub_desconto"] += desc
+            g["sub_custo"] += custo
+            g["sub_margem"] += margem
+            tot_venda += venda; tot_desc += desc; tot_custo += custo
+        cur.close(); conn.close()
+        vendedores = []
+        for g in grupos.values():
+            g["sub_venda"] = round(g["sub_venda"], 2)
+            g["sub_desconto"] = round(g["sub_desconto"], 2)
+            g["sub_custo"] = round(g["sub_custo"], 2)
+            g["sub_margem"] = round(g["sub_margem"], 2)
+            g["sub_margem_pct"] = round((g["sub_margem"] / g["sub_venda"] * 100), 2) if g["sub_venda"] > 0 else 0.0
+            vendedores.append(g)
+        margem_geral = round(tot_venda - tot_custo, 2)
+        totais = {
+            "venda": round(tot_venda, 2),
+            "desconto": round(tot_desc, 2),
+            "custo": round(tot_custo, 2),
+            "margem": margem_geral,
+            "margem_pct": round((margem_geral / tot_venda * 100), 2) if tot_venda > 0 else 0.0,
+            "qtd_pedidos": sum(len(g["pedidos"]) for g in vendedores),
+        }
+        return {"success": True, "vendedores": vendedores, "totais": totais}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "vendedores": [], "totais": {}}
+
+
+@api_router.get("/relatorios/descontos-margem")
+async def relatorio_descontos_margem(
+    servidor: str, banco: str, data_ini: str, data_fim: str,
+    vendedor: Optional[str] = None, pedido: Optional[int] = None,
+):
+    return await asyncio.to_thread(
+        _relatorio_desc_margem_sync, servidor, banco, data_ini, data_fim, vendedor, pedido
+    )
+
+
 
 
 # Busca de cliente para o pedido — por nome, cgc/cpf ou telefone.

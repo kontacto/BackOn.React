@@ -850,6 +850,19 @@ export default function PedidoFormScreen() {
             </View>
           )}
 
+          {editing && pedidoId ? (
+            <TouchableOpacity
+              onPress={() => router.push({ pathname: "/relatorio-descontos", params: { pedido: String(pedidoId) } })}
+              activeOpacity={0.85}
+              style={styles.analiseBtn}
+              testID="pedido-form-analise-btn"
+            >
+              <Ionicons name="bar-chart-outline" size={18} color={colors.brandPrimary} />
+              <Text style={styles.analiseBtnText}>Analisar margem & descontos</Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.brandPrimary} />
+            </TouchableOpacity>
+          ) : null}
+
           <View style={{ height: 80 }} />
         </ScrollView>
       </KeyboardAvoidingView>
@@ -1490,6 +1503,12 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.error,
   },
   deleteBtnWideText: { color: colors.error, fontWeight: "600", fontSize: 15 },
+  analiseBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    marginTop: spacing.md, paddingVertical: 13, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary,
+  },
+  analiseBtnText: { color: colors.brandPrimary, fontWeight: "600", fontSize: 14 },
   descRow: {
     flexDirection: "row", alignItems: "center", gap: spacing.sm,
     paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border,

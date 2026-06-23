@@ -1,0 +1,43 @@
+{
+  "summary": "Frontend E2E completo do RELATÓRIO Descontos & Margem: TODOS os fluxos PASSARAM. (1) Tile 'Relatórios' (testID principal-tile-relatórios) abre /relatorios (relatorios-screen). (2) Card 'Descontos & Margem' (testID 'relatorio-Descontos & Margem') navega para /relatorio-descontos (relatorio-descontos-screen). (3) De/Até vêm preenchidos (01/06/2026 - 23/06/2026 default cobre Pedido #1 dat. 20/06/2026). (4) 'Gerar relatório' (rel-buscar) retorna Totais (Vendas R$ 53,90 · Descontos R$ 3,00 · Custo R$ 0,00 · Margem R$ 53,90 · 100%) e Grupo CARLOS ALBERTO SILVA com Pedido #1 (rel-grupo-1 + rel-pedido-1). (5) Toque em rel-pedido-1 navega para /pedido-form?pedido=1 (Pedido #1 abre). (6) Dentro do pedido, 'Analisar margem & descontos' (pedido-form-analise-btn) navega para /relatorio-descontos?pedido=1, com header 'Análise do Pedido #1', Totais e Pedido #1 listados (auto-busca pelo useEffect setando 2000-2100). (7) Filtro de vendedor (rel-vendedor): selecionando MARIA SOUZA -> 'Nenhum pedido no período.' (0 pedidos); selecionando CARLOS ALBERTO SILVA -> Pedido #1 listado. Backend API /api/relatorios/descontos-margem retorna corretamente success=true com totais e vendedores agrupados.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "/relatorio-descontos",
+        "issues": [
+          "DateField (rel-data-ini / rel-data-fim) no preview web: ao tocar no campo, NÃO renderiza nenhum elemento visível (nem input[type=date], nem modal). Provavelmente o @react-native-community/datetimepicker no web não está renderizando o seletor inline (open=true mas sem output visual). Por sorte, defaults 01/MM/YYYY a hoje já cobrem o Pedido #1 nesta data (20/06/2026), portanto a feature não está bloqueada. Em mobile nativo (iOS/Android) deve funcionar — confirmar com build nativa."
+        ]
+      }
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/rel_05_hub.png (relatorios-screen com card 'Descontos & Margem')",
+    "/tmp/rel_06_relatorio.png (relatorio-descontos-screen com filtros)",
+    "/tmp/rel_08_resultado.png (Totais R$ 53,90 + Grupo CARLOS + Pedido #1)",
+    "/tmp/rel_09_pedido_form.png (navegação para /pedido-form?pedido=1)",
+    "/tmp/rel_10_analise.png (Análise do Pedido #1 via pedido-form-analise-btn)",
+    "/tmp/rel_vendedor_maria.png (filtro MARIA SOUZA -> Nenhum pedido)",
+    "/tmp/rel_vendedor_carlos.png (filtro CARLOS -> Pedido #1 listado)"
+  ],
+  "action_items": [
+    "(LOW/opcional) Investigar DateField em web: ao tocar em rel-data-ini, document.querySelectorAll('input[type=\"date\"]').length retorna 0 — o @react-native-community/datetimepicker em Platform.OS === 'web' (DateField.tsx:115-124) aparentemente não está renderizando o picker visual. Em ambiente mobile (iOS/Android) deve funcionar normalmente. Para a UAT web, considerar fallback com <input type=date /> nativo via Platform.OS check, ou expor um campo manual editável. Não bloqueia a feature porque defaults cobrem o cenário atual."
+  ],
+  "critical_code_review_comments": [
+    "relatorio-descontos.tsx (271 linhas) bem estruturado: tipos PedidoRow/VendedorGroup/Totais explícitos, formatBRL com toLocaleString pt-BR, brDate util, margemColor por faixa (>=30 success / >=10 warning / <10 error). Bom uso de useCallback/useMemo.",
+    "useEffect inicial carrega funcionarios via /api/funcionarios?servidor=&banco= (linha 73-83). Mapeia codigo->value/nome->label corretamente. catch silencioso ignora falha de lista.",
+    "useEffect que dispara busca automática quando vier pedidoParam (linha 118-125) usa setTimeout(buscar,0) para garantir state atualizado — OK, mas seria mais limpo com um efeito dependente de dataIni/dataFim quando pedidoParam.",
+    "relatorios.tsx (hub) bem feito; cards 'em breve' têm route:null + disabled + opacity 0.6. testID dos cards usa o label diretamente ('relatorio-Descontos & Margem' tem espaços/&) — funciona via [data-testid=\"...\"] mas considerar slug (relatorio-descontos-margem) para evitar caracteres especiais em selectors CSS.",
+    "principal-tile-relatórios contém acento — funciona com getAttribute, mas seria mais robusto usar slug ASCII (principal-tile-relatorios)."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100% (curl + UI E2E)", "frontend": "100% — todos os critérios do review passaram" },
+  "seed_data_creation": "Nenhum dado novo criado. Pedido #1 permanece com 2 itens (data 20/06/2026, venda R$ 53,90, desconto R$ 3,00).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Fluxo Relatório Descontos & Margem 100% funcional via web preview. testIDs principais: principal-tile-relatórios (com acento), relatorios-screen, 'relatorio-Descontos & Margem' (com espaços/&), relatorio-descontos-screen, rel-data-ini, rel-data-fim, rel-vendedor (+ rel-vendedor-opt-1/-2), rel-pedido, rel-buscar, rel-totais, rel-grupo-1, rel-pedido-1, pedido-form-analise-btn. Para clicar em qualquer testID com caracteres especiais (acento/espaços/&) use page.evaluate(\"(t)=>document.querySelectorAll('[data-testid]').forEach(el=>{if(el.getAttribute('data-testid')===t)el.click()})\", testID). AsyncStorage zera entre sessões Playwright — recriar conexão + login KONTACTO/$KONT2011 (Azure acordou na 1ª tentativa nesta rodada). DateField não renderiza input visível no web preview, mas defaults (01/MM/YYYY a hoje) cobrem 20/06/2026 do Pedido #1.",
+  "rca_of_issue": "Sem bugs encontrados. Único ponto de observação: DateField web — o branch Platform.OS === 'web' do DateField.tsx (linhas 115-124) renderiza <DateTimePicker> de @react-native-community/datetimepicker que aparentemente não exibe UI visível em React Native Web no preview. Reprodução: clicar em rel-data-ini ou rel-data-fim no preview web, observar que NENHUM picker/input aparece. Sem impacto funcional pois defaults cobrem o cenário testado."
+}
