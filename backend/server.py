@@ -1170,8 +1170,8 @@ def _check_pedido_aberto(cur, pedido: int) -> tuple[bool, str]:
 def _resolve_produto(cur, codigo: str) -> Optional[dict]:
     """Procura primeiro em pecas, depois em servicos. Retorna dados padrão do item."""
     cur.execute(
-        "SELECT codigo_int AS codigo, descricao, codigo_fab, p_venda AS valor, uni "
-        "FROM pecas WHERE codigo_int=%s",
+        "SELECT codigo_int AS codigo, descricao, codigo_fab, p_venda AS valor, uni, "
+        "       custo_reposicao FROM pecas WHERE codigo_int=%s",
         (codigo,),
     )
     r = cur.fetchone()
@@ -1183,6 +1183,7 @@ def _resolve_produto(cur, codigo: str) -> Optional[dict]:
             "cod_fab": (r.get("codigo_fab") or "").strip(),
             "valor": float(r.get("valor") or 0),
             "unidade": (r.get("uni") or "").strip()[:2] or "UN",
+            "custo": float(r.get("custo_reposicao") or 0),
         }
     cur.execute(
         "SELECT codigo, descricao, valor_hora AS valor FROM servicos WHERE codigo=%s",
@@ -1197,6 +1198,7 @@ def _resolve_produto(cur, codigo: str) -> Optional[dict]:
             "cod_fab": (r.get("codigo") or "").strip(),
             "valor": float(r.get("valor") or 0),
             "unidade": "HR",
+            "custo": 0.0,
         }
     return None
 
@@ -1341,14 +1343,15 @@ def _add_item_sync(req: ItemSaveRequest, pedido: int) -> dict:
         p_venda = round(p_normal - desc + acr, 4)  # preço líquido unitário
         complemento = (req.complemento or "").strip()
         unidade = prod["unidade"]
+        custo = float(prod.get("custo") or 0)  # pecas.custo_reposicao no momento da venda
 
         cur.execute(
             "INSERT INTO pedido_venda_prod "
-            "(pedido, produto, qtd_pedida, p_venda, p_normal, desconto, acrescimo, "
+            "(pedido, produto, qtd_pedida, p_venda, p_normal, desconto, acrescimo, custo_ped, "
             " descricao_produto, unidade_pedido, situacao_item, item_cancelado, data_inclusao_item) "
             "OUTPUT INSERTED.codauto "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'A',0,CAST(GETDATE() AS DATE))",
-            (pedido, codigo, qtd, p_venda, p_normal, desc, acr, complemento, unidade),
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'A',0,CAST(GETDATE() AS DATE))",
+            (pedido, codigo, qtd, p_venda, p_normal, desc, acr, custo, complemento, unidade),
         )
         row = cur.fetchone()
         codauto = int(row["codauto"] if isinstance(row, dict) else row[0])
@@ -1495,8 +1498,8 @@ def _list_descontos_sync(servidor: str, banco: str, pedido: int) -> dict:
             tipo_d = (r.get("TIPO_DESCONTO") or "").strip().upper()
             qtd = float(r.get("qtd_pedida") or 0)
             valor_unit = float(r.get("VALOR") or 0)
-            # 'I' = sobre item (valor é unitário → multiplica pela qtd); 'G' = geral (valor cheio)
-            valor_total = round(valor_unit * qtd, 2) if tipo_d == "I" else round(valor_unit, 2)
+            # VALOR é sempre UNITÁRIO (item 'I' e geral 'G' distribuído por item) → multiplica pela qtd
+            valor_total = round(valor_unit * qtd, 2)
             total += valor_total
             desc = (r.get("peca_desc") or r.get("serv_desc") or r.get("produto") or "Desconto geral")
             items.append({
@@ -1524,6 +1527,141 @@ def _list_descontos_sync(servidor: str, banco: str, pedido: int) -> dict:
 @api_router.get("/pedidos/{pedido}/descontos")
 async def list_descontos(pedido: int, servidor: str, banco: str):
     return await asyncio.to_thread(_list_descontos_sync, servidor, banco, pedido)
+
+
+def _get_limites_sync(servidor: str, banco: str) -> dict:
+    """Lê os limites de desconto por função na tabela controle (registro único)."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT TOP 1 desconto_pdv_gerente, desconto_pdv_supervisor, desconto_pdv_vendedor "
+            "FROM controle"
+        )
+        r = cur.fetchone()
+        cur.close(); conn.close()
+        if not r:
+            # sem registro de configuração → sem restrição
+            return {"success": True, "gerente": 100.0, "supervisor": 100.0, "vendedor": 100.0, "configurado": False}
+        return {
+            "success": True,
+            "gerente": float(r.get("desconto_pdv_gerente") or 0),
+            "supervisor": float(r.get("desconto_pdv_supervisor") or 0),
+            "vendedor": float(r.get("desconto_pdv_vendedor") or 0),
+            "configurado": True,
+        }
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+@api_router.get("/controle/desconto-limites")
+async def desconto_limites(servidor: str, banco: str):
+    return await asyncio.to_thread(_get_limites_sync, servidor, banco)
+
+
+def _limite_por_funcao(lim: dict, funcao: int) -> float:
+    # funcao: 1=gerente, 2=supervisor, 3=vendedor (master = gerente)
+    if funcao == 2:
+        return float(lim.get("supervisor") or 0)
+    if funcao == 3:
+        return float(lim.get("vendedor") or 0)
+    return float(lim.get("gerente") or 0)
+
+
+class DescontoGeralRequest(BaseModel):
+    servidor: str
+    banco: str
+    percentual: float = 0          # % geral sobre o total (0 = remover)
+    usuario_codigo: Optional[int] = -2
+    funcao: Optional[int] = 1       # 1=gerente, 2=supervisor, 3=vendedor
+
+
+def _aplicar_desconto_geral_sync(req: DescontoGeralRequest, pedido: int) -> dict:
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        existe, sit = _check_pedido_aberto(cur, pedido)
+        if not existe:
+            conn.close()
+            return {"success": False, "message": "Pedido não encontrado."}
+        if sit != "A":
+            conn.close()
+            return {"success": False, "message": f"Pedido '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterado."}
+
+        pct = float(req.percentual or 0)
+        if pct < 0:
+            conn.close()
+            return {"success": False, "message": "Percentual inválido."}
+
+        # valida limite por função (somente ao aplicar desconto > 0)
+        if pct > 0:
+            lim = _get_limites_sync(req.servidor, req.banco)
+            limite = _limite_por_funcao(lim, int(req.funcao or 1))
+            if limite > 0 and pct > limite + 1e-6:
+                conn.close()
+                return {"success": False, "message": f"Desconto acima do limite permitido ({limite:g}%) para sua função."}
+
+        # busca todos os itens do pedido
+        cur.execute(
+            "SELECT codauto, p_normal, acrescimo, qtd_pedida FROM pedido_venda_prod "
+            "WHERE pedido=%s AND ISNULL(item_cancelado,0)=0",
+            (pedido,),
+        )
+        itens = cur.fetchall()
+        if not itens:
+            conn.close()
+            return {"success": False, "message": "Pedido sem itens para aplicar desconto."}
+
+        usuario = int(req.usuario_codigo if req.usuario_codigo is not None else -2)
+        for it in itens:
+            codauto = int(it["codauto"])
+            p_normal = float(it.get("p_normal") or 0)
+            acr = float(it.get("acrescimo") or 0)
+            desconto_unit = round(p_normal * pct / 100.0, 2)
+            p_venda = round(p_normal - desconto_unit + acr, 4)
+            cur.execute(
+                "UPDATE pedido_venda_prod SET desconto=%s, p_venda=%s, "
+                "data_alteracao_item=CAST(GETDATE() AS DATE) WHERE codauto=%s AND pedido=%s",
+                (desconto_unit, p_venda, codauto, pedido),
+            )
+            # desconto geral SOBREPÕE os descontos de item: remove qualquer log do item (I e G)
+            cur.execute(
+                "DELETE FROM descontos_concedidos WHERE TIPO='PED' AND CODIGO=%s AND CODIGO_PRODUTO=%s",
+                (pedido, codauto),
+            )
+            if pct > 0:
+                cur.execute(
+                    "INSERT INTO descontos_concedidos "
+                    "(TIPO, CODIGO, CODIGO_PRODUTO, PERCENTUAL, VALOR, USUARIO, TIPO_DESCONTO) "
+                    "VALUES ('PED', %s, %s, %s, %s, %s, 'G')",
+                    (pedido, codauto, pct, desconto_unit, usuario),
+                )
+        novo_total = _recalc_pedido_total(cur, pedido)
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "total": novo_total, "percentual": pct}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao aplicar desconto geral: {e}"}
+
+
+@api_router.post("/pedidos/{pedido}/desconto-geral")
+async def aplicar_desconto_geral(pedido: int, req: DescontoGeralRequest):
+    return await asyncio.to_thread(_aplicar_desconto_geral_sync, req, pedido)
 
 
 

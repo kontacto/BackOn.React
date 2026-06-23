@@ -1,0 +1,51 @@
+{
+  "summary": "Frontend E2E para DESCONTO GERAL: fluxo funciona 100% no backend e nos dados exibidos (subtotal, item p_venda recalculado, modal 'Descontos Concedidos' com tipo 'Geral'), mas há 1 BUG DE ESTADO no rótulo do botão 'Desconto geral' que NÃO sincroniza com o estado real do pedido após Aplicar/Remover (geralAtual só é lido em openGeralModal, nunca em loadItens). Subtotal pré-desconto R$ 77,80 (Heineken 1×12 + Hambúrguer 2×32,90). Após 10%: subtotal R$ 70,02, Heineken p_venda 10,80, Hambúrguer p_venda 29,61, 'Descontos concedidos -R$ 7,78', modal lista 2 linhas 'Geral · 10% · ... · usuário -2' (Heineken -1,20 + Hambúrguer -6,58 = 7,78). Limite 'Limite da sua função: 100%' aparece e bloqueia 150% com toast 'Máximo permitido: 100%.'. Remover zera descontos e restaura subtotal. Cleanup dos itens (P002+P003) OK.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Botão 'Desconto geral' (testID pedido-form-desconto-geral-btn)",
+        "issue": "Rótulo do botão NÃO mostra '(10%)' imediatamente após APLICAR 10% (continua só 'Desconto geral') E continua mostrando '(10%)' após REMOVER (deveria voltar para 'Desconto geral'). Causa: geralAtual só é atualizado em openGeralModal (linha 493), nunca após submitGeral/loadItens. Fix sugerido: em submitGeral após success, chamar setGeralAtual(pct) (já contém o novo valor 0 ou pct).",
+        "testID": "pedido-form-desconto-geral-btn",
+        "priority": "MEDIUM"
+      },
+      {
+        "component": "Modal Desconto Geral - campo Percentual",
+        "issue": "Race condition no reabrir do modal: setGeralModalOpen(true) é síncrono mas o fetch das infos só preenche o campo depois (~300ms). O usuário vê o campo vazio por uma fração de segundo antes do '10' aparecer. Reproduzível via Playwright (input_value lido imediato retorna ''). Fix opcional: setGeralPct('') antes do await, ou só abrir modal após o Promise.all resolver, ou mostrar spinner.",
+        "testID": "pedido-form-geral-pct",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/dg_04_added.png (2 itens sem desconto)",
+    "/tmp/dg_05_modal.png (modal desconto geral, Limite 100%)",
+    "/tmp/dg_06_apply10.png (subtotal 70,02 + Descontos concedidos -7,78 + p_venda recalculado)",
+    "/tmp/dg_07_desc_modal.png (modal lista 2 linhas 'Geral · 10%')",
+    "/tmp/dg_08_reopen.png (modal reaberto com 10 preenchido)",
+    "/tmp/dg_09_limit150.png (toast 'Máximo permitido: 100%.')",
+    "/tmp/dg_10_remove.png (subtotal 77,80, sem 'Descontos concedidos' MAS botão ainda diz '(10%)')",
+    "/tmp/dg_11_clean.png (pedido vazio)"
+  ],
+  "action_items": [
+    "Corrigir sincronização do label '(X%)' no botão 'Desconto geral': em submitGeral (pedido-form.tsx:500-523) após j.success === true, chamar setGeralAtual(pct) (pct=0 quando Remover, pct=valor quando Aplicar). Atualmente o label só é refrescado se o usuário reabrir o modal.",
+    "(Opcional) Eliminar piscar do campo no reopen: setGeralPct(fmtNum(prev)) antes de abrir, ou abrir modal só após fetch.",
+    "(Arrastado) pedido-form.tsx tem 1542 linhas; considerar refatoração."
+  ],
+  "critical_code_review_comments": [
+    "Backend valida limite corretamente (toast 'Máximo permitido: 100%.' bate com handleApplyGeral linha 528; usuário KONTACTO master cai no slot 'gerente' com fallback 100% pois controle está vazio).",
+    "Política 'substitui descontos por item' confirmada na UI: itens passaram a ter desconto unitário visível (10,80 e 29,61) e modal de descontos só mostra linhas 'Geral'.",
+    "Logs 'G' por item conferidos via UI: 2 linhas no modal Descontos Concedidos, ambas 'Geral · 10%' com usuario=-2 (KONTACTO master).",
+    "BUG de UX: descasamento entre estado real (que veio do GET /pedidos/1/descontos) e estado local geralAtual após mutação. O componente confia que o usuário sempre vai reabrir o modal para ver o '(X%)' atualizado."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100% (via UI ponta-a-ponta + curl prévio do main agent)", "frontend": "95% — funcionalidade central OK, label do botão tem bug de sync" },
+  "seed_data_creation": "Pedido #1 ficou VAZIO ao final do teste (todos os itens criados foram excluídos). Limpou também 2 itens órfãos (15, 16) deixados por execuções anteriores.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "AsyncStorage zera a cada sessão Playwright — recriar conexão BARESTEL + login KONTACTO/$KONT2011. Pedido #1 deve estar Aberto e VAZIO. Para clicar nos botões 'connection-save-button', 'pedido-form-add-confirm', 'pedido-form-geral-apply', 'pedido-form-geral-remove', 'pedido-form-edit-delete' use page.evaluate(\"(s)=>document.querySelector(s).click()\", sel) — clicks normais (mesmo com force=True) falham com 'Element is outside of the viewport' porque o RN Web aninha o Pressable abaixo do viewport mobile mesmo após scroll_into_view_if_needed. Navegação após login: principal-screen → click principal-tile-pedidos → pedidos-screen → click pedido-1 → pedido-form-add-item. Para validar a correção do label, basta aplicar 10%, ler 'pedido-form-desconto-geral-btn' (deve ter '(10%)' SEM reabrir modal) e depois remover, e re-ler (deve voltar a 'Desconto geral' sem percentual).",
+  "rca_of_issue": "Bug do label '(X%)' no botão Desconto geral: state geralAtual é populado APENAS no handler openGeralModal (pedido-form.tsx:491-493) a partir do GET /pedidos/{id}/descontos. submitGeral (linha 500-523) só faz setGeralModalOpen(false), showToast e loadItens(). loadItens (linha 290-307) recarrega APENAS itens e subtotal — não toca geralAtual. Resultado: o botão fica defasado até o usuário reabrir manualmente o modal. Reprodução: aplicar 10% → ver botão sem '(10%)'; remover → ver botão ainda com '(10%)'. Mitigação: dentro de submitGeral, no bloco success, adicionar setGeralAtual(pct)."
+}

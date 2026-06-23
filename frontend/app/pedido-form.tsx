@@ -151,6 +151,14 @@ export default function PedidoFormScreen() {
   const [descTotalApi, setDescTotalApi] = useState(0);
   const [descLoading, setDescLoading] = useState(false);
 
+  // Desconto geral sobre o total
+  const [funcaoCod, setFuncaoCod] = useState<number>(1); // 1=gerente,2=supervisor,3=vendedor
+  const [geralModalOpen, setGeralModalOpen] = useState(false);
+  const [geralPct, setGeralPct] = useState("");
+  const [geralAtual, setGeralAtual] = useState(0);
+  const [geralLimite, setGeralLimite] = useState(100);
+  const [geralSaving, setGeralSaving] = useState(false);
+
   const isAberto = (pedido?.situacao || "A").toUpperCase() === "A";
 
   const descTotalItens = useMemo(
@@ -174,6 +182,9 @@ export default function PedidoFormScreen() {
       setVendedor(vCod);
       const isMaster = !!(s?.usuario as { master?: boolean } | undefined)?.master;
       setUsuarioCod(isMaster ? -2 : (typeof vCod === "number" ? vCod : -2));
+      const cf = (s?.funcionario as { cod_funcao?: string } | undefined)?.cod_funcao;
+      const fc = cf ? parseInt(cf, 10) : NaN;
+      setFuncaoCod(isMaster ? 1 : (Number.isFinite(fc) && fc > 0 ? fc : 1));
       const fnome = (s?.funcionario?.nome_guerra || s?.funcionario?.nome || "") as string;
       setVendedorNome(fnome);
 
@@ -463,6 +474,61 @@ export default function PedidoFormScreen() {
     } finally { setDescLoading(false); }
   };
 
+  const openGeralModal = async () => {
+    if (!conn || !pedidoId) return;
+    setGeralModalOpen(true);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`;
+      const [rl, rd] = await Promise.all([
+        fetch(`${base}/api/controle/desconto-limites?${qs}`).then((r) => r.json()),
+        fetch(`${base}/api/pedidos/${pedidoId}/descontos?${qs}`).then((r) => r.json()),
+      ]);
+      if (rl?.success) {
+        const lim = funcaoCod === 2 ? rl.supervisor : funcaoCod === 3 ? rl.vendedor : rl.gerente;
+        setGeralLimite(Number(lim) || 100);
+      }
+      const gRow = (rd?.items || []).find((d: DescontoRow) => d.tipo_desconto === "G");
+      const atual = gRow ? Number(gRow.percentual) : 0;
+      setGeralAtual(atual);
+      setGeralPct(atual > 0 ? fmtNum(atual) : "");
+    } catch {
+      // silencioso
+    }
+  };
+
+  const submitGeral = async (pct: number) => {
+    if (!conn || !pedidoId) return;
+    setGeralSaving(true);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const r = await fetch(`${base}/api/pedidos/${pedidoId}/desconto-geral`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          servidor: conn.servidor, banco: conn.banco,
+          percentual: pct, usuario_codigo: usuarioCod, funcao: funcaoCod,
+        }),
+      });
+      const j = await r.json();
+      if (!j?.success) { showToast(j?.message || "Falha no desconto geral.", "error"); }
+      else {
+        setGeralModalOpen(false);
+        showToast(pct > 0 ? "Desconto geral aplicado." : "Desconto geral removido.", "success");
+        loadItens();
+      }
+    } catch (e) {
+      showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
+    } finally { setGeralSaving(false); }
+  };
+
+  const handleApplyGeral = () => {
+    const pct = parseNum(geralPct);
+    if (pct <= 0) { showToast("Informe um percentual maior que zero.", "error"); return; }
+    if (pct > geralLimite + 1e-6) { showToast(`Máximo permitido: ${fmtNum(geralLimite)}%.`, "error"); return; }
+    submitGeral(pct);
+  };
+
 
   const handleSave = async () => {
     if (!conn) return;
@@ -740,6 +806,23 @@ export default function PedidoFormScreen() {
                   <Text style={styles.itemTotal}>{formatBRL(it.total)}</Text>
                 </Pressable>
               ))}
+
+              {isAberto ? (
+                <TouchableOpacity
+                  onPress={openGeralModal}
+                  activeOpacity={0.8}
+                  style={styles.geralBtn}
+                  testID="pedido-form-desconto-geral-btn"
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Ionicons name="cash-outline" size={16} color={colors.brandPrimary} />
+                    <Text style={styles.geralBtnLabel}>
+                      Desconto geral{geralAtual > 0 ? ` (${fmtNum(geralAtual)}%)` : ""}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={colors.brandPrimary} />
+                </TouchableOpacity>
+              ) : null}
 
               {descTotalItens > 0 ? (
                 <TouchableOpacity
@@ -1097,6 +1180,61 @@ export default function PedidoFormScreen() {
         </Pressable>
       </Modal>
 
+      {/* Modal desconto geral */}
+      <Modal visible={geralModalOpen} transparent animationType="slide" onRequestClose={() => setGeralModalOpen(false)}>
+        <Pressable style={styles.modalBg} onPress={() => setGeralModalOpen(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Desconto Geral</Text>
+              <Pressable onPress={() => setGeralModalOpen(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+            <View style={{ gap: spacing.sm }}>
+              <View style={styles.itensHint}>
+                <Ionicons name="information-circle-outline" size={18} color={colors.muted} />
+                <Text style={styles.itensHintText}>
+                  Aplica o percentual proporcionalmente a todos os itens e substitui descontos por item. Limite da sua função: {fmtNum(geralLimite)}%.
+                </Text>
+              </View>
+              <Text style={styles.fieldLabel}>Percentual (%)</Text>
+              <TextInput
+                value={geralPct}
+                onChangeText={setGeralPct}
+                keyboardType="decimal-pad"
+                placeholder="0"
+                placeholderTextColor={colors.muted}
+                style={styles.input}
+                testID="pedido-form-geral-pct"
+              />
+              <View style={styles.modalBtns}>
+                {geralAtual > 0 ? (
+                  <TouchableOpacity
+                    onPress={() => submitGeral(0)}
+                    disabled={geralSaving}
+                    activeOpacity={0.8}
+                    style={styles.deleteBtnWide}
+                    testID="pedido-form-geral-remove"
+                  >
+                    <Text style={styles.deleteBtnWideText}>Remover</Text>
+                  </TouchableOpacity>
+                ) : null}
+                <TouchableOpacity
+                  onPress={handleApplyGeral}
+                  disabled={geralSaving}
+                  activeOpacity={0.8}
+                  style={[styles.primaryBtn, { flex: 1 }]}
+                  testID="pedido-form-geral-apply"
+                >
+                  {geralSaving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Aplicar</Text>}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+
       {/* Modal relatório de descontos concedidos */}
       <Modal visible={descModalOpen} transparent animationType="slide" onRequestClose={() => setDescModalOpen(false)}>
         <Pressable style={styles.modalBg} onPress={() => setDescModalOpen(false)}>
@@ -1340,6 +1478,17 @@ const styles = StyleSheet.create({
   },
   descBtnLabel: { fontSize: 13, color: colors.error, fontWeight: "500" },
   descBtnValue: { fontSize: 14, color: colors.error, fontWeight: "700" },
+  geralBtn: {
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radius.md,
+    backgroundColor: colors.brandTertiary, borderWidth: 1, borderColor: colors.border,
+  },
+  geralBtnLabel: { fontSize: 13, color: colors.brandPrimary, fontWeight: "500" },
+  deleteBtnWide: {
+    paddingHorizontal: spacing.lg, borderRadius: radius.pill, paddingVertical: 13,
+    alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.error,
+  },
+  deleteBtnWideText: { color: colors.error, fontWeight: "600", fontSize: 15 },
   descRow: {
     flexDirection: "row", alignItems: "center", gap: spacing.sm,
     paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border,
