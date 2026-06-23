@@ -10,6 +10,7 @@ import DateField from "@/src/components/DateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
+import { exportReportPdf } from "@/src/utils/export-report";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Conn = { servidor: string; banco: string; api: string };
@@ -58,6 +59,7 @@ export default function RelatorioDescontosScreen() {
   const [totais, setTotais] = useState<Totais | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [exporting, setExporting] = useState(false);
 
   // carrega conexão + funcionarios (vendedores)
   useEffect(() => {
@@ -133,6 +135,24 @@ export default function RelatorioDescontosScreen() {
     [pedidoParam]
   );
 
+  const handleExport = useCallback(async () => {
+    if (!totais) return;
+    setExporting(true);
+    setError(null);
+    try {
+      await exportReportPdf({
+        titulo: headerTitle,
+        periodo: pedidoParam ? undefined : `Período: ${brDate(dataIni || "")} a ${brDate(dataFim || "")}`,
+        totais,
+        vendedores,
+      });
+    } catch (e) {
+      setError(`Falha ao exportar: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setExporting(false);
+    }
+  }, [totais, vendedores, headerTitle, pedidoParam, dataIni, dataFim]);
+
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="relatorio-descontos-screen">
       <View style={styles.header}>
@@ -140,7 +160,23 @@ export default function RelatorioDescontosScreen() {
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
         <Text style={styles.headerTitle} numberOfLines={1}>{headerTitle}</Text>
-        <View style={{ width: 40 }} />
+        {totais ? (
+          <Pressable
+            onPress={handleExport}
+            disabled={exporting}
+            hitSlop={12}
+            style={({ pressed }) => [styles.backBtn, (pressed || exporting) && { opacity: 0.6 }]}
+            testID="relatorio-export"
+          >
+            {exporting ? (
+              <ActivityIndicator size="small" color={colors.onBrandPrimary} />
+            ) : (
+              <Ionicons name="share-outline" size={22} color={colors.onBrandPrimary} />
+            )}
+          </Pressable>
+        ) : (
+          <View style={{ width: 40 }} />
+        )}
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>

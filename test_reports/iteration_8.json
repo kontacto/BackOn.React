@@ -1,0 +1,40 @@
+{
+  "summary": "Feature 'EXPORTAR/COMPARTILHAR relatório Descontos & Margem' como PDF — TODOS OS REQUISITOS PASSARAM. (1) Antes de gerar: botão testID 'relatorio-export' AUSENTE no header (count=0) ✓. (2) Após tocar em 'Gerar relatório' (rel-buscar) com pedido=1 e período padrão (01/06/2026–23/06/2026), a tela renderiza 'rel-totais' (1 pedido, CARLOS ALBERTO SILVA, Pedido #1 TESTE CLIENTE 9DIG, valores zerados pois pedido vazio) e o ícone share-outline ('relatorio-export') aparece no canto superior direito do header ao lado do título 'Descontos & Margem' ✓. (3) Ao tocar em 'relatorio-export' no ambiente web: o app NÃO derruba (nenhum red screen, nenhum erro de runtime, nenhum erro relacionado a expo-print/expo-sharing/Print/Sharing no console), a tela 'relatorio-descontos-screen' permanece visível, o botão permanece presente, e window.print() é chamado 1x (interceptado e contado via init script — corresponde ao Print.printAsync da web). ✓ (4) Fluxo via Pedido: ao abrir Pedido #1 e tocar 'pedido-form-analise-btn', a navegação ocorre para /relatorio-descontos?pedido=1 com título 'Análise do Pedido #1', os totais carregam automaticamente (range amplo 2000-01-01..2100-12-31 via useEffect[conn]) e o botão 'relatorio-export' aparece no header. Ao tocar nele: sem crash, window.print() chamado 1x, sem erros. ✓ Nenhum erro de runtime em console em todas as etapas. Nenhuma deprecated package encontrada nesse fluxo (expo-print e expo-sharing são os recomendados). Detectados apenas warnings antigos não-bloqueantes do react-native-web ('shadow* deprecated' e 'props.pointerEvents deprecated') já reportados em iterações anteriores.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/R2_descontos_screen.png (tela Descontos & Margem antes de gerar — sem botão de export no header)",
+    "/tmp/R3_after_gerar.png (após Gerar relatório com pedido=1 — totais visíveis e ícone share aparece no header top-right)",
+    "/tmp/R4_after_export.png (após clicar em relatorio-export — tela continua visível, sem crash)",
+    "/tmp/P2_pedido_form.png (Pedido #1 com botão pedido-form-analise-btn 'Analisar margem & descontos' visível)",
+    "/tmp/P3_analise_screen.png (Análise do Pedido #1 carregada com totais e ícone share-outline no header)",
+    "/tmp/P5_after_export_pedido.png (clique em export no Análise do Pedido — sem crash)"
+  ],
+  "action_items": [
+    "Nenhuma ação obrigatória — feature funcionando conforme spec. ",
+    "(SUGESTÃO opcional) Considerar exibir um toast/feedback após exportReportPdf retornar com sucesso (na web hoje o usuário só vê o diálogo do navegador; se cancelar não há retorno visual). Por exemplo, setError(null) + um toast tipo 'PDF gerado'. Não bloqueante."
+  ],
+  "critical_code_review_comments": [
+    "relatorio-descontos.tsx (366 linhas): bem estruturado, dentro do limite de 700. Botão de export usa renderização condicional `totais ? <Pressable...> : <View style={{width:40}} />` o que mantém o alinhamento centralizado do título. testID 'relatorio-export' aplicado corretamente no Pressable. ✓",
+    "handleExport (linha 138-154): usa useCallback com deps corretas; isola try/catch; seta exporting com ActivityIndicator e dispara setError em caso de falha. ✓",
+    "export-report.ts (148 linhas): pequeno e focado. Função `esc` previne XSS no HTML. Platform.OS === 'web' usa Print.printAsync({html}); nativo usa printToFileAsync + Sharing.shareAsync com fallback para Print.printAsync({uri}). Estrutura HTML bem montada com estilos inline. ✓",
+    "Nenhum acoplamento a `_id` do MongoDB (irrelevante — backend é SQL Server).",
+    "EXPO_PUBLIC_BACKEND_URL utilizado via conexão armazenada (não hardcoded). ✓",
+    "Sem novos warnings expo no bundle — expo-print e expo-sharing são os pacotes oficialmente suportados (não-deprecated)."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "n/a (testing_type=frontend only)",
+    "frontend": "100% — 5/5 validações da review_request passaram (botão oculto antes, visível depois, sem crash no clique direto, fluxo via Pedido com título 'Análise do Pedido #1' e export funcional)"
+  },
+  "seed_data_creation": "Não foi criada nova seed — o Pedido #1 já existia no BDREACTAPP (TESTE CLIENTE 9DIG, CARLOS ALBERTO SILVA, sem itens, R$ 0,00). A conexão BARESTEL é recriada em cada execução do Playwright pois o AsyncStorage zera entre sessões.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Feature de export PDF do relatório Descontos & Margem está completa e funcional na web (chama Print.printAsync → window.print()). No nativo (build real) usaria expo-print printToFileAsync + Sharing.shareAsync — não testável em Playwright web. testIDs: 'relatorio-export' (botão share no header, só aparece se totais!=null), 'rel-totais', 'rel-buscar', 'rel-pedido', 'pedido-form-analise-btn'. Para testar com dados não-vazios em runs futuros: usar campo rel-pedido=1 (pedido #1 sempre existe em BDREACTAPP) com período padrão; ou popular itens no pedido #1 para ver valores reais. AsyncStorage zera entre sessões — sempre recriar conn (BARESTEL/gibanweb.database.windows.net/BDREACTAPP/https://cliente-crud.preview.emergentagent.com) e logar com KONTACTO/$KONT2011.",
+  "rca_of_issue": "Nenhum bug identificado nesta iteração. Implementação enxuta e correta da feature solicitada."
+}
