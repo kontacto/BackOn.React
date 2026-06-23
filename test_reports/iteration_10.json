@@ -1,0 +1,38 @@
+{
+  "summary": "Validados TODOS os 4 novos requisitos da review_request (backend + frontend). (1) TAB BAR: barra inferior contém exatamente 4 abas (Início, Clientes, Configurações, Relatórios) — hrefs detectados: ['/principal','/clientes','/configuracoes','/relatorios']. Aba 'Pedidos' NÃO existe na tab bar (Pedidos tab-bar link count=0). (2) DASHBOARD TILES: apenas Clientes, Produtos & Serviços e Pedidos. NÃO existem tiles 'Configurações' nem 'Relatórios' (testIDs principal-tile-configurações / principal-tile-relatórios = 0). (3) FILTRO SITUAÇÃO (principal-situacao-filter com chips Todos/Aberto/Fechado/Faturado/Cancelado): selecionar 'Aberto' mantém pedido #1 com totais pedidos=1, produtos=R$ 54,50, margem=R$ 24,39 (44,75%); 'Fechado' zera tudo (pedido-1 count=0, total-row count=0, todos os totais = 0 / 0,00%); 'Todos' volta a mostrar pedido #1 com margem R$ 24,39 / 44,75%. (4) MARGEM MÉDIA DO DIA (principal-margem / totals-margem / totals-margem-pct): exibe corretamente 'Margem média do dia · Venda líquida − custo de reposição · R$ 24,39 · 44,75%' como esperado. (5) PEDIDOS VIA TILE: tocar 'principal-tile-pedidos' abre pedidos-screen com botão pedidos-back funcional retornando ao principal-screen. (6) CONFIGURAÇÕES (aba): configuracoes-screen renderiza com config-profile (KONTACTO Sistemas/BARESTEL), config-conexoes (navega para connections-screen e voltar retorna), config-relatorios e config-logout — todos os testIDs presentes. Backend /api/dashboard/me validado via curl: situacao=A retorna 1 pedido com margem 24.39/44.75%; situacao=F retorna 0 pedidos e zero margem; sem filtro também 1 pedido. Nenhum red screen, nenhum erro de console crítico, todos os testIDs presentes conforme spec.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/A2_principal.png (Início com 3 tiles + chips de situação + margem 24,39/44,75%)",
+    "/tmp/A3_sitA.png (chip Aberto selecionado — pedido #1 visível, totais corretos)",
+    "/tmp/A4_sitF.png (chip Fechado — lista vazia, totais zerados)",
+    "/tmp/A5_todos.png (chip Todos selecionado — pedido #1 de volta)",
+    "/tmp/B1_pedidos.png (Pedidos via tile com botão voltar)",
+    "/tmp/C1_config.png (Configurações com 4 abas inferiores: Início/Clientes/Configurações/Relatórios)"
+  ],
+  "action_items": [
+    "Nenhuma ação obrigatória — todos os 4 ajustes da review_request (filtro situação, margem média, remoção dos tiles Configurações/Relatórios, troca de aba Pedidos→Configurações) estão funcionando 100%."
+  ],
+  "critical_code_review_comments": [
+    "(tabs)/_layout.tsx: 4 Tabs.Screen na ordem correta (principal/clientes/configuracoes/relatorios) — não há mais 'pedidos' como tab. ✓",
+    "(tabs)/principal.tsx (545 linhas, dentro do limite): tiles array tem exatamente 3 itens [Clientes, Produtos & Serviços, Pedidos]; SITUACOES array com 5 chips; loadDashboard concatena &situacao= na URL quando não vazio; useEffect re-dispara em [vendedorFiltro, situacaoFiltro]. ✓",
+    "(tabs)/configuracoes.tsx (191 linhas): testIDs config-profile/config-conexoes/config-relatorios/config-logout presentes; router.push(/connections) e router.push(/relatorios) corretos. ✓",
+    "pedidos.tsx movido para root (não em (tabs)) com botão back via router.back() — confirmado por hrefs (apenas 4 abas) e navegação via tile. ✓",
+    "backend server.py _dashboard_sync: adiciona AND pv.situacao=%s ao WHERE quando situacao not in (None,'','all'); inclui margem e margem_pct nos totais via custo_reposicao/custo_hora — validado via curl 3x. ✓"
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (3/3 curls: dashboard sem filtro, situacao=A retorna pedido, situacao=F retorna vazio)",
+    "frontend": "100% (6/6 cenários: tab bar 4 abas, 3 tiles, chips A/F/Todos, margem, tile Pedidos+back, config tab+conexões+back)"
+  },
+  "seed_data_creation": "Nenhuma seed nova — reutilizado pedido #1 (Aberto, R$ 54,50, margem R$ 24,39/44,75%) já existente em BDREACTAPP datado de hoje. Conexão BARESTEL re-criada no AsyncStorage da sessão Playwright.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Login flow Playwright: 1) AsyncStorage zera entre runs — criar conexão em /connections (testIDs: connection-empresa-input, connection-servidor-input, connection-banco-input, connection-api-input, connection-save-button) → press connections-back-button (somente aparece quando há ao menos 1 conexão) → vai pra /login. 2) Em /login: login-usuario-input='KONTACTO', login-senha-input='$KONT2011', login-submit-button. Azure pode demorar — fazer até 5 tentativas com sleep 5s. testIDs-chave desta review: principal-situacao-filter, principal-sit-{todos,A,F,PG,C}, principal-margem, totals-margem, totals-margem-pct, principal-tile-{clientes,produtos & serviços,pedidos}, configuracoes-screen, config-{profile,conexoes,relatorios,logout}, pedidos-screen, pedidos-back. Para verificar ausência da aba Pedidos: contar a[href$='/pedidos'] no DOM (deve = 0; só existem 4 hrefs de abas).",
+  "rca_of_issue": "N/A — nenhum bug encontrado. Todos os 4 ajustes solicitados (filtro situação + margem média + remoção de 2 tiles + troca Pedidos→Configurações na tab bar) implementados corretamente pelo main agent E1."
+}

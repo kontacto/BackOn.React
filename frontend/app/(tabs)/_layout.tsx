@@ -32,10 +32,10 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="pedidos"
+        name="configuracoes"
         options={{
-          title: "Pedidos",
-          tabBarIcon: ({ color, size }) => <Ionicons name="receipt-outline" size={size} color={color} />,
+          title: "Configurações",
+          tabBarIcon: ({ color, size }) => <Ionicons name="settings-outline" size={size} color={color} />,
         }}
       />
       <Tabs.Screen

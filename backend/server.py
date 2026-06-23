@@ -2199,21 +2199,26 @@ async def update_cliente(codigo: int, req: ClienteCreateRequest):
 # =====================================================================
 # Dashboard — totais do dia + lista de pedidos do vendedor
 # =====================================================================
-def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso: str) -> dict:
+def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso: str,
+                    situacao: Optional[str] = None) -> dict:
     """Totais e pedidos do dia (pedido_venda/pedido_venda_prod).
-    vendedor None/'' = todos; produtos/servicos = soma p_venda*qtd por tipo (pecas/servicos)."""
+    vendedor None/'' = todos; situacao None/'' = todas; produtos/servicos = soma p_venda*qtd
+    por tipo (pecas/servicos). Inclui margem média do dia (venda líquida - custo)."""
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
         return {"success": False, "message": f"Falha conexão: {e}",
-                "totais": {"pedidos": 0, "produtos": 0, "servicos": 0}, "pedidos": []}
+                "totais": {"pedidos": 0, "produtos": 0, "servicos": 0, "margem": 0, "margem_pct": 0}, "pedidos": []}
     try:
         cur = conn.cursor(as_dict=True)
         vfilter = ""
         vparams: list = []
         if vendedor not in (None, "", "all"):
-            vfilter = " AND pv.vendedor = %s"
-            vparams = [vendedor]
+            vfilter += " AND pv.vendedor = %s"
+            vparams.append(vendedor)
+        if situacao not in (None, "", "all"):
+            vfilter += " AND pv.situacao = %s"
+            vparams.append(situacao)
 
         # Quantidade de pedidos do dia
         cur.execute(
@@ -2223,11 +2228,13 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
         )
         qtd = int((cur.fetchone() or {}).get("qtd") or 0)
 
-        # Totais de produtos x serviços do dia
+        # Totais de produtos x serviços + venda/custo do dia (p/ margem)
         cur.execute(
             "SELECT "
             "  SUM(CASE WHEN pe.codigo_int IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS prod, "
-            "  SUM(CASE WHEN sv.codigo IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS serv "
+            "  SUM(CASE WHEN sv.codigo IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS serv, "
+            "  SUM(i.p_venda*i.qtd_pedida) AS venda_total, "
+            "  SUM(COALESCE(NULLIF(pe.custo_reposicao,0), NULLIF(sv.custo_hora,0), NULLIF(i.custo_ped,0), 0) * i.qtd_pedida) AS custo_total "
             "FROM pedido_venda pv "
             "JOIN pedido_venda_prod i ON i.pedido = pv.pedido AND ISNULL(i.item_cancelado,0)=0 "
             "LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
@@ -2236,10 +2243,15 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
             tuple([data_iso] + vparams),
         )
         tr = cur.fetchone() or {}
+        venda_total = float(tr.get("venda_total") or 0)
+        custo_total = float(tr.get("custo_total") or 0)
+        margem = round(venda_total - custo_total, 2)
         totais = {
             "pedidos": qtd,
             "produtos": float(tr.get("prod") or 0),
             "servicos": float(tr.get("serv") or 0),
+            "margem": margem,
+            "margem_pct": round((margem / venda_total * 100), 2) if venda_total > 0 else 0.0,
         }
 
         # Lista de pedidos do dia
@@ -2274,11 +2286,12 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
 
 
 @api_router.get("/dashboard/me")
-async def dashboard_me(servidor: str, banco: str, vendedor: Optional[str] = None, data: Optional[str] = None):
-    # data padrão = hoje (YYYY-MM-DD); vendedor vazio/None/all = todos
+async def dashboard_me(servidor: str, banco: str, vendedor: Optional[str] = None,
+                       data: Optional[str] = None, situacao: Optional[str] = None):
+    # data padrão = hoje (YYYY-MM-DD); vendedor/situacao vazio/None/all = todos
     from datetime import date  # noqa: E402
     data_iso = data or date.today().isoformat()
-    return await asyncio.to_thread(_dashboard_sync, servidor, banco, vendedor, data_iso)
+    return await asyncio.to_thread(_dashboard_sync, servidor, banco, vendedor, data_iso, situacao)
 
 
 # =====================================================================

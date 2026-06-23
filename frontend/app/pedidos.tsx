@@ -153,7 +153,14 @@ export default function PedidosScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="pedidos-screen">
       <View style={styles.header}>
-        <View style={{ width: 40 }} />
+        <Pressable
+          onPress={() => router.back()}
+          style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]}
+          hitSlop={12}
+          testID="pedidos-back"
+        >
+          <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
+        </Pressable>
         <Text style={styles.headerTitle}>Pedidos ({total})</Text>
         <Pressable
           onPress={() => setShowFilters((v) => !v)}

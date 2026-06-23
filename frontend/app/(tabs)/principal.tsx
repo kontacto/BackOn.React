@@ -32,8 +32,16 @@ function formatBRL(v: number): string {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-type DashboardTotals = { pedidos: number; produtos: number; servicos: number };
+type DashboardTotals = { pedidos: number; produtos: number; servicos: number; margem: number; margem_pct: number };
 type DashboardPedido = { pedido: number; cliente: string; valor: number };
+
+const SITUACOES: { value: string; label: string }[] = [
+  { value: "", label: "Todos" },
+  { value: "A", label: "Aberto" },
+  { value: "F", label: "Fechado" },
+  { value: "PG", label: "Faturado" },
+  { value: "C", label: "Cancelado" },
+];
 
 export default function PrincipalScreen() {
   const router = useRouter();
@@ -41,12 +49,13 @@ export default function PrincipalScreen() {
   const [loading, setLoading] = useState(true);
 
   // Dashboard
-  const [totais, setTotais] = useState<DashboardTotals>({ pedidos: 0, produtos: 0, servicos: 0 });
+  const [totais, setTotais] = useState<DashboardTotals>({ pedidos: 0, produtos: 0, servicos: 0, margem: 0, margem_pct: 0 });
   const [pedidos, setPedidos] = useState<DashboardPedido[]>([]);
   const [dashLoading, setDashLoading] = useState(false);
   const [dashError, setDashError] = useState<string | null>(null);
   const [vendedorOpts, setVendedorOpts] = useState<SelectOption[]>([]);
   const [vendedorFiltro, setVendedorFiltro] = useState<string | number | null>(null); // null = Todos
+  const [situacaoFiltro, setSituacaoFiltro] = useState<string>(""); // "" = Todos
 
   const isManager = useMemo(() => {
     if ((session?.usuario as { master?: boolean } | undefined)?.master) return true;
@@ -94,7 +103,7 @@ export default function PrincipalScreen() {
   }, []);
 
   const loadDashboard = useCallback(
-    async (s: Session, vendedorOverride?: string | number | null) => {
+    async (s: Session, vendedorOverride?: string | number | null, situacaoOverride?: string) => {
       setDashLoading(true);
       setDashError(null);
       try {
@@ -119,18 +128,20 @@ export default function PrincipalScreen() {
           }
           vendedorParam = String(own);
         }
+        const sit = situacaoOverride !== undefined ? situacaoOverride : situacaoFiltro;
         const apiBase = conn.api.replace(/\/+$/, "");
         const url =
           `${apiBase}/api/dashboard/me` +
           `?servidor=${encodeURIComponent(conn.servidor)}` +
           `&banco=${encodeURIComponent(conn.banco)}` +
-          `&vendedor=${encodeURIComponent(vendedorParam)}`;
+          `&vendedor=${encodeURIComponent(vendedorParam)}` +
+          (sit ? `&situacao=${encodeURIComponent(sit)}` : "");
         const r = await fetch(url);
         const j = await r.json();
         if (!j?.success) {
           setDashError(j?.message || "Não foi possível obter os totais.");
         }
-        setTotais(j?.totais || { pedidos: 0, produtos: 0, servicos: 0 });
+        setTotais(j?.totais || { pedidos: 0, produtos: 0, servicos: 0, margem: 0, margem_pct: 0 });
         setPedidos(Array.isArray(j?.pedidos) ? j.pedidos : []);
       } catch (e) {
         setDashError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
@@ -159,11 +170,11 @@ export default function PrincipalScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, isManager, loadDashboard, loadVendedores]);
 
-  // Recarrega ao trocar o filtro de vendedor (somente gerente/supervisor)
+  // Recarrega ao trocar qualquer filtro (vendedor — gerente/supervisor; situação — todos)
   useEffect(() => {
-    if (session && isManager) loadDashboard(session, vendedorFiltro);
+    if (session) loadDashboard(session, vendedorFiltro, situacaoFiltro);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vendedorFiltro]);
+  }, [vendedorFiltro, situacaoFiltro]);
 
   const handleLogout = async () => {
     await clearSession();
@@ -272,8 +283,6 @@ export default function PrincipalScreen() {
             { label: "Clientes", icon: "people-outline" as const, route: "/clientes" as const },
             { label: "Produtos & Serviços", icon: "cube-outline" as const, route: "/produtos" as const },
             { label: "Pedidos", icon: "receipt-outline" as const, route: "/pedidos" as const },
-            { label: "Relatórios", icon: "bar-chart-outline" as const, route: "/relatorios" as const },
-            { label: "Configurações", icon: "settings-outline" as const, route: null },
           ].map((t) => (
             <Pressable
               key={t.label}
@@ -307,6 +316,23 @@ export default function PrincipalScreen() {
           </View>
         ) : null}
 
+        {/* ======== Filtro por situação (todos os usuários) ======== */}
+        <View style={styles.sitFilterRow} testID="principal-situacao-filter">
+          {SITUACOES.map((s) => {
+            const sel = situacaoFiltro === s.value;
+            return (
+              <Pressable
+                key={s.value || "all"}
+                onPress={() => setSituacaoFiltro(s.value)}
+                style={[styles.sitChip, sel && styles.sitChipSel]}
+                testID={`principal-sit-${s.value || "todos"}`}
+              >
+                <Text style={[styles.sitChipText, sel && styles.sitChipTextSel]}>{s.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
         {/* ======== Totais do dia ======== */}
         <Text style={styles.sectionTitle}>Totais de Hoje</Text>
         <View style={styles.totalsRow} testID="principal-totals">
@@ -326,6 +352,25 @@ export default function PrincipalScreen() {
             <Text style={styles.totalLabel}>Serviços</Text>
             <Text style={[styles.totalValue, { fontSize: 16 }]} testID="totals-servicos">
               {dashLoading ? "…" : formatBRL(totais.servicos)}
+            </Text>
+          </View>
+        </View>
+
+        {/* ======== Margem média do dia ======== */}
+        <View style={styles.margemCard} testID="principal-margem">
+          <View style={styles.margemIcon}>
+            <Ionicons name="trending-up" size={20} color={colors.onBrandPrimary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.margemLabel}>Margem média do dia</Text>
+            <Text style={styles.margemHint}>Venda líquida − custo de reposição</Text>
+          </View>
+          <View style={{ alignItems: "flex-end" }}>
+            <Text style={styles.margemValue} testID="totals-margem">
+              {dashLoading ? "…" : formatBRL(totais.margem)}
+            </Text>
+            <Text style={styles.margemPct} testID="totals-margem-pct">
+              {dashLoading ? "" : `${(totais.margem_pct || 0).toFixed(2).replace(".", ",")}%`}
             </Text>
           </View>
         </View>
@@ -437,6 +482,27 @@ const styles = StyleSheet.create({
   tileHint: { fontSize: 11, color: colors.muted, marginTop: 2 },
   totalsRow: { flexDirection: "row", gap: spacing.sm },
   filterRow: { flexDirection: "row", marginTop: spacing.md },
+  sitFilterRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: spacing.sm, marginBottom: spacing.xs },
+  sitChip: {
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface,
+  },
+  sitChipSel: { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary },
+  sitChipText: { fontSize: 12, color: colors.muted },
+  sitChipTextSel: { color: colors.brandPrimary, fontWeight: "600" },
+  margemCard: {
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md,
+    marginTop: spacing.sm, borderLeftWidth: 4, borderLeftColor: colors.brandPrimary,
+  },
+  margemIcon: {
+    width: 38, height: 38, borderRadius: 19, backgroundColor: colors.brandPrimary,
+    alignItems: "center", justifyContent: "center",
+  },
+  margemLabel: { fontSize: 13, fontWeight: "600", color: colors.onSurface },
+  margemHint: { fontSize: 11, color: colors.muted, marginTop: 1 },
+  margemValue: { fontSize: 17, fontWeight: "700", color: colors.brandPrimary },
+  margemPct: { fontSize: 12, fontWeight: "600", color: colors.success },
   totalCard: {
     flex: 1, backgroundColor: colors.surfaceSecondary,
     borderRadius: radius.md, padding: spacing.md,
