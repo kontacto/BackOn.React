@@ -1480,34 +1480,37 @@ def _list_descontos_sync(servidor: str, banco: str, pedido: int) -> dict:
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            "SELECT d.COD_AUTO_DESCONTOS_CONCEDIDOS AS cod, d.TIPO_DESCONTO, d.CODIGO_PRODUTO, "
-            "       d.PERCENTUAL, d.VALOR, d.USUARIO, "
-            "       i.qtd_pedida, i.produto, "
-            "       pe.descricao AS peca_desc, sv.descricao AS serv_desc "
-            "FROM descontos_concedidos d "
-            "LEFT JOIN pedido_venda_prod i ON i.codauto = d.CODIGO_PRODUTO "
+            "SELECT i.codauto, i.produto, i.qtd_pedida, i.p_normal, i.desconto, "
+            "       pe.descricao AS peca_desc, sv.descricao AS serv_desc, "
+            "       d.PERCENTUAL, d.USUARIO, d.TIPO_DESCONTO "
+            "FROM pedido_venda_prod i "
             "LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
             "LEFT JOIN servicos sv ON sv.codigo = i.produto "
-            "WHERE d.TIPO='PED' AND d.CODIGO=%s "
-            "ORDER BY d.COD_AUTO_DESCONTOS_CONCEDIDOS",
+            "LEFT JOIN descontos_concedidos d ON d.TIPO='PED' AND d.CODIGO=i.pedido AND d.CODIGO_PRODUTO=i.codauto "
+            "WHERE i.pedido=%s AND ISNULL(i.item_cancelado,0)=0 AND ISNULL(i.desconto,0) > 0 "
+            "ORDER BY i.codauto",
             (pedido,),
         )
         items = []
         total = 0.0
         for r in cur.fetchall():
-            tipo_d = (r.get("TIPO_DESCONTO") or "").strip().upper()
+            tipo_d = (r.get("TIPO_DESCONTO") or "I").strip().upper() or "I"
             qtd = float(r.get("qtd_pedida") or 0)
-            valor_unit = float(r.get("VALOR") or 0)
-            # VALOR é sempre UNITÁRIO (item 'I' e geral 'G' distribuído por item) → multiplica pela qtd
+            valor_unit = float(r.get("desconto") or 0)
+            p_normal = float(r.get("p_normal") or 0)
             valor_total = round(valor_unit * qtd, 2)
             total += valor_total
-            desc = (r.get("peca_desc") or r.get("serv_desc") or r.get("produto") or "Desconto geral")
+            # % do log, ou calcula a partir do valor/p_normal
+            pct = float(r.get("PERCENTUAL") or 0)
+            if pct <= 0 and p_normal > 0:
+                pct = round(valor_unit / p_normal * 100, 2)
+            desc = (r.get("peca_desc") or r.get("serv_desc") or r.get("produto") or "Item")
             items.append({
-                "cod": int(r["cod"]),
+                "cod": int(r["codauto"]),
                 "tipo_desconto": tipo_d,
-                "tipo_label": "Item" if tipo_d == "I" else ("Geral" if tipo_d == "G" else tipo_d),
+                "tipo_label": "Geral" if tipo_d == "G" else "Item",
                 "descricao": (desc or "").strip(),
-                "percentual": float(r.get("PERCENTUAL") or 0),
+                "percentual": pct,
                 "valor_unitario": valor_unit,
                 "qtd": qtd,
                 "valor_total": valor_total,
@@ -1578,7 +1581,7 @@ def _limite_por_funcao(lim: dict, funcao: int) -> float:
 class DescontoGeralRequest(BaseModel):
     servidor: str
     banco: str
-    percentual: float = 0          # % geral sobre o total (0 = remover)
+    valor: float = 0               # valor TOTAL do desconto geral em R$ (0 = remover)
     usuario_codigo: Optional[int] = -2
     funcao: Optional[int] = 1       # 1=gerente, 2=supervisor, 3=vendedor
 
@@ -1598,18 +1601,10 @@ def _aplicar_desconto_geral_sync(req: DescontoGeralRequest, pedido: int) -> dict
             conn.close()
             return {"success": False, "message": f"Pedido '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterado."}
 
-        pct = float(req.percentual or 0)
-        if pct < 0:
+        valor = float(req.valor or 0)
+        if valor < 0:
             conn.close()
-            return {"success": False, "message": "Percentual inválido."}
-
-        # valida limite por função (somente ao aplicar desconto > 0)
-        if pct > 0:
-            lim = _get_limites_sync(req.servidor, req.banco)
-            limite = _limite_por_funcao(lim, int(req.funcao or 1))
-            if limite > 0 and pct > limite + 1e-6:
-                conn.close()
-                return {"success": False, "message": f"Desconto acima do limite permitido ({limite:g}%) para sua função."}
+            return {"success": False, "message": "Valor inválido."}
 
         # busca todos os itens do pedido
         cur.execute(
@@ -1622,12 +1617,31 @@ def _aplicar_desconto_geral_sync(req: DescontoGeralRequest, pedido: int) -> dict
             conn.close()
             return {"success": False, "message": "Pedido sem itens para aplicar desconto."}
 
+        # base = soma dos itens a preço cheio (p_normal * qtd)
+        base = sum(float(it.get("p_normal") or 0) * float(it.get("qtd_pedida") or 0) for it in itens)
+        if valor > 0 and base <= 0:
+            conn.close()
+            return {"success": False, "message": "Itens sem valor para distribuir o desconto."}
+
+        # valida limite por função pelo % equivalente
+        pct_efetivo = round(valor / base * 100, 4) if base > 0 else 0
+        if valor > 0:
+            lim = _get_limites_sync(req.servidor, req.banco)
+            limite = _limite_por_funcao(lim, int(req.funcao or 1))
+            if limite > 0 and pct_efetivo > limite + 1e-6:
+                conn.close()
+                return {"success": False, "message": f"Desconto ({pct_efetivo:g}%) acima do limite ({limite:g}%) para sua função."}
+            if valor > base + 1e-6:
+                conn.close()
+                return {"success": False, "message": "Desconto maior que o total dos itens."}
+
         usuario = int(req.usuario_codigo if req.usuario_codigo is not None else -2)
         for it in itens:
             codauto = int(it["codauto"])
             p_normal = float(it.get("p_normal") or 0)
             acr = float(it.get("acrescimo") or 0)
-            desconto_unit = round(p_normal * pct / 100.0, 2)
+            # distribui proporcionalmente ao peso do item (p_normal) → desconto UNITÁRIO
+            desconto_unit = round(valor * p_normal / base, 2) if (valor > 0 and base > 0) else 0.0
             p_venda = round(p_normal - desconto_unit + acr, 4)
             cur.execute(
                 "UPDATE pedido_venda_prod SET desconto=%s, p_venda=%s, "
@@ -1639,18 +1653,19 @@ def _aplicar_desconto_geral_sync(req: DescontoGeralRequest, pedido: int) -> dict
                 "DELETE FROM descontos_concedidos WHERE TIPO='PED' AND CODIGO=%s AND CODIGO_PRODUTO=%s",
                 (pedido, codauto),
             )
-            if pct > 0:
+            if valor > 0 and desconto_unit > 0:
+                pct_item = round(desconto_unit / p_normal * 100, 2) if p_normal > 0 else 0
                 cur.execute(
                     "INSERT INTO descontos_concedidos "
                     "(TIPO, CODIGO, CODIGO_PRODUTO, PERCENTUAL, VALOR, USUARIO, TIPO_DESCONTO) "
                     "VALUES ('PED', %s, %s, %s, %s, %s, 'G')",
-                    (pedido, codauto, pct, desconto_unit, usuario),
+                    (pedido, codauto, pct_item, desconto_unit, usuario),
                 )
         novo_total = _recalc_pedido_total(cur, pedido)
         conn.commit()
         cur.close()
         conn.close()
-        return {"success": True, "total": novo_total, "percentual": pct}
+        return {"success": True, "total": novo_total, "valor": valor, "percentual": pct_efetivo}
     except Exception as e:
         try:
             conn.rollback(); conn.close()

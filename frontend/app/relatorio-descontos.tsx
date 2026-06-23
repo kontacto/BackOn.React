@@ -85,15 +85,17 @@ export default function RelatorioDescontosScreen() {
     })();
   }, [router]);
 
-  const buscar = useCallback(async () => {
+  const buscar = useCallback(async (override?: { di?: string; df?: string }) => {
     if (!conn) return;
-    if (!dataIni || !dataFim) { setError("Informe o período."); return; }
+    const di = override?.di ?? dataIni;
+    const df = override?.df ?? dataFim;
+    if (!di || !df) { setError("Informe o período."); return; }
     setLoading(true);
     setError(null);
     try {
       const base = conn.api.replace(/\/+$/, "");
       let url = `${base}/api/relatorios/descontos-margem?servidor=${encodeURIComponent(conn.servidor)}` +
-        `&banco=${encodeURIComponent(conn.banco)}&data_ini=${dataIni}&data_fim=${dataFim}`;
+        `&banco=${encodeURIComponent(conn.banco)}&data_ini=${di}&data_fim=${df}`;
       if (vendedor) url += `&vendedor=${encodeURIComponent(String(vendedor))}`;
       const pf = parseInt(pedidoFiltro, 10);
       if (Number.isFinite(pf) && pf > 0) url += `&pedido=${pf}`;
@@ -114,12 +116,12 @@ export default function RelatorioDescontosScreen() {
     }
   }, [conn, dataIni, dataFim, vendedor, pedidoFiltro]);
 
-  // busca automática quando vier de um pedido específico
+  // busca automática quando vier de um pedido específico (usa range amplo, sem depender do state)
   useEffect(() => {
     if (conn && pedidoParam) {
       setDataIni("2000-01-01");
       setDataFim("2100-12-31");
-      setTimeout(buscar, 0);
+      buscar({ di: "2000-01-01", df: "2100-12-31" });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conn]);

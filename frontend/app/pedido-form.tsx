@@ -154,7 +154,7 @@ export default function PedidoFormScreen() {
   // Desconto geral sobre o total
   const [funcaoCod, setFuncaoCod] = useState<number>(1); // 1=gerente,2=supervisor,3=vendedor
   const [geralModalOpen, setGeralModalOpen] = useState(false);
-  const [geralPct, setGeralPct] = useState("");
+  const [geralValor, setGeralValor] = useState("");
   const [geralAtual, setGeralAtual] = useState(0);
   const [geralLimite, setGeralLimite] = useState(100);
   const [geralSaving, setGeralSaving] = useState(false);
@@ -210,7 +210,12 @@ export default function PedidoFormScreen() {
             fetch(`${base}/api/area-atuacao?${qs}`).then((r) => r.json()).catch(() => null),
             fetch(`${base}/api/funcionarios?${qs}`).then((r) => r.json()).catch(() => null),
           ]);
-          if (ra?.success) setAreas(ra.items || []);
+          if (ra?.success) {
+            const arr = ra.items || [];
+            setAreas(arr);
+            // se houver apenas 1 área de atuação, seleciona automaticamente
+            if (arr.length === 1) setAreaAtuacao((prev) => (prev == null ? arr[0].codigo : prev));
+          }
           if (rf?.success) setFuncionarios(rf.items || []);
         } catch {
           // silencioso — combobox vazio
@@ -488,16 +493,21 @@ export default function PedidoFormScreen() {
         const lim = funcaoCod === 2 ? rl.supervisor : funcaoCod === 3 ? rl.vendedor : rl.gerente;
         setGeralLimite(Number(lim) || 100);
       }
-      const gRow = (rd?.items || []).find((d: DescontoRow) => d.tipo_desconto === "G");
-      const atual = gRow ? Number(gRow.percentual) : 0;
+      const gRows = (rd?.items || []).filter((d: DescontoRow) => d.tipo_desconto === "G");
+      const atual = gRows.reduce((s: number, d: DescontoRow) => s + (d.valor_total || 0), 0);
       setGeralAtual(atual);
-      setGeralPct(atual > 0 ? fmtNum(atual) : "");
+      setGeralValor(atual > 0 ? fmtNum(atual) : "");
     } catch {
       // silencioso
     }
   };
 
-  const submitGeral = async (pct: number) => {
+  const baseGeral = useMemo(
+    () => itens.reduce((s, it) => s + (it.p_normal || 0) * (it.qtd || 0), 0),
+    [itens]
+  );
+
+  const submitGeral = async (valor: number) => {
     if (!conn || !pedidoId) return;
     setGeralSaving(true);
     try {
@@ -507,15 +517,15 @@ export default function PedidoFormScreen() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           servidor: conn.servidor, banco: conn.banco,
-          percentual: pct, usuario_codigo: usuarioCod, funcao: funcaoCod,
+          valor, usuario_codigo: usuarioCod, funcao: funcaoCod,
         }),
       });
       const j = await r.json();
       if (!j?.success) { showToast(j?.message || "Falha no desconto geral.", "error"); }
       else {
-        setGeralAtual(pct);
+        setGeralAtual(valor);
         setGeralModalOpen(false);
-        showToast(pct > 0 ? "Desconto geral aplicado." : "Desconto geral removido.", "success");
+        showToast(valor > 0 ? "Desconto geral aplicado." : "Desconto geral removido.", "success");
         loadItens();
       }
     } catch (e) {
@@ -524,10 +534,15 @@ export default function PedidoFormScreen() {
   };
 
   const handleApplyGeral = () => {
-    const pct = parseNum(geralPct);
-    if (pct <= 0) { showToast("Informe um percentual maior que zero.", "error"); return; }
-    if (pct > geralLimite + 1e-6) { showToast(`Máximo permitido: ${fmtNum(geralLimite)}%.`, "error"); return; }
-    submitGeral(pct);
+    const valor = parseNum(geralValor);
+    if (valor <= 0) { showToast("Informe um valor maior que zero.", "error"); return; }
+    if (valor > baseGeral + 1e-6) { showToast("Desconto maior que o total dos itens.", "error"); return; }
+    const pctEf = baseGeral > 0 ? (valor / baseGeral) * 100 : 0;
+    if (pctEf > geralLimite + 1e-6) {
+      showToast(`Desconto (${pctEf.toFixed(1)}%) acima do limite (${fmtNum(geralLimite)}%) da sua função.`, "error");
+      return;
+    }
+    submitGeral(valor);
   };
 
 
@@ -752,7 +767,7 @@ export default function PedidoFormScreen() {
 
           {/* Itens do Pedido */}
           <View style={styles.itensHeader}>
-            <Text style={[styles.sectionTitle, { marginTop: spacing.lg }]}>
+            <Text style={styles.sectionTitle}>
               Itens do Pedido {itens.length ? `(${itens.length})` : ""}
             </Text>
             {editing && isAberto ? (
@@ -818,7 +833,7 @@ export default function PedidoFormScreen() {
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                     <Ionicons name="cash-outline" size={16} color={colors.brandPrimary} />
                     <Text style={styles.geralBtnLabel}>
-                      Desconto geral{geralAtual > 0 ? ` (${fmtNum(geralAtual)}%)` : ""}
+                      Desconto geral{geralAtual > 0 ? ` (${formatBRL(geralAtual)})` : ""}
                     </Text>
                   </View>
                   <Ionicons name="chevron-forward" size={16} color={colors.brandPrimary} />
@@ -1208,19 +1223,24 @@ export default function PedidoFormScreen() {
               <View style={styles.itensHint}>
                 <Ionicons name="information-circle-outline" size={18} color={colors.muted} />
                 <Text style={styles.itensHintText}>
-                  Aplica o percentual proporcionalmente a todos os itens e substitui descontos por item. Limite da sua função: {fmtNum(geralLimite)}%.
+                  Informe o valor do desconto em R$ — será distribuído proporcionalmente entre os itens e substitui descontos por item. Limite da sua função: {fmtNum(geralLimite)}%.
                 </Text>
               </View>
-              <Text style={styles.fieldLabel}>Percentual (%)</Text>
+              <Text style={styles.fieldLabel}>Valor do desconto (R$)</Text>
               <TextInput
-                value={geralPct}
-                onChangeText={setGeralPct}
+                value={geralValor}
+                onChangeText={setGeralValor}
                 keyboardType="decimal-pad"
-                placeholder="0"
+                placeholder="0,00"
                 placeholderTextColor={colors.muted}
                 style={styles.input}
-                testID="pedido-form-geral-pct"
+                testID="pedido-form-geral-valor"
               />
+              {parseNum(geralValor) > 0 && baseGeral > 0 ? (
+                <Text style={styles.geralEquiv}>
+                  Equivale a {((parseNum(geralValor) / baseGeral) * 100).toFixed(1)}% do total dos itens ({formatBRL(baseGeral)}).
+                </Text>
+              ) : null}
               <View style={styles.modalBtns}>
                 {geralAtual > 0 ? (
                   <TouchableOpacity
@@ -1453,11 +1473,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   toastText: { color: colors.onBrandPrimary, fontSize: 14, fontWeight: "500", textAlign: "center" },
-  itensHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  itensHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.lg, marginBottom: spacing.sm },
   addItemBtn: {
     flexDirection: "row", alignItems: "center", gap: 4,
     backgroundColor: colors.brandPrimary, paddingHorizontal: spacing.md, paddingVertical: 7,
-    borderRadius: radius.pill, marginTop: spacing.lg,
+    borderRadius: radius.pill,
   },
   addItemBtnText: { color: colors.onBrandPrimary, fontWeight: "500", fontSize: 13 },
   itensHint: {
@@ -1498,6 +1518,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brandTertiary, borderWidth: 1, borderColor: colors.border,
   },
   geralBtnLabel: { fontSize: 13, color: colors.brandPrimary, fontWeight: "500" },
+  geralEquiv: { fontSize: 12, color: colors.muted, marginTop: -2 },
   deleteBtnWide: {
     paddingHorizontal: spacing.lg, borderRadius: radius.pill, paddingVertical: 13,
     alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.error,
