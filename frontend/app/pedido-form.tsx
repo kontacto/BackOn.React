@@ -192,9 +192,9 @@ export default function PedidoFormScreen() {
       const fnome = (s?.funcionario?.nome_guerra || s?.funcionario?.nome || "") as string;
       setVendedorNome(fnome);
 
-      // Quem pode alterar o vendedor: cod_funcao 01 ou 02
+      // Quem pode alterar o vendedor: master (KONTACTO) ou cod_funcao 01/02 (gerente/supervisor)
       const codFuncao = String(s?.funcionario?.cod_funcao || "").trim().padStart(2, "0");
-      setVendedorCanEdit(VENDEDOR_EDIT_FUNCOES.includes(codFuncao));
+      setVendedorCanEdit(isMaster || VENDEDOR_EDIT_FUNCOES.includes(codFuncao));
 
       // Pré-seleciona cliente vindo da rota
       if (!editing && params.cliente && params.cliente_nome) {

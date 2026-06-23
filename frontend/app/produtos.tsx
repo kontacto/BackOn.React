@@ -48,7 +48,13 @@ export default function ProdutosScreen() {
   const [selQtd, setSelQtd] = useState("1");
   const [selValor, setSelValor] = useState("0,00");
   const [selCompl, setSelCompl] = useState("");
+  const [selDesc, setSelDesc] = useState("");
+  const [selDescMode, setSelDescMode] = useState<"rs" | "pct">("pct");
   const [selSaving, setSelSaving] = useState(false);
+  // Permissão de desconto do usuário logado
+  const [funcaoCod, setFuncaoCod] = useState<number>(1); // 1=gerente,2=supervisor,3=vendedor
+  const [usuarioCod, setUsuarioCod] = useState<number>(-2);
+  const [descLimite, setDescLimite] = useState<number>(100); // % máximo permitido
   const [toast, setToast] = useState<string | null>(null);
   const [conn, setConn] = useState<Connection | null>(null);
   const [search, setSearch] = useState("");
@@ -66,6 +72,27 @@ export default function ProdutosScreen() {
       const conns = await listConnections();
       const c = conns.find((x) => x.empresa === s?.empresa) || null;
       setConn(c);
+      // Função/permissão de desconto do usuário logado
+      const isMaster = !!(s?.usuario as { master?: boolean } | undefined)?.master;
+      const cf = (s?.funcionario as { cod_funcao?: string } | undefined)?.cod_funcao;
+      const fc = cf ? parseInt(cf, 10) : NaN;
+      const funcao = isMaster ? 1 : Number.isFinite(fc) && fc > 0 ? fc : 1;
+      setFuncaoCod(funcao);
+      const vCod = s?.funcionario?.codigo_int;
+      setUsuarioCod(isMaster ? -2 : typeof vCod === "number" ? vCod : -2);
+      if (c) {
+        try {
+          const base = c.api.replace(/\/+$/, "");
+          const qs = `servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`;
+          const rl = await fetch(`${base}/api/controle/desconto-limites?${qs}`).then((r) => r.json());
+          if (rl?.success) {
+            const lim = funcao === 2 ? rl.supervisor : funcao === 3 ? rl.vendedor : rl.gerente;
+            setDescLimite(Number(lim) || 100);
+          }
+        } catch {
+          // mantém limite padrão
+        }
+      }
     })();
   }, []);
 
@@ -152,12 +179,33 @@ export default function ProdutosScreen() {
     setSelQtd("1");
     setSelValor(formatBRL(item.valor).replace("R$", "").trim());
     setSelCompl("");
+    setSelDesc("");
+    setSelDescMode("pct");
   };
 
   const addToOrder = async () => {
     if (!conn || !selectPedido || !selItem) return;
     const qtd = parseNum(selQtd);
     if (qtd <= 0) { showToast("Quantidade inválida."); return; }
+    const pNormal = parseNum(selValor);
+    // Calcula desconto unitário (R$) e % a partir do modo escolhido
+    let descRs = 0;
+    let descPct = 0;
+    const dVal = parseNum(selDesc);
+    if (dVal > 0 && pNormal > 0) {
+      if (selDescMode === "pct") {
+        descPct = dVal;
+        descRs = Math.round(((pNormal * dVal) / 100) * 100) / 100;
+      } else {
+        descRs = dVal;
+        descPct = Math.round((descRs / pNormal) * 10000) / 100;
+      }
+    }
+    // Valida limite por função
+    if (descPct > descLimite + 0.001) {
+      showToast(`Desconto acima do limite permitido (${descLimite}%).`);
+      return;
+    }
     setSelSaving(true);
     try {
       const base = conn.api.replace(/\/+$/, "");
@@ -168,7 +216,11 @@ export default function ProdutosScreen() {
           servidor: conn.servidor, banco: conn.banco,
           produto: selItem.codigo,
           qtd,
-          valor_unitario: parseNum(selValor),
+          valor_unitario: pNormal,
+          desconto: descRs,
+          desconto_pct: descPct,
+          usuario_codigo: usuarioCod,
+          funcao: funcaoCod,
           complemento: selCompl,
         }),
       });
@@ -363,9 +415,47 @@ export default function ProdutosScreen() {
                 </View>
                 <Text style={styles.fieldLabel}>Complemento (opcional)</Text>
                 <TextInput value={selCompl} onChangeText={setSelCompl} placeholder="Descrição complementar" placeholderTextColor={colors.muted} style={styles.modalInput} testID="produtos-add-compl" />
+
+                {/* Desconto com alternância R$ / % */}
+                <View style={styles.descHeader}>
+                  <Text style={styles.fieldLabel}>Desconto (máx. {descLimite}%)</Text>
+                  <View style={styles.modeToggle}>
+                    <TouchableOpacity
+                      onPress={() => setSelDescMode("pct")}
+                      style={[styles.modeBtn, selDescMode === "pct" && styles.modeBtnSel]}
+                      testID="produtos-add-desc-pct"
+                    >
+                      <Text style={[styles.modeBtnText, selDescMode === "pct" && styles.modeBtnTextSel]}>%</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => setSelDescMode("rs")}
+                      style={[styles.modeBtn, selDescMode === "rs" && styles.modeBtnSel]}
+                      testID="produtos-add-desc-rs"
+                    >
+                      <Text style={[styles.modeBtnText, selDescMode === "rs" && styles.modeBtnTextSel]}>R$</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                <TextInput
+                  value={selDesc}
+                  onChangeText={setSelDesc}
+                  keyboardType="decimal-pad"
+                  placeholder={selDescMode === "pct" ? "0 %" : "R$ 0,00"}
+                  placeholderTextColor={colors.muted}
+                  style={styles.modalInput}
+                  testID="produtos-add-desc"
+                />
+
                 <View style={styles.previewRow}>
                   <Text style={styles.fieldLabel}>Total do item</Text>
-                  <Text style={styles.cardValor}>{formatBRL(parseNum(selQtd) * parseNum(selValor))}</Text>
+                  <Text style={styles.cardValor}>
+                    {(() => {
+                      const pn = parseNum(selValor);
+                      const dv = parseNum(selDesc);
+                      const descRs = dv > 0 && pn > 0 ? (selDescMode === "pct" ? (pn * dv) / 100 : dv) : 0;
+                      return formatBRL(parseNum(selQtd) * Math.max(pn - descRs, 0));
+                    })()}
+                  </Text>
                 </View>
                 <Pressable
                   onPress={addToOrder}
@@ -509,6 +599,12 @@ const styles = StyleSheet.create({
     padding: spacing.md, borderWidth: 1, borderColor: colors.border,
   },
   qtdRow: { flexDirection: "row", gap: spacing.sm },
+  descHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  modeToggle: { flexDirection: "row", borderWidth: 1, borderColor: colors.border, borderRadius: 8, overflow: "hidden" },
+  modeBtn: { paddingHorizontal: 14, paddingVertical: 4, backgroundColor: colors.surface },
+  modeBtnSel: { backgroundColor: colors.brandPrimary },
+  modeBtnText: { fontSize: 13, fontWeight: "600", color: colors.muted },
+  modeBtnTextSel: { color: colors.onBrandPrimary },
   qtdInputRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   plusBtn: {
     width: 40, height: 40, borderRadius: radius.sm, backgroundColor: colors.brandPrimary,

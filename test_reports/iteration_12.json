@@ -1,0 +1,41 @@
+{
+  "summary": "Validados os 2 bugs da review_request (backend + frontend, mobile 390x844). BUG2 (combobox de vendedor no pedido-form para KONTACTO master): no /pedido-form do pedido #1, NÃO aparece o label '(sem permissão para alterar)' nem 'Vendedor não identificado'; o testID 'pedido-form-vendedor' é uma combobox EDITÁVEL — clicar abre o modal 'Selecionar Vendedor' listando 'CARLOS · #1 · CARLOS ALBERTO SILVA' e 'MARIA · #2 · MARIA SOUZA'; selecionar CARLOS persiste no campo. ✓ BUG1 (desconto no add-item via /produtos?pedido=1): clicar 'Adicionar' no pedido-form abre o modal interno; tocar 'pedido-form-open-produtos' navega para /produtos?pedido=1 (cabeçalho 'Adicionar ao Pedido #1'); tocar P001 Coca-Cola R$8,50 abre o modal 'Adicionar ao Pedido' contendo TODOS os campos esperados (testIDs presentes: produtos-add-qtd, produtos-add-valor, produtos-add-compl, produtos-add-desc, produtos-add-desc-pct, produtos-add-desc-rs, produtos-add-confirm); o label aparece como 'Desconto (máx. 30%)' — alinhado com o limite de gerente que o backend retorna para o usuário master KONTACTO; alternar para '%' e digitar 10 muda 'Total do item' de R$ 8,50 para R$ 7,65 (8,50 × 0,9) — desconto aplicado corretamente no preview. Confirmar 'Adicionar ao Pedido' grava o item no backend (POST /api/pedidos/1/itens com desconto=0.85, desconto_pct=10, usuario_codigo=-2, funcao=1 — retornado 200/success) e fecha o modal. Item de teste depois REMOVIDO (DELETE codauto=32) — pedido #1 voltou a R$ 54,50, estado original preservado. Backend pytest (8/8): /api/controle/desconto-limites devolve gerente/supervisor/vendedor; /api/funcionarios?ativos=true devolve lista populando o combobox; POST /api/pedidos/1/itens aceita o payload completo (desconto, desconto_pct, usuario_codigo, funcao, complemento), grava em pedido_venda_prod e em descontos_concedidos; /api/pedidos/1/descontos lista o desconto recém-criado (item 'Coca-Cola 600ml' aparece junto com o pré-existente Heineken); o total do pedido aumenta após o POST; DELETE limpa o item criado. Nenhum red screen, nenhum erro de console crítico.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter12_desconto_item.py",
+    "/app/test_reports/pytest/iter12_results.xml",
+    "/tmp/iter12_pedidoform.png (pedido-form #1 com Vendedor 'CARLOS · #1 · CARLOS ALBERTO SILVA' editável e SEM label de bloqueio)",
+    "/tmp/iter12_vend_open.png (modal 'Selecionar Vendedor' com CARLOS e MARIA listados — combobox funcional)",
+    "/tmp/iter12_produtos.png (/produtos?pedido=1 com header 'Adicionar ao Pedido #1' e cards de produtos)",
+    "/tmp/iter12_addmodal.png (modal 'Adicionar ao Pedido' com TODOS os campos incluindo 'Desconto (máx. 30%)' com toggle %/R$)",
+    "/tmp/iter12_addmodal_disc.png (Desconto 10% no modo % → Total do item: R$ 7,65)"
+  ],
+  "action_items": [
+    "Nenhuma ação obrigatória — ambos os bugs (BUG1 desconto no modal de adicionar item via /produtos; BUG2 combobox de vendedor para master) estão funcionando 100% conforme spec."
+  ],
+  "critical_code_review_comments": [
+    "produtos.tsx (636 linhas, ligeiramente acima do limite recomendado de 700 mas dentro): hidrata permissão de desconto no mount via getSession (isMaster ? funcao=1 / usuarioCod=-2 : usa cod_funcao do funcionário); busca /api/controle/desconto-limites e seleciona gerente/supervisor/vendedor por funcaoCod (linhas 69-97); modal renderiza Desconto (máx. {descLimite}%) + toggle pct/rs + input; calcula descRs/descPct corretamente (linhas 186-208); envia desconto, desconto_pct, usuario_codigo, funcao, complemento no POST (linhas 213-225). ✓",
+    "pedido-form.tsx (linha 196-197): vendedorCanEdit = isMaster || cod_funcao in ['01','02'] — KONTACTO master passa direto; remove o overlay 'sem permissão para alterar' e habilita o SelectField. testIDs pedido-form-vendedor-opt-{codigo} populados via vendedorOptionsWithGhost. ✓",
+    "Backend /api/pedidos/{pedido}/itens aceita req.desconto, req.desconto_pct e chama _log_desconto_item(...) gravando em descontos_concedidos (server.py linhas 1293-1358); /api/pedidos/{pedido}/descontos retorna lista filtrada por desconto>0 — frontend consome em análise. ✓",
+    "MENOR: o frontend valida limite (descPct > descLimite + 0.001) e mostra toast; mas o backend NÃO aplica essa validação no POST (testado: enviar funcao=3 com desconto_pct=99 retornou success). Para um sistema robusto, recomenda-se validar limite no servidor também — não bloqueante, mas vale registrar.",
+    "Observação UI: a chave do FlatList em pedidos.tsx gera 2 nós com testID='pedido-1' (um virtualizador escondido + o visível). Não afeta UX, mas requer .last() em scripts Playwright. Sugestão: usar keyExtractor que evite duplicação ou prefixar testID com index."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter12_desconto_item.py (novo: 8 testes pytest cobrindo limites/funcionários/POST com desconto/cleanup)"
+  ],
+  "success_rate": {
+    "backend": "100% (8/8 pytest: desconto-limites, funcionarios ativos, get pedido, add item com 10% pct, desconto aparece em /descontos, total subiu, delete cleanup, limite acima)",
+    "frontend": "100% (BUG2 vendedor combobox editável + opções CARLOS/MARIA + seleção persistente; BUG1 modal /produtos com todos os campos incluindo Desconto (máx. 30%) com toggle %/R$, total do item recalcula R$ 8,50 → R$ 7,65 com 10%, confirm salva e fecha modal)"
+  },
+  "seed_data_creation": "Item de teste TEST_iter12_desconto (codauto 32, P001 qtd=1 desconto R$0,85 / 10%) foi criado durante o fluxo UI e DEPOIS REMOVIDO via DELETE — pedido #1 voltou ao estado original (total R$ 54,50). Conexão BARESTEL recriada no AsyncStorage durante o run Playwright.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Login flow: connection-new (BARESTEL/gibanweb/BDREACTAPP/https://cliente-crud.preview.emergentagent.com) → connections-back-button → login KONTACTO/$KONT2011 (até 6 tentativas para Azure 40613). testIDs-chave desta iteração — BUG2: 'pedido-form-vendedor' (SelectField), 'pedido-form-vendedor-opt-{codigo}' (opções no modal de seleção). BUG1: rota /produtos?pedido=1 com 'item-P-{codigo}' (ex.: item-P-P001); modal de adicionar tem 'produtos-add-qtd', 'produtos-add-qtd-plus', 'produtos-add-valor', 'produtos-add-compl', 'produtos-add-desc', 'produtos-add-desc-pct', 'produtos-add-desc-rs', 'produtos-add-confirm'; o desconto-limite vem de GET /api/controle/desconto-limites e o label do modal exibe 'Desconto (máx. X%)'. Para KONTACTO master, X=30 (limite gerente). Fluxo: pedido-form-add-item abre modal interno → pedido-form-open-produtos navega para /produtos. ATENÇÃO: o FlatList de pedidos.tsx renderiza 2 nós com mesmo testID 'pedido-{id}' (virtualizador escondido + visível) — use locator.last() em Playwright. Limite-desconto NÃO é validado no backend POST (somente frontend) — registrar se isso for crítico.",
+  "rca_of_issue": "N/A — nenhum bug. Ambas as correções (BUG1 modal de adicionar item ganhou desconto com toggle %/R$ + validação de limite por função; BUG2 vendedorCanEdit aceita master OU cod_funcao 01/02) implementadas corretamente pelo main agent E1."
+}
