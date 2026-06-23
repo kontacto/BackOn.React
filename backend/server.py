@@ -1288,6 +1288,31 @@ class ItemSaveRequest(BaseModel):
     desconto_pct: Optional[float] = 0      # % informado (0 se foi em R$) — só para o log
     acrescimo: Optional[float] = 0         # acréscimo UNITÁRIO em R$
     usuario_codigo: Optional[int] = -2     # -2 = KONTACTO (master)
+    funcao: Optional[int] = None           # 1=gerente,2=supervisor,3=vendedor (p/ validar limite)
+
+
+def _validar_limite_desconto(cur, funcao: Optional[int], usuario_codigo: Optional[int],
+                             p_normal: float, desc: float, desc_pct: float) -> Optional[str]:
+    """Valida o desconto contra o limite da função (tabela controle). Retorna mensagem de erro
+    se exceder, ou None se OK. Master (usuario_codigo == -2) sempre passa."""
+    if (usuario_codigo if usuario_codigo is not None else -2) == -2:
+        return None  # master ignora limite
+    pct = float(desc_pct or 0)
+    if pct <= 0 and p_normal > 0 and desc > 0:
+        pct = desc / p_normal * 100
+    if pct <= 0 or not funcao:
+        return None
+    cur.execute(
+        "SELECT TOP 1 desconto_pdv_gerente, desconto_pdv_supervisor, desconto_pdv_vendedor FROM controle"
+    )
+    r = cur.fetchone() or {}
+    col = {1: "desconto_pdv_gerente", 2: "desconto_pdv_supervisor", 3: "desconto_pdv_vendedor"}.get(int(funcao))
+    if not col:
+        return None
+    lim = float(r.get(col) or 100)
+    if pct > lim + 0.001:
+        return f"Desconto {pct:.2f}% acima do limite permitido para a função ({lim:.0f}%)."
+    return None
 
 
 def _log_desconto_item(cur, pedido: int, codauto: int, perc: float, valor_unit: float, usuario: int):
@@ -1344,6 +1369,11 @@ def _add_item_sync(req: ItemSaveRequest, pedido: int) -> dict:
         complemento = (req.complemento or "").strip()
         unidade = prod["unidade"]
         custo = float(prod.get("custo") or 0)  # pecas.custo_reposicao no momento da venda
+        # Defesa em profundidade: valida limite de desconto por função (master ignora)
+        lim_err = _validar_limite_desconto(cur, req.funcao, req.usuario_codigo, p_normal, desc, float(req.desconto_pct or 0))
+        if lim_err:
+            conn.close()
+            return {"success": False, "message": lim_err}
 
         cur.execute(
             "INSERT INTO pedido_venda_prod "
@@ -1392,6 +1422,11 @@ def _update_item_sync(req: ItemSaveRequest, pedido: int, codauto: int) -> dict:
         p_normal = float(req.valor_unitario or 0)
         desc = float(req.desconto or 0)
         acr = float(req.acrescimo or 0)
+        # Defesa em profundidade: valida limite de desconto por função (master ignora)
+        lim_err = _validar_limite_desconto(cur, req.funcao, req.usuario_codigo, p_normal, desc, float(req.desconto_pct or 0))
+        if lim_err:
+            conn.close()
+            return {"success": False, "message": lim_err}
         p_venda = round(p_normal - desc + acr, 4)  # preço líquido unitário
         complemento = (req.complemento or "").strip()
 

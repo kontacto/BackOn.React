@@ -383,6 +383,7 @@ export default function PedidoFormScreen() {
           desconto_pct: parseNum(addDescPct),
           acrescimo: acr,
           usuario_codigo: usuarioCod,
+          funcao: funcaoCod,
           complemento: addCompl,
         }),
       });
@@ -432,6 +433,7 @@ export default function PedidoFormScreen() {
           desconto_pct: parseNum(editDescPct),
           acrescimo: acr,
           usuario_codigo: usuarioCod,
+          funcao: funcaoCod,
         }),
       });
       const j = await r.json();
