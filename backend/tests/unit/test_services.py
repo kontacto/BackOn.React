@@ -6,11 +6,6 @@ helpers que recebem um cursor (testados com um cursor falso/queue).
 
 Executar: cd /app/backend && python -m pytest tests/test_unit_services.py -q
 """
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from services.clientes_service import (  # noqa: E402
     _valid_cpf, _valid_cnpj, _validate_cgc_cpf, _only_alnum_upper, _normalize_cgc,
 )

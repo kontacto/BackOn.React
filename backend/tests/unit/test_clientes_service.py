@@ -1,0 +1,103 @@
+"""Testes UNITÁRIOS do fluxo de gravação de cliente (_save_cliente_sync).
+
+As validações de domínio rodam ANTES de abrir conexão (sem banco). O caminho de
+INSERT é testado com conexão/cursor falsos (monkeypatch em _open_conn e
+_get_col_sizes), validando o código retornado e as queries emitidas.
+"""
+import services.clientes_service as cs
+from models.schemas import ClienteSaveRequest, EnderecoInput, TelefoneInput
+
+
+def _req(**over):
+    base = dict(servidor="srv", banco="BDREACTAPP", nome="Cliente Teste",
+                cgc_cpf="", e_mail="", inscre="", tipo="", aceita_email=False, vendedor=3)
+    base.update(over)
+    return ClienteSaveRequest(**base)
+
+
+# ---- Cursor / conexão falsos ----
+class FakeCursor:
+    def __init__(self, one=None, rowcount=1):
+        self._one = list(one or [])
+        self.rowcount = rowcount
+        self.queries = []
+
+    def execute(self, q, p=None):
+        self.queries.append((q, p))
+
+    def fetchone(self):
+        return self._one.pop(0) if self._one else None
+
+    def close(self):
+        pass
+
+
+class FakeConn:
+    def __init__(self, cursor):
+        self._c = cursor
+        self.committed = False
+        self.rolled = False
+
+    def cursor(self, as_dict=False):
+        return self._c
+
+    def commit(self):
+        self.committed = True
+
+    def rollback(self):
+        self.rolled = True
+
+    def close(self):
+        pass
+
+
+def _patch(monkeypatch, cursor):
+    conn = FakeConn(cursor)
+    monkeypatch.setattr(cs, "_open_conn", lambda *a, **k: conn)
+    monkeypatch.setattr(cs, "_get_col_sizes", lambda *a, **k: {})
+    return conn
+
+
+class TestValidacoesSemBanco:
+    def test_nome_obrigatorio(self):
+        r = cs._save_cliente_sync(_req(nome="   "), None, [], None)
+        assert r["success"] is False and "Nome" in r["message"]
+
+    def test_nome_muito_longo(self):
+        r = cs._save_cliente_sync(_req(nome="N" * 61), None, [], None)
+        assert r["success"] is False and "60" in r["message"]
+
+    def test_cpf_invalido(self):
+        r = cs._save_cliente_sync(_req(cgc_cpf="11144477730"), None, [], None)
+        assert r["success"] is False and "CPF" in r["message"]
+
+    def test_maximo_3_telefones(self):
+        tels = [TelefoneInput(ddd="21", tel=f"9999000{i}") for i in range(4)]
+        r = cs._save_cliente_sync(_req(), None, tels, None)
+        assert r["success"] is False and "3" in r["message"]
+
+
+class TestInsertComMock:
+    def test_insert_retorna_codigo_e_commita(self, monkeypatch):
+        # INSERT cliente ... OUTPUT INSERTED.codigo → fetchone retorna [123]
+        cur = FakeCursor(one=[[123]])
+        conn = _patch(monkeypatch, cur)
+        r = cs._save_cliente_sync(
+            _req(cgc_cpf="11144477735"),
+            EnderecoInput(tipo=0, cep="20000000", endereco="Rua X", numero=10, uf="RJ"),
+            [TelefoneInput(ddd="21", tel="999990000", descricao="Cel")],
+            None,
+        )
+        assert r["success"] is True and r["codigo"] == 123
+        assert conn.committed is True
+        joined = " ".join(q[0].upper() for q in cur.queries)
+        assert "INSERT INTO CLIENTE" in joined
+        assert "CLIENTE_END" in joined and "CLIENTE_TEL" in joined
+
+    def test_update_cliente_inexistente(self, monkeypatch):
+        # UPDATE com rowcount 0 → cliente não encontrado, faz rollback
+        cur = FakeCursor(rowcount=0)
+        conn = _patch(monkeypatch, cur)
+        r = cs._save_cliente_sync(_req(nome="Novo Nome"), None, [], codigo=999)
+        assert r["success"] is False and "não encontrado" in r["message"].lower()
+        assert conn.rolled is True
