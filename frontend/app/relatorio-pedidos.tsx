@@ -237,9 +237,15 @@ export default function RelatorioPedidosScreen() {
                 <Text style={styles.tLabel}>Pedidos</Text>
                 <Text style={styles.tValue} testID="relpedidos-tot-pedidos">{totais.qtd_pedidos}</Text>
               </View>
+              <View style={[styles.tCard, { borderLeftColor: colors.brandSecondary || "#5a7bd8" }]}>
+                <Text style={styles.tLabel}>Total Prod/Serv</Text>
+                <Text style={[styles.tValue, { fontSize: 14 }]} testID="relpedidos-tot-total">
+                  {formatBRL((totais.produtos || 0) + (totais.servicos || 0))}
+                </Text>
+              </View>
               <View style={[styles.tCard, { borderLeftColor: colors.success }]}>
                 <Text style={styles.tLabel}>Margem média</Text>
-                <Text style={[styles.tValue, { fontSize: 15 }]} testID="relpedidos-tot-margem">{formatBRL(totais.margem)}</Text>
+                <Text style={[styles.tValue, { fontSize: 14 }]} testID="relpedidos-tot-margem">{formatBRL(totais.margem)}</Text>
                 <Text style={styles.tSub}>{(totais.margem_pct || 0).toFixed(2).replace(".", ",")}%</Text>
               </View>
             </View>

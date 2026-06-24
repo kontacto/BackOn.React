@@ -343,11 +343,10 @@ def _sql_login_sync(payload: LoginRequest) -> LoginResponse:
         if not usuario_row:
             cur.close()
             conn.close()
+            # Credencial inválida: NÃO expor dados de conexão/diagnóstico
             return LoginResponse(
                 success=False,
                 message=GENERIC_AUTH_ERROR,
-                error_step="query_usuarios",
-                attempted=attempted,
             )
 
         usuario_obj = _enrich_usuario(_to_json_safe(usuario_row))

@@ -1,0 +1,39 @@
+{
+  "summary": "Iteração 14 — Validados os 2 itens da rodada (mobile 390x844, backend pytest + UI Playwright). (1) BUG SEGURANÇA login: POST /api/login com credencial inválida (naoexiste/errada123) na conexão BARESTEL retorna agora APENAS {success:false, message:'Usuário ou senha inválidos.'} — todos os campos sensíveis (empresa, server, database, attempted, error_step, error_line, error_code_line, error_query, usuario, funcionario) vêm null. Na UI o banner testID 'login-error' mostra somente 'Usuário ou senha inválidos.'; testIDs 'login-error-attempted' (Conexão tentada) e 'login-error-origin' (Origem do erro) NÃO renderizam (visible=false); nenhum vazamento dos termos 'gibanweb', 'BDREACTAPP', 'suporte', 'SELECT', 'usuarios' aparece no texto. (2) Login VÁLIDO KONTACTO/$KONT2011 continua chegando ao Dashboard normalmente (testID 'principal-welcome' = 'Bem-vindo à BARESTEL', usuário '@KONTACTO Grupo: Master'). (3) FEATURE Relatório de Pedidos (rota /relatorio-pedidos): bloco 'Totais do período' (testID 'relpedidos-totais') agora exibe o novo card 'Total Prod/Serv' (testID 'relpedidos-tot-total') com R$ 54,50 (= Produtos 54,50 + Serviços 0,00). Demais cards conferem: Pedidos=1, Margem média R$ 24,39 (44,75%), Descontos R$ 2,40, Produtos R$ 54,50, Serviços R$ 0,00. Backend pytest 3/3 PASS em /app/test_reports/pytest/iter14_results.xml. Nenhum red screen; apenas warnings 'shadow* deprecated' já reportados em iters anteriores.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter14_login_security_relpedidos_total.py",
+    "/app/test_reports/pytest/iter14_results.xml",
+    "/tmp/iter14_login_invalid.png (banner mostra somente 'Usuário ou senha inválidos.', sem painel 'Conexão tentada' nem 'Origem do erro')",
+    "/tmp/iter14_dashboard.png (login válido KONTACTO chegou ao Dashboard com welcome 'Bem-vindo à BARESTEL')",
+    "/tmp/iter14_relatorio_totais.png (Relatório de Pedidos com bloco 'Totais do período' incluindo o card 'Total Prod/Serv' R$ 54,50)"
+  ],
+  "action_items": [
+    "Nenhuma ação obrigatória — ambos os itens (BUG de segurança no login e FEATURE 'Total Prod/Serv' no Relatório de Pedidos) estão 100% funcionais."
+  ],
+  "critical_code_review_comments": [
+    "server.py linhas 343-350: ramo 'usuario não encontrado em usuarios' retorna LoginResponse(success=False, message=GENERIC_AUTH_ERROR) SEM attempted/error_step/empresa/server/database — exatamente o esperado para não vazar dados de conexão. ✓",
+    "server.py linha 154: GENERIC_AUTH_ERROR = 'Usuário ou senha inválidos.' centralizado. ✓",
+    "login.tsx linhas 267-291 (login-error-attempted) e 292-330 (login-error-origin): renderização condicional a errorDetails?.attempted e errorDetails?.error_step|error_line. Como o backend agora envia esses campos como null/None nesse caso, os painéis não aparecem. ✓",
+    "relatorio-pedidos.tsx linhas 240-245: novo <View> com testID 'relpedidos-tot-total' soma totais.produtos + totais.servicos via formatBRL. Card posicionado entre 'Pedidos' e 'Margem média' na primeira linha do bloco. ✓",
+    "MENOR (não bloqueante): login.tsx tem 596 linhas — próximo do limite 700; principal.tsx e relatorio-pedidos.tsx também na faixa de 400-600 linhas. Considerar split em componentes em refatoração futura."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter14_login_security_relpedidos_total.py (novo: 3 testes pytest cobrindo login inválido sem vazamento + master válido + totais.produtos/servicos no relatório)"
+  ],
+  "success_rate": {
+    "backend": "100% (3/3 pytest: login inválido retorna apenas message genérica com todos os 9 campos sensíveis em null; master KONTACTO/$KONT2011 retorna success=true com usuario.master=true; /api/relatorios/pedidos retorna totais.produtos=54.5 + totais.servicos=0.0 (soma 54.5) + qtd_pedidos=1, margem 24.39/44.75%, desconto 2.40)",
+    "frontend": "100% (UI Playwright mobile 390x844: banner 'login-error' = somente 'Usuário ou senha inválidos.'; painéis 'login-error-attempted' e 'login-error-origin' is_visible=false; texto não contém termos sensíveis; login válido KONTACTO chega ao Dashboard; /relatorio-pedidos → bloco 'relpedidos-totais' contém todos os 6 cards incluindo o novo 'relpedidos-tot-total'=R$ 54,50)"
+  },
+  "seed_data_creation": "Nenhuma seed nova. Reutilizado pedido #1 (Aberto, 2026-06-24, TESTE CLIENTE 9DIG, CARLOS ALBERTO SILVA, total R$ 54,50, margem R$ 24,39 = 44,75%, desconto R$ 2,40 no item Heineken Long Neck 10%). Conexão BARESTEL/gibanweb/BDREACTAPP recriada no AsyncStorage durante o run Playwright (AsyncStorage zera entre runs).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "TestIDs-chave: login-error (sempre presente quando há erro), login-error-attempted e login-error-origin (NUNCA devem aparecer em caso de credencial inválida — visible=false). Para reproduzir UI do login: criar Conexão (connections-new-button → connection-{empresa,servidor,banco,api}-input → connection-save-button [scroll_into_view_if_needed antes do click — botão fica abaixo do viewport 844px]) → connections-back-button → login-{usuario,senha}-input + login-submit-button. Relatório de Pedidos: rota /relatorio-pedidos (acesso direto via page.goto), DateField default = primeiro dia do mês a hoje (01/06/2026 a 24/06/2026 nesta data); clicar 'relpedidos-buscar' (Gerar relatório); bloco 'relpedidos-totais' contém os cards 'relpedidos-tot-{pedidos,total,margem,descontos,produtos,servicos}'. O novo card é 'relpedidos-tot-total' (Total Prod/Serv = produtos+servicos, somado no front).",
+  "rca_of_issue": "N/A — nenhum bug nesta rodada. A correção de segurança no login (server.py removeu attempted/error_step do retorno quando o usuário+senha não bate na tabela) e a feature do card 'Total Prod/Serv' no Relatório de Pedidos (relatorio-pedidos.tsx soma totais.produtos+totais.servicos via formatBRL com testID 'relpedidos-tot-total') foram implementadas corretamente pelo main agent E1."
+}
