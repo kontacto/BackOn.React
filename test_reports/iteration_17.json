@@ -1,0 +1,45 @@
+{
+  "summary": "Iteração 17 — REGRESSÃO UI das duas telas componentizadas (Dashboard /principal e Relatório /relatorio-pedidos) após refatoração para hooks (useDashboard, useRelatorioPedidos) + componentes src/components/principal/* e src/components/relatorio/*. Backend pulado conforme review_request (já validado em iter16 26/26 PASS). Login KONTACTO/$KONT2011 (master) na empresa BARESTEL → /principal. DASHBOARD: principal-screen renderiza; principal-welcome exibe 'Bem-vindo à BARESTEL / KONTACTO Sistemas / @KONTACTO / Grupo: Master'; tiles principal-tile-clientes/produtos & serviços/pedidos visíveis e tappable; principal-vendedor-filter VISÍVEL para usuário master (✓ regra isManager); chips principal-sit-todos/A/F/PG/C todos renderizados. Cartões de totais (testID totals-pedidos=1, totals-produtos=R$ 54,50, totals-servicos=R$ 0,00) + card de margem (totals-margem=R$ 24,39, totals-margem-pct=44,75%, totals-descontos='Descontos concedidos: R$ 2,40') — RECONCILIAÇÃO IDÊNTICA ao iter15/iter16. Mudar filtro de situação dispara reload do dashboard (situacao=A → totals-pedidos=1; situacao=todos → 1). pedido-1 aparece na lista 'Pedidos de Hoje' (data 24/06/2026 coincide com today) e é clicável (data-testid='pedido-1'). RELATÓRIO: relatorio-pedidos-screen renderiza; DateField com valores default De=01/06/2026 (firstOfMonthISO) e Até=24/06/2026 (todayISO); SelectField vendedor opcional; chips situação (relpedidos-sit-todos/A/F/PG/C); botão relpedidos-buscar dispara busca e retorna relpedidos-totais com qtd_pedidos=1, total prod/serv R$ 54,50, margem média R$ 24,39 (44,75%), descontos R$ 2,40, produtos R$ 54,50, serviços R$ 0,00 — TODOS os 6 testIDs de totais OK. Lista 1 pedido(s); relpedidos-row-1 (#1, Aberto, TESTE CLIENTE 9DIG, 24/06/2026 · CARLOS ALBERTO SILVA, R$ 54,50) expandiu ao clicar → relpedidos-expand-1 exibiu Margem (Venda R$ 54,50, Desconto R$ 2,40, Custo R$ 30,11, Margem R$ 24,39 (44,75%)) + Descontos concedidos (Heineken Long Neck · Item · 10,00% · qtd 2 → - R$ 2,40). LOGOUT: principal-logout-button leva a /login com usuario-input vazio. NENHUM red screen, NENHUMA quebra de fluxo, contratos /api inalterados. Warnings shadow*/pointerEvents (react-native-web) persistem — não-bloqueantes, já documentados em iter16.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "vários (StyleSheet)", "issue": "Warning recorrente: 'shadow*' style props are deprecated. Use 'boxShadow'. Não-bloqueante. Já reportado em iter16."},
+      {"component": "vários (Pressable/Modal)", "issue": "Warning recorrente: props.pointerEvents is deprecated. Use style.pointerEvents. Não-bloqueante. Já reportado em iter16."}
+    ]
+  },
+  "test_report_links": [
+    "/tmp/iter17_dash.png (Dashboard pós-login master KONTACTO — welcome, tiles, vendedor filter, situação chips, totais reconciliados)",
+    "/tmp/iter17_dash_after.png (Dashboard após troca de filtro situação → reload OK)",
+    "/tmp/iter17_relfilters.png (Filtros do Relatório com data ini/fim default)",
+    "/tmp/iter17_reltotais.png (Totais do período + lista de 1 pedido)",
+    "/tmp/iter17_relexpand.png (Pedido #1 expandido com Margem + Descontos concedidos)",
+    "/tmp/iter17_login.png (Tela de login)"
+  ],
+  "action_items": [
+    "Nenhuma ação obrigatória. Componentização das duas telas (Dashboard e Relatório de Pedidos) preservou 100% do comportamento observável.",
+    "OPCIONAL (não-bloqueante, já listado em iter16): migrar StyleSheet shadow* → boxShadow e remover prop pointerEvents para silenciar warnings do react-native-web."
+  ],
+  "critical_code_review_comments": [
+    "app/(tabs)/principal.tsx (87 linhas) — virou apenas orquestrador: chama useDashboard() e compõe WelcomeHero, ModuleTiles, SelectField (vendedor), SituacaoFilter, TotalsCards, PedidosTable. Loading + redirect-to-login encapsulados antes do render. ✓ Refatoração limpa.",
+    "src/components/principal/useDashboard.ts — concentra session loading, isManager (master OU cod_funcao '01'/'02'), loadVendedores/loadEmpresa, loadDashboard com vendedorOverride/situacaoOverride, persistência de situação (getSituacaoPref/setSituacaoPref), useFocusEffect para re-carregar sessão. useEffect com [vendedorFiltro, situacaoFiltro] dispara reload. ✓ Side-effects bem isolados; eslint-disable react-hooks/exhaustive-deps justificado para evitar loop.",
+    "src/components/principal/PedidosTable.tsx — usa useRouter().push({pathname:'/pedido-form', params:{pedido:String(p.pedido)}}) para abrir pedido — ✓ correto.",
+    "src/components/principal/TotalsCards.tsx — todos os testIDs (totals-pedidos/produtos/servicos/margem/margem-pct/descontos) preservados; formatBRL e (margem_pct||0).toFixed(2).replace('.',',') idênticos ao código pré-refatoração.",
+    "app/relatorio-pedidos.tsx (62 linhas) — fluxo enxuto: hook useRelatorioPedidos() → Filtros + TotaisBox + PedidoCard.map. ✓",
+    "src/components/relatorio/useRelatorioPedidos.ts — buscar() limpa expandedId+analises antes de nova chamada (evita estado inconsistente); loadAnalise faz Promise.all de /api/relatorios/descontos-margem (pedido) + /api/pedidos/{pedido}/descontos; toggleExpand troca expandedId e dispara loadAnalise sob demanda apenas se analise[pedido] ainda não foi carregado. ✓ Lógica preservada.",
+    "src/components/relatorio/PedidoCard.tsx — chevron up/down condicionado a `open` ✓; uso de SIT_COLOR para colorir sitTag baseada em p.situacao; estado de loading/error/conteúdo (Margem grid + lista de Descontos) bem segregado.",
+    "MENOR: useDashboard exporta tanto o hook quanto types (DashboardTotals/DashboardPedido) — componentes do mesmo dir importam de './useDashboard' (ex: TotalsCards, PedidosTable). Acoplamento aceitável dentro do mesmo módulo. ✓"
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "Não testado nesta rodada (review_request: testing_type='frontend only(skip backend)'). Backend confirmado em iter16: 26/26 pytest PASS.",
+    "frontend": "100% — Dashboard (8/8 sub-elementos: screen, welcome, 3 tiles, vendedor-filter, 5 sit-chips, 6 totals testIDs, list, pedido-1 clicável) + filtro situação dispara reload + Relatório (screen, 5 sit-chips, vendedor select, 2 DateField, buscar, totais 6 testIDs, row-1, expand-1 com Margem+Descontos) + Logout → /login. Todos os testIDs documentados em iter16 continuam funcionando."
+  },
+  "seed_data_creation": "Nenhuma seed nova. Reutilizado pedido #1 (BARESTEL/BDREACTAPP, situação A, total R$ 54,50, margem R$ 24,39 = 44,75%, desconto R$ 2,40 em Heineken Long Neck 10% qtd 2).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Componentização Dashboard + Relatório validada SEM regressão. Estrutura: /app/frontend/app/(tabs)/principal.tsx + /app/frontend/src/components/principal/{WelcomeHero,ModuleTiles,SituacaoFilter,TotalsCards,PedidosTable,useDashboard,styles}.tsx|ts ; /app/frontend/app/relatorio-pedidos.tsx + /app/frontend/src/components/relatorio/{Filtros,TotaisBox,PedidoCard,useRelatorioPedidos,styles}.tsx|ts. Para semeação rápida da UI: localStorage.setItem('@back_on/connections', JSON.stringify([{empresa:'BARESTEL',servidor:'gibanweb.database.windows.net',banco:'BDREACTAPP',api:EXPO_BACKEND_URL}])). TestIDs principais permanecem: principal-screen, principal-welcome, principal-tile-{clientes|produtos & serviços|pedidos}, principal-vendedor-filter, principal-vendedor-select, principal-situacao-filter, principal-sit-{todos|A|F|PG|C}, principal-totals, totals-{pedidos|produtos|servicos|margem|margem-pct|descontos}, principal-pedidos-list, pedido-{N}, principal-pedidos-total, principal-logout-button; relatorio-pedidos-screen, relpedidos-{di|df|vendedor}, relpedidos-sit-{todos|A|F|PG|C}, relpedidos-buscar, relpedidos-totais, relpedidos-tot-{pedidos|total|margem|descontos|produtos|servicos}, relpedidos-row-{N}, relpedidos-expand-{N}, relpedidos-back, relpedidos-error. Observação de teste (NÃO É BUG): para colapsar o card no relatório, o clique tem que cair sobre a faixa do cabeçalho (Pressable interno) e não sobre a área do expand — minha 2ª click landed no expand e por isso o teste reportou 'expand still visible'. Verificado por análise de código: toggleExpand inverte corretamente expandedId.",
+  "rca_of_issue": "N/A — esta é regressão de refatoração. Toda a lógica (filtros, totais, lista, expandir/recolher) continua idêntica aos números semeados anteriormente (pedido #1: produtos R$ 54,50, margem R$ 24,39 / 44,75%, desconto R$ 2,40). Hooks centralizam estado/efeitos e componentes filhos recebem props imutáveis."
+}
