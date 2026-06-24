@@ -1666,26 +1666,28 @@ def _relatorio_pedidos_sync(servidor: str, banco: str, data_ini: str, data_fim: 
             tuple(params),
         )
         rows = cur.fetchall()
-        # Totais agregados (mesmos filtros) — venda líquida, desconto, custo, margem, produtos/serviços
+        # Totais por pedido (rateando produtos/serviços pelo pedido.total → bate com a lista)
         cur.execute(
-            "SELECT "
-            "  SUM(i.p_venda*i.qtd_pedida) AS venda, "
-            "  SUM(ISNULL(i.desconto,0)*i.qtd_pedida) AS desconto, "
-            "  SUM(COALESCE(NULLIF(pe.custo_reposicao,0), NULLIF(sv.custo_hora,0), NULLIF(i.custo_ped,0), 0) * i.qtd_pedida) AS custo, "
-            "  SUM(CASE WHEN pe.codigo_int IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS produtos, "
-            "  SUM(CASE WHEN sv.codigo IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS servicos "
+            "SELECT ISNULL(pv.total,0) AS total, "
+            "  ISNULL(ag.item_sum,0) AS item_sum, "
+            "  ISNULL(ag.serv_sum,0) AS serv_sum, "
+            "  ISNULL(ag.custo_sum,0) AS custo_sum, "
+            "  ISNULL(ag.desc_sum,0) AS desc_sum "
             "FROM pedido_venda pv "
-            "JOIN pedido_venda_prod i ON i.pedido = pv.pedido AND ISNULL(i.item_cancelado,0)=0 "
-            "LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
-            "LEFT JOIN servicos sv ON sv.codigo = i.produto "
+            "OUTER APPLY (SELECT "
+            "    SUM(i.p_venda*i.qtd_pedida) AS item_sum, "
+            "    SUM(CASE WHEN sv.codigo IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS serv_sum, "
+            "    SUM(COALESCE(NULLIF(pe.custo_reposicao,0), NULLIF(sv.custo_hora,0), NULLIF(i.custo_ped,0), 0) * i.qtd_pedida) AS custo_sum, "
+            "    SUM(ISNULL(i.desconto,0)*i.qtd_pedida) AS desc_sum "
+            "  FROM pedido_venda_prod i "
+            "  LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
+            "  LEFT JOIN servicos sv ON sv.codigo = i.produto "
+            "  WHERE i.pedido = pv.pedido AND ISNULL(i.item_cancelado,0)=0) ag "
             f"WHERE {' AND '.join(where)}",
             tuple(params),
         )
-        tr = cur.fetchone() or {}
+        agg = _ratear_totais_por_pedido(cur.fetchall())
         cur.close(); conn.close()
-        venda_t = float(tr.get("venda") or 0)
-        custo_t = float(tr.get("custo") or 0)
-        margem_t = round(venda_t - custo_t, 2)
         pedidos = []
         for r in rows:
             d = r.get("data")
@@ -1700,14 +1702,14 @@ def _relatorio_pedidos_sync(servidor: str, banco: str, data_ini: str, data_fim: 
                 "vendedor_nome": (r.get("vendedor_nome") or "").strip() or "—",
             })
         totais = {
-            "qtd_pedidos": len(rows),
-            "venda": round(venda_t, 2),
-            "desconto": round(float(tr.get("desconto") or 0), 2),
-            "custo": round(custo_t, 2),
-            "margem": margem_t,
-            "margem_pct": round((margem_t / venda_t * 100), 2) if venda_t > 0 else 0.0,
-            "produtos": round(float(tr.get("produtos") or 0), 2),
-            "servicos": round(float(tr.get("servicos") or 0), 2),
+            "qtd_pedidos": agg["qtd_pedidos"],
+            "venda": agg["venda"],
+            "desconto": agg["descontos"],
+            "custo": agg["custo"],
+            "margem": agg["margem"],
+            "margem_pct": agg["margem_pct"],
+            "produtos": agg["produtos"],
+            "servicos": agg["servicos"],
         }
         return {"success": True, "pedidos": pedidos, "totais": totais}
     except Exception as e:
@@ -2354,6 +2356,40 @@ async def update_cliente(codigo: int, req: ClienteCreateRequest):
 # =====================================================================
 # Dashboard — totais do dia + lista de pedidos do vendedor
 # =====================================================================
+def _ratear_totais_por_pedido(rows: list) -> dict:
+    """Recebe linhas por pedido (total = pedido_venda.total; item_sum/serv_sum/custo_sum/desc_sum
+    dos itens). Rateia produtos/serviços pelo pedido.total, garantindo que
+    produtos + serviços == Σ pedido.total (bate com a lista de pedidos). A margem usa
+    venda = Σ pedido.total (valor real do pedido) − custo de reposição dos itens."""
+    produtos = servicos = venda = custo = descontos = 0.0
+    qtd = 0
+    for r in rows:
+        qtd += 1
+        total = float(r.get("total") or 0)
+        item_sum = float(r.get("item_sum") or 0)
+        serv_sum = float(r.get("serv_sum") or 0)
+        venda += total
+        custo += float(r.get("custo_sum") or 0)
+        descontos += float(r.get("desc_sum") or 0)
+        if item_sum > 0:
+            sv = total * (serv_sum / item_sum)
+            servicos += sv
+            produtos += total - sv  # produtos + itens não classificados
+        else:
+            produtos += total
+    margem = round(venda - custo, 2)
+    return {
+        "qtd_pedidos": qtd,
+        "produtos": round(produtos, 2),
+        "servicos": round(servicos, 2),
+        "venda": round(venda, 2),
+        "custo": round(custo, 2),
+        "descontos": round(descontos, 2),
+        "margem": margem,
+        "margem_pct": round((margem / venda * 100), 2) if venda > 0 else 0.0,
+    }
+
+
 def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso: str,
                     situacao: Optional[str] = None) -> dict:
     """Totais e pedidos do dia (pedido_venda/pedido_venda_prod).
@@ -2375,40 +2411,34 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
             vfilter += " AND pv.situacao = %s"
             vparams.append(situacao)
 
-        # Quantidade de pedidos do dia
+        # Totais por pedido (rateando produtos/serviços pelo pedido.total → bate com a lista)
         cur.execute(
-            f"SELECT COUNT(*) AS qtd FROM pedido_venda pv "
-            f"WHERE CAST(pv.data AS DATE) = %s{vfilter}",
-            tuple([data_iso] + vparams),
-        )
-        qtd = int((cur.fetchone() or {}).get("qtd") or 0)
-
-        # Totais de produtos x serviços + venda/custo do dia (p/ margem)
-        cur.execute(
-            "SELECT "
-            "  SUM(CASE WHEN pe.codigo_int IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS prod, "
-            "  SUM(CASE WHEN sv.codigo IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS serv, "
-            "  SUM(i.p_venda*i.qtd_pedida) AS venda_total, "
-            "  SUM(ISNULL(i.desconto,0)*i.qtd_pedida) AS desconto_total, "
-            "  SUM(COALESCE(NULLIF(pe.custo_reposicao,0), NULLIF(sv.custo_hora,0), NULLIF(i.custo_ped,0), 0) * i.qtd_pedida) AS custo_total "
+            "SELECT ISNULL(pv.total,0) AS total, "
+            "  ISNULL(ag.item_sum,0) AS item_sum, "
+            "  ISNULL(ag.serv_sum,0) AS serv_sum, "
+            "  ISNULL(ag.custo_sum,0) AS custo_sum, "
+            "  ISNULL(ag.desc_sum,0) AS desc_sum "
             "FROM pedido_venda pv "
-            "JOIN pedido_venda_prod i ON i.pedido = pv.pedido AND ISNULL(i.item_cancelado,0)=0 "
-            "LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
-            "LEFT JOIN servicos sv ON sv.codigo = i.produto "
+            "OUTER APPLY (SELECT "
+            "    SUM(i.p_venda*i.qtd_pedida) AS item_sum, "
+            "    SUM(CASE WHEN sv.codigo IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS serv_sum, "
+            "    SUM(COALESCE(NULLIF(pe.custo_reposicao,0), NULLIF(sv.custo_hora,0), NULLIF(i.custo_ped,0), 0) * i.qtd_pedida) AS custo_sum, "
+            "    SUM(ISNULL(i.desconto,0)*i.qtd_pedida) AS desc_sum "
+            "  FROM pedido_venda_prod i "
+            "  LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
+            "  LEFT JOIN servicos sv ON sv.codigo = i.produto "
+            "  WHERE i.pedido = pv.pedido AND ISNULL(i.item_cancelado,0)=0) ag "
             f"WHERE CAST(pv.data AS DATE) = %s{vfilter}",
             tuple([data_iso] + vparams),
         )
-        tr = cur.fetchone() or {}
-        venda_total = float(tr.get("venda_total") or 0)
-        custo_total = float(tr.get("custo_total") or 0)
-        margem = round(venda_total - custo_total, 2)
+        agg = _ratear_totais_por_pedido(cur.fetchall())
         totais = {
-            "pedidos": qtd,
-            "produtos": float(tr.get("prod") or 0),
-            "servicos": float(tr.get("serv") or 0),
-            "descontos": round(float(tr.get("desconto_total") or 0), 2),
-            "margem": margem,
-            "margem_pct": round((margem / venda_total * 100), 2) if venda_total > 0 else 0.0,
+            "pedidos": agg["qtd_pedidos"],
+            "produtos": agg["produtos"],
+            "servicos": agg["servicos"],
+            "descontos": agg["descontos"],
+            "margem": agg["margem"],
+            "margem_pct": agg["margem_pct"],
         }
 
         # Lista de pedidos do dia

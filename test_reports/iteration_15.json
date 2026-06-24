@@ -1,0 +1,40 @@
+{
+  "summary": "Iteração 15 — BUG RECONCILIAÇÃO de totais (Produtos+Serviços vs Total da lista) — FIX VALIDADO em backend (pytest 6/6) e UI (Playwright mobile 390x844). (1) DASHBOARD (/api/dashboard/me): com situação 'Todos' e 'Aberto' (pedido #1, data 2026-06-24), Produtos+Serviços (54,50+0,00=R$54,50) bate EXATAMENTE com o Total da lista 'Pedidos de Hoje' (R$54,50). Margem R$24,39 (44,75%) e Descontos R$2,40 conferem. Filtro 'Fechado' esvazia (0 pedidos, R$0,00). (2) RELATÓRIO DE PEDIDOS (/api/relatorios/pedidos) com período amplo (2000-2100): 'Total Prod/Serv' (relpedidos-tot-total) = R$54,50 = Produtos (R$54,50) + Serviços (R$0,00) = soma da lista; Pedidos=1; Margem R$24,39 (44,75%); Descontos R$2,40. Filtro 'Fechado' retorna 'Nenhum pedido no período/filtros.' (correto). (3) Expansão do pedido #1 continua exibindo Margem + Descontos concedidos (Heineken Long Neck −R$2,40). (4) _ratear_totais_por_pedido (server.py:2359) garante produtos+servicos == Σ pedido_venda.total via peso por p_venda dos itens — algoritmo correto: quando item_sum>0 → serv=total*(serv_sum/item_sum), prod=total-serv; quando 0 itens → prod=total. Margem usa venda=Σ pedido.total (valor real, não recalculado dos itens). Nenhum vazamento ou red screen detectado.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter15_reconciliacao_totais.py",
+    "/app/test_reports/pytest/iter15_results.xml",
+    "/tmp/iter15_dashboard.png (Produtos R$54,50 + Serviços R$0,00 = Total da lista R$54,50)",
+    "/tmp/iter15_relatorio.png (Totais do período: Total Prod/Serv R$54,50 = Produtos+Serviços; Pedidos=1; Margem R$24,39/44,75%; Descontos R$2,40)",
+    "/tmp/iter15_relatorio_expand.png (pedido #1 expandido: Margem R$24,39 (44,75%) + Descontos concedidos Heineken Long Neck −R$2,40)"
+  ],
+  "action_items": [
+    "Nenhuma ação obrigatória — bug de reconciliação dos totais corrigido com sucesso. _ratear_totais_por_pedido funciona corretamente em ambos os fluxos (Dashboard e Relatório de Pedidos)."
+  ],
+  "critical_code_review_comments": [
+    "server.py:2359-2390 _ratear_totais_por_pedido — algoritmo matematicamente correto: para cada pedido com itens (item_sum>0), serv_sum/item_sum é o peso dos serviços dentro do total faturado dos itens; multiplicar pelo pedido.total e subtrair de total dá produtos. Quando item_sum=0 (sem itens), produtos=total (default). Garante Σ produtos + Σ servicos == Σ pedido.total.",
+    "server.py:2415-2433 _dashboard_sync e server.py:1670-1689 _relatorio_pedidos_sync — ambos usam a mesma query OUTER APPLY + _ratear_totais_por_pedido, mantendo consistência entre Dashboard e Relatório.",
+    "principal.tsx:387-394 testIDs totals-produtos / totals-servicos exibem os valores rateados; principal.tsx:461-466 testID principal-pedidos-total soma pedidos.valor (= pedido.total). Coincidem pela construção do backend.",
+    "relatorio-pedidos.tsx:242 testID relpedidos-tot-total = formatBRL(totais.produtos + totais.servicos) — soma feita no front, mas como backend já garantiu reconciliação, é equivalente a Σ pedido.total.",
+    "MENOR: server.py tem 2536 linhas (acima do limite 700). Já reportado em iters anteriores — refatoração pendente em rodada futura.",
+    "MENOR: principal.tsx 589 linhas e relatorio-pedidos.tsx ~600 linhas — também próximos do limite. Refatoração futura."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter15_reconciliacao_totais.py (novo: 6 pytest cobrindo reconciliação Dashboard e Relatório de Pedidos com filtros Todos/Aberto/Fechado)"
+  ],
+  "success_rate": {
+    "backend": "100% (6/6 pytest PASS: dashboard_situacao_todos/aberto/fechado_vazio + relatorio periodo_amplo/situacao_aberto/situacao_fechado_vazio — todos validam que produtos+servicos == soma_lista; valores numéricos conferem com cenário pedido #1)",
+    "frontend": "100% (UI Playwright mobile 390x844 — Dashboard: Produtos R$54,50 + Serviços R$0,00 = Total da lista R$54,50 ✓ Margem R$24,39 (44,75%) ✓ Descontos R$2,40 ✓; Filtros Aberto/Fechado funcionam; Relatório de Pedidos: Total Prod/Serv R$54,50 = Produtos+Serviços ✓ todos os cards conferem; expansão do pedido #1 mostra Margem + Descontos)"
+  },
+  "seed_data_creation": "Nenhuma seed nova. Cenário usado: pedido #1 (BARESTEL/BDREACTAPP, data 2026-06-24, situação A=Aberto, cliente TESTE CLIENTE 9DIG, vendedor CARLOS ALBERTO SILVA, total R$54,50, custo R$30,11, margem R$24,39=44,75%, desconto R$2,40 no item Heineken Long Neck 10%). Para os filtros de situação Fechado retorna-se vazio (não há pedidos F no preview).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "BUG RECONCILIAÇÃO foi corrigido em server.py via _ratear_totais_por_pedido (linha 2359). Função recebe rows com {total, item_sum, serv_sum, custo_sum, desc_sum} e rateia produtos/serviços pelo pedido.total usando peso serv_sum/item_sum. Aplicado em _dashboard_sync e _relatorio_pedidos_sync. TestIDs principais: Dashboard → totals-produtos, totals-servicos, totals-margem, totals-margem-pct, totals-descontos, principal-pedidos-total (linha 'Total (N) R$ X,XX'), principal-sit-{todos,A,F,PG,C}. Relatório → relpedidos-totais (container), relpedidos-tot-{pedidos,total,margem,descontos,produtos,servicos}, relpedidos-data-{ini,fim} (DateField - inputs ocultos, não setáveis via .fill — usar defaults), relpedidos-sit-{todos,A,F,PG,C}, relpedidos-buscar (Gerar relatório), relpedidos-row-{N}. Filtro Fechado no Relatório: quando lista vazia, todo o bloco relpedidos-totais NÃO renderiza (mensagem 'Nenhum pedido no período/filtros.' aparece) — comportamento correto. Para reproduzir setup: connections-new-button → preencher empresa/servidor/banco/api → connection-save-button (scroll antes) → connections-back-button → login KONTACTO/$KONT2011. Para Relatório com período amplo via UI, é difícil sem datepicker — use defaults (mês atual) que já incluem o pedido #1 (data HOJE).",
+  "rca_of_issue": "N/A — bug já estava corrigido pelo main agent E1 antes do testing. Esta iteração APENAS validou. RCA do bug original (documentado no problem_statement): cards Dashboard somavam i.p_venda*i.qtd_pedida classificando por pecas/servicos, enquanto a lista 'Pedidos de Hoje' usava pedido_venda.total. Pedidos legados onde alguém alterou pedido.total manualmente (ou houve recálculo divergente) ficavam com soma_itens ≠ pedido.total, causando Produtos+Serviços ≠ Total. FIX: _ratear_totais_por_pedido distribui pedido.total entre produtos/servicos pelos pesos dos itens, fazendo a igualdade matemática Σ(produtos)+Σ(servicos) = Σ(pedido.total) por construção, independentemente da divergência item_sum vs pedido.total."
+}
