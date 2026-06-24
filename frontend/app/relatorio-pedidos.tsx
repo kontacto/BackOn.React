@@ -22,6 +22,7 @@ type DescItem = {
   percentual: number; valor_unitario: number; qtd: number; valor_total: number;
 };
 type MargemTotais = { venda: number; desconto: number; custo: number; margem: number; margem_pct: number };
+type RelTotais = MargemTotais & { qtd_pedidos: number; produtos: number; servicos: number };
 type Analise = { loading: boolean; error?: string | null; margem?: MargemTotais | null; descontos?: DescItem[] };
 
 const SITUACOES = [
@@ -62,6 +63,7 @@ export default function RelatorioPedidosScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pedidos, setPedidos] = useState<PedidoItem[]>([]);
+  const [totais, setTotais] = useState<RelTotais | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [analises, setAnalises] = useState<Record<number, Analise>>({});
 
@@ -106,8 +108,8 @@ export default function RelatorioPedidosScreen() {
       if (situacao) url += `&situacao=${encodeURIComponent(situacao)}`;
       const r = await fetch(url);
       const j = await r.json();
-      if (!j?.success) { setError(j?.message || "Falha ao gerar relatório."); setPedidos([]); }
-      else setPedidos(Array.isArray(j.pedidos) ? j.pedidos : []);
+      if (!j?.success) { setError(j?.message || "Falha ao gerar relatório."); setPedidos([]); setTotais(null); }
+      else { setPedidos(Array.isArray(j.pedidos) ? j.pedidos : []); setTotais(j.totais || null); }
     } catch (e) {
       setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -227,6 +229,37 @@ export default function RelatorioPedidosScreen() {
           <Text style={styles.empty}>Nenhum pedido no período/filtros.</Text>
         ) : null}
 
+        {totais && pedidos.length > 0 ? (
+          <View style={styles.totaisBox} testID="relpedidos-totais">
+            <Text style={styles.totaisTitle}>Totais do período</Text>
+            <View style={styles.totaisRow}>
+              <View style={[styles.tCard, { borderLeftColor: colors.brandPrimary }]}>
+                <Text style={styles.tLabel}>Pedidos</Text>
+                <Text style={styles.tValue} testID="relpedidos-tot-pedidos">{totais.qtd_pedidos}</Text>
+              </View>
+              <View style={[styles.tCard, { borderLeftColor: colors.success }]}>
+                <Text style={styles.tLabel}>Margem média</Text>
+                <Text style={[styles.tValue, { fontSize: 15 }]} testID="relpedidos-tot-margem">{formatBRL(totais.margem)}</Text>
+                <Text style={styles.tSub}>{(totais.margem_pct || 0).toFixed(2).replace(".", ",")}%</Text>
+              </View>
+            </View>
+            <View style={styles.totaisRow}>
+              <View style={[styles.tCard, { borderLeftColor: colors.error }]}>
+                <Text style={styles.tLabel}>Descontos</Text>
+                <Text style={[styles.tValue, { fontSize: 14, color: colors.error }]} testID="relpedidos-tot-descontos">{formatBRL(totais.desconto)}</Text>
+              </View>
+              <View style={[styles.tCard, { borderLeftColor: "#1e88e5" }]}>
+                <Text style={styles.tLabel}>Produtos</Text>
+                <Text style={[styles.tValue, { fontSize: 14 }]} testID="relpedidos-tot-produtos">{formatBRL(totais.produtos)}</Text>
+              </View>
+              <View style={[styles.tCard, { borderLeftColor: colors.warning }]}>
+                <Text style={styles.tLabel}>Serviços</Text>
+                <Text style={[styles.tValue, { fontSize: 14 }]} testID="relpedidos-tot-servicos">{formatBRL(totais.servicos)}</Text>
+              </View>
+            </View>
+          </View>
+        ) : null}
+
         {pedidos.length > 0 ? (
           <Text style={styles.count}>{pedidos.length} pedido(s)</Text>
         ) : null}
@@ -338,6 +371,13 @@ const styles = StyleSheet.create({
   },
   errorText: { color: colors.error, fontSize: 13, flex: 1 },
   empty: { textAlign: "center", color: colors.muted, fontSize: 13, marginTop: spacing.lg },
+  totaisBox: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, gap: spacing.sm, marginTop: spacing.sm },
+  totaisTitle: { fontSize: 13, fontWeight: "700", color: colors.brandPrimary },
+  totaisRow: { flexDirection: "row", gap: spacing.sm },
+  tCard: { flex: 1, backgroundColor: colors.surfaceSecondary, borderRadius: radius.sm, padding: spacing.sm, borderLeftWidth: 3 },
+  tLabel: { fontSize: 10, color: colors.muted, textTransform: "uppercase", letterSpacing: 0.3 },
+  tValue: { fontSize: 18, fontWeight: "700", color: colors.onSurface, marginTop: 2 },
+  tSub: { fontSize: 11, fontWeight: "600", color: colors.success },
   count: { fontSize: 12, color: colors.muted, marginTop: spacing.sm, marginBottom: 2 },
   card: { backgroundColor: colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, overflow: "hidden" },
   cardHead: { flexDirection: "row", alignItems: "center", gap: spacing.sm, padding: spacing.md },

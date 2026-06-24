@@ -1667,7 +1667,26 @@ def _relatorio_pedidos_sync(servidor: str, banco: str, data_ini: str, data_fim: 
             tuple(params),
         )
         rows = cur.fetchall()
+        # Totais agregados (mesmos filtros) — venda líquida, desconto, custo, margem, produtos/serviços
+        cur.execute(
+            "SELECT "
+            "  SUM(i.p_venda*i.qtd_pedida) AS venda, "
+            "  SUM(ISNULL(i.desconto,0)*i.qtd_pedida) AS desconto, "
+            "  SUM(COALESCE(NULLIF(pe.custo_reposicao,0), NULLIF(sv.custo_hora,0), NULLIF(i.custo_ped,0), 0) * i.qtd_pedida) AS custo, "
+            "  SUM(CASE WHEN pe.codigo_int IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS produtos, "
+            "  SUM(CASE WHEN sv.codigo IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS servicos "
+            "FROM pedido_venda pv "
+            "JOIN pedido_venda_prod i ON i.pedido = pv.pedido AND ISNULL(i.item_cancelado,0)=0 "
+            "LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
+            "LEFT JOIN servicos sv ON sv.codigo = i.produto "
+            f"WHERE {' AND '.join(where)}",
+            tuple(params),
+        )
+        tr = cur.fetchone() or {}
         cur.close(); conn.close()
+        venda_t = float(tr.get("venda") or 0)
+        custo_t = float(tr.get("custo") or 0)
+        margem_t = round(venda_t - custo_t, 2)
         pedidos = []
         for r in rows:
             d = r.get("data")
@@ -1681,7 +1700,17 @@ def _relatorio_pedidos_sync(servidor: str, banco: str, data_ini: str, data_fim: 
                 "vendedor_cod": r.get("vendedor_cod"),
                 "vendedor_nome": (r.get("vendedor_nome") or "").strip() or "—",
             })
-        return {"success": True, "pedidos": pedidos}
+        totais = {
+            "qtd_pedidos": len(rows),
+            "venda": round(venda_t, 2),
+            "desconto": round(float(tr.get("desconto") or 0), 2),
+            "custo": round(custo_t, 2),
+            "margem": margem_t,
+            "margem_pct": round((margem_t / venda_t * 100), 2) if venda_t > 0 else 0.0,
+            "produtos": round(float(tr.get("produtos") or 0), 2),
+            "servicos": round(float(tr.get("servicos") or 0), 2),
+        }
+        return {"success": True, "pedidos": pedidos, "totais": totais}
     except Exception as e:
         try:
             conn.close()
@@ -2361,6 +2390,7 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
             "  SUM(CASE WHEN pe.codigo_int IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS prod, "
             "  SUM(CASE WHEN sv.codigo IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS serv, "
             "  SUM(i.p_venda*i.qtd_pedida) AS venda_total, "
+            "  SUM(ISNULL(i.desconto,0)*i.qtd_pedida) AS desconto_total, "
             "  SUM(COALESCE(NULLIF(pe.custo_reposicao,0), NULLIF(sv.custo_hora,0), NULLIF(i.custo_ped,0), 0) * i.qtd_pedida) AS custo_total "
             "FROM pedido_venda pv "
             "JOIN pedido_venda_prod i ON i.pedido = pv.pedido AND ISNULL(i.item_cancelado,0)=0 "
@@ -2377,6 +2407,7 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
             "pedidos": qtd,
             "produtos": float(tr.get("prod") or 0),
             "servicos": float(tr.get("serv") or 0),
+            "descontos": round(float(tr.get("desconto_total") or 0), 2),
             "margem": margem,
             "margem_pct": round((margem / venda_total * 100), 2) if venda_total > 0 else 0.0,
         }

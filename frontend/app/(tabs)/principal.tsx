@@ -38,7 +38,7 @@ function formatBRL(v: number): string {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-type DashboardTotals = { pedidos: number; produtos: number; servicos: number; margem: number; margem_pct: number };
+type DashboardTotals = { pedidos: number; produtos: number; servicos: number; descontos: number; margem: number; margem_pct: number };
 type DashboardPedido = { pedido: number; cliente: string; valor: number };
 
 const SITUACOES: { value: string; label: string }[] = [
@@ -55,7 +55,7 @@ export default function PrincipalScreen() {
   const [loading, setLoading] = useState(true);
 
   // Dashboard
-  const [totais, setTotais] = useState<DashboardTotals>({ pedidos: 0, produtos: 0, servicos: 0, margem: 0, margem_pct: 0 });
+  const [totais, setTotais] = useState<DashboardTotals>({ pedidos: 0, produtos: 0, servicos: 0, descontos: 0, margem: 0, margem_pct: 0 });
   const [pedidos, setPedidos] = useState<DashboardPedido[]>([]);
   const [dashLoading, setDashLoading] = useState(false);
   const [dashError, setDashError] = useState<string | null>(null);
@@ -180,7 +180,7 @@ export default function PrincipalScreen() {
         if (!j?.success) {
           setDashError(j?.message || "Não foi possível obter os totais.");
         }
-        setTotais(j?.totais || { pedidos: 0, produtos: 0, servicos: 0, margem: 0, margem_pct: 0 });
+        setTotais(j?.totais || { pedidos: 0, produtos: 0, servicos: 0, descontos: 0, margem: 0, margem_pct: 0 });
         setPedidos(Array.isArray(j?.pedidos) ? j.pedidos : []);
       } catch (e) {
         setDashError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
@@ -299,7 +299,7 @@ export default function PrincipalScreen() {
             </View>
           )}
           <View style={{ flex: 1 }}>
-            <Text style={styles.welcome}>Bem-vindo à {fantasia || session.empresa}</Text>
+            <Text style={styles.welcome}>Bem-vindo à {session.empresa}</Text>
             <Text style={styles.heroName} numberOfLines={1}>
               {displayName || "Usuário"}
             </Text>
@@ -404,6 +404,9 @@ export default function PrincipalScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.margemLabel}>Margem média do dia</Text>
             <Text style={styles.margemHint}>Venda líquida − custo de reposição</Text>
+            <Text style={styles.margemDesc} testID="totals-descontos">
+              Descontos concedidos: {dashLoading ? "…" : formatBRL(totais.descontos)}
+            </Text>
           </View>
           <View style={{ alignItems: "flex-end" }}>
             <Text style={styles.margemValue} testID="totals-margem">
@@ -541,6 +544,7 @@ const styles = StyleSheet.create({
   },
   margemLabel: { fontSize: 13, fontWeight: "600", color: colors.onSurface },
   margemHint: { fontSize: 11, color: colors.muted, marginTop: 1 },
+  margemDesc: { fontSize: 12, color: colors.error, fontWeight: "500", marginTop: 3 },
   margemValue: { fontSize: 17, fontWeight: "700", color: colors.brandPrimary },
   margemPct: { fontSize: 12, fontWeight: "600", color: colors.success },
   totalCard: {

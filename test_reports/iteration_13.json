@@ -1,0 +1,39 @@
+{
+  "summary": "Validados os 3 ajustes desta rodada (backend + frontend, mobile 390x844). (1) WELCOME do Dashboard: o bloco testID 'principal-welcome' exibe exatamente 'Bem-vindo à BARESTEL' (usa session.empresa = NOME DA CONEXÃO, não a fantasia); em paralelo, o subtítulo do cabeçalho Back-On continua mostrando 'PISCINA BAR' (fantasia via /api/controle/empresa) — comportamento conforme spec. (2) CARD MARGEM do Dashboard (testID 'principal-margem'): além de 'Margem média do dia' R$ 24,39 / 44,75%, exibe a nova linha 'Descontos concedidos: R$ 2,40' (testID 'totals-descontos'). (3) RELATÓRIO DE PEDIDOS: rota /relatorio-pedidos com período default (01/06/2026 a 24/06/2026) e Gerar → aparece o bloco 'Totais do período' (testID 'relpedidos-totais') com Pedidos=1 (relpedidos-tot-pedidos), Margem média R$ 24,39 + 44,75% (relpedidos-tot-margem), Descontos R$ 2,40 (relpedidos-tot-descontos), Produtos R$ 54,50 (relpedidos-tot-produtos), Serviços R$ 0,00 (relpedidos-tot-servicos). Filtro situação 'Fechado' + Gerar → o bloco 'relpedidos-totais' SOME (is_visible=false) e o texto 'Nenhum pedido no período/filtros.' aparece; voltar para 'Aberto' + Gerar → o bloco REAPARECE com os mesmos valores do pedido #1. Expansão da linha (testID 'relpedidos-expand-1') continua funcional: mostra Venda R$54,50 / Desconto R$2,40 / Custo R$30,11 / Margem R$24,39 (44,75%) e 'Heineken Long Neck · Item · 10,00% · qtd 2 · -R$ 2,40'. Backend pytest: 6/6 passam (dashboard/me com totais.descontos=2.4, dashboard/me situacao=F zera descontos, /api/relatorios/pedidos retorna objeto 'totais' completo, valores batem com pedido #1, situacao=F retorna lista vazia e totais zerados, situacao=A volta com qtd_pedidos=1 e desconto=2.40). Nenhum red screen, nenhum erro de console crítico (apenas warnings de 'shadow* deprecated').",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter13_dashboard_relatorio_totais.py",
+    "/app/test_reports/pytest/iter13_results.xml",
+    "/tmp/iter13_dashboard.png (welcome 'Bem-vindo à BARESTEL' + cabeçalho 'PISCINA BAR' + card Margem com 'Descontos concedidos: R$ 2,40')",
+    "/tmp/iter13_rel_aberto.png (Relatório de Pedidos com bloco 'Totais do período' completo)",
+    "/tmp/iter13_rel_final.png (após Aberto novamente + expand do pedido #1)"
+  ],
+  "action_items": [
+    "Nenhuma ação obrigatória — os 3 ajustes (welcome com nome da conexão, linha 'Descontos concedidos' no card de margem, bloco 'Totais do período' no Relatório de Pedidos com sumir/reaparecer conforme filtro) estão 100% funcionais."
+  ],
+  "critical_code_review_comments": [
+    "principal.tsx linha 302: usa <Text>Bem-vindo à {session.empresa}</Text> — fixo no nome da conexão (não na fantasia). Cabeçalho linha 277 usa fantasia || session.empresa como fallback. Distinção correta e clara. ✓",
+    "principal.tsx linhas 407-409: novo <Text testID='totals-descontos'> dentro do margemCard mostrando 'Descontos concedidos: {formatBRL(totais.descontos)}'. Tipo DashboardTotals (linha 41) inclui 'descontos: number'. ✓",
+    "relatorio-pedidos.tsx linhas 232-261: bloco 'Totais do período' renderizado SOMENTE quando totais && pedidos.length > 0 (condição correta — some quando lista vazia). testIDs completos: relpedidos-totais, relpedidos-tot-pedidos, relpedidos-tot-margem, relpedidos-tot-descontos, relpedidos-tot-produtos, relpedidos-tot-servicos. Tipo RelTotais herda MargemTotais e adiciona qtd_pedidos/produtos/servicos. ✓",
+    "Backend (já validado pelo main agent): /api/dashboard/me retorna totais.descontos somando descontos do dia; /api/relatorios/pedidos agrega bloco 'totais' com SUMs filtrados por data + vendedor + situacao. ✓",
+    "MENOR (não bloqueante): principal.tsx tem 588 linhas — próximo do limite de 700; considerar split em componentes (TotalsRow, MargemCard, PedidosList) numa próxima refatoração. Mesmo comentário válido para iterations anteriores."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter13_dashboard_relatorio_totais.py (novo: 6 testes pytest cobrindo descontos no dashboard + totais no relatório com filtros)"
+  ],
+  "success_rate": {
+    "backend": "100% (6/6 pytest: dashboard descontos=2.4, dashboard situacao F zera, relatorios totais bloco presente, valores batem 1/54.50/2.40/24.39/44.75/54.50/0.00, situacao F zera tudo, situacao A volta)",
+    "frontend": "100% (welcome 'Bem-vindo à BARESTEL' + header fantasia 'PISCINA BAR' / linha 'Descontos concedidos: R$ 2,40' no card de margem / bloco 'Totais do período' renderiza Pedidos=1 + Margem R$24,39/44,75% + Desc R$2,40 + Prod R$54,50 + Serv R$0,00 / Fechado faz bloco sumir / Aberto faz reaparecer / expand do pedido #1 continua mostrando margem + Heineken 10% -R$2,40)"
+  },
+  "seed_data_creation": "Nenhuma seed nova. Reutilizado pedido #1 (Aberto, 2026-06-24, TESTE CLIENTE 9DIG, CARLOS ALBERTO SILVA, total R$ 54,50, custo R$ 30,11, margem R$ 24,39 = 44,75%, com 1 desconto Heineken Long Neck 10% R$ 2,40). Conexão BARESTEL/gibanweb/BDREACTAPP recriada no AsyncStorage no run Playwright (AsyncStorage zera entre runs).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "testIDs-chave desta iteração — Dashboard: 'principal-welcome' contém 'Bem-vindo à {session.empresa}' (NOME DA CONEXÃO, não fantasia); 'totals-descontos' renderiza 'Descontos concedidos: {totais.descontos}'; 'totals-margem' + 'totals-margem-pct' continuam mostrando margem média. Relatório de Pedidos: bloco 'relpedidos-totais' (condicional a totais && pedidos.length > 0) com filhos relpedidos-tot-{pedidos,margem,descontos,produtos,servicos}. Fluxo Playwright: connections-new-button → connection-{empresa,servidor,banco,api}-input → connection-save-button → connections-back-button → login-{usuario,senha}-input + login-submit-button (até 7 tentativas para Azure 40613 sleep). Para acessar /relatorio-pedidos diretamente, use page.goto absoluto OU navegue via tab 'Relatórios' (testID 'relatorios-screen' + tile 'relatorio-Relatório de Pedidos'). Backend retornando: dashboard/me.totais.descontos=2.4, relatorios/pedidos.totais={qtd_pedidos:1, venda:54.5, desconto:2.4, custo:30.11, margem:24.39, margem_pct:44.75, produtos:54.5, servicos:0.0}.",
+  "rca_of_issue": "N/A — nenhum bug. As 3 mudanças (welcome com session.empresa em vez de fantasia, linha 'Descontos concedidos' no margemCard via totais.descontos, novo bloco 'Totais do período' no Relatório de Pedidos consumindo o objeto 'totais' do endpoint /api/relatorios/pedidos) foram implementadas corretamente pelo main agent E1."
+}
