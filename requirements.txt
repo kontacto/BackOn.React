@@ -1,0 +1,18 @@
+# requirements.txt da RAIZ — usado APENAS pelo deploy do Azure App Service (Linux/Oryx).
+#
+# Por que existe na raiz?
+#   O builder do Azure (Oryx) só detecta um app Python se encontrar um
+#   requirements.txt na RAIZ do repositório. Como este repo é um monorepo
+#   (backend/ + frontend/ lado a lado), sem este arquivo o Azure mostra a tela
+#   "Waiting for content" porque não acha a aplicação.
+#
+# IMPORTANTE: NÃO use o backend/requirements.txt no Azure — ele contém libs
+# internas da Emergent (emergentintegrations, litellm via wheel privado) que
+# NÃO existem no PyPI público e quebrariam o build. Estas são as dependências
+# MÍNIMAS de produção do backend FastAPI:
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+gunicorn>=22.0.0
+python-dotenv>=1.0.0
+pydantic>=2.7.0
+pymssql>=2.3.0
