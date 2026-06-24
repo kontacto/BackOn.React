@@ -1,0 +1,47 @@
+{
+  "summary": "Iteração 16 — REGRESSÃO COMPLETA pós-refatoração (server.py 2500 linhas → db/models/services/routes; pedido-form.tsx 1588 linhas → src/components/pedido/* + hook usePedidoItens). Backend 26/26 pytest PASS (TestSmoke, TestLogin, TestLookups, TestClientes, TestProdutos, TestPedidos, TestDescontos, TestRelatorios). Login: master KONTACTO/$KONT2011 (master=true), Estela/26171 (classe=4 VENDEDOR, cod_funcao='03'), ADM/admin, CARLOS/123 — todos retornam success=true. Credencial inválida retorna apenas {success:false, message:'Usuário ou senha inválidos.'} sem vazar empresa/server/database/attempted/error_step/error_query/usuario/funcionario. Endpoints validados: /api/login, /api/area-atuacao, /api/funcionarios, /api/tipo-cliente, /api/controle/desconto-limites, /api/controle/empresa, /api/clientes (POST list), /api/clientes/find/search, /api/clientes/find/by-cgc, /api/clientes/{cod}, /api/produtos-servicos (tipo=all|produto), /api/produtos/foto/{cod} (204 quando ausente), /api/pedidos (POST list — pedido #1 presente), /api/pedidos/1 (situacao='A'), /api/pedidos/1/itens (total = qtd*valor_unitario), /api/pedidos/1/descontos (total=2.40), /api/dashboard/me (produtos+servicos == soma_lista; pedido #1), /api/relatorios/pedidos (reconciliação OK; qtd_pedidos=1, venda=54.5, margem=24.39, desconto=2.40), /api/relatorios/descontos-margem (estrutura: {vendedores:[{pedidos:[...]}], totais:{venda:54.5, desconto:2.4, margem:24.39}}). UI mobile 390x844 smoke: conexão BARESTEL→login Estela→Dashboard renderiza welcome 'Bem-vindo à BARESTEL ESTELA @Estela Grupo: VENDEDOR'; Clientes (1 row: TESTE CLIENTE 9DIG); Relatório Pedidos: Total Prod/Serv R$ 54,50 = Produtos R$ 54,50 + Serviços R$ 0,00, Pedidos 1, Margem média R$ 24,39 (44,75%), Descontos R$ 2,40 — reconciliação preservada. NENHUM red screen, nenhum endpoint /api quebrado, nenhuma mudança de contrato. Warnings react-native-web já conhecidos (shadow*/pointerEvents deprecated) não bloqueiam.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "vários (StyleSheet)", "issue": "Warning: 'shadow*' style props are deprecated. Use 'boxShadow'. Não-bloqueante mas recorrente em quase toda iteração. Reference: vários componentes (search por shadowColor/shadowOffset)."},
+      {"component": "vários (Pressable/Modal)", "issue": "Warning: props.pointerEvents is deprecated. Use style.pointerEvents. Não-bloqueante. Reference: vários (TouchableOpacity/Modal com pointerEvents prop)."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter16_regressao_refactor.py (26 pytest cobrindo todos os 17 grupos de endpoints /api após refatoração modular)",
+    "/app/test_reports/pytest/iter16_results.xml (26/26 PASS)",
+    "/tmp/iter16_dashboard.png (Dashboard pós-login Estela — welcome 'ESTELA @Estela Grupo: VENDEDOR'; cards Totais carregando — Azure wake-up no momento do screenshot)",
+    "/tmp/iter16_clientes.png (lista de clientes: TESTE CLIENTE 9DIG)",
+    "/tmp/iter16_relatorio.png (Relatório de Pedidos com reconciliação: Total Prod/Serv R$ 54,50 = Produtos R$ 54,50 + Serviços R$ 0,00; Margem R$ 24,39 (44,75%); Descontos R$ 2,40; 1 pedido)"
+  ],
+  "action_items": [
+    "Nenhuma ação obrigatória — refatoração estrutural validada sem regressões. Contratos /api/* idênticos; comportamento idêntico; testes anteriores (iter14/iter15) e novo regression (iter16) PASS.",
+    "OPCIONAL (não-bloqueante): substituir props shadowColor/shadowOffset/shadowOpacity/shadowRadius por boxShadow CSS e remover prop pointerEvents (migrar para style.pointerEvents) para eliminar warnings de depreciação no react-native-web."
+  ],
+  "critical_code_review_comments": [
+    "server.py (47 linhas) — bootstrap limpo: carrega .env ANTES de importar db.mongo/db.connection (comentário no topo é correto), monta APIRouter prefix='/api', inclui 9 sub-routers (misc, auth, clientes, produtos, pedidos, descontos, controle, relatorios, lookups), configura CORSMiddleware allow_origins=['*'] e logging.basicConfig. ✓ Excelente split — saiu de 2500 para 47 linhas no entrypoint.",
+    "routes/*.py — todos delegam diretamente para services/*.py via `await service.xxx(req)`; nenhuma lógica de negócio inline; rotas específicas /clientes/find/by-cgc e /clientes/find/search aparecem ANTES de /clientes/{codigo} no router (ordem correta para FastAPI matching). ✓",
+    "services/auth_service.py — mantém GENERIC_AUTH_ERROR='Usuário ou senha inválidos.' (linha 12) e ramo de usuário não encontrado retorna LoginResponse sem attempted/error_step/etc (linha 190-193). ✓ Bug de vazamento corrigido em iter14 continua corrigido.",
+    "MENOR (não-bloqueante): pedido-form.tsx ainda grande (orquestrador) mas usa hook usePedidoItens + 8 componentes em src/components/pedido/. Componentes individuais (AddItemModal, ClientSearchModal, ClienteSection, DiscountsReportModal, EditItemModal, GeneralDiscountModal, ItemList, PedidoHeader) bem nomeados. ✓",
+    "MENOR: routes/misc.py expõe /api/dev/file e /api/dev/file2 (download de arquivos de código-fonte do app). Marcado como 'DOWNLOAD TEMPORÁRIO — remover após sincronizar com GitHub' nos comentários. Lembrar de remover em produção (não é vulnerabilidade de leitura arbitrária — caminhos fixos em dict — mas vaza o source).",
+    "MENOR: routes/misc.py importa db.mongo (legado StatusCheck) — manter por compat enquanto não migrar, mas eventualmente remover."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter16_regressao_refactor.py (NOVO: 26 testes pytest cobrindo TestSmoke + TestLogin (6) + TestLookups (5) + TestClientes (4) + TestProdutos (3) + TestPedidos (3) + TestDescontos (1) + TestRelatorios (3))"
+  ],
+  "success_rate": {
+    "backend": "100% (26/26 pytest PASS em test_iter16_regressao_refactor.py — todos os endpoints /api de smoke + regressão respondem 200 com payloads no formato esperado; reconciliação Dashboard/Relatório mantida; login security mantida)",
+    "frontend": "100% (UI mobile 390x844 — login com Estela/26171 chega ao Dashboard com classe VENDEDOR; Clientes lista TESTE CLIENTE 9DIG; Relatório de Pedidos exibe todos os cards reconciliados conforme iter15; nenhum red screen; warnings react-native-web já conhecidos)"
+  },
+  "seed_data_creation": "Nenhuma seed nova. Cenário reutilizado: pedido #1 (BARESTEL/BDREACTAPP, data 2026-06-24, situação A=Aberto, cliente TESTE CLIENTE 9DIG, vendedor CARLOS ALBERTO SILVA, total R$ 54,50, custo R$ 30,11, margem R$ 24,39=44,75%, desconto R$ 2,40 em Heineken Long Neck 10%).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "REFATORAÇÃO VALIDADA. Backend: server.py virou só bootstrap (47L); domínios em backend/routes/*.py (auth, clientes, produtos, pedidos, descontos, controle, relatorios, lookups, misc) → services/*.py (auth_service, clientes_service, produtos_service, pedidos_service, itens_service, descontos_service, controle_service, relatorios_service, lookups_service, pedido_common, constants). Modelos em backend/models/schemas.py. Conexão SQL e mongo em backend/db/. Todos os endpoints /api/* mantiveram o mesmo path/params/payload. Frontend: pedido-form.tsx usa hook /app/frontend/src/hooks/usePedidoItens.ts e 8 componentes em /app/frontend/src/components/pedido/*.tsx; helpers em /app/frontend/src/utils/{api.ts,format.ts}. Para retest rápido: pytest /app/backend/tests/test_iter16_regressao_refactor.py -v. Test IDs UI principais permanecem: login-* (usuario-input, senha-input, submit-button, error, error-attempted, error-origin), connections-* (new-button, back-button), connection-* (empresa-input, servidor-input, banco-input, api-input, save-button), principal-welcome, totals-* (produtos, servicos, margem, margem-pct, descontos), principal-pedidos-total, relpedidos-* (totais, tot-pedidos, tot-total, tot-margem, tot-descontos, tot-produtos, tot-servicos, buscar, data-ini, data-fim, sit-*).",
+  "rca_of_issue": "N/A — esta rodada é regressão, não bug. Refatoração estrutural não alterou nenhum comportamento observável das APIs nem da UI. Os 3 testes do meu arquivo iter16 que inicialmente falharam foram assertions incorretas no meu código de teste (assumi campos errados: `qtd_pedida`/`p_venda` em vez de `qtd`/`valor_unitario`; `items.valor` em vez de `total` top-level; `pedidos` em vez de `vendedores`). Corrigidos no próprio iter16 — TODOS os campos do contrato real foram preservados pela refatoração."
+}
