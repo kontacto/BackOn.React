@@ -112,17 +112,27 @@ export default function LoginScreen() {
         return;
       }
       const apiUrl = normalizeApiUrl(selected.api);
-      const resp = await fetch(`${apiUrl}/api/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          empresa: selected.empresa,
-          servidor: selected.servidor,
-          banco: selected.banco,
-          usuario: usuario.trim(),
-          senha,
-        }),
-      });
+      // Timeout defensivo: evita o botão ficar "processando" para sempre quando a
+      // URL da API está inacessível (ex.: conexão salva com URL antiga após um fork).
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30000);
+      let resp: Response;
+      try {
+        resp = await fetch(`${apiUrl}/api/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            empresa: selected.empresa,
+            servidor: selected.servidor,
+            banco: selected.banco,
+            usuario: usuario.trim(),
+            senha,
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
       const data = (await resp.json()) as LoginResult & { detail?: string };
       if (!resp.ok) {
         setError(data.detail || GENERIC_AUTH_ERROR);
@@ -154,8 +164,19 @@ export default function LoginScreen() {
         }
       }
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Falha de rede";
-      setError(`Não foi possível contatar o servidor (${msg}).`);
+      const isAbort = e instanceof Error && e.name === "AbortError";
+      if (isAbort) {
+        setError(
+          `Tempo esgotado ao contatar o servidor (${selected.api}). ` +
+            "Verifique a URL da API em Conexões e sua conexão com a internet."
+        );
+      } else {
+        const msg = e instanceof Error ? e.message : "Falha de rede";
+        setError(
+          `Não foi possível contatar o servidor (${msg}). ` +
+            `Confira a URL da API da conexão: ${selected.api}`
+        );
+      }
     } finally {
       setSubmitting(false);
     }
