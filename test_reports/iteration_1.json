@@ -53,6 +53,6 @@
   "seed_data_creation": "Itens criados/editados durante o teste no Pedido #1 foram limpos ao final. Pedido #1 voltou ao estado original (apenas codauto=1 / Coca-Cola / qtd=5 / R$50,00).",
   "retest_needed": false,
   "should_main_agent_self_test": false,
-  "context_for_next_testing_agent": "Conexão BARESTEL já está salva no localStorage do preview. Login Estela/26171 NÃO funciona (usuário não existe no DB), usar KONTACTO/$KONT2011. Pedido #1 está em estado Aberto com cliente 'TESTE CLIENTE 9DIG'. Banco Azure SQL desperta na 1ª request (~5-10s). Itens são persistidos via /api/pedidos/{pedido}/itens. URL preview: https://cliente-crud.preview.emergentagent.com.",
+  "context_for_next_testing_agent": "Conexão BARESTEL já está salva no localStorage do preview. Login Estela/26171 NÃO funciona (usuário não existe no DB), usar KONTACTO/$KONT2011. Pedido #1 está em estado Aberto com cliente 'TESTE CLIENTE 9DIG'. Banco Azure SQL desperta na 1ª request (~5-10s). Itens são persistidos via /api/pedidos/{pedido}/itens. URL preview: https://order-crud-discounts.preview.emergentagent.com.",
   "rca_of_issue": "N/A — funcionalidade implementada corretamente. Único ponto de atenção: descrepância entre test_credentials.md (Estela/26171) e o que existe no banco. Reprodução: curl -X POST .../api/login -d '{\"empresa\":\"BARESTEL\",...,\"usuario\":\"Estela\",\"senha\":\"26171\"}' → success=false, error_step=query_usuarios."
 }
