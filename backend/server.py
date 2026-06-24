@@ -5,6 +5,7 @@ inclui os routers de cada domínio, configura CORS e logging.
 Toda a lógica de negócio fica em services/ e os endpoints em routes/.
 """
 import logging
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,6 +14,15 @@ from dotenv import load_dotenv
 # ambiente em tempo de import (db.mongo, db.connection).
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+# Garante que os pacotes locais (db/ models/ services/ routes/) sejam importáveis
+# INDEPENDENTE de como o uvicorn é iniciado — seja "uvicorn server:app" a partir
+# da pasta backend, "uvicorn backend.server:app" a partir da raiz, ou pelo perfil
+# de execução do Visual Studio (cujo diretório de trabalho costuma ser a raiz da
+# solução). Sem isto, os imports absolutos abaixo (from routes/db/services...)
+# quebrariam e o backend não subiria.
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from fastapi import APIRouter, FastAPI  # noqa: E402
 from starlette.middleware.cors import CORSMiddleware  # noqa: E402

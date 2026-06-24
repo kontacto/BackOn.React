@@ -131,6 +131,19 @@ New-NetFirewallRule -DisplayName "Back-On API" -Direction Inbound `
 uvicorn server:app --host 0.0.0.0 --port 8001 --reload
 ```
 
+> **IMPORTANTE (estrutura modular):** a partir de jun/2026 o backend deixou de ser
+> um único `server.py` e passou a ser um pacote com as pastas `db/`, `models/`,
+> `services/` e `routes/`. Ao puxar a solução pelo Git, **garanta que essas pastas
+> vieram junto** (não basta só o `server.py`).
+>
+> O comando acima deve ser executado **de dentro da pasta `backend`** (`cd backend`).
+> Se você inicia pelo **Visual Studio** (cujo diretório de trabalho costuma ser a
+> raiz da solução), use **uma** das opções abaixo — ambas já funcionam:
+> - Definir o *Working Directory* do projeto como a pasta `backend` e iniciar `server:app`; ou
+> - Iniciar a partir da raiz com `uvicorn backend.server:app --host 0.0.0.0 --port 8001`
+>   (o `server.py` agora insere a própria pasta no `sys.path` e resolve os imports).
+
+
 Você verá:
 ```
 INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)

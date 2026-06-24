@@ -102,10 +102,12 @@ class TestLogin:
         _, j = self._login(api, "Estela", "26171")
         assert j and j.get("success") is True, j
         u = j.get("usuario") or {}
-        # classe 4 = VENDEDOR conforme test_credentials.md
-        assert int(u.get("classe") or -1) == 4, u
+        # Conforme review_request iter19: Estela é classe '3 - SÓCIO'
+        assert int(u.get("classe") or -1) == 3, u
+        assert (u.get("classe_descricao") or "").strip().upper() == "SÓCIO", u
         f = j.get("funcionario") or {}
-        assert (f.get("cod_funcao") or "").strip() == "03", f
+        # cod_funcao '01' (limite de desconto de gerente)
+        assert (f.get("cod_funcao") or "").strip() == "01", f
 
     def test_user_adm(self, api):
         _, j = self._login(api, "ADM", "admin")
