@@ -2,18 +2,24 @@
 from fastapi import APIRouter
 
 from models.permissoes import SalvarPermissoesRequest
-from services import permissoes_service
+from services import controle_config_service, permissoes_service
 
 router = APIRouter()
 
 
 @router.get("/permissoes/catalogo")
-async def catalogo():
-    """Árvore declarativa de telas/ações (sem dependência de banco)."""
+async def catalogo(servidor: str | None = None, banco: str | None = None):
+    """Árvore de telas/ações, já filtrada pelos módulos ligados (controle_configuracao)."""
+    cat = permissoes_service.CATALOGO
+    if servidor and banco:
+        cfg = await controle_config_service.read_config(servidor, banco)
+        if cfg.get("success"):
+            disabled = permissoes_service.disabled_telas(cfg["valores"])
+            cat = permissoes_service.filter_catalogo(disabled)
     return {
         "success": True,
         "sistema": permissoes_service.SISTEMA,
-        "catalogo": permissoes_service.CATALOGO,
+        "catalogo": cat,
     }
 
 

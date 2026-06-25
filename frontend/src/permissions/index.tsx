@@ -14,6 +14,14 @@ type PermState = {
   isMaster: boolean;
   keys: Set<string>;
   classe: number | null;
+  disabledTelas: Set<string>;
+};
+
+// Mapa: módulo (coluna controle_configuracao) -> telas controladas.
+// Manter alinhado com backend services/controle_config_service.MODULE_TELAS.
+const MODULE_TELAS: Record<string, string[]> = {
+  Pedido_venda: ["PEDIDO"],
+  Clientes: ["CLIENTE"],
 };
 
 type PermContextValue = PermState & {
@@ -35,13 +43,14 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
     isMaster: false,
     keys: new Set(),
     classe: null,
+    disabledTelas: new Set(),
   });
 
   const reload = useCallback(async () => {
     setState((s) => ({ ...s, loading: true }));
     const session = await getSession();
     if (!session) {
-      setState({ loading: false, isMaster: false, keys: new Set(), classe: null });
+      setState({ loading: false, isMaster: false, keys: new Set(), classe: null, disabledTelas: new Set() });
       return;
     }
     const usuario = (session.usuario ?? {}) as Record<string, unknown>;
@@ -54,38 +63,41 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
         ? null
         : Number(classeRaw);
 
-    if (isMaster) {
-      setState({ loading: false, isMaster: true, keys: new Set(), classe });
-      return;
-    }
-    if (classe === null || Number.isNaN(classe)) {
-      // Sem classe identificada → modo estrito: nada liberado.
-      setState({ loading: false, isMaster: false, keys: new Set(), classe: null });
-      return;
-    }
-    try {
-      const conns = await listConnections();
-      const conn = conns.find((c) => c.empresa === session.empresa);
-      if (!conn) {
-        setState({ loading: false, isMaster: false, keys: new Set(), classe });
-        return;
-      }
+    const conns = await listConnections();
+    const conn = conns.find((c) => c.empresa === session.empresa);
+    const keys = new Set<string>();
+    const disabledTelas = new Set<string>();
+
+    if (conn) {
       const base = conn.api.replace(/\/+$/, "");
-      const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(
-        conn.banco
-      )}&classe=${classe}`;
-      const r = await fetch(`${base}/api/permissoes?${qs}`).then((x) => x.json());
-      const keys = new Set<string>();
-      if (r?.success && Array.isArray(r.items)) {
-        (r.items as { tela: string; comando: string }[]).forEach((i) =>
-          keys.add(normKey(i.tela, i.comando))
-        );
+      const cq = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`;
+      // 1) Módulos ligados/desligados (controle_configuracao) — sobrepõe tudo.
+      try {
+        const cfg = await fetch(`${base}/api/controle-config?${cq}`).then((x) => x.json());
+        if (cfg?.success && cfg.valores) {
+          Object.entries(MODULE_TELAS).forEach(([mod, telas]) => {
+            if (!cfg.valores[mod]) telas.forEach((t) => disabledTelas.add(t.toUpperCase()));
+          });
+        }
+      } catch {
+        // sem flags → não desliga nada
       }
-      setState({ loading: false, isMaster: false, keys, classe });
-    } catch {
-      // Falha de rede → modo estrito (mantém bloqueado), evita liberar por engano.
-      setState({ loading: false, isMaster: false, keys: new Set(), classe });
+      // 2) Permissões do grupo (apenas não-master com classe válida).
+      if (!isMaster && classe !== null && !Number.isNaN(classe)) {
+        try {
+          const r = await fetch(`${base}/api/permissoes?${cq}&classe=${classe}`).then((x) => x.json());
+          if (r?.success && Array.isArray(r.items)) {
+            (r.items as { tela: string; comando: string }[]).forEach((i) =>
+              keys.add(normKey(i.tela, i.comando))
+            );
+          }
+        } catch {
+          // falha → modo estrito (mantém bloqueado)
+        }
+      }
     }
+
+    setState({ loading: false, isMaster, keys, classe, disabledTelas });
   }, []);
 
   useEffect(() => {
@@ -94,15 +106,18 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
 
   const can = useCallback(
     (key: string) => {
-      if (state.isMaster) return true;
       const k = (key || "").trim().toUpperCase();
       if (!k) return false;
+      // Módulo desligado (controle_configuracao) sobrepõe tudo, inclusive master.
+      const tela = k.split(".")[0];
+      if (state.disabledTelas.has(tela)) return false;
+      if (state.isMaster) return true;
       if (state.keys.has(k)) return true;
       // "CLIENTE" sem comando → considera permitido se houver "CLIENTE.ABRIR".
       if (!k.includes(".") && state.keys.has(`${k}.ABRIR`)) return true;
       return false;
     },
-    [state.isMaster, state.keys]
+    [state.isMaster, state.keys, state.disabledTelas]
   );
 
   const value = useMemo<PermContextValue>(
@@ -122,6 +137,7 @@ export function usePermissions(): PermContextValue {
       isMaster: false,
       keys: new Set(),
       classe: null,
+      disabledTelas: new Set(),
       can: () => false,
       reload: async () => {},
     };

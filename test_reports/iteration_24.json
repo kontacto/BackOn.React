@@ -1,0 +1,34 @@
+{
+  "summary": "Iteração 24 — Tela 'Módulos e Recursos' (controle_configuracao). Backend: 5/5 testes pytest passaram (campos=38, leitura com 38 booleans, save toggle, sobreposição em /api/permissoes/catalogo, catálogo sem filtro). Frontend: login KONTACTO → Configurações mostra TILE 'Permissões' e 'Módulos e Recursos' (ambos), /modulos-recursos lista 38 checkboxes com testID mod-<campo>, com Pedido_venda e Clientes marcados; toggle + Salvar produz feedback 'Módulos e recursos salvos.', e o estado persiste ao reabrir a tela. Estado final restaurado: Pedido_venda=true, Clientes=true (verificado via API).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/e2e/test_iter24_controle_config.py",
+    "/app/test_reports/pytest/iter24_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "controle_config_service._save_config_sync: UPDATE sem WHERE atualiza todas as linhas. Como a tabela é registro ÚNICO (premissa documentada no código), funciona; mas se a tabela ficar com >1 linha por bug operacional, ficará tudo igual. Considerar SELECT TOP 1 + UPDATE por PK, ou TRUNCATE/INSERT, ou WHERE 1=1 explícito para clareza.",
+    "permissoes_service.disabled_telas: import de MODULE_TELAS é feito dentro da função (lazy) para evitar ciclo — ok, mas poderia ser movido para topo caso o ciclo seja só percebido (não há ciclo aparente em routes/services atuais)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/e2e/test_iter24_controle_config.py"
+  ],
+  "success_rate": {
+    "backend": "100% (5/5)",
+    "frontend": "100% (login, navegação, lista, toggle, save, persistência, restauração)"
+  },
+  "seed_data_creation": "Apenas seed de conexão no localStorage do navegador (chave @back_on/connections) para simular onboarding pronto. Nenhuma alteração de dados no banco além de toggle temporário de Fornecedores (restaurado ao final).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Tabela controle_configuracao tem 38 colunas bit (registro único). Pedido_venda e Clientes estão LIGADOS (estado de produção). MODULE_TELAS atual: Pedido_venda→PEDIDO, Clientes→CLIENTE. Tile 'Módulos e Recursos' só aparece para KONTACTO (master). Endpoint GET /api/permissoes/catalogo aceita servidor/banco opcionais — quando ambos são informados, aplica filtro por flags; sem eles, retorna catálogo completo. Test file de regressão: backend/tests/e2e/test_iter24_controle_config.py.",
+  "rca_of_issue": "N/A — feature passou."
+}

@@ -196,3 +196,27 @@ async def list_permissoes(servidor: str, banco: str, classe: int) -> dict:
 
 async def salvar_permissoes(payload: SalvarPermissoesRequest) -> dict:
     return await asyncio.to_thread(_salvar_sync, payload)
+
+
+# ---------------- Filtro por módulos (controle_configuracao) ----------------
+def disabled_telas(flags: dict) -> set:
+    """Telas desligadas por módulo (flag controle_configuracao = False)."""
+    from services.controle_config_service import MODULE_TELAS
+
+    disabled = set()
+    for modulo, telas in MODULE_TELAS.items():
+        if not flags.get(modulo, False):
+            disabled.update(telas)
+    return disabled
+
+
+def filter_catalogo(disabled: set) -> list:
+    """Remove telas desligadas; menus que ficam sem telas também somem."""
+    out = []
+    for menu in CATALOGO:
+        telas = [t for t in menu["children"] if t["tela"] not in disabled]
+        if telas:
+            novo = dict(menu)
+            novo["children"] = telas
+            out.append(novo)
+    return out

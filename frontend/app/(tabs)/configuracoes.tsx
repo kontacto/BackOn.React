@@ -31,10 +31,12 @@ export default function ConfiguracoesScreen() {
 
   // Acesso ao módulo de Permissões: usuário master (KONTACTO) ou funcionário com
   // cod_funcao 01/02 (sócio/gerente).
+  const usuarioObj = (session?.usuario ?? {}) as Record<string, unknown>;
+  const isKontacto =
+    usuarioObj?.master === true ||
+    String(usuarioObj?.usuario ?? "").toUpperCase() === "KONTACTO";
   const canManagePermissoes = (() => {
-    const u = (session?.usuario ?? {}) as Record<string, unknown>;
-    if (u?.master === true) return true;
-    if (String(u?.usuario ?? "").toUpperCase() === "KONTACTO") return true;
+    if (isKontacto) return true;
     const cf = parseInt(
       String((session?.funcionario as Record<string, unknown> | null)?.cod_funcao ?? ""),
       10
@@ -128,6 +130,15 @@ export default function ConfiguracoesScreen() {
                 onPress={() => router.push("/permissoes")}
                 testID="config-permissoes"
               />
+              {isKontacto ? (
+                <Item
+                  icon="cube-outline"
+                  label="Módulos e Recursos"
+                  hint="Liberar módulos do sistema para a empresa"
+                  onPress={() => router.push("/modulos-recursos")}
+                  testID="config-modulos"
+                />
+              ) : null}
             </View>
           </>
         ) : null}
