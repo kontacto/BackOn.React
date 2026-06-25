@@ -27,7 +27,9 @@ export default function ConfiguracoesScreen() {
   );
 
   const displayName =
-    pickFirst(session?.funcionario, ["nome", "nome_guerra"]) || session?.usuario || "Usuário";
+    pickFirst(session?.funcionario, ["nome", "nome_guerra"]) ||
+    String((session?.usuario as Record<string, unknown> | null)?.usuario ?? "") ||
+    "Usuário";
 
   // Acesso ao módulo de Permissões: usuário master (KONTACTO) ou funcionário com
   // cod_funcao 01/02 (sócio/gerente).
