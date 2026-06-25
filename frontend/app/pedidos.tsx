@@ -232,6 +232,7 @@ export default function PedidosScreen() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.chipsScroll}
         contentContainerStyle={styles.chipsRow}
       >
         {SITUACOES.map((s) => {
@@ -302,6 +303,7 @@ export default function PedidosScreen() {
 
       <FlatList
         data={items}
+        style={styles.list}
         keyExtractor={(p) => String(p.pedido)}
         contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 100, paddingTop: spacing.sm }}
         ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
@@ -373,6 +375,8 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
   },
+  chipsScroll: { flexGrow: 0, flexShrink: 0 },
+  list: { flex: 1 },
   chip: {
     paddingHorizontal: spacing.md, paddingVertical: 8,
     borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border,

@@ -1,0 +1,31 @@
+{
+  "summary": "Iter27 — Validação do BUG FIX de sobreposição em /pedidos. Viewport mobile 390x844, sessão master KONTACTO + conexão BACKON TESTE seedadas via localStorage. Fluxo testado: (1) /pedidos abre com 'Pedidos (1)' e o card '#1 Aberto · TESTE CLIENTE 9DIG · CARLOS ALBERTO SILVA · R$ 54,50' renderizado ✓. (2) Toque em pedidos-toggle-filters abre pedidos-filter-card e o painel fica TOTALMENTE VISÍVEL acima da lista — confirmado por geometria: filterCard {top:171, bottom:352, height:181}, firstCard pedido-1 {top:368, bottom:446} → gap de 16px, SEM sobreposição. (3) Filtros internos visíveis e contidos no card: pedidos-data-ini (top:225 bot:267), pedidos-data-fim (top:225 bot:267), pedidos-vendedor-filter (top:279 bot:339) e pedidos-vendedor-select (top:297 bot:339) — todos dentro de [171,352]. (4) Toque no select abre o modal 'Selecionar vendedor' com 'Todos os vendedores' + CARLOS/ESTELA/MARIA; selecionar opt-all recarrega sem sobreposição. (5) Toque novamente em pedidos-toggle-filters fecha o painel e a lista volta ao normal ✓. Conclusão: o ajuste em pedidos.tsx (FlatList com styles.list={flex:1} e ScrollView horizontal com chipsScroll={flexGrow:0,flexShrink:0}) corrige o bug — o painel de filtros (incluindo o filtro de Vendedor 'Todos os vendedores') já NÃO é coberto pela lista.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/iter27_pedidos_initial.png",
+    "/tmp/iter27_filter_open.png",
+    "/tmp/iter27_select_modal.png",
+    "/tmp/iter27_filter_closed.png"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "pedidos.tsx:304-306 — FlatList recebe style={styles.list} com {flex:1}; isso impede que a lista cresça pelo conteúdo e sobreponha o painel de filtros quando ele aparece. ✓",
+    "pedidos.tsx:378 — chipsScroll com {flexGrow:0, flexShrink:0}: o ScrollView horizontal de situações mantém altura fixa do conteúdo (sem expandir), evitando que ele 'puxe' espaço do painel. ✓",
+    "pedidos.tsx:253-300 — filterCard é irmão direto do FlatList; com o pai SafeAreaView em flex:1, a ordem natural é header → search → chips → filterCard → FlatList (rola dentro do espaço restante). Confirmado por geometria (filterCard.bottom=352 < firstCard.top=368).",
+    "Nenhum z-index/position absolute foi necessário; a solução é puramente layout flex, o que é robusto em Expo web e nativo.",
+    "Carryover: configuracoes.tsx:30 — fallback de displayName ainda usa session?.usuario como string (não-bloqueante)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only)", "frontend": "100% — sem sobreposição; todos os campos do painel visíveis e funcionais"},
+  "seed_data_creation": "Apenas localStorage: @back_on/connections=[BACKON TESTE → gibanweb/BDREACTAPP] e @back_on/session={master KONTACTO}. Nenhum dado tocado no Azure SQL.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Para reproduzir, seed localStorage e abrir /pedidos no viewport 390x844, depois tocar em pedidos-toggle-filters. Verifique geometricamente que filterCard.bottom <= primeiro pedido-<n>.top (sem overlap) e que pedidos-vendedor-select está contido em [filterCard.top, filterCard.bottom]. testIDs relevantes: pedidos-screen, pedidos-toggle-filters, pedidos-filter-card, pedidos-data-ini, pedidos-data-fim, pedidos-vendedor-filter, pedidos-vendedor-select, pedidos-vendedor-select-opt-all/-<codigo>, pedido-<num>.",
+  "rca_of_issue": "Causa raiz: a FlatList não tinha style com flex:1, então em layouts onde o conteúdo era pequeno ela colapsava à altura natural; quando o painel de filtros era inserido como irmão acima, o ScrollView horizontal dos chips (sem flexGrow:0/shrink:0) absorvia/empurrava espaço e a lista renderizava por cima visualmente (z-order conflitante e ausência de constraint vertical). Fix: aplicar styles.list={flex:1} na FlatList (constraint vertical clara, ela ocupa apenas o espaço restante após o painel) + chipsScroll={flexGrow:0,flexShrink:0} (mantém os chips fixos sem competir por espaço vertical). Validação: filterCard.bottom=352, firstCard.top=368 → no overlap; com painel aberto, todos os campos (De/Até/Vendedor) ficam inteiramente visíveis acima da lista."
+}
