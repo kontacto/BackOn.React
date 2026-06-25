@@ -1,0 +1,36 @@
+{
+  "summary": "Iter23 — Validação do catálogo de Permissões para MOVIMENTO > PEDIDO refletindo TODOS os botões reais da tela de Pedido (incl. sensíveis de gerência) + verificação de que master vê todos os botões na pedido-form e no modal de item. Backend (7/7 PASS em pytest backend/tests/e2e/test_iter23_permissoes_pedido_catalog.py): (1) GET /api/permissoes/catalogo retorna nó MOVIMENTO > PEDIDO com EXATAMENTE 10 comandos: ABRIR, GRAVAR, ADD_ITEM, EDIT_ITEM, DEL_ITEM, DESC_ITEM, DESC_GERAL, VER_DESCONTOS, ANALISE, SITUACAO ✓. (2) NÃO contém EXCLUIR do pedido ✓ (pedido só muda situação). (3) Labels conferem: 'Abrir tela','Gravar pedido','Adicionar item','Editar item','Excluir item','Desconto no item','Desconto geral','Ver descontos','Analisar margem','Alterar situação' ✓. (4) POST /api/permissoes/salvar com subset de 5 itens [ABRIR,GRAVAR,ADD_ITEM,EDIT_ITEM,DEL_ITEM] para classe=4 → GET retorna exatamente esses 5 (DELETE+INSERT idempotente) ✓. (5) Sensíveis não enviados (DESC_GERAL, ANALISE, SITUACAO, VER_DESCONTOS, DESC_ITEM) NÃO aparecem na leitura ✓. Frontend (mobile 390x844, sessão master KONTACTO injetada via localStorage equivalente ao fluxo iter22): (A) /permissoes → seleciona VENDEDOR → expande Movimento>Pedidos → todos os 10 labels visíveis na árvore ✓ (FOUND 10/10), nenhum label 'Excluir' (sozinho) ✓. (B) Salvar via UI (testID perm-save) um subset de 5 botões (ABRIR/GRAVAR/ADD_ITEM/EDIT_ITEM/DEL_ITEM) → GET /api/permissoes?classe=4 retorna exatamente esse subset ✓. (C) /pedido-form?pedido=1 (master) renderiza testIDs pedido-form-add-item, pedido-form-desconto-geral-btn, pedido-form-analise-btn ✓; com itens existentes, pedido-form-descontos-btn também aparece ✓. (D) Tap em pedido-form-item-<id> abre EditItemModal com pedido-form-edit-descpct, pedido-form-edit-descrs, pedido-form-edit-delete (lixeira) e pedido-form-edit-save (Salvar) ✓. Cleanup: classe=4 (VENDEDOR) zerada ao final em backend e frontend tests. Logs backend limpos, sem 5xx.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/e2e/test_iter23_permissoes_pedido_catalog.py",
+    "/app/test_reports/pytest/iter23_results.xml",
+    "/tmp/iter23_pedidos_expanded.png (árvore com os 10 botões PEDIDO visíveis)",
+    "/tmp/iter23_saved_subset.png (UI salvou 5 permissão(ões))",
+    "/tmp/iter23_pedido_form.png (master pedido-form com todos os botões)",
+    "/tmp/iter23_edit_item_modal.png (EditItemModal com Desc.%, Desc.R$, lixeira e Salvar)"
+  ],
+  "action_items": [
+    "(Cosmético, não bloqueia) Warning persistente do react-native-web 'shadow* style props are deprecated. Use boxShadow' em /app/frontend/app/permissoes.tsx (estilo saveBtn). Mesmo apontamento de iter21/iter22."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/services/permissoes_service.py:35-46 — ACOES_PEDIDO declara exatamente os 10 comandos esperados pelo usuário, sem EXCLUIR. Bem documentado o motivo (pedido muda de SITUAÇÃO, não é excluível). ✓",
+    "/app/backend/services/permissoes_service.py:72-74 — Nó MOVIMENTO usa ACOES_PEDIDO via _tela(... , ACOES_PEDIDO), enquanto outros menus usam ACOES_PADRAO. Catálogo declarativo: adicionar novo botão = uma linha na lista. ✓",
+    "/app/frontend/src/components/pedido/ItemList.tsx:21,29,83,100 — Cada botão sensível protegido via usePermissions().can('PEDIDO.<COMANDO>'): ADD_ITEM (pedido-form-add-item), DESC_GERAL (pedido-form-desconto-geral-btn), VER_DESCONTOS (pedido-form-descontos-btn), e o clique no item só ocorre se EDIT_ITEM ou DEL_ITEM ou DESC_ITEM. ✓",
+    "/app/frontend/src/components/pedido/EditItemModal.tsx:15-18,59-81,124-152 — Modal aplica canDesc (DESC_ITEM), canSave (EDIT_ITEM) e canDelete (DEL_ITEM) corretamente nos campos e botões. ✓",
+    "/app/frontend/src/components/pedido/AddItemModal.tsx:22,122,137 — Campos Desc.% e Desc.R$ só renderizam se canDesc (PEDIDO.DESC_ITEM). ✓",
+    "/app/frontend/app/pedido-form.tsx:267,354-365 — Header.canSave bind a PEDIDO.GRAVAR; bloco 'Analisar margem' protegido por PEDIDO.ANALISE com testID pedido-form-analise-btn. ✓"
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (7/7 pytest passed)", "frontend": "100% (todos os 10 botões na árvore + pedido-form master + modal item OK)"},
+  "seed_data_creation": "Permissões da classe=4 (VENDEDOR) foram gravadas com subset de 5 itens durante o teste e LIMPAS ao final (0 itens). Estado final idêntico ao pós-iter22.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Para expandir um nó da árvore /permissoes via Playwright, NÃO clique no testID perm-<key> (isso é o checkbox/toggleNode). O chevron é um Pressable separado SEM testID, posicionado ~20px à esquerda do bounding box do testID. Funciona: bb = await page.locator('[data-testid=\"perm-TELA|PEDIDO|\"]').bounding_box(); await page.mouse.click(bb['x'] - 20, bb['y'] + bb['height']/2). Para o pedido-form, master KONTACTO bypassa todas as permissões (PermissionsProvider can()===true). O pedido #1 do BDREACTAPP tem 2 itens com desconto já lançado, então pedido-form-descontos-btn aparece. KeyOf usa formato '${tipo}|${tela}|${comando||\"\"}'. Sessão master injetada via @back_on/session com {usuario:{master:true}} acelera os testes (pular /connections + /login).",
+  "rca_of_issue": "N/A — implementação consistente entre backend (catálogo declarativo com ACOES_PEDIDO) e frontend (gating fino por can('PEDIDO.<comando>') em cada botão da tela de Pedido). O catálogo expõe os 10 comandos exatos, persistência é idempotente via DELETE+INSERT por (classe,sistema=50), e a UI master vê tudo conforme spec."
+}

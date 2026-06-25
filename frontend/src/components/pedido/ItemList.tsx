@@ -4,6 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { colors } from "@/src/theme/colors";
 import { formatBRL } from "@/src/utils/format";
+import { usePermissions } from "@/src/permissions";
 import { styles } from "./styles";
 import { ItemRow } from "./types";
 import { UsePedidoItens } from "./usePedidoItens";
@@ -16,6 +17,8 @@ type Props = {
 
 export default function ItemList({ editing, isAberto, it }: Props) {
   const { itens, subtotal, itensLoading, descTotalItens, geralAtual } = it;
+  const { can } = usePermissions();
+  const canEditItem = can("PEDIDO.EDIT_ITEM") || can("PEDIDO.DEL_ITEM") || can("PEDIDO.DESC_ITEM");
 
   return (
     <>
@@ -23,7 +26,7 @@ export default function ItemList({ editing, isAberto, it }: Props) {
         <Text style={styles.sectionTitle}>
           Itens do Pedido {itens.length ? `(${itens.length})` : ""}
         </Text>
-        {editing && isAberto ? (
+        {editing && isAberto && can("PEDIDO.ADD_ITEM") ? (
           <Pressable
             onPress={it.openAddModal}
             style={({ pressed }) => [styles.addItemBtn, pressed && { opacity: 0.8 }]}
@@ -52,8 +55,9 @@ export default function ItemList({ editing, isAberto, it }: Props) {
           {itens.map((item: ItemRow) => (
             <Pressable
               key={item.codauto}
-              onPress={() => it.openEditModal(item)}
-              style={({ pressed }) => [styles.itemRow, pressed && { opacity: 0.8 }]}
+              onPress={canEditItem ? () => it.openEditModal(item) : undefined}
+              disabled={!canEditItem}
+              style={({ pressed }) => [styles.itemRow, pressed && canEditItem && { opacity: 0.8 }]}
               testID={`pedido-form-item-${item.codauto}`}
             >
               <View style={[styles.itemTipo, item.tipo === "P" ? styles.tagProd : styles.tagServ]}>
@@ -76,7 +80,7 @@ export default function ItemList({ editing, isAberto, it }: Props) {
             </Pressable>
           ))}
 
-          {isAberto ? (
+          {isAberto && can("PEDIDO.DESC_GERAL") ? (
             <TouchableOpacity
               onPress={it.openGeralModal}
               activeOpacity={0.8}
@@ -93,7 +97,7 @@ export default function ItemList({ editing, isAberto, it }: Props) {
             </TouchableOpacity>
           ) : null}
 
-          {descTotalItens > 0 ? (
+          {descTotalItens > 0 && can("PEDIDO.VER_DESCONTOS") ? (
             <TouchableOpacity
               onPress={it.openDescontos}
               activeOpacity={0.8}

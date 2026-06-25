@@ -351,7 +351,7 @@ export default function PedidoFormScreen() {
           {/* Itens do Pedido */}
           <ItemList editing={editing} isAberto={isAberto} it={it} />
 
-          {editing && pedidoId ? (
+          {editing && pedidoId && can("PEDIDO.ANALISE") ? (
             <TouchableOpacity
               onPress={() => router.push({ pathname: "/relatorio-descontos", params: { pedido: String(pedidoId) } })}
               activeOpacity={0.85}

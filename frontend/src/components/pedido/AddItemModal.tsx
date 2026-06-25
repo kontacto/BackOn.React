@@ -6,6 +6,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { colors, spacing } from "@/src/theme/colors";
 import { formatBRL, parseNum, fmtNum, calcDescUnit } from "@/src/utils/format";
+import { usePermissions } from "@/src/permissions";
 import { styles } from "./styles";
 import { ProdutoServico } from "./types";
 import { UsePedidoItens } from "./usePedidoItens";
@@ -17,6 +18,8 @@ type Props = {
 
 export default function AddItemModal({ it, onOpenProdutos }: Props) {
   const { selProd } = it;
+  const { can } = usePermissions();
+  const canDesc = can("PEDIDO.DESC_ITEM");
   return (
     <Modal visible={it.addOpen} transparent animationType="slide" onRequestClose={() => it.setAddOpen(false)}>
       <Pressable style={styles.modalBg} onPress={() => it.setAddOpen(false)}>
@@ -116,6 +119,7 @@ export default function AddItemModal({ it, onOpenProdutos }: Props) {
                   </View>
                 </View>
                 <View style={styles.qtdRow}>
+                  {canDesc ? (
                   <View style={{ flex: 1 }}>
                     <Text style={styles.fieldLabel}>Desc. %</Text>
                     <TextInput
@@ -129,6 +133,8 @@ export default function AddItemModal({ it, onOpenProdutos }: Props) {
                       testID="pedido-form-add-descpct"
                     />
                   </View>
+                  ) : null}
+                  {canDesc ? (
                   <View style={{ flex: 1 }}>
                     <Text style={styles.fieldLabel}>Desc. R$ (unit.)</Text>
                     <TextInput
@@ -142,6 +148,7 @@ export default function AddItemModal({ it, onOpenProdutos }: Props) {
                       testID="pedido-form-add-descrs"
                     />
                   </View>
+                  ) : null}
                   <View style={{ flex: 1 }}>
                     <Text style={styles.fieldLabel}>Acrésc. R$ (unit.)</Text>
                     <TextInput

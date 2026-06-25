@@ -29,6 +29,23 @@ ACOES_PADRAO = [
 ]
 
 
+# Ações específicas da tela de Pedido (reflete TODOS os botões reais da tela).
+# Obs.: o Pedido NÃO pode ser excluído — sua SITUAÇÃO é que muda
+# (Aberto/Fechado/Faturado/Cancelado), por isso há "Alterar situação" e não "Excluir".
+ACOES_PEDIDO = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Gravar pedido"),
+    ("ADD_ITEM", "Adicionar item"),
+    ("EDIT_ITEM", "Editar item"),
+    ("DEL_ITEM", "Excluir item"),
+    ("DESC_ITEM", "Desconto no item"),
+    ("DESC_GERAL", "Desconto geral"),
+    ("VER_DESCONTOS", "Ver descontos"),
+    ("ANALISE", "Analisar margem"),
+    ("SITUACAO", "Alterar situação"),
+]
+
+
 def _tela(tela: str, nome: str, acoes=ACOES_PADRAO) -> dict:
     return {
         "tipo": "TELA",
@@ -53,7 +70,7 @@ CATALOGO = [
         _tela("PRODUTO", "Produtos & Serviços"),
     ]),
     _menu("MOVIMENTO", "Movimento", [
-        _tela("PEDIDO", "Pedidos"),
+        _tela("PEDIDO", "Pedidos", ACOES_PEDIDO),
     ]),
     _menu("GERENCIAL", "Gerencial", [
         _tela("GERENCIAL", "Painel Gerencial", [

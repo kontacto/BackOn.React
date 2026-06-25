@@ -6,11 +6,16 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { colors, spacing } from "@/src/theme/colors";
 import { formatBRL, parseNum, fmtNum, calcDescUnit } from "@/src/utils/format";
+import { usePermissions } from "@/src/permissions";
 import { styles } from "./styles";
 import { UsePedidoItens } from "./usePedidoItens";
 
 export default function EditItemModal({ it }: { it: UsePedidoItens }) {
   const { editItem } = it;
+  const { can } = usePermissions();
+  const canDesc = can("PEDIDO.DESC_ITEM");
+  const canSave = can("PEDIDO.EDIT_ITEM");
+  const canDelete = can("PEDIDO.DEL_ITEM");
   return (
     <Modal visible={!!editItem} transparent animationType="slide" onRequestClose={() => it.setEditItem(null)}>
       <Pressable style={styles.modalBg} onPress={() => it.setEditItem(null)}>
@@ -54,11 +59,11 @@ export default function EditItemModal({ it }: { it: UsePedidoItens }) {
                     <TextInput
                       value={it.editDescPct}
                       onChangeText={(v) => { it.setEditDescPct(v); if (parseNum(v) > 0) it.setEditDescRs(""); }}
-                      editable={parseNum(it.editDescRs) <= 0}
+                      editable={canDesc && parseNum(it.editDescRs) <= 0}
                       keyboardType="decimal-pad"
                       placeholder="0"
                       placeholderTextColor={colors.muted}
-                      style={[styles.input, parseNum(it.editDescRs) > 0 && styles.inputDisabled]}
+                      style={[styles.input, (!canDesc || parseNum(it.editDescRs) > 0) && styles.inputDisabled]}
                       testID="pedido-form-edit-descpct"
                     />
                   </View>
@@ -67,11 +72,11 @@ export default function EditItemModal({ it }: { it: UsePedidoItens }) {
                     <TextInput
                       value={it.editDescRs}
                       onChangeText={(v) => { it.setEditDescRs(v); if (parseNum(v) > 0) it.setEditDescPct(""); }}
-                      editable={parseNum(it.editDescPct) <= 0}
+                      editable={canDesc && parseNum(it.editDescPct) <= 0}
                       keyboardType="decimal-pad"
                       placeholder="0,00"
                       placeholderTextColor={colors.muted}
-                      style={[styles.input, parseNum(it.editDescPct) > 0 && styles.inputDisabled]}
+                      style={[styles.input, (!canDesc || parseNum(it.editDescPct) > 0) && styles.inputDisabled]}
                       testID="pedido-form-edit-descrs"
                     />
                   </View>
@@ -116,22 +121,34 @@ export default function EditItemModal({ it }: { it: UsePedidoItens }) {
                   );
                 })()}
                 <View style={styles.modalBtns}>
-                  <Pressable
-                    onPress={() => it.handleDeleteItem(editItem)}
-                    disabled={it.editSaving}
-                    style={({ pressed }) => [styles.deleteBtn, (pressed || it.editSaving) && { opacity: 0.8 }]}
-                    testID="pedido-form-edit-delete"
-                  >
-                    <Ionicons name="trash-outline" size={18} color={colors.error} />
-                  </Pressable>
-                  <Pressable
-                    onPress={it.handleUpdateItem}
-                    disabled={it.editSaving}
-                    style={({ pressed }) => [styles.primaryBtn, { flex: 1 }, (pressed || it.editSaving) && { opacity: 0.8 }]}
-                    testID="pedido-form-edit-save"
-                  >
-                    {it.editSaving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Salvar</Text>}
-                  </Pressable>
+                  {canDelete ? (
+                    <Pressable
+                      onPress={() => it.handleDeleteItem(editItem)}
+                      disabled={it.editSaving}
+                      style={({ pressed }) => [styles.deleteBtn, (pressed || it.editSaving) && { opacity: 0.8 }]}
+                      testID="pedido-form-edit-delete"
+                    >
+                      <Ionicons name="trash-outline" size={18} color={colors.error} />
+                    </Pressable>
+                  ) : null}
+                  {canSave ? (
+                    <Pressable
+                      onPress={it.handleUpdateItem}
+                      disabled={it.editSaving}
+                      style={({ pressed }) => [styles.primaryBtn, { flex: 1 }, (pressed || it.editSaving) && { opacity: 0.8 }]}
+                      testID="pedido-form-edit-save"
+                    >
+                      {it.editSaving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Salvar</Text>}
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      onPress={() => it.setEditItem(null)}
+                      style={({ pressed }) => [styles.primaryBtn, { flex: 1 }, pressed && { opacity: 0.8 }]}
+                      testID="pedido-form-edit-close"
+                    >
+                      <Text style={styles.primaryBtnText}>Fechar</Text>
+                    </Pressable>
+                  )}
                 </View>
               </View>
             </ScrollView>
