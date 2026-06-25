@@ -1,4 +1,4 @@
-// Grade de tiles dos módulos (Clientes, Produtos & Serviços, Pedidos).
+// Grade de tiles dos módulos da Tela Principal.
 import { Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -8,9 +8,8 @@ import { usePermissions } from "@/src/permissions";
 import { styles } from "./styles";
 
 const TILES = [
-  { label: "Clientes", icon: "people-outline" as const, route: "/clientes" as const, perm: "CLIENTE.ABRIR" },
-  { label: "Produtos & Serviços", icon: "cube-outline" as const, route: "/produtos" as const, perm: "PRODUTO.ABRIR" },
   { label: "Pedidos", icon: "receipt-outline" as const, route: "/pedidos" as const, perm: "PEDIDO.ABRIR" },
+  { label: "Ordem de Serviço", icon: "construct-outline" as const, route: "/os" as const, perm: "OS.ABRIR" },
 ];
 
 export default function ModuleTiles() {

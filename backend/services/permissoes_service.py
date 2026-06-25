@@ -46,6 +46,17 @@ ACOES_PEDIDO = [
 ]
 
 
+# Ações da Ordem de Serviço (os / os_produto). Vendedor e executor são por item.
+ACOES_OS = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Gravar OS"),
+    ("ADD_ITEM", "Adicionar item"),
+    ("EDIT_ITEM", "Editar item"),
+    ("DEL_ITEM", "Excluir item"),
+    ("SITUACAO", "Alterar situação"),
+]
+
+
 def _tela(tela: str, nome: str, acoes=ACOES_PADRAO) -> dict:
     return {
         "tipo": "TELA",
@@ -71,6 +82,7 @@ CATALOGO = [
     ]),
     _menu("MOVIMENTO", "Movimento", [
         _tela("PEDIDO", "Pedidos", ACOES_PEDIDO),
+        _tela("OS", "Ordem de Serviço", ACOES_OS),
     ]),
     _menu("GERENCIAL", "Gerencial", [
         _tela("GERENCIAL", "Painel Gerencial", [

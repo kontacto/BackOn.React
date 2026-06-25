@@ -1,0 +1,43 @@
+{
+  "summary": "Iter28 — Validação completa do MÓDULO OS (Ordem de Serviço), TILES da Tela Principal e BUG FIX de sobreposição em /pedidos. Backend: 19/19 pytest passou (test_iter28_os_module.py) cobrindo POST /api/os (lista + filtros search/situacao/data + página vazia), POST /api/os/create (codigo MAX+1), GET /api/os/{c}, PUT /api/os/{c} (somente Aberta), GET/POST/PUT/DELETE /api/os/{c}/itens (vendedor+executor POR ITEM, recálculo correto: 2×8,50=17 + 1×150=167; depois qtd 3 → 25,50+150=175,50; delete S01 → 25,50), validações (qtd<=0, produto inexistente, item inexistente). Frontend (viewport 390×844, login KONTACTO/$KONT2011): (a) Tela Principal exibe SOMENTE tiles 'Pedidos' e 'Ordem de Serviço' — 'Clientes' e 'Produtos & Serviços' foram removidos conforme pedido ✓. (b) /os lista 2 OS (#1 R$25,50, #2 R$0,00), chips (Todas/Aberta/Fechada/Faturada/Cancelada), busca, FAB '+'; ao abrir filtros: filterCard {top:179, bottom:288} e firstCard os-2 {top:300} → 12px de gap, SEM sobreposição. (c) /os-form (edit OS#1): item card mostra 'Vend.: Estela · Exec.: —', Total da OS R$ 25,50; botão 'Item' abre modal, busca P002 (Heineken Long Neck) encontra, SelectField Vendedor e Executor presentes (POR ITEM) e o modal 'Selecionar Vendedor' lista CARLOS/Estela/MARIA. (d) /os-form (Nova OS): seleção de cliente via modal, Gravar criou OS #3 e redirecionou para edit mode com status Aberta. (e) /pedidos: filterCard {top:179, bottom:360} e firstCard pedido-1 {top:372} → 12px de gap, SEM overlap; digitar 'TESTE' na busca mantém foco no input (activeElement=pedidos-search-input) e atualiza a lista (filtrou para 1 resultado). Conclusão: TODAS as 3 entregas (overlap fix, tiles, módulo OS) estão funcionando corretamente em backend e frontend.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/e2e/test_iter28_os_module.py",
+    "/app/test_reports/pytest/iter28_results.xml",
+    "/tmp/iter28_principal.png",
+    "/tmp/iter28_os_list.png",
+    "/tmp/iter28_os_filters_open.png",
+    "/tmp/iter28_os_chip_aberta.png",
+    "/tmp/iter28_os_form_edit.png",
+    "/tmp/iter28_os_prod_search.png",
+    "/tmp/iter28_os_item_confirm.png",
+    "/tmp/iter28_os_vendedor_modal.png",
+    "/tmp/iter28_os_new_cliente_modal.png",
+    "/tmp/iter28_os_new_after_pick.png",
+    "/tmp/iter28_os_new_saved.png",
+    "/tmp/iter28_pedidos_filters.png",
+    "/tmp/iter28_pedidos_search.png"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "os.tsx:333 — styles.list={flex:1} aplicado na FlatList junto com chipsScroll={flexGrow:0,flexShrink:0} replica o fix de pedidos.tsx; geometria confirmou ausência de overlap em /os.",
+    "os.tsx:154-226 — Painel de filtros (search + chips + filterCard) está dentro do ListHeaderComponent, rola junto com a lista (padrão idêntico ao de pedidos.tsx). Bom.",
+    "os_itens_service.py:28-37 — _recalc_os_total usa UPDATE com subquery SUM e relê o valor; testado e correto (167 → 175.50 → 25.50).",
+    "os_service.py:160 — MAX+1 dentro da mesma conexão; OK para concorrência baixa, pode ter race em alta concorrência (já documentado pelo time, fora do escopo).",
+    "ModuleTiles.tsx:10-13 — TILES atualizado: apenas 'Pedidos' (PEDIDO.ABRIR) e 'Ordem de Serviço' (OS.ABRIR). Master KONTACTO vê ambos via usePermissions. Bom.",
+    "os-form.tsx:592-612 — Vendedor/Executor implementados como SelectField POR ITEM (não no cabeçalho), conforme regra do módulo OS. Confirmado em UI."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "100% — tiles corretos, /os funcional sem overlap, /os-form (edit+new) funciona, /pedidos sem overlap e com foco preservado na busca"},
+  "seed_data_creation": "Backend pytest criou OS #3 (cliente 1) com itens P001 e S01, depois testou update e delete (S01 removido; P001 permanece com qtd 3). Frontend criou OS #4 via UI (cliente=TESTE CLIENTE 9DIG) que ficou em Aberta sem itens. Nenhum dado de outros módulos foi alterado.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Reproduzir: seed localStorage @back_on/connections=[BACKON TESTE → gibanweb/BDREACTAPP], login KONTACTO/$KONT2011, viewport 390x844. testIDs principais: principal-tile-pedidos, principal-tile-ordem de serviço, os-screen, os-toggle-filters, os-filter-card, os-search-input, os-chip-{value}, os-fab-new, os-{codigo}, os-form-screen, os-form-cliente, os-form-area, os-form-descricao, os-form-obs, os-form-add-item, os-item-{cod_os_prod}, os-form-prod-search, os-form-prod-{codigo}, os-form-item-qtd/valor/descpct/descrs/acr, os-form-item-vendedor, os-form-item-executor, os-form-item-compl, os-form-item-confirm, os-form-item-delete, os-form-save. Validação geométrica do anti-overlap: filterCard.bottom < firstCard.top em ambos /os e /pedidos.",
+  "rca_of_issue": "Aplicado o mesmo padrão do fix de /pedidos: o painel de filtros foi movido para ListHeaderComponent (rola junto com a lista) + FlatList recebe styles.list={flex:1} (constraint vertical) + chipsScroll={flexGrow:0,flexShrink:0} (impede o ScrollView horizontal de competir por espaço). Validado por geometria DOM em ambas as telas: nenhum overlap, gap consistente de ~12px."
+}

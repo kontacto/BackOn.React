@@ -85,6 +85,42 @@ class ItemSaveRequest(BaseModel):
     funcao: Optional[int] = None           # 1=gerente,2=supervisor,3=vendedor (p/ validar limite)
 
 
+class OSListRequest(BaseModel):
+    servidor: str
+    banco: str
+    search: Optional[str] = ""
+    situacao: Optional[str] = ""  # vazio = todas
+    data_ini: Optional[str] = None  # ISO YYYY-MM-DD
+    data_fim: Optional[str] = None  # ISO YYYY-MM-DD
+    page: int = 1
+    size: int = 20
+
+
+class OSSaveRequest(BaseModel):
+    servidor: str
+    banco: str
+    cliente: int                          # cliente.codigo
+    area_atuacao: Optional[int] = None    # area_atuacao.area (FK)
+    descricao_cliente: Optional[str] = ""  # relato do cliente
+    obs: Optional[str] = ""
+
+
+class OSItemSaveRequest(BaseModel):
+    servidor: str
+    banco: str
+    produto: Optional[str] = None          # obrigatório no create (pecas.codigo_int / servicos.codigo)
+    qtd: float = 1
+    valor_unitario: Optional[float] = None  # se None, usa preço padrão do produto
+    complemento: Optional[str] = ""
+    desconto: Optional[float] = 0          # desconto UNITÁRIO em R$
+    desconto_pct: Optional[float] = 0      # % informado (só p/ log)
+    acrescimo: Optional[float] = 0         # acréscimo UNITÁRIO em R$
+    vendedor: Optional[int] = None         # funcionarios.codigo_int — POR ITEM
+    executor: Optional[int] = None         # funcionarios.codigo_int — POR ITEM
+    usuario_codigo: Optional[int] = -2
+    funcao: Optional[int] = None
+
+
 class DescontoGeralRequest(BaseModel):
     servidor: str
     banco: str
