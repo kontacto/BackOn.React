@@ -101,8 +101,20 @@ class OSSaveRequest(BaseModel):
     banco: str
     cliente: int                          # cliente.codigo
     area_atuacao: Optional[int] = None    # area_atuacao.area (FK)
-    descricao_cliente: Optional[str] = ""  # relato do cliente
-    obs: Optional[str] = ""
+    descricao_cliente: Optional[str] = ""  # "Cliente Descreva" (os.descricao_cliente)
+    obs: Optional[str] = ""                # os.obs
+    resumo: Optional[str] = ""             # "Serviço Executado" (os.resumo)
+    status_os: Optional[int] = None        # índice do combobox (os.status_os)
+    atendente: Optional[int] = None        # funcionarios.codigo_int (os.atendente)
+    situacao: Optional[str] = None         # A/F/PG/C (os.situacao); None no create = 'A'
+    # Veículo / Equipamento
+    placa: Optional[str] = ""              # os.placa
+    marca: Optional[str] = ""              # os.marca
+    modelo: Optional[str] = ""             # os.modelo
+    km: Optional[int] = None               # os.km
+    ano: Optional[str] = ""                # os.ano
+    chassi: Optional[str] = ""             # os.chassi (Oficina)
+    numero_de_serie: Optional[str] = ""    # os.numero_de_serie (Assistência)
 
 
 class OSItemSaveRequest(BaseModel):

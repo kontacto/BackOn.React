@@ -1,0 +1,42 @@
+{
+  "summary": "Iter29 — Validação BACKEND + FRONTEND da AMPLIAÇÃO do módulo OS (novos campos cabeçalho, custo_os/custo_ped, toggle Oficina/Assistencia, rótulos duplos) e regressão de Pedido (custo_ped=valor_hora para serviço). Backend: 7/7 pytest passou (test_iter29_os_full_pedido_custo.py): (1) OS create/get/update persistem todos os novos campos (status_os=3, atendente=3, situacao='A', placa=AAA-1234, marca=VW, modelo=GOL, km=12345, ano=2022, chassi=9BWZZZ377VT...), update altera status_os→4, placa→BBB-9999, numero_de_serie→SN-XYZ-001; (2) add item produto P001 e serviço S01 em OS criam itens com sucesso; (3) Pedido novo (#3) add item produto P001 e serviço S01 com sucesso — confirma compartilhamento de _resolve_produto entre Pedido e OS. Observação: endpoint /api/db/run-query=404, então não foi possível validar custo_os/custo_ped via SELECT direto no pytest; E1 já validou via DB diretamente (custo_os produto=4.71, serviço=150). Frontend (viewport 390x844, login KONTACTO/$KONT2011): habilitei Oficina=true via /api/controle-config/salvar (necessário pelo novo gate em permissions/index.tsx:93), Principal mostrou tiles ['pedidos','ordem de serviço'] ✓, /os-form (Nova OS) renderizou TODOS os 16 testIDs novos (cliente, status, atendente, situacao, area, placa, km, marca, modelo, ano, serie, descricao, resumo, obs, save, screen), rótulos 'Veículo'/'CHASSI' aplicados (moduleOn('Oficina')=true). Criou OS #7 com Cliente=TESTE CLIENTE 9DIG, Status='Em execução', Atendente=Estela, todos os campos do veículo, descricao_cliente/resumo/obs preenchidos → redirecionou para edit mode (?os=7). Reabertura confirmou persistência completa: placa=TST-2929, km=55555, ano=2023, serie=CHASSI-TEST-29, todos os textos longos preservados ✓. Items: add P001 (R$8,50) com vendor=Estela + S01 (R$150,00) → Total da OS = R$158,50 ✓. Regressão /pedidos: gap filterCard.bottom→firstCard.top=12px (sem overlap) ✓. Oficina restaurada para false após os testes.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/e2e/test_iter29_os_full_pedido_custo.py",
+    "/app/test_reports/pytest/iter29_results.xml",
+    "/tmp/iter29_principal_oficina_on.png",
+    "/tmp/iter29_osform_new.png",
+    "/tmp/iter29_osform_filled.png",
+    "/tmp/iter29_osform_saved.png",
+    "/tmp/iter29_osform_items.png",
+    "/tmp/iter29_pedidos.png"
+  ],
+  "action_items": [
+    "IMPORTANTE p/ documentação ao usuário: com a nova regra do toggle de OS (permissions/index.tsx:93 — Oficina OR Assistencia), o tile 'Ordem de Serviço' e a tela /os-form ficam BLOQUEADAS ('Acesso restrito') por padrão no BDREACTAPP (Oficina=false e Assistencia=false). Para usar o módulo OS, ligar Oficina ou Assistencia em 'Módulos e Recursos' (controle_configuracao). Isto é comportamento esperado, mas o seed inicial pode confundir testes futuros.",
+    "Endpoint /api/db/run-query não existe (404). Se quiser validar custo_os/custo_ped via API automatizada, considere expor um helper read-only (ou já validar via leitura indireta com /api/os/{c}/itens retornando custo)."
+  ],
+  "critical_code_review_comments": [
+    "permissions/index.tsx:93 — gate OS = Oficina OU Assistencia está correto e atende req.5; bloqueia inclusive master KONTACTO (consistente com outros módulos via disabledTelas).",
+    "os_service.py:84-145 — _get_os_sync retorna TODOS os novos campos (status_os, atendente, atendente_nome via JOIN funcionarios, placa, marca, modelo, km, ano, chassi, numero_de_serie, descricao_cliente, obs, resumo). Bom.",
+    "os_service.py:148-225 — _save_os_sync INSERT inclui os 12 novos campos; UPDATE também. _trunc aplica limites do schema. Bom.",
+    "pedido_common.py:60-70 — FIX validado: serviço retorna custo=valor_hora (antes era 0). Compartilhado por itens_service e os_itens_service.",
+    "os-form.tsx:241-258 — Ao gravar, isOficina decide se valor de 'serie' vai p/ chassi (Oficina) ou numero_de_serie (Assistência). UX consistente com os rótulos duplos.",
+    "os-form.tsx:495 / 522 — equipLabel ('Veículo'/'Equipamento'/'Veículo / Equipamento') e serieLabel ('Chassi'/'Nº de Série'/'Nº de Série / Chassi') cobrem os 3 estados (Oficina, Assistência, nenhum). Bom."
+  ],
+  "updated_files": [
+    "/app/backend/tests/e2e/test_iter29_os_full_pedido_custo.py (novo)",
+    "/app/test_reports/iteration_29.json"
+  ],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% — OS form completo, criar+reabrir+itens+total, /pedidos sem regressão"},
+  "seed_data_creation": "Backend pytest criou OS #5 (cleanup itens), Pedido #3 (cleanup itens). Frontend criou OS #7 cliente=TESTE CLIENTE 9DIG com 2 itens (P001 R$8,50 + S01 R$150). Oficina foi temporariamente habilitada e restaurada para false no controle_configuracao.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Para testar /os-form e o tile de OS, o módulo OS exige Oficina OU Assistencia=true em /api/controle-config (sem isso, retorna 'Acesso restrito' mesmo para master). Comando para habilitar: curl -X POST {API}/api/controle-config/salvar -d '{\"servidor\":\"...\",\"banco\":\"...\",\"valores\":{\"Oficina\":true}}'. TestIDs do login: login-usuario-input/login-senha-input/login-submit-button. TestIDs do os-form: os-form-{cliente,status,atendente,situacao,area,placa,km,marca,modelo,ano,serie,descricao,resumo,obs,save,add-item} e os-form-item-{qtd,valor,vendedor,executor,confirm,delete}. Endpoint /api/db/run-query NÃO existe — não use para validar persistência; use os endpoints próprios.",
+  "rca_of_issue": "N/A — não houve bug. Apenas confirmar com o usuário que o gate Oficina/Assistencia é desejado: por padrão o BDREACTAPP atual tem ambos=false, então o tile e a tela /os-form ficam invisíveis. Se o usuário esperar que OS apareça por padrão, considere setar Oficina=true por padrão no seed ou documentar o passo."
+}

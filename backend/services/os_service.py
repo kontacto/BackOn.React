@@ -9,7 +9,7 @@ Situações reutilizam os mesmos códigos do pedido (A/F/PG/C).
 import asyncio
 from typing import Optional
 
-from db.connection import _open_conn
+from db.connection import _open_conn, _get_col_sizes, _trunc
 from models.schemas import OSListRequest, OSSaveRequest
 from services.constants import SITUACAO_LABEL
 
@@ -90,12 +90,15 @@ def _get_os_sync(servidor: str, banco: str, codigo: int) -> dict:
         cur = conn.cursor(as_dict=True)
         cur.execute(
             "SELECT o.codigo, o.cliente, o.data_entrada, o.hora_entrada, o.situacao, o.valor, "
-            "       o.area_atuacao, o.descricao_cliente, o.obs, "
+            "       o.area_atuacao, o.descricao_cliente, o.obs, o.resumo, o.status_os, o.atendente, "
+            "       o.placa, o.marca, o.modelo, o.km, o.ano, o.chassi, o.numero_de_serie, "
             "       c.nome AS cliente_nome, c.cgc_cpf AS cliente_cgc, "
-            "       a.descricao AS area_descricao "
+            "       a.descricao AS area_descricao, "
+            "       f.nome AS atendente_nome, f.nome_guerra AS atendente_guerra "
             "FROM os o "
             "LEFT JOIN cliente c ON c.codigo = o.cliente "
             "LEFT JOIN area_atuacao a ON a.area = o.area_atuacao "
+            "LEFT JOIN funcionarios f ON f.codigo_int = o.atendente "
             "WHERE o.codigo = %s",
             (codigo,),
         )
@@ -121,6 +124,17 @@ def _get_os_sync(servidor: str, banco: str, codigo: int) -> dict:
                 "area_descricao": (row.get("area_descricao") or "").strip(),
                 "descricao_cliente": row.get("descricao_cliente") or "",
                 "obs": row.get("obs") or "",
+                "resumo": row.get("resumo") or "",
+                "status_os": int(row["status_os"]) if row.get("status_os") is not None else None,
+                "atendente": int(row["atendente"]) if row.get("atendente") else None,
+                "atendente_nome": (row.get("atendente_guerra") or row.get("atendente_nome") or "").strip(),
+                "placa": (row.get("placa") or "").strip(),
+                "marca": (row.get("marca") or "").strip(),
+                "modelo": (row.get("modelo") or "").strip(),
+                "km": int(row["km"]) if row.get("km") is not None else None,
+                "ano": (row.get("ano") or "").strip(),
+                "chassi": (row.get("chassi") or "").strip(),
+                "numero_de_serie": (row.get("numero_de_serie") or "").strip(),
             },
         }
     except Exception as e:
@@ -152,8 +166,19 @@ def _save_os_sync(req: OSSaveRequest, codigo: Optional[int]) -> dict:
                 label = SITUACAO_LABEL.get(sit_atual, sit_atual)
                 return {"success": False, "message": f"OS com situação '{label}' não pode ser alterada."}
 
+        sizes = _get_col_sizes(conn, req.banco, "os")
         descricao_cliente = req.descricao_cliente or ""
         obs = req.obs or ""
+        resumo = req.resumo or ""
+        placa = _trunc(req.placa or "", sizes, "placa", 8)
+        marca = _trunc(req.marca or "", sizes, "marca", 3)
+        modelo = _trunc(req.modelo or "", sizes, "modelo", 3)
+        ano = _trunc(req.ano or "", sizes, "ano", 9)
+        chassi = _trunc(req.chassi or "", sizes, "chassi", 20)
+        num_serie = _trunc(req.numero_de_serie or "", sizes, "numero_de_serie", 20)
+        km = int(req.km) if req.km is not None else 0
+        status_os = req.status_os if req.status_os is not None else 0
+        situacao = (req.situacao or "A").strip().upper() if req.situacao else "A"
 
         if codigo is None:
             # codigo NÃO é identity → gera MAX+1. km e OS_ORIGINAL são NOT NULL.
@@ -162,17 +187,22 @@ def _save_os_sync(req: OSSaveRequest, codigo: Optional[int]) -> dict:
             cur.execute(
                 "INSERT INTO os "
                 "(codigo, cliente, data_entrada, hora_entrada, situacao, valor, "
-                " area_atuacao, descricao_cliente, obs, km, OS_ORIGINAL) "
+                " area_atuacao, descricao_cliente, obs, resumo, status_os, atendente, "
+                " placa, marca, modelo, km, ano, chassi, numero_de_serie, OS_ORIGINAL) "
                 "VALUES (%s, %s, CAST(GETDATE() AS DATE), CONVERT(NVARCHAR(8), GETDATE(), 108), "
-                "        'A', 0, %s, %s, %s, 0, 0)",
-                (novo, req.cliente, req.area_atuacao, descricao_cliente, obs),
+                "        %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0)",
+                (novo, req.cliente, situacao, req.area_atuacao, descricao_cliente, obs, resumo,
+                 status_os, req.atendente, placa, marca, modelo, km, ano, chassi, num_serie),
             )
             os_id = novo
         else:
             cur.execute(
-                "UPDATE os SET cliente=%s, area_atuacao=%s, descricao_cliente=%s, obs=%s "
+                "UPDATE os SET cliente=%s, area_atuacao=%s, descricao_cliente=%s, obs=%s, "
+                " resumo=%s, status_os=%s, atendente=%s, situacao=%s, "
+                " placa=%s, marca=%s, modelo=%s, km=%s, ano=%s, chassi=%s, numero_de_serie=%s "
                 "WHERE codigo=%s",
-                (req.cliente, req.area_atuacao, descricao_cliente, obs, codigo),
+                (req.cliente, req.area_atuacao, descricao_cliente, obs, resumo, status_os,
+                 req.atendente, situacao, placa, marca, modelo, km, ano, chassi, num_serie, codigo),
             )
             if cur.rowcount == 0:
                 conn.rollback()

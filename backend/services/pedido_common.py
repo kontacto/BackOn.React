@@ -58,13 +58,14 @@ def _resolve_produto(cur, codigo: str) -> Optional[dict]:
     )
     r = cur.fetchone()
     if r:
+        valor = float(r.get("valor") or 0)
         return {
             "tipo": "S",
             "codigo": (r.get("codigo") or "").strip(),
             "descricao": (r.get("descricao") or "").strip(),
             "cod_fab": (r.get("codigo") or "").strip(),
-            "valor": float(r.get("valor") or 0),
+            "valor": valor,
             "unidade": "HR",
-            "custo": 0.0,
+            "custo": valor,  # serviço: custo = valor_hora (regra de negócio)
         }
     return None

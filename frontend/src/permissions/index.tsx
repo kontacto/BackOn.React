@@ -89,6 +89,8 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
           Object.entries(MODULE_TELAS).forEach(([mod, telas]) => {
             if (!cfg.valores[mod]) telas.forEach((t) => disabledTelas.add(t.toUpperCase()));
           });
+          // Ordem de Serviço: habilitada se Oficina OU Assistência estiver ligada.
+          if (!(cfg.valores.Oficina || cfg.valores.Assistencia)) disabledTelas.add("OS");
         }
       } catch {
         // sem flags → não desliga nada

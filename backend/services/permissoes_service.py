@@ -219,6 +219,9 @@ def disabled_telas(flags: dict) -> set:
     for modulo, telas in MODULE_TELAS.items():
         if not flags.get(modulo, False):
             disabled.update(telas)
+    # Ordem de Serviço: habilitada se Oficina OU Assistência estiver ligada.
+    if not (flags.get("Oficina", False) or flags.get("Assistencia", False)):
+        disabled.add("OS")
     return disabled
 
 

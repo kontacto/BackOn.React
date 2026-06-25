@@ -20,10 +20,30 @@ import { ClienteRow, ProdutoServico } from "@/src/components/pedido/types";
 
 const SIT_COLOR: Record<string, string> = { A: "#1e88e5", F: "#43a047", PG: "#8e24aa", C: "#e53935" };
 
+// Combobox Status O.S. — grava o índice (os.status_os).
+const STATUS_OS = [
+  "Aguardando aprovação do Orçamento",
+  "Aguardando Liberação de Execução",
+  "Pendente",
+  "Em execução",
+  "Executado",
+  "Cancelado",
+];
+
+const SITUACOES = [
+  { value: "A", label: "Aberta" },
+  { value: "F", label: "Fechada" },
+  { value: "PG", label: "Faturada" },
+  { value: "C", label: "Cancelada" },
+];
+
 type OSData = {
   codigo: number; cliente: number | null; cliente_nome: string; cliente_cgc: string;
   data: string | null; hora: string; situacao: string; situacao_label: string; total: number;
   area_atuacao: number | null; area_descricao: string; descricao_cliente: string; obs: string;
+  resumo: string; status_os: number | null; atendente: number | null; atendente_nome: string;
+  placa: string; marca: string; modelo: string; km: number | null; ano: string;
+  chassi: string; numero_de_serie: string;
 };
 
 type OSItem = {
@@ -37,7 +57,7 @@ type Toast = { msg: string; tone: "info" | "error" | "success" } | null;
 
 export default function OSFormScreen() {
   const router = useRouter();
-  const { can } = usePermissions();
+  const { can, moduleOn } = usePermissions();
   const params = useLocalSearchParams<{ os?: string }>();
   const editing = !!params.os;
   const osId = params.os ? parseInt(String(params.os), 10) : null;
@@ -58,6 +78,16 @@ export default function OSFormScreen() {
   const [areaAtuacao, setAreaAtuacao] = useState<number | null>(null);
   const [descricaoCliente, setDescricaoCliente] = useState("");
   const [obs, setObs] = useState("");
+  const [resumo, setResumo] = useState("");
+  const [statusOs, setStatusOs] = useState<number | null>(null);
+  const [atendente, setAtendente] = useState<number | null>(null);
+  const [situacao, setSituacao] = useState("A");
+  const [placa, setPlaca] = useState("");
+  const [marca, setMarca] = useState("");
+  const [modelo, setModelo] = useState("");
+  const [km, setKm] = useState("");
+  const [ano, setAno] = useState("");
+  const [serie, setSerie] = useState("");  // chassi (Oficina) ou nº de série (Assistência)
 
   const [areas, setAreas] = useState<{ codigo: number; descricao: string }[]>([]);
   const [funcionarios, setFuncionarios] = useState<{ codigo: number; nome: string; nome_guerra: string }[]>([]);
@@ -133,6 +163,16 @@ export default function OSFormScreen() {
         setAreaAtuacao(o.area_atuacao ?? null);
         setDescricaoCliente(o.descricao_cliente || "");
         setObs(o.obs || "");
+        setResumo(o.resumo || "");
+        setStatusOs(o.status_os ?? null);
+        setAtendente(o.atendente ?? null);
+        setSituacao(o.situacao || "A");
+        setPlaca(o.placa || "");
+        setMarca(o.marca || "");
+        setModelo(o.modelo || "");
+        setKm(o.km != null ? String(o.km) : "");
+        setAno(o.ano || "");
+        setSerie(o.chassi || o.numero_de_serie || "");
       } else {
         showToast(j?.message || "Erro ao carregar OS.", "error");
       }
@@ -198,11 +238,24 @@ export default function OSFormScreen() {
     if (!cliente) { showToast("Selecione um cliente.", "error"); return; }
     setSaving(true);
     try {
-      const body = {
+      const isOficina = moduleOn("Oficina");
+      const body: Record<string, unknown> = {
         cliente: cliente.codigo,
         area_atuacao: areaAtuacao,
         descricao_cliente: descricaoCliente,
         obs,
+        resumo,
+        status_os: statusOs,
+        atendente: atendente,
+        situacao,
+        placa,
+        marca,
+        modelo,
+        km: km.trim() ? parseInt(km, 10) || 0 : 0,
+        ano,
+        // Campo de descrição dupla: Oficina grava em chassi, Assistência em nº de série.
+        chassi: isOficina ? serie : "",
+        numero_de_serie: isOficina ? "" : serie,
       };
       const j = editing && osId
         ? await apiSend(conn, `/api/os/${osId}`, "PUT", body)
@@ -320,6 +373,12 @@ export default function OSFormScreen() {
 
   const sit = os?.situacao || "A";
   const sitColor = SIT_COLOR[sit] || colors.muted;
+  const isOficina = moduleOn("Oficina");
+  const isAssist = moduleOn("Assistencia");
+  const equipLabel = isOficina ? "Veículo" : isAssist ? "Equipamento" : "Veículo / Equipamento";
+  const serieLabel = isOficina ? "Chassi" : isAssist ? "Nº de Série" : "Nº de Série / Chassi";
+  const statusOptions: SelectOption[] = STATUS_OS.map((s, i) => ({ value: i, label: s }));
+  const situacaoOptions: SelectOption[] = SITUACOES.map((s) => ({ value: s.value, label: s.label }));
 
   if (loading) return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
@@ -372,6 +431,47 @@ export default function OSFormScreen() {
             <Ionicons name="chevron-forward" size={16} color={colors.muted} />
           </Pressable>
 
+          {/* Status O.S. */}
+          <Text style={styles.sectionTitle}>Status O.S.</Text>
+          <SelectField
+            value={statusOs}
+            onChange={(v) => setStatusOs(v == null ? null : Number(v))}
+            options={statusOptions}
+            placeholder="Selecione o status"
+            modalTitle="Status da O.S."
+            searchable={false}
+            allowClear
+            testID="os-form-status"
+          />
+
+          {/* Atendente e Situação */}
+          <View style={styles.fieldRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sectionTitle}>Atendente</Text>
+              <SelectField
+                value={atendente}
+                onChange={(v) => setAtendente(v == null ? null : Number(v))}
+                options={funcOptions}
+                placeholder="Atendente"
+                modalTitle="Selecionar Atendente"
+                allowClear
+                testID="os-form-atendente"
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.sectionTitle}>Situação</Text>
+              <SelectField
+                value={situacao}
+                onChange={(v) => setSituacao(v == null ? "A" : String(v))}
+                options={situacaoOptions}
+                placeholder="Situação"
+                modalTitle="Situação da O.S."
+                searchable={false}
+                testID="os-form-situacao"
+              />
+            </View>
+          </View>
+
           {/* Área de atuação */}
           <Text style={styles.sectionTitle}>Área de Atuação</Text>
           <SelectField
@@ -391,8 +491,41 @@ export default function OSFormScreen() {
             <Text style={styles.readonlyText}>{editing ? formatDateBR(os?.data || null) : formatDateBR(todayISO())}</Text>
           </View>
 
-          {/* Relato do cliente */}
-          <Text style={styles.sectionTitle}>Relato do Cliente</Text>
+          {/* Veículo / Equipamento */}
+          <Text style={styles.groupTitle}>{equipLabel}</Text>
+          <View style={styles.fieldRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fieldLabel}>Placa</Text>
+              <TextInput value={placa} onChangeText={setPlaca} autoCapitalize="characters" maxLength={8} placeholder="ABC-1234" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-placa" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fieldLabel}>KM</Text>
+              <TextInput value={km} onChangeText={setKm} keyboardType="number-pad" placeholder="0" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-km" />
+            </View>
+          </View>
+          <View style={styles.fieldRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fieldLabel}>Marca</Text>
+              <TextInput value={marca} onChangeText={setMarca} maxLength={3} placeholder="Marca" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-marca" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fieldLabel}>Modelo</Text>
+              <TextInput value={modelo} onChangeText={setModelo} maxLength={3} placeholder="Modelo" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-modelo" />
+            </View>
+          </View>
+          <View style={styles.fieldRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fieldLabel}>Ano</Text>
+              <TextInput value={ano} onChangeText={setAno} maxLength={9} placeholder="2025" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-ano" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fieldLabel}>{serieLabel}</Text>
+              <TextInput value={serie} onChangeText={setSerie} maxLength={20} placeholder={serieLabel} placeholderTextColor={colors.muted} style={styles.input} testID="os-form-serie" />
+            </View>
+          </View>
+
+          {/* Cliente Descreva */}
+          <Text style={styles.sectionTitle}>Cliente Descreva</Text>
           <TextInput
             value={descricaoCliente}
             onChangeText={setDescricaoCliente}
@@ -401,6 +534,18 @@ export default function OSFormScreen() {
             style={[styles.input, { minHeight: 80, textAlignVertical: "top", paddingTop: 12 }]}
             multiline
             testID="os-form-descricao"
+          />
+
+          {/* Serviço Executado */}
+          <Text style={styles.sectionTitle}>Serviço Executado</Text>
+          <TextInput
+            value={resumo}
+            onChangeText={setResumo}
+            placeholder="Resumo do serviço executado"
+            placeholderTextColor={colors.muted}
+            style={[styles.input, { minHeight: 80, textAlignVertical: "top", paddingTop: 12 }]}
+            multiline
+            testID="os-form-resumo"
           />
 
           {/* Observação */}
@@ -680,6 +825,7 @@ const styles = StyleSheet.create({
   rowCenter: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   headerMeta: { fontSize: 12, color: colors.muted },
   sectionTitle: { fontSize: 13, fontWeight: "600", color: colors.onSurface, marginTop: spacing.md, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.4 },
+  groupTitle: { fontSize: 14, fontWeight: "700", color: colors.brandPrimary, marginTop: spacing.lg, marginBottom: 4 },
   selectBox: {
     flexDirection: "row", alignItems: "center", gap: spacing.sm,
     backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
