@@ -1,0 +1,35 @@
+{
+  "summary": "Iter22 — Frontend-only E2E do novo checkbox PAI 'Marcar todas as permissões' (testID perm-select-all) em /permissoes, sistema=50. Login KONTACTO/$KONT2011 (sessão injetada via localStorage para acelerar — equivalente ao fluxo /connections → /login real validado em iter21). Mobile viewport 390x844, viewport real do preview. Todos os 8 cenários do review_request foram validados (9/9 assertions PASS): (1) Login MASTER e abertura de /permissoes via Configurações > Administração ✓ rota carrega permissoes-screen. (2) Combobox perm-classe-picker abre modal com classes 1..4, perm-classe-4 (VENDEDOR) seleciona e árvore carrega ✓. (3) perm-select-all renderiza no topo da árvore com label 'Marcar todas as permissões' ✓. (4) Toggle perm-select-all marca TODOS os 46 nós (cor do ícone vira brandPrimary rgb(11,42,91) = 'checkbox'); 2º toggle desmarca TODOS (cor muted rgb(107,120,145) = 'square-outline') ✓. (5) Estado parcial: marcar manualmente APENAS o nó TELA|CLIENTE deixa perm-select-all em estado parcial — cor do ícone vira warning rgb(194,122,41) = 'remove-circle' ✓ (validado por cor pois Ionicons renderiza glyph sem texto). (6) Com tudo marcado via perm-select-all, perm-save dispara POST /api/permissoes/salvar e exibe feedback '46 permissão(ões) salva(s).' — GET /api/permissoes?classe=4 retorna exatamente 46 itens ✓. (7) Persistência: trocar para classe=1 (ADMIN) e voltar para classe=4 (VENDEDOR) → API retorna os mesmos 46 itens e UI mostra perm-select-all ON ✓. (8) Limpar: desmarcar via perm-select-all e Gravar → grupo fica com 0 permissões; recarregar (troca de classe e volta) mantém vazio ✓. BÔNUS validado: estado parcial salva subset (6 itens = TELA|CLIENTE + 5 BOTÕES filhos). Persistência via DELETE+INSERT (classe=4, sistema=50) funciona perfeitamente. Backend logs sem erros, todas as chamadas /api/permissoes* retornaram 200 OK.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/iter22_perm_loaded.png (tela /permissoes carregada)",
+    "/tmp/iter22_vendedor_selected.png (VENDEDOR selecionada com perm-select-all no topo)",
+    "/tmp/iter22_allon.png (todos os 46 nós marcados após perm-select-all)",
+    "/tmp/iter22_saved_all.png (feedback '46 permissão(ões) salva(s).' visível)",
+    "/tmp/iter22_alloff.png (todos desmarcados)",
+    "/tmp/iter22_partial_validated.png (estado parcial: apenas CLIENTES marcado, select-all e CADASTROS com ícone laranja remove-circle)"
+  ],
+  "action_items": [
+    "(Cosmético, não bloqueia) Warning persistente do react-native-web 'shadow* style props are deprecated. Use boxShadow' em /app/frontend/app/permissoes.tsx (estilo saveBtn linhas 463-467: shadowColor/shadowOpacity/shadowRadius/shadowOffset). Migrar para boxShadow num próximo refactor — mesma observação já feita em iter21."
+  ],
+  "critical_code_review_comments": [
+    "/app/frontend/app/permissoes.tsx:68-75 — allKeys + allState derivam corretamente o estado tri-state (false | true | 'partial') a partir do tamanho da intersecção entre catálogo e Set selected. Lógica O(N) limpa. ✓",
+    "/app/frontend/app/permissoes.tsx:77-81 — toggleAll: se TODOS estão marcados, esvazia; caso contrário, marca todos. Comportamento correto: a partir de estado parcial, o 1º clique vai para ON (todos). Confirmado por teste (cenário D na sequência partial→ON→OFF). ✓",
+    "/app/frontend/app/permissoes.tsx:307-326 — perm-select-all renderizado via ListHeaderComponent do FlatList, ícone tri-state e cor (brandPrimary/warning/muted) refletem fielmente allState. ✓",
+    "/app/frontend/app/permissoes.tsx:180-215 — handleSave: monta itens a partir do flatMap (chave → nó), POST /api/permissoes/salvar com {servidor,banco,classe,itens}; backend faz DELETE+INSERT. Feedback de sucesso vem do payload r.message. Em sucesso chama reloadPermissions() para refrescar o PermissionsProvider — boa decisão. ✓",
+    "/app/frontend/app/permissoes.tsx:124-152 — loadClasse popula 'selected' a partir de GET /api/permissoes?classe=N (Set de keyOf), garantindo que perm-select-all derive automaticamente o estado correto ao trocar de grupo. ✓"
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (smoke via UI — endpoints catalogo/classes/permissoes/salvar todos 200 OK)", "frontend": "100% (9/9 assertions, 8/8 cenários do review_request)"},
+  "seed_data_creation": "Durante o teste a classe=4 (VENDEDOR) foi gravada com 46 itens, depois com 6 itens (parcial: TELA|CLIENTE + 5 botões), e LIMPA ao final (0 itens). Estado final preservado: VENDEDOR=0 perms (igual ao estado pós-iter21).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Para reproduzir rapidamente, injetar via localStorage (avoid /connections + /login flow): localStorage['@back_on/connections'] = JSON.stringify([{id:'x',empresa:'BACKON TESTE',servidor:'gibanweb.database.windows.net',banco:'BDREACTAPP',api:'<EXPO_BACKEND_URL>',logo:'',createdAt:new Date().toISOString()}]); localStorage['@back_on/session'] = JSON.stringify({empresa:'BACKON TESTE',server:'gibanweb.database.windows.net',database:'BDREACTAPP',logo:'',usuario:{usuario:'KONTACTO',master:true,classe:0},funcionario:null,loggedAt:new Date().toISOString()}); depois page.goto(`${BASE}/permissoes`). Detecção de estado tri-state do perm-select-all DEVE usar a COR computada do ícone interno (style.color via div[style*='color']) — Ionicons no RNW renderiza glyph sem nome de classe legível. Cores: ON=rgb(11,42,91) [brandPrimary], PARTIAL=rgb(194,122,41) [warning], OFF=rgb(107,120,145) [muted]. Pressable do RNW exige page.mouse.click(bbox.center) — page.click(force=True) não dispara onPress. API GET /api/permissoes?classe=N de fora do browser dá 403 (provavelmente CDN/edge); chamar via page.evaluate(fetch(...)) funciona. Catálogo VENDEDOR completo tem 46 chaves (MENU+TELA+BOTAO combinados em Cadastros, Movimento, Gerencial, Relatórios, Configurações).",
+  "rca_of_issue": "N/A — feature funcionando integralmente conforme spec. O checkbox pai 'Marcar todas as permissões' está implementado em /app/frontend/app/permissoes.tsx (linhas 67-81 lógica + 307-326 render), integra-se ao Set<string> 'selected' já existente, e persiste via o mesmo endpoint POST /api/permissoes/salvar (DELETE+INSERT por classe/sistema=50). Persistência confirmada em ambas as direções (cheio → reload → ainda cheio; vazio → reload → ainda vazio)."
+}
