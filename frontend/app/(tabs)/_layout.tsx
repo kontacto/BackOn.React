@@ -25,10 +25,10 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="clientes"
+        name="cadastros"
         options={{
-          title: "Clientes",
-          tabBarIcon: ({ color, size }) => <Ionicons name="people-outline" size={size} color={color} />,
+          title: "Cadastros",
+          tabBarIcon: ({ color, size }) => <Ionicons name="albums-outline" size={size} color={color} />,
         }}
       />
       <Tabs.Screen

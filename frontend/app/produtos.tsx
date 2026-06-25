@@ -44,7 +44,7 @@ export default function ProdutosScreen() {
   const router = useRouter();
   const { can, moduleOn } = usePermissions();
   const servicosOn = moduleOn("servicos");
-  const params = useLocalSearchParams<{ pedido?: string }>();
+  const params = useLocalSearchParams<{ pedido?: string; tipo?: string }>();
   const selectPedido = params.pedido ? parseInt(String(params.pedido), 10) : null;
   const selecting = !!selectPedido;
 
@@ -62,7 +62,9 @@ export default function ProdutosScreen() {
   const [toast, setToast] = useState<string | null>(null);
   const [conn, setConn] = useState<Connection | null>(null);
   const [search, setSearch] = useState("");
-  const [tipo, setTipo] = useState<Tipo>("all");
+  const [tipo, setTipo] = useState<Tipo>(
+    params.tipo === "P" || params.tipo === "S" ? params.tipo : "all"
+  );
   const [items, setItems] = useState<Item[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
