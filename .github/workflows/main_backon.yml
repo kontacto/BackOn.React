@@ -80,9 +80,9 @@ jobs:
       - name: Login no Azure (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_XXXXXXXXXXXXXXXX }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_XXXXXXXXXXXXXXXX }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_XXXXXXXXXXXXXXXX }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_DAEC6F0B6DAC49BDB17FB0FCBE83BBE0 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E032C6E7208547558B35514D07A80CB1 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_4B374C47656644EEA58E7B47709F0651 }}
 
       - name: Deploy para o Azure Web App
         id: deploy-to-webapp
