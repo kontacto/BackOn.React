@@ -10,31 +10,36 @@ type Props = {
   saving: boolean;
   onBack: () => void;
   onSave: () => void;
+  canSave?: boolean;
 };
 
-export default function PedidoHeader({ title, saving, onBack, onSave }: Props) {
+export default function PedidoHeader({ title, saving, onBack, onSave, canSave = true }: Props) {
   return (
     <View style={styles.header}>
       <Pressable onPress={onBack} style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]} hitSlop={12}>
         <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
       </Pressable>
       <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
-      <Pressable
-        onPress={onSave}
-        disabled={saving}
-        style={({ pressed }) => [styles.saveBtn, (pressed || saving) && { opacity: 0.7 }]}
-        hitSlop={8}
-        testID="pedido-form-save"
-      >
-        {saving ? (
-          <ActivityIndicator color={colors.onBrandPrimary} size="small" />
-        ) : (
-          <>
-            <Ionicons name="checkmark" size={18} color={colors.onBrandPrimary} />
-            <Text style={styles.saveLabel}>Gravar</Text>
-          </>
-        )}
-      </Pressable>
+      {canSave ? (
+        <Pressable
+          onPress={onSave}
+          disabled={saving}
+          style={({ pressed }) => [styles.saveBtn, (pressed || saving) && { opacity: 0.7 }]}
+          hitSlop={8}
+          testID="pedido-form-save"
+        >
+          {saving ? (
+            <ActivityIndicator color={colors.onBrandPrimary} size="small" />
+          ) : (
+            <>
+              <Ionicons name="checkmark" size={18} color={colors.onBrandPrimary} />
+              <Text style={styles.saveLabel}>Gravar</Text>
+            </>
+          )}
+        </Pressable>
+      ) : (
+        <View style={{ width: 40 }} />
+      )}
     </View>
   );
 }

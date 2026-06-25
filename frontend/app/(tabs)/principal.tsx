@@ -55,7 +55,7 @@ export default function PrincipalScreen() {
 
         <ModuleTiles />
 
-        {d.isManager ? (
+        {d.canSeeAll ? (
           <View style={styles.filterRow} testID="principal-vendedor-filter">
             <SelectField
               label="Filtrar por vendedor"
@@ -72,7 +72,13 @@ export default function PrincipalScreen() {
 
         <SituacaoFilter value={d.situacaoFiltro} onChange={d.handleSituacao} />
 
-        <TotalsCards totais={d.totais} dashLoading={d.dashLoading} />
+        <TotalsCards
+          totais={d.totais}
+          dashLoading={d.dashLoading}
+          showTotais={d.showTotais}
+          showMargem={d.showMargem}
+          showDescontos={d.showDescontos}
+        />
 
         <PedidosTable
           pedidos={d.pedidos}

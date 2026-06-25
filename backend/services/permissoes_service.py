@@ -55,6 +55,14 @@ CATALOGO = [
     _menu("MOVIMENTO", "Movimento", [
         _tela("PEDIDO", "Pedidos"),
     ]),
+    _menu("GERENCIAL", "Gerencial", [
+        _tela("GERENCIAL", "Painel Gerencial", [
+            ("TOTAIS", "Ver totais do dia"),
+            ("MARGEM", "Ver margem média"),
+            ("DESCONTOS", "Ver descontos concedidos"),
+            ("TODOS_VEND", "Ver todos os vendedores"),
+        ]),
+    ]),
     _menu("RELATORIOS", "Relatórios", [
         _tela("REL_PEDIDOS", "Relatório de Pedidos"),
         _tela("REL_DESCONTOS", "Descontos & Margem"),

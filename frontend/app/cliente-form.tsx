@@ -17,6 +17,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { getSession } from "@/src/utils/storage/session";
+import { usePermissions } from "@/src/permissions";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
@@ -153,6 +154,7 @@ function useToast() {
 // ============================================================
 export default function ClienteFormScreen() {
   const router = useRouter();
+  const { can } = usePermissions();
   const params = useLocalSearchParams<{ codigo?: string; initial_nome?: string }>();
   const editing = !!params.codigo;
   const codigo = params.codigo ? parseInt(String(params.codigo), 10) : null;
@@ -544,25 +546,29 @@ export default function ClienteFormScreen() {
         <Text style={styles.headerTitle} numberOfLines={1}>
           {editing ? `Cliente #${codigo}` : "Novo Cliente"}
         </Text>
-        <Pressable
-          onPress={handleSave}
-          disabled={saving}
-          style={({ pressed }) => [
-            styles.saveBtn,
-            (pressed || saving) && { opacity: 0.7 },
-          ]}
-          hitSlop={8}
-          testID="cliente-form-save-button"
-        >
-          {saving ? (
-            <ActivityIndicator color={colors.onBrandPrimary} size="small" />
-          ) : (
-            <>
-              <Ionicons name="checkmark" size={18} color={colors.onBrandPrimary} />
-              <Text style={styles.saveLabel}>Gravar</Text>
-            </>
-          )}
-        </Pressable>
+        {can("CLIENTE.GRAVAR") ? (
+          <Pressable
+            onPress={handleSave}
+            disabled={saving}
+            style={({ pressed }) => [
+              styles.saveBtn,
+              (pressed || saving) && { opacity: 0.7 },
+            ]}
+            hitSlop={8}
+            testID="cliente-form-save-button"
+          >
+            {saving ? (
+              <ActivityIndicator color={colors.onBrandPrimary} size="small" />
+            ) : (
+              <>
+                <Ionicons name="checkmark" size={18} color={colors.onBrandPrimary} />
+                <Text style={styles.saveLabel}>Gravar</Text>
+              </>
+            )}
+          </Pressable>
+        ) : (
+          <View style={{ width: 40 }} />
+        )}
       </View>
 
       <KeyboardAvoidingView

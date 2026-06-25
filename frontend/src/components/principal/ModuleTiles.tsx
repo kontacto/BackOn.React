@@ -4,19 +4,33 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
 import { colors } from "@/src/theme/colors";
+import { usePermissions } from "@/src/permissions";
 import { styles } from "./styles";
 
 const TILES = [
-  { label: "Clientes", icon: "people-outline" as const, route: "/clientes" as const },
-  { label: "Produtos & Serviços", icon: "cube-outline" as const, route: "/produtos" as const },
-  { label: "Pedidos", icon: "receipt-outline" as const, route: "/pedidos" as const },
+  { label: "Clientes", icon: "people-outline" as const, route: "/clientes" as const, perm: "CLIENTE.ABRIR" },
+  { label: "Produtos & Serviços", icon: "cube-outline" as const, route: "/produtos" as const, perm: "PRODUTO.ABRIR" },
+  { label: "Pedidos", icon: "receipt-outline" as const, route: "/pedidos" as const, perm: "PEDIDO.ABRIR" },
 ];
 
 export default function ModuleTiles() {
   const router = useRouter();
+  const { can } = usePermissions();
+  const visibleTiles = TILES.filter((t) => can(t.perm));
+
+  if (visibleTiles.length === 0) {
+    return (
+      <View style={styles.tilesGrid}>
+        <Text style={{ color: colors.muted, fontSize: 13, padding: 8 }}>
+          Nenhum módulo liberado para o seu grupo.
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.tilesGrid}>
-      {TILES.map((t) => (
+      {visibleTiles.map((t) => (
         <Pressable
           key={t.label}
           onPress={() => t.route && router.push(t.route)}

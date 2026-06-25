@@ -14,6 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { Connection, listConnections } from "@/src/utils/storage/connections";
+import { usePermissions } from "@/src/permissions";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 // ---------------- Tipos ----------------
@@ -48,6 +49,7 @@ function flatten(nodes: CatNode[], map: Record<string, CatNode> = {}): Record<st
 
 export default function PermissoesScreen() {
   const router = useRouter();
+  const { reload: reloadPermissions } = usePermissions();
   const [conn, setConn] = useState<Connection | null>(null);
   const [catalogo, setCatalogo] = useState<CatNode[]>([]);
   const [classes, setClasses] = useState<Classe[]>([]);
@@ -187,6 +189,7 @@ export default function PermissoesScreen() {
       }).then((x) => x.json());
       if (r?.success) setFeedback(r.message || "Permissões salvas.");
       else setError(r?.message || "Erro ao salvar.");
+      if (r?.success) await reloadPermissions();
     } catch (e) {
       setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
     } finally {

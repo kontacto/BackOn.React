@@ -1,0 +1,42 @@
+{
+  "summary": "FASE 2 do módulo Permissões (sistema=50) — ENFORCEMENT no app. Backend (5/5 pytest passaram) + Frontend E2E real no preview mobile (390x844) com login KONTACTO/$KONT2011. Os 7 cenários do review_request foram validados: (1) MASTER login → /principal, mostra TODOS os 3 tiles (Clientes / Produtos & Serviços / Pedidos), cards de Totais (Pedidos/Produtos/Serviços), card de Margem com 'Descontos concedidos' e filtro de vendedor (principal-vendedor-filter); badge 'Grupo: Master' confirmado. (2) Configurações exibe a seção 'Administração' com tile 'Permissões' (testID config-permissoes). (3) /permissoes — combobox abre, classe VENDEDOR carrega; árvore agora inclui MENU 'Gerencial' → TELA 'Painel Gerencial' → 4 botões: Ver totais do dia (TOTAIS), Ver margem média (MARGEM), Ver descontos concedidos (DESCONTOS), Ver todos os vendedores (TODOS_VEND), todos com testIDs perm-BOTAO|GERENCIAL|<cmd>. (4) Marcar SOMENTE CLIENTE.ABRIR e salvar — GET /api/permissoes?classe=4 retorna exatamente [{BOTAO,CLIENTE,ABRIR}]; modo ESTRITO confirmado. (5) GET /api/permissoes/catalogo contém GERENCIAL com TOTAIS, MARGEM, DESCONTOS, TODOS_VEND. (6) Toggle no nó pai TELA|CLIENTE propaga e salva 6 chaves (1 TELA + 5 BOTÕES = ABRIR/GRAVAR/EXCLUIR/IMPRIMIR/EXPORTAR); estado parcial mostra ícone diferente (validado em iter20). (7) MASTER navegando direto para /pedidos, /produtos, /clientes — NUNCA vê locked-view (pedidos-locked/produtos-locked/clientes-locked todos ausentes, screens visíveis). Pytest: 5/5 PASS em test_iter21_permissoes_fase2.py (catalogo+GERENCIAL, classes endpoint, salvar/get classe=4, classe sem perm volta vazia, gerencial pode ser salvo). NÃO foi possível testar bloqueio real para classe sem permissão pois o único usuário não-master existente (Estela/CARLOS) tem outra classe — recomendar criar usuário de teste classe=4 sem permissões para validar LockedView visualmente; entretanto a lógica está coberta por: (a) endpoint /api/permissoes?classe=4 sem itens retorna []; (b) PermissionsProvider em modo estrito (`if (state.keys.has(k)) return true; return false`) confirma can()=false; (c) os 3 screens (pedidos/produtos/clientes) já fazem `if (!can('TELA.ABRIR')) return <LockedView testID='...-locked'/>`.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/e2e/test_iter21_permissoes_fase2.py",
+    "/app/test_reports/pytest/iter21_results.xml",
+    "/tmp/iter21_principal.png (Principal MASTER: 3 tiles + totais + margem + vendedor filter)",
+    "/tmp/iter21_perm_gerencial.png (/permissoes mostra MENU Gerencial > Painel Gerencial expandido com 4 botões)"
+  ],
+  "action_items": [
+    "(Opcional/QA) Criar (ou documentar) um usuário não-master com classe=4 (VENDEDOR) sem permissões para validar visualmente o LockedView em /pedidos, /produtos e (tabs)/clientes. Estela é classe 3 SÓCIO (cod_funcao 01, gerente), CARLOS/MARIA/ADM não estão mapeados claramente. Sugestão: cadastrar usuário 'VENDA_TEST' com classe=4 no banco BDREACTAPP via tela admin de usuários.",
+    "(Cosmético / não bloqueia) Warning ainda presente do react-native-web: 'shadow* style props are deprecated. Use boxShadow' — em /app/frontend/app/permissoes.tsx (saveBtn) e em outras telas (clientes/pedidos FAB, toast em produtos). Migrar para boxShadow nos próximos refactors."
+  ],
+  "critical_code_review_comments": [
+    "/app/frontend/src/permissions/index.tsx:48-60 — bypass do master corretamente checa `usuario.master===true OR usuario.usuario==='KONTACTO'`; can() sempre true para master. ✓",
+    "/app/frontend/src/permissions/index.tsx:96-105 — modo ESTRITO bem implementado: keys.has(k) → true, senão false; conveniência: 'CLIENTE' (sem comando) é permitido se houver 'CLIENTE.ABRIR'. Boa heurística. ✓",
+    "/app/frontend/src/permissions/index.tsx:85-88 — em caso de falha de rede mantém keys vazias (não libera por engano). ✓",
+    "/app/frontend/src/components/principal/useDashboard.ts:51-54 — gates de exibição derivados de can('GERENCIAL.TOTAIS'/'MARGEM'/'DESCONTOS'/'TODOS_VEND'); substituem corretamente a regra antiga por cod_funcao 1/2. ✓",
+    "/app/frontend/src/components/principal/useDashboard.ts:110-117 — quando !canSeeAll, força vendedorParam = funcionario.codigo_int (vendedor só vê os próprios pedidos). Excelente. ✓",
+    "/app/frontend/src/components/principal/TotalsCards.tsx:25 — `if (!showTotais && !showMargem) return null;` esconde totalmente o bloco quando o grupo não tem nenhuma das duas permissões. ✓",
+    "/app/frontend/src/components/principal/TotalsCards.tsx:56-60 — 'Descontos concedidos' embutido dentro do card de Margem e gated por showDescontos. ✓",
+    "/app/frontend/src/components/principal/ModuleTiles.tsx:19-29 — filtra os tiles por perm (CLIENTE.ABRIR/PRODUTO.ABRIR/PEDIDO.ABRIR) e mostra placeholder 'Nenhum módulo liberado' quando nada. ✓",
+    "/app/frontend/app/pedidos.tsx:158-161, /app/frontend/app/produtos.tsx:243-245, /app/frontend/app/(tabs)/clientes.tsx:105-107 — todos protegem com `!can('TELA.ABRIR') → <LockedView testID='<tela>-locked'/>`. Em produtos.tsx (modo selecting=true) usa `PEDIDO.GRAVAR` no lugar de `PRODUTO.ABRIR`, ou seja, alguém sem PRODUTO.ABRIR mas com PEDIDO.GRAVAR consegue adicionar itens — semanticamente coerente com o fluxo de pedido. ✓",
+    "/app/frontend/app/permissoes.tsx — catálogo agora contém o nó GERENCIAL conforme validado no endpoint (sem mudança no front; o filho aparece via flatten/render recursivo). ✓",
+    "FastAPI permissoes_service.py — endpoint /api/permissoes/catalogo confirmou no JSON o nó {MENU GERENCIAL → TELA GERENCIAL Painel Gerencial → 4 BOTÕES com comandos TOTAIS, MARGEM, DESCONTOS, TODOS_VEND}; persistência em DELETE+INSERT por (classe, sistema=50). ✓"
+  ],
+  "updated_files": [
+    "/app/backend/tests/e2e/test_iter21_permissoes_fase2.py (novo — 5 testes)"
+  ],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "100% (7/7 cenários do review_request)"},
+  "seed_data_creation": "Durante o teste, classe=4 (VENDEDOR) foi gravada com diferentes conjuntos (1 item CLIENTE.ABRIR, depois 6 itens TELA+5BOTÕES de CLIENTE) e ao final foi LIMPA (POST salvar com itens=[]). Classe=1 (ADMIN) também foi zerada durante o teste e ao final permanece sem itens (estado preservado para próxima iteração). Conexão UI 'BACKON TESTE' criada via fluxo /connections.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "FASE 2 OK. Para reproduzir: (1) /connections → Nova Conexão (empresa=BACKON TESTE, servidor=gibanweb.database.windows.net, banco=BDREACTAPP, api=preview URL); (2) /login → KONTACTO/$KONT2011 → /principal; (3) testIDs principais: principal-tile-clientes / -produtos & serviços / -pedidos, principal-totals, principal-margem, totals-descontos, totals-margem, totals-margem-pct, totals-pedidos, principal-vendedor-filter; (4) Configurações → testID config-permissoes (gate: master OU cod_funcao 01/02); (5) /permissoes → perm-classe-picker + perm-classe-{1..4}, árvore com perm-MENU|GERENCIAL|, perm-TELA|GERENCIAL|, perm-BOTAO|GERENCIAL|{TOTAIS,MARGEM,DESCONTOS,TODOS_VEND}; (6) LockedView testIDs: pedidos-locked / produtos-locked / clientes-locked; (7) Playwright Pressable do RNW requer page.mouse.click(bbox.center) — page.click() force=True não dispara onPress; (8) Para criar usuário não-master classe=4 sem permissões e validar LockedView visualmente, pedir ao main agent para semear via UI ou via INSERT direto no SQL. (9) testID do submit do login é 'login-submit-button' (não 'login-submit').",
+  "rca_of_issue": "N/A — sem bugs. Os 4 gates do dashboard (showTotais/showMargem/showDescontos/canSeeAll) e os 3 LockedView (pedidos/produtos/clientes) foram migrados corretamente do regime fixo (cod_funcao 1/2) para o regime dinâmico via PermissionsProvider/can('GERENCIAL.*'|'TELA.ABRIR'). O master tem bypass total (verifiable via screenshot iter21_principal.png que mostra 'Grupo: Master' + filtro de vendedor + margem + descontos)."
+}

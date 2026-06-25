@@ -15,6 +15,8 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
+import { usePermissions } from "@/src/permissions";
+import LockedView from "@/src/components/LockedView";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import DateField from "@/src/components/DateField";
 
@@ -56,6 +58,7 @@ function formatDate(iso: string | null) {
 
 export default function PedidosScreen() {
   const router = useRouter();
+  const { can } = usePermissions();
   const [conn, setConn] = useState<Connection | null>(null);
   const [search, setSearch] = useState("");
   const [situacao, setSituacao] = useState("");
@@ -152,6 +155,10 @@ export default function PedidosScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="pedidos-screen">
+      {!can("PEDIDO.ABRIR") ? (
+        <LockedView testID="pedidos-locked" />
+      ) : (
+      <>
       <View style={styles.header}>
         <Pressable
           onPress={() => router.back()}
@@ -278,14 +285,18 @@ export default function PedidosScreen() {
         )}
       />
 
-      <Pressable
-        onPress={() => router.push("/pedido-form")}
-        style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85 }]}
-        hitSlop={8}
-        testID="pedidos-fab-new"
-      >
-        <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
-      </Pressable>
+      {can("PEDIDO.GRAVAR") ? (
+        <Pressable
+          onPress={() => router.push("/pedido-form")}
+          style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85 }]}
+          hitSlop={8}
+          testID="pedidos-fab-new"
+        >
+          <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
+        </Pressable>
+      ) : null}
+      </>
+      )}
     </SafeAreaView>
   );
 }

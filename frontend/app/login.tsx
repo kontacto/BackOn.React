@@ -17,6 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { Connection, listConnections } from "@/src/utils/storage/connections";
 import { setSession } from "@/src/utils/storage/session";
+import { usePermissions } from "@/src/permissions";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 const GENERIC_AUTH_ERROR = "Usuário ou senha inválidos.";
@@ -49,6 +50,7 @@ type LoginResult = {
 
 export default function LoginScreen() {
   const router = useRouter();
+  const { reload: reloadPermissions } = usePermissions();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [selected, setSelected] = useState<Connection | null>(null);
   const [usuario, setUsuario] = useState("");
@@ -149,6 +151,7 @@ export default function LoginScreen() {
           loggedAt: new Date().toISOString(),
         });
         setSenha("");
+        await reloadPermissions();
         router.replace("/principal");
       } else {
         setErrorDetails(data);

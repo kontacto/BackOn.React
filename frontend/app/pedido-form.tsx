@@ -7,6 +7,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { apiGet, apiSend } from "@/src/utils/api";
+import { usePermissions } from "@/src/permissions";
+import LockedView from "@/src/components/LockedView";
 import { colors } from "@/src/theme/colors";
 import { formatDateBR, todayISO } from "@/src/utils/format";
 import DateField from "@/src/components/DateField";
@@ -27,6 +29,7 @@ import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
 const VENDEDOR_EDIT_FUNCOES = ["01", "02"];
 export default function PedidoFormScreen() {
   const router = useRouter();
+  const { can } = usePermissions();
   const params = useLocalSearchParams<{ pedido?: string; cliente?: string; cliente_nome?: string }>();
   const editing = !!params.pedido;
   const pedidoId = params.pedido ? parseInt(String(params.pedido), 10) : null;
@@ -261,6 +264,7 @@ export default function PedidoFormScreen() {
         saving={saving}
         onBack={() => router.back()}
         onSave={handleSave}
+        canSave={can("PEDIDO.GRAVAR")}
       />
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>

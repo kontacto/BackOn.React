@@ -9,6 +9,7 @@ import {
 } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { apiGet } from "@/src/utils/api";
+import { usePermissions } from "@/src/permissions";
 import { SelectOption } from "@/src/components/SelectField";
 
 export type DashboardTotals = {
@@ -29,6 +30,7 @@ export function pickFirst(obj: Record<string, unknown> | null | undefined, keys:
 
 export function useDashboard() {
   const router = useRouter();
+  const { can } = usePermissions();
   const [session, setSessionState] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -46,12 +48,10 @@ export function useDashboard() {
     setSituacaoPref(value);
   }, []);
 
-  const isManager = useMemo(() => {
-    if ((session?.usuario as { master?: boolean } | undefined)?.master) return true;
-    const cod = pickFirst(session?.funcionario, ["cod_funcao"]);
-    const norm = cod ? cod.toString().padStart(2, "0") : "";
-    return norm === "01" || norm === "02";
-  }, [session]);
+  const canSeeAll = useMemo(() => can("GERENCIAL.TODOS_VEND"), [can]);
+  const showTotais = useMemo(() => can("GERENCIAL.TOTAIS"), [can]);
+  const showMargem = useMemo(() => can("GERENCIAL.MARGEM"), [can]);
+  const showDescontos = useMemo(() => can("GERENCIAL.DESCONTOS"), [can]);
 
   const loadSession = useCallback(async () => {
     setLoading(true);
@@ -108,7 +108,7 @@ export function useDashboard() {
         const conn = await connFor(s);
         if (!conn) { setDashError("Conexão não encontrada."); return; }
         let vendedorParam: string;
-        if (isManager) {
+        if (canSeeAll) {
           vendedorParam = vendedorOverride === undefined || vendedorOverride === null ? "all" : String(vendedorOverride);
         } else {
           const own = s.funcionario?.codigo_int;
@@ -126,7 +126,7 @@ export function useDashboard() {
         setDashLoading(false);
       }
     },
-    [isManager, connFor, situacaoFiltro]
+    [canSeeAll, connFor, situacaoFiltro]
   );
 
   useFocusEffect(useCallback(() => { loadSession(); }, [loadSession]));
@@ -136,10 +136,10 @@ export function useDashboard() {
     if (session) {
       loadDashboard(session, vendedorFiltro);
       loadEmpresa(session);
-      if (isManager) loadVendedores(session);
+      if (canSeeAll) loadVendedores(session);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, isManager, loadDashboard, loadVendedores, loadEmpresa]);
+  }, [session, canSeeAll, loadDashboard, loadVendedores, loadEmpresa]);
 
   useEffect(() => {
     if (session) loadDashboard(session, vendedorFiltro, situacaoFiltro);
@@ -165,6 +165,7 @@ export function useDashboard() {
   return {
     session, loading, totais, pedidos, dashLoading, dashError,
     vendedorOpts, vendedorFiltro, setVendedorFiltro, situacaoFiltro, handleSituacao,
-    fantasia, isManager, handleLogout, displayName, nomeGuerra, totalPedidos, classe,
+    fantasia, canSeeAll, showTotais, showMargem, showDescontos,
+    handleLogout, displayName, nomeGuerra, totalPedidos, classe,
   };
 }

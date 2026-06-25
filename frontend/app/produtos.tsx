@@ -17,6 +17,8 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
+import { usePermissions } from "@/src/permissions";
+import LockedView from "@/src/components/LockedView";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Tipo = "all" | "P" | "S";
@@ -40,6 +42,7 @@ function parseNum(s: string): number {
 
 export default function ProdutosScreen() {
   const router = useRouter();
+  const { can } = usePermissions();
   const params = useLocalSearchParams<{ pedido?: string }>();
   const selectPedido = params.pedido ? parseInt(String(params.pedido), 10) : null;
   const selecting = !!selectPedido;
@@ -237,6 +240,10 @@ export default function ProdutosScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="produtos-screen">
+      {!(selecting ? can("PEDIDO.GRAVAR") : can("PRODUTO.ABRIR")) ? (
+        <LockedView testID="produtos-locked" />
+      ) : (
+      <>
       <View style={styles.header}>
         <Pressable
           onPress={() => router.back()}
@@ -476,6 +483,8 @@ export default function ProdutosScreen() {
           <Text style={styles.toastText}>{toast}</Text>
         </View>
       ) : null}
+      </>
+      )}
     </SafeAreaView>
   );
 }

@@ -4,12 +4,14 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { colors, radius, spacing } from "@/src/theme/colors";
+import { usePermissions } from "@/src/permissions";
 
 type ReportTile = {
   label: string;
   desc: string;
   icon: keyof typeof Ionicons.glyphMap;
   route: "/relatorio-descontos" | "/relatorio-pedidos" | null;
+  perm: string | null;
 };
 
 const REPORTS: ReportTile[] = [
@@ -18,18 +20,22 @@ const REPORTS: ReportTile[] = [
     desc: "Pedidos por período/vendedor/situação. Expanda para ver descontos e margem.",
     icon: "documents-outline",
     route: "/relatorio-pedidos",
+    perm: "REL_PEDIDOS.ABRIR",
   },
   {
     label: "Descontos & Margem",
     desc: "Consolidado por vendedor: vendas, descontos, custo e margem.",
     icon: "trending-down-outline",
     route: "/relatorio-descontos",
+    perm: "REL_DESCONTOS.ABRIR",
   },
-  { label: "Vendas (em breve)", desc: "Resumo de vendas por período.", icon: "cart-outline", route: null },
+  { label: "Vendas (em breve)", desc: "Resumo de vendas por período.", icon: "cart-outline", route: null, perm: null },
 ];
 
 export default function RelatoriosScreen() {
   const router = useRouter();
+  const { can } = usePermissions();
+  const visible = REPORTS.filter((r) => !r.perm || can(r.perm));
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="relatorios-screen">
       <View style={styles.header}>
@@ -38,7 +44,10 @@ export default function RelatoriosScreen() {
 
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.sectionSub}>Selecione um relatório para visualizar.</Text>
-        {REPORTS.map((r) => (
+        {visible.length === 0 ? (
+          <Text style={styles.sectionSub}>Nenhum relatório liberado para o seu grupo.</Text>
+        ) : null}
+        {visible.map((r) => (
           <Pressable
             key={r.label}
             onPress={() => r.route && router.push(r.route)}

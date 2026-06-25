@@ -14,6 +14,8 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
+import { usePermissions } from "@/src/permissions";
+import LockedView from "@/src/components/LockedView";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Cliente = {
@@ -28,6 +30,9 @@ type Cliente = {
 
 export default function ClientesScreen() {
   const router = useRouter();
+  const { can } = usePermissions();
+  const canNovoCliente = can("CLIENTE.GRAVAR");
+  const canNovoPedido = can("PEDIDO.GRAVAR");
   const [items, setItems] = useState<Cliente[]>([]);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -97,6 +102,10 @@ export default function ClientesScreen() {
     load(search, next, true);
   };
 
+  if (!can("CLIENTE.ABRIR")) {
+    return <LockedView testID="clientes-locked" />;
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="clientes-screen">
       <View style={styles.header}>
@@ -160,33 +169,37 @@ export default function ClientesScreen() {
                 <Text style={styles.cardSub} numberOfLines={1}>Tipo: {item.tipo_descricao}</Text>
               ) : null}
             </View>
-            <Pressable
-              onPress={(e) => {
-                e.stopPropagation();
-                router.push({
-                  pathname: "/pedido-form",
-                  params: { cliente: String(item.codigo), cliente_nome: item.nome },
-                });
-              }}
-              style={({ pressed }) => [styles.novoPedidoBtn, pressed && { opacity: 0.7 }]}
-              hitSlop={6}
-              testID={`cliente-${item.codigo}-novo-pedido`}
-            >
-              <Ionicons name="add-circle" size={28} color={colors.brandPrimary} />
-              <Text style={styles.novoPedidoLabel}>Pedido</Text>
-            </Pressable>
+            {canNovoPedido ? (
+              <Pressable
+                onPress={(e) => {
+                  e.stopPropagation();
+                  router.push({
+                    pathname: "/pedido-form",
+                    params: { cliente: String(item.codigo), cliente_nome: item.nome },
+                  });
+                }}
+                style={({ pressed }) => [styles.novoPedidoBtn, pressed && { opacity: 0.7 }]}
+                hitSlop={6}
+                testID={`cliente-${item.codigo}-novo-pedido`}
+              >
+                <Ionicons name="add-circle" size={28} color={colors.brandPrimary} />
+                <Text style={styles.novoPedidoLabel}>Pedido</Text>
+              </Pressable>
+            ) : null}
           </Pressable>
         )}
       />
 
-      <Pressable
-        onPress={() => router.push("/cliente-form")}
-        style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
-        hitSlop={8}
-        testID="clientes-fab-new"
-      >
-        <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
-      </Pressable>
+      {canNovoCliente ? (
+        <Pressable
+          onPress={() => router.push("/cliente-form")}
+          style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
+          hitSlop={8}
+          testID="clientes-fab-new"
+        >
+          <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
+        </Pressable>
+      ) : null}
     </SafeAreaView>
   );
 }
