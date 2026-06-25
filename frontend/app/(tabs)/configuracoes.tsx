@@ -115,13 +115,6 @@ export default function ConfiguracoesScreen() {
             onPress={() => router.push("/connections")}
             testID="config-conexoes"
           />
-          <Item
-            icon="bar-chart-outline"
-            label="Relatórios"
-            hint="Descontos, margem e consolidados"
-            onPress={() => router.push("/relatorios")}
-            testID="config-relatorios"
-          />
         </View>
 
         {canManagePermissoes ? (
