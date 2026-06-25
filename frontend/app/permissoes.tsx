@@ -209,7 +209,7 @@ export default function PermissoesScreen() {
       <View key={k}>
         <View style={[styles.row, { paddingLeft: spacing.md + depth * 22 }]}>
           {hasChildren ? (
-            <Pressable onPress={() => toggleExpand(k)} hitSlop={8} style={styles.caret}>
+            <Pressable onPress={() => toggleExpand(k)} hitSlop={{ top: 12, bottom: 12, left: 14, right: 14 }} style={styles.caret}>
               <Ionicons
                 name={isOpen ? "chevron-down" : "chevron-forward"}
                 size={16}
