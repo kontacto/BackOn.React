@@ -67,9 +67,6 @@ jobs:
     permissions:
       id-token: write   # necessário para login OIDC no Azure
       contents: read
-    environment:
-      name: 'Production'
-      url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
     steps:
       - name: Download do artefato
         uses: actions/download-artifact@v4
