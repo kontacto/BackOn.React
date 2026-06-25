@@ -64,6 +64,22 @@ export default function PermissoesScreen() {
 
   const flatMap = useMemo(() => flatten(catalogo), [catalogo]);
 
+  // Todas as chaves do catálogo (para o checkbox pai "Marcar tudo")
+  const allKeys = useMemo(() => catalogo.flatMap((n) => collectKeys(n)), [catalogo]);
+  const allState: boolean | "partial" = useMemo(() => {
+    if (allKeys.length === 0) return false;
+    const sel = allKeys.filter((k) => selected.has(k)).length;
+    if (sel === 0) return false;
+    if (sel === allKeys.length) return true;
+    return "partial";
+  }, [allKeys, selected]);
+
+  const toggleAll = () => {
+    const allOn = allKeys.length > 0 && allKeys.every((k) => selected.has(k));
+    setSelected(allOn ? new Set() : new Set(allKeys));
+    setFeedback(null);
+  };
+
   // Carrega catálogo + classes ao abrir
   const boot = useCallback(async () => {
     setLoading(true);
@@ -156,7 +172,8 @@ export default function PermissoesScreen() {
 
   const toggleExpand = (k: string) => {
     const next = new Set(expanded);
-    next.has(k) ? next.delete(k) : next.add(k);
+    if (next.has(k)) next.delete(k);
+    else next.add(k);
     setExpanded(next);
   };
 
@@ -286,6 +303,28 @@ export default function PermissoesScreen() {
           data={catalogo}
           keyExtractor={(n) => keyOf(n)}
           renderItem={({ item }) => renderNode(item, 0)}
+          ListHeaderComponent={
+            <Pressable onPress={toggleAll} style={styles.selectAllRow} testID="perm-select-all">
+              <Ionicons
+                name={
+                  (allState === true
+                    ? "checkbox"
+                    : allState === "partial"
+                    ? "remove-circle"
+                    : "square-outline") as any
+                }
+                size={22}
+                color={
+                  allState === true
+                    ? colors.brandPrimary
+                    : allState === "partial"
+                    ? colors.warning
+                    : colors.muted
+                }
+              />
+              <Text style={styles.selectAllLabel}>Marcar todas as permissões</Text>
+            </Pressable>
+          }
           contentContainerStyle={{ paddingVertical: spacing.sm, paddingBottom: 110 }}
         />
       )}
@@ -390,6 +429,19 @@ const styles = StyleSheet.create({
   },
   placeholder: { alignItems: "center", justifyContent: "center", marginTop: 60, gap: 12, paddingHorizontal: spacing.xl },
   placeholderText: { color: colors.muted, fontSize: 14, textAlign: "center" },
+  selectAllRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: spacing.md,
+    marginBottom: 4,
+    backgroundColor: colors.surfaceSecondary ?? "#f3f5f9",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  selectAllLabel: { fontSize: 15, fontWeight: "700", color: colors.onSurface },
   row: { flexDirection: "row", alignItems: "center", paddingRight: spacing.md, minHeight: 44 },
   caret: { width: 22, alignItems: "center", justifyContent: "center" },
   checkArea: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 6 },
