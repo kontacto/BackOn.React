@@ -1,0 +1,93 @@
+# Workflow de deploy do BACKEND (FastAPI) para o Azure App Service (Linux).
+#
+# Correções aplicadas (vs. o arquivo gerado automaticamente pelo Azure):
+#   1) NÃO cria/empacota venv no CI. O build das dependências é feito pelo
+#      Oryx no próprio Azure (App Settings: SCM_DO_BUILD_DURING_DEPLOYMENT=true).
+#   2) Envia SOMENTE a pasta backend/ + o requirements.txt da RAIZ (o frontend
+#      fica de fora). O requirements.txt da raiz é o de produção Linux e contém
+#      o gunicorn — NÃO use requirements-windows.txt (sem gunicorn) nem o
+#      backend/requirements.txt (tem libs internas da Emergent que não existem no PyPI).
+#   3) Startup Command no Azure permanece:
+#      gunicorn --bind=0.0.0.0:8000 --timeout 600 --chdir backend -k uvicorn.workers.UvicornWorker server:app
+#
+# IMPORTANTE (autenticação OIDC): substitua os 3 nomes de secret abaixo
+#   (AZUREAPPSERVICE_CLIENTID_..., _TENANTID_..., _SUBSCRIPTIONID_...) pelos
+#   nomes EXATOS que já existem no seu repositório (copie do arquivo antigo
+#   ou de Settings -> Secrets and variables -> Actions). Eles têm um sufixo
+#   único (GUID) gerado pelo Azure Deployment Center.
+
+name: Build and deploy Python app to Azure Web App - BackOn
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  AZURE_WEBAPP_NAME: BackOn          # <-- confirme: nome EXATO do seu App Service
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      # Monta o pacote de deploy contendo APENAS o backend + o requirements.txt da raiz.
+      # Assim o Oryx encontra o requirements.txt na raiz do pacote e o server.py em backend/.
+      - name: Preparar pacote de deploy (somente backend)
+        run: |
+          mkdir -p deploy/backend
+          # copia o backend, exceto artefatos locais que não devem ir pro Azure
+          rsync -a --delete \
+            --exclude '.venv' \
+            --exclude 'venv' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            --exclude '.pytest_cache' \
+            --exclude 'tests' \
+            --exclude '.env' \
+            backend/ deploy/backend/
+          # requirements.txt de produção (Linux, com gunicorn) na raiz do pacote
+          cp requirements.txt deploy/requirements.txt
+          ls -la deploy deploy/backend
+
+      - name: Upload do artefato para o job de deploy
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-app
+          path: deploy/
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      id-token: write   # necessário para login OIDC no Azure
+      contents: read
+    environment:
+      name: 'Production'
+      url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
+    steps:
+      - name: Download do artefato
+        uses: actions/download-artifact@v4
+        with:
+          name: python-app
+          path: .
+
+      - name: Login no Azure (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_XXXXXXXXXXXXXXXX }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_XXXXXXXXXXXXXXXX }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_XXXXXXXXXXXXXXXX }}
+
+      - name: Deploy para o Azure Web App
+        id: deploy-to-webapp
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          slot-name: 'Production'
+          package: .
