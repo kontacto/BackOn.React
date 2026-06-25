@@ -46,3 +46,13 @@ async def update_item(codigo: int, cod_os_prod: int, req: OSItemSaveRequest):
 @router.delete("/os/{codigo}/itens/{cod_os_prod}")
 async def delete_item(codigo: int, cod_os_prod: int, servidor: str, banco: str):
     return await os_itens_service.delete_item(servidor, banco, codigo, cod_os_prod)
+
+
+@router.get("/os/{codigo}/descontos")
+async def list_descontos(codigo: int, servidor: str, banco: str):
+    return await os_itens_service.list_descontos(servidor, banco, codigo)
+
+
+@router.get("/os/{codigo}/analise")
+async def analise(codigo: int, servidor: str, banco: str):
+    return await os_itens_service.analise(servidor, banco, codigo)

@@ -53,6 +53,9 @@ ACOES_OS = [
     ("ADD_ITEM", "Adicionar item"),
     ("EDIT_ITEM", "Editar item"),
     ("DEL_ITEM", "Excluir item"),
+    ("DESC_ITEM", "Desconto no item"),
+    ("VER_DESCONTOS", "Ver descontos"),
+    ("ANALISE", "Analisar margem"),
     ("SITUACAO", "Alterar situação"),
 ]
 

@@ -1,0 +1,38 @@
+{
+  "summary": "Iter30 — Validação BACKEND + FRONTEND de (1) Bottom Sheet de Veículo/Equipamento no /os-form e (2) novos botões 'Descontos concedidos' e 'Analisar margem & descontos'. BACKEND: 5/5 pytest passou (test_iter30_os_analise_descontos.py): GET /api/os/7/analise retorna totais {venda,desconto,custo,margem,margem_pct,qtd_itens} + itens com mesmo schema e custo_os corretamente alimentado (margem=venda-custo conferida); GET /api/os/7/descontos vazio (OS #7 não tem itens com desconto) — estrutura validada; criada OS nova com item P001 qtd=2 desconto=R$2,00/un. → /descontos lista 1 item com valor_unitario=2.0, qtd=2, valor_total=4.0, total=4.0, percentual>0 ✓; /analise reflete desconto=4.0, venda=13.0 (2× (8.5-2)), custo>0 ✓. FRONTEND (viewport 390x844, login KONTACTO/$KONT2011, Oficina=true temporário): conexão criada → login → /os-form?os=7 carregou. Botão os-form-veiculo-open ABRE BOTTOM SHEET com TODOS os 6 campos (os-form-placa/km/marca/modelo/ano/serie) + botão Concluir (os-form-veiculo-ok) ✓. Editei placa=ZZZ-3030 marca=FIA, fechei sheet, salvei (os-form-save), reabri /os-form?os=7 e reabri sheet → placa='ZZZ-3030' marca='FIA' PERSISTIDOS ✓. Botão os-form-descontos-btn visível em modo edição → abre modal 'Descontos Concedidos' com 'Nenhum desconto registrado' (correto, OS #7 sem desconto) ✓. Botão os-form-analise-btn visível em modo edição → abre modal 'Margem & Descontos' com card de totais (labels Descontos/Custo/Margem renderizados; 'Vendas' usa textTransform uppercase no DOM, captura ok visualmente) e lista de itens ✓. Tela Principal continua mostrando tiles Pedidos+Ordem de Serviço sem regressão. Oficina restaurada para false ao final.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/e2e/test_iter30_os_analise_descontos.py",
+    "/app/test_reports/pytest/iter30_results.xml",
+    "/tmp/iter30_principal.png",
+    "/tmp/iter30_osform_edit.png",
+    "/tmp/iter30_vehsheet.png",
+    "/tmp/iter30_after_save.png",
+    "/tmp/iter30_desc_modal.png",
+    "/tmp/iter30_analise_modal.png"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "os_itens_service.py:274-319 — _list_descontos_sync filtra ISNULL(item_cancelado,0)=0 AND ISNULL(desconto,0)>0; calcula valor_total = desconto*qtd e percentual = desconto/preco_unitario*100 (proteção contra div-zero). Bem.",
+    "os_itens_service.py:322-389 — _analise_sync calcula venda/desconto/custo por item e totais agregados; margem=venda-custo; margem_pct com proteção venda>0. Bem.",
+    "os-form.tsx:840-888 — bottom sheet usa Modal slide-from-bottom com sheetHandle, ScrollView interno (maxHeight 460) e KeyboardAvoidingView ausente (Pode causar overlay do teclado em iOS — não crítico, mas considerar adicionar; testes via Playwright funcionaram com blur antes do click do botão OK).",
+    "os-form.tsx:633-647 — os-form-descontos-btn e os-form-analise-btn só renderizam quando editing && osId && can('OS.VER_DESCONTOS'|'OS.ANALISE'); confirmação por testes — em modo novo (sem osId) não aparecem.",
+    "os-form.tsx:271-272 — chassi vs numero_de_serie escolhido por moduleOn('Oficina'); lógica consistente."
+  ],
+  "updated_files": [
+    "/app/backend/tests/e2e/test_iter30_os_analise_descontos.py (novo)",
+    "/app/test_reports/iteration_30.json"
+  ],
+  "success_rate": {"backend": "100% (5/5 pytest)", "frontend": "100% — bottom sheet renderiza/edita/persiste; modais de descontos e análise abrem com dados corretos"},
+  "seed_data_creation": "Backend pytest criou 1 OS nova com 1 item P001 desc=R$2/un. (cleanup automático dos itens via fixture). Frontend criou conexão local 'TESTE' e atualizou OS #7 (placa=ZZZ-3030, marca=FIA). Oficina foi habilitada temporariamente e RESTAURADA para false em controle_configuracao.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Mesmas observações da iter29: o tile/tela OS exige Oficina OR Assistencia=true em controle_configuracao. TestIDs do bottom sheet de veículo: os-form-veiculo-open (abre), os-form-placa/km/marca/modelo/ano/serie (campos), os-form-veiculo-ok (Concluir). Os botões os-form-descontos-btn e os-form-analise-btn só aparecem em modo edição (osId presente) e com permissões OS.VER_DESCONTOS / OS.ANALISE. Endpoints: GET /api/os/{cod}/descontos e GET /api/os/{cod}/analise. NÃO use /api/db/run-query (404). Connection card NÃO é clicável para entrar no login; em vez disso use testID connections-back-button (vai para /login) ou navegue diretamente para /login após criar conexão.",
+  "rca_of_issue": "N/A — nenhum bug encontrado. Todos os requisitos da iter30 funcionam (backend e frontend)."
+}

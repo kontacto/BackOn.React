@@ -268,3 +268,130 @@ async def update_item(req: OSItemSaveRequest, codigo: int, cod_os_prod: int) -> 
 
 async def delete_item(servidor: str, banco: str, codigo: int, cod_os_prod: int) -> dict:
     return await asyncio.to_thread(_delete_item_sync, servidor, banco, codigo, cod_os_prod)
+
+
+# ---------- Descontos concedidos & Análise de margem ----------
+def _list_descontos_sync(servidor: str, banco: str, codigo: int) -> dict:
+    """Lê os itens da OS com desconto > 0 (descontos concedidos)."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": [], "total": 0}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT i.cod_os_prod, i.codigo_interno, i.quant, i.preco_unitario, i.desconto, "
+            "       pe.descricao AS peca_desc, sv.descricao AS serv_desc "
+            "FROM os_produto i "
+            "LEFT JOIN pecas pe ON pe.codigo_int = i.codigo_interno "
+            "LEFT JOIN servicos sv ON sv.codigo = i.codigo_interno "
+            "WHERE i.os=%s AND ISNULL(i.item_cancelado,0)=0 AND ISNULL(i.desconto,0) > 0 "
+            "ORDER BY i.cod_os_prod",
+            (codigo,),
+        )
+        items = []
+        total = 0.0
+        for r in cur.fetchall():
+            qtd = float(r.get("quant") or 0)
+            desc_unit = float(r.get("desconto") or 0)
+            p_normal = float(r.get("preco_unitario") or 0)
+            valor_total = round(desc_unit * qtd, 2)
+            total += valor_total
+            pct = round(desc_unit / p_normal * 100, 2) if p_normal > 0 else 0
+            desc = (r.get("peca_desc") or r.get("serv_desc") or r.get("codigo_interno") or "Item")
+            items.append({
+                "cod": int(r["cod_os_prod"]),
+                "tipo_label": "Item",
+                "descricao": (desc or "").strip(),
+                "percentual": pct,
+                "valor_unitario": desc_unit,
+                "qtd": qtd,
+                "valor_total": valor_total,
+            })
+        cur.close()
+        conn.close()
+        return {"success": True, "items": items, "total": round(total, 2)}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": [], "total": 0}
+
+
+def _analise_sync(servidor: str, banco: str, codigo: int) -> dict:
+    """Análise de margem & descontos da OS, calculada a partir de os_produto.
+    venda = quant*p_venda; desconto = quant*desconto; custo = quant*custo_os."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT i.cod_os_prod, i.codigo_interno, i.quant, i.p_venda, i.preco_unitario, "
+            "       i.desconto, i.custo_os, "
+            "       pe.descricao AS peca_desc, sv.descricao AS serv_desc "
+            "FROM os_produto i "
+            "LEFT JOIN pecas pe ON pe.codigo_int = i.codigo_interno "
+            "LEFT JOIN servicos sv ON sv.codigo = i.codigo_interno "
+            "WHERE i.os=%s AND ISNULL(i.item_cancelado,0)=0 "
+            "ORDER BY i.cod_os_prod",
+            (codigo,),
+        )
+        itens = []
+        t_venda = t_desc = t_custo = 0.0
+        for r in cur.fetchall():
+            qtd = float(r.get("quant") or 0)
+            pv = float(r.get("p_venda") or 0)
+            desc_unit = float(r.get("desconto") or 0)
+            custo_unit = float(r.get("custo_os") or 0)
+            venda = round(qtd * pv, 2)
+            desconto = round(qtd * desc_unit, 2)
+            custo = round(qtd * custo_unit, 2)
+            margem = round(venda - custo, 2)
+            margem_pct = round(margem / venda * 100, 2) if venda > 0 else 0.0
+            t_venda += venda
+            t_desc += desconto
+            t_custo += custo
+            desc = (r.get("peca_desc") or r.get("serv_desc") or r.get("codigo_interno") or "Item")
+            itens.append({
+                "cod": int(r["cod_os_prod"]),
+                "descricao": (desc or "").strip(),
+                "qtd": qtd,
+                "venda": venda,
+                "desconto": desconto,
+                "custo": custo,
+                "margem": margem,
+                "margem_pct": margem_pct,
+            })
+        cur.close()
+        conn.close()
+        t_margem = round(t_venda - t_custo, 2)
+        t_pct = round(t_margem / t_venda * 100, 2) if t_venda > 0 else 0.0
+        return {
+            "success": True,
+            "itens": itens,
+            "totais": {
+                "venda": round(t_venda, 2),
+                "desconto": round(t_desc, 2),
+                "custo": round(t_custo, 2),
+                "margem": t_margem,
+                "margem_pct": t_pct,
+                "qtd_itens": len(itens),
+            },
+        }
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+async def list_descontos(servidor: str, banco: str, codigo: int) -> dict:
+    return await asyncio.to_thread(_list_descontos_sync, servidor, banco, codigo)
+
+
+async def analise(servidor: str, banco: str, codigo: int) -> dict:
+    return await asyncio.to_thread(_analise_sync, servidor, banco, codigo)

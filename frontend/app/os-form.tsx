@@ -37,6 +37,8 @@ const SITUACOES = [
   { value: "C", label: "Cancelada" },
 ];
 
+const margemColor = (pct: number) => (pct >= 30 ? colors.success : pct >= 10 ? colors.warning : colors.error);
+
 type OSData = {
   codigo: number; cliente: number | null; cliente_nome: string; cliente_cgc: string;
   data: string | null; hora: string; situacao: string; situacao_label: string; total: number;
@@ -88,6 +90,18 @@ export default function OSFormScreen() {
   const [km, setKm] = useState("");
   const [ano, setAno] = useState("");
   const [serie, setSerie] = useState("");  // chassi (Oficina) ou nº de série (Assistência)
+
+  // bottom sheet de Veículo/Equipamento
+  const [vehSheet, setVehSheet] = useState(false);
+  // descontos concedidos
+  const [descModal, setDescModal] = useState(false);
+  const [descItems, setDescItems] = useState<{ cod: number; descricao: string; percentual: number; valor_unitario: number; qtd: number; valor_total: number }[]>([]);
+  const [descTotal, setDescTotal] = useState(0);
+  const [descLoading, setDescLoading] = useState(false);
+  // análise de margem
+  const [analiseModal, setAnaliseModal] = useState(false);
+  const [analiseData, setAnaliseData] = useState<{ itens: { cod: number; descricao: string; venda: number; desconto: number; custo: number; margem: number; margem_pct: number }[]; totais: { venda: number; desconto: number; custo: number; margem: number; margem_pct: number; qtd_itens: number } } | null>(null);
+  const [analiseLoading, setAnaliseLoading] = useState(false);
 
   const [areas, setAreas] = useState<{ codigo: number; descricao: string }[]>([]);
   const [funcionarios, setFuncionarios] = useState<{ codigo: number; nome: string; nome_guerra: string }[]>([]);
@@ -358,6 +372,30 @@ export default function OSFormScreen() {
     } finally { setItemSaving(false); }
   };
 
+  const openDescontos = async () => {
+    if (!conn || !osId) return;
+    setDescModal(true);
+    setDescLoading(true);
+    try {
+      const j = await apiGet(conn, `/api/os/${osId}/descontos`);
+      if (j?.success) { setDescItems(j.items || []); setDescTotal(j.total || 0); }
+      else { setDescItems([]); setDescTotal(0); }
+    } catch { setDescItems([]); setDescTotal(0); }
+    finally { setDescLoading(false); }
+  };
+
+  const openAnalise = async () => {
+    if (!conn || !osId) return;
+    setAnaliseModal(true);
+    setAnaliseLoading(true);
+    try {
+      const j = await apiGet(conn, `/api/os/${osId}/analise`);
+      if (j?.success) setAnaliseData({ itens: j.itens || [], totais: j.totais });
+      else setAnaliseData(null);
+    } catch { setAnaliseData(null); }
+    finally { setAnaliseLoading(false); }
+  };
+
   const areaOptions: SelectOption[] = useMemo(
     () => areas.map((a) => ({ value: a.codigo, label: a.descricao })),
     [areas]
@@ -491,38 +529,21 @@ export default function OSFormScreen() {
             <Text style={styles.readonlyText}>{editing ? formatDateBR(os?.data || null) : formatDateBR(todayISO())}</Text>
           </View>
 
-          {/* Veículo / Equipamento */}
-          <Text style={styles.groupTitle}>{equipLabel}</Text>
-          <View style={styles.fieldRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.fieldLabel}>Placa</Text>
-              <TextInput value={placa} onChangeText={setPlaca} autoCapitalize="characters" maxLength={8} placeholder="ABC-1234" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-placa" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.fieldLabel}>KM</Text>
-              <TextInput value={km} onChangeText={setKm} keyboardType="number-pad" placeholder="0" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-km" />
-            </View>
-          </View>
-          <View style={styles.fieldRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.fieldLabel}>Marca</Text>
-              <TextInput value={marca} onChangeText={setMarca} maxLength={3} placeholder="Marca" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-marca" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.fieldLabel}>Modelo</Text>
-              <TextInput value={modelo} onChangeText={setModelo} maxLength={3} placeholder="Modelo" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-modelo" />
-            </View>
-          </View>
-          <View style={styles.fieldRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.fieldLabel}>Ano</Text>
-              <TextInput value={ano} onChangeText={setAno} maxLength={9} placeholder="2025" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-ano" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.fieldLabel}>{serieLabel}</Text>
-              <TextInput value={serie} onChangeText={setSerie} maxLength={20} placeholder={serieLabel} placeholderTextColor={colors.muted} style={styles.input} testID="os-form-serie" />
-            </View>
-          </View>
+          {/* Veículo / Equipamento — abre bottom sheet */}
+          <Text style={styles.sectionTitle}>{equipLabel}</Text>
+          <Pressable
+            onPress={() => setVehSheet(true)}
+            style={({ pressed }) => [styles.selectBox, pressed && { opacity: 0.75 }]}
+            testID="os-form-veiculo-open"
+          >
+            <Ionicons name={isAssist ? "hardware-chip-outline" : "car-outline"} size={18} color={colors.muted} />
+            <Text style={[styles.selectText, !(placa || marca || modelo || serie) && { color: colors.muted }]} numberOfLines={1}>
+              {placa || marca || modelo || serie
+                ? [placa, [marca, modelo].filter(Boolean).join(" "), serie].filter(Boolean).join(" · ")
+                : `Informar ${equipLabel.toLowerCase()}`}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.muted} />
+          </Pressable>
 
           {/* Cliente Descreva */}
           <Text style={styles.sectionTitle}>Cliente Descreva</Text>
@@ -607,6 +628,22 @@ export default function OSFormScreen() {
               <Text style={styles.subtotalLabel}>Total da OS</Text>
               <Text style={styles.subtotalValue}>{formatBRL(subtotal)}</Text>
             </View>
+          ) : null}
+
+          {editing && osId && can("OS.VER_DESCONTOS") ? (
+            <TouchableOpacity onPress={openDescontos} activeOpacity={0.85} style={styles.actionBtn} testID="os-form-descontos-btn">
+              <Ionicons name="pricetag-outline" size={18} color={colors.brandPrimary} />
+              <Text style={styles.actionBtnText}>Descontos concedidos</Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.brandPrimary} />
+            </TouchableOpacity>
+          ) : null}
+
+          {editing && osId && can("OS.ANALISE") ? (
+            <TouchableOpacity onPress={openAnalise} activeOpacity={0.85} style={styles.actionBtn} testID="os-form-analise-btn">
+              <Ionicons name="bar-chart-outline" size={18} color={colors.brandPrimary} />
+              <Text style={styles.actionBtnText}>Analisar margem & descontos</Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.brandPrimary} />
+            </TouchableOpacity>
           ) : null}
 
           <View style={{ height: 60 }} />
@@ -800,6 +837,138 @@ export default function OSFormScreen() {
         </Pressable>
       </Modal>
 
+      {/* Bottom sheet: Veículo / Equipamento */}
+      <Modal visible={vehSheet} transparent animationType="slide" onRequestClose={() => setVehSheet(false)}>
+        <Pressable style={styles.modalBg} onPress={() => setVehSheet(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{equipLabel}</Text>
+              <Pressable onPress={() => setVehSheet(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+            <ScrollView style={{ maxHeight: 460 }} keyboardShouldPersistTaps="handled">
+              <View style={styles.fieldRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.fieldLabel}>Placa</Text>
+                  <TextInput value={placa} onChangeText={setPlaca} autoCapitalize="characters" maxLength={8} placeholder="ABC-1234" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-placa" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.fieldLabel}>KM</Text>
+                  <TextInput value={km} onChangeText={setKm} keyboardType="number-pad" placeholder="0" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-km" />
+                </View>
+              </View>
+              <View style={styles.fieldRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.fieldLabel}>Marca</Text>
+                  <TextInput value={marca} onChangeText={setMarca} maxLength={3} placeholder="Marca" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-marca" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.fieldLabel}>Modelo</Text>
+                  <TextInput value={modelo} onChangeText={setModelo} maxLength={3} placeholder="Modelo" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-modelo" />
+                </View>
+              </View>
+              <View style={styles.fieldRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.fieldLabel}>Ano</Text>
+                  <TextInput value={ano} onChangeText={setAno} maxLength={9} placeholder="2025" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-ano" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.fieldLabel}>{serieLabel}</Text>
+                  <TextInput value={serie} onChangeText={setSerie} maxLength={20} placeholder={serieLabel} placeholderTextColor={colors.muted} style={styles.input} testID="os-form-serie" />
+                </View>
+              </View>
+              <Pressable onPress={() => setVehSheet(false)} style={({ pressed }) => [styles.primaryBtn, { marginTop: spacing.lg }, pressed && { opacity: 0.85 }]} testID="os-form-veiculo-ok">
+                <Text style={styles.primaryBtnText}>Concluir</Text>
+              </Pressable>
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Modal: Descontos concedidos */}
+      <Modal visible={descModal} transparent animationType="slide" onRequestClose={() => setDescModal(false)}>
+        <Pressable style={styles.modalBg} onPress={() => setDescModal(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Descontos Concedidos</Text>
+              <Pressable onPress={() => setDescModal(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+            {descLoading ? (
+              <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 24 }} />
+            ) : descItems.length === 0 ? (
+              <Text style={styles.hintText}>Nenhum desconto registrado.</Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 420 }}>
+                {descItems.map((d) => (
+                  <View key={d.cod} style={styles.descRow} testID={`os-form-desc-${d.cod}`}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemDesc} numberOfLines={1}>{d.descricao}</Text>
+                      <Text style={styles.itemSub}>
+                        {d.percentual > 0 ? `${fmtNum(d.percentual)}% · ` : ""}{fmtNum(d.qtd)}× {formatBRL(d.valor_unitario)}
+                      </Text>
+                    </View>
+                    <Text style={[styles.itemTotal, { color: colors.error }]}>- {formatBRL(d.valor_total)}</Text>
+                  </View>
+                ))}
+                <View style={styles.subtotalRow}>
+                  <Text style={styles.subtotalLabel}>Total de descontos</Text>
+                  <Text style={[styles.subtotalValue, { color: colors.error }]}>- {formatBRL(descTotal)}</Text>
+                </View>
+              </ScrollView>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Modal: Analisar margem & descontos */}
+      <Modal visible={analiseModal} transparent animationType="slide" onRequestClose={() => setAnaliseModal(false)}>
+        <Pressable style={styles.modalBg} onPress={() => setAnaliseModal(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Margem & Descontos</Text>
+              <Pressable onPress={() => setAnaliseModal(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+            {analiseLoading ? (
+              <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 24 }} />
+            ) : !analiseData ? (
+              <Text style={styles.hintText}>Sem dados para análise.</Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 480 }}>
+                <View style={styles.totaisCard}>
+                  <View style={styles.totaisGrid}>
+                    <View style={styles.totItem}><Text style={styles.totLbl}>Vendas</Text><Text style={styles.totVal}>{formatBRL(analiseData.totais.venda)}</Text></View>
+                    <View style={styles.totItem}><Text style={styles.totLbl}>Descontos</Text><Text style={[styles.totVal, { color: colors.error }]}>{formatBRL(analiseData.totais.desconto)}</Text></View>
+                    <View style={styles.totItem}><Text style={styles.totLbl}>Custo</Text><Text style={styles.totVal}>{formatBRL(analiseData.totais.custo)}</Text></View>
+                    <View style={styles.totItem}>
+                      <Text style={styles.totLbl}>Margem</Text>
+                      <Text style={[styles.totVal, { color: margemColor(analiseData.totais.margem_pct) }]}>{formatBRL(analiseData.totais.margem)} · {analiseData.totais.margem_pct}%</Text>
+                    </View>
+                  </View>
+                </View>
+                {analiseData.itens.map((it) => (
+                  <View key={it.cod} style={styles.descRow} testID={`os-form-analise-${it.cod}`}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemDesc} numberOfLines={1}>{it.descricao}</Text>
+                      <Text style={styles.itemSub}>Venda {formatBRL(it.venda)} · Custo {formatBRL(it.custo)}</Text>
+                    </View>
+                    <View style={{ alignItems: "flex-end" }}>
+                      <Text style={[styles.itemTotal, { color: margemColor(it.margem_pct) }]}>{formatBRL(it.margem)}</Text>
+                      <Text style={[styles.itemSub, { color: margemColor(it.margem_pct) }]}>{it.margem_pct}%</Text>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {toast ? (
         <View style={[styles.toast, toast.tone === "error" && { backgroundColor: colors.error }, toast.tone === "success" && { backgroundColor: colors.success }]} testID="os-form-toast">
           <Text style={styles.toastText}>{toast.msg}</Text>
@@ -862,6 +1031,26 @@ const styles = StyleSheet.create({
   subtotalRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.border },
   subtotalLabel: { fontSize: 14, color: colors.onSurface, fontWeight: "500" },
   subtotalValue: { fontSize: 18, fontWeight: "700", color: colors.brandPrimary },
+  actionBtn: {
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    backgroundColor: colors.brandTertiary, borderRadius: radius.md,
+    paddingHorizontal: spacing.md, paddingVertical: 14, marginTop: spacing.md,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  actionBtnText: { flex: 1, fontSize: 14, fontWeight: "600", color: colors.brandPrimary },
+  sheetHandle: { alignSelf: "center", width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: spacing.sm },
+  descRow: {
+    flexDirection: "row", alignItems: "center", gap: spacing.md,
+    paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  totaisCard: {
+    backgroundColor: colors.brandTertiary, borderRadius: radius.md, padding: spacing.md,
+    borderWidth: 1, borderColor: colors.border, marginBottom: spacing.md,
+  },
+  totaisGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  totItem: { width: "47%" },
+  totLbl: { fontSize: 11, color: colors.muted, textTransform: "uppercase", letterSpacing: 0.4 },
+  totVal: { fontSize: 15, fontWeight: "700", color: colors.onSurface, marginTop: 2 },
   // modal
   modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
   modalCard: {
