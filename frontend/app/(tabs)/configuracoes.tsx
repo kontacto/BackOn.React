@@ -29,6 +29,19 @@ export default function ConfiguracoesScreen() {
   const displayName =
     pickFirst(session?.funcionario, ["nome", "nome_guerra"]) || session?.usuario || "Usuário";
 
+  // Acesso ao módulo de Permissões: usuário master (KONTACTO) ou funcionário com
+  // cod_funcao 01/02 (sócio/gerente).
+  const canManagePermissoes = (() => {
+    const u = (session?.usuario ?? {}) as Record<string, unknown>;
+    if (u?.master === true) return true;
+    if (String(u?.usuario ?? "").toUpperCase() === "KONTACTO") return true;
+    const cf = parseInt(
+      String((session?.funcionario as Record<string, unknown> | null)?.cod_funcao ?? ""),
+      10
+    );
+    return cf === 1 || cf === 2;
+  })();
+
   const handleLogout = async () => {
     await clearSession();
     router.replace("/login");
@@ -110,6 +123,21 @@ export default function ConfiguracoesScreen() {
             testID="config-relatorios"
           />
         </View>
+
+        {canManagePermissoes ? (
+          <>
+            <Text style={styles.sectionTitle}>Administração</Text>
+            <View style={styles.group}>
+              <Item
+                icon="shield-checkmark-outline"
+                label="Permissões"
+                hint="Definir acessos por grupo de usuário"
+                onPress={() => router.push("/permissoes")}
+                testID="config-permissoes"
+              />
+            </View>
+          </>
+        ) : null}
 
         <Text style={styles.sectionTitle}>Conta</Text>
         <View style={styles.group}>

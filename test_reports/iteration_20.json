@@ -1,0 +1,48 @@
+{
+  "summary": "Iteração 20 — TESTE FRONTEND do NOVO MÓDULO 'Permissões' (sistema=50). Backend pulado (já validado via curl). Cobertura E2E real no preview web (mobile viewport 390x844) com Playwright: criação de conexão BACKON TESTE → login master KONTACTO/$KONT2011 → tab Configurações → tile 'Permissões' → tela /permissoes → combobox → árvore (MENU>TELA>BOTAO) → mark/unmark propagação → Salvar → persistência. RESULTADO: 8/8 cenários do review_request passaram. (1) Login master OK (redirect para /principal). (2) Seção 'Administração' com tile 'Permissões' (testID config-permissoes) AGORA visível para KONTACTO. (3) /permissoes carrega com header 'Permissões', combobox 'Selecione um grupo…' (testID perm-classe-picker). (4) Combobox abre modal com 4 grupos: ADMIN(testID perm-classe-1), GERENTE(2), SÓCIO(3), VENDEDOR(4). (5) Selecionando VENDEDOR carrega árvore com 4 MENUs (Cadastros/Movimento/Relatórios/Configurações) expandidos por padrão; expandindo caret da TELA 'Clientes' surgem 5 BOTAOs: Abrir Tela(ABRIR), Gravar(GRAVAR), Excluir(EXCLUIR), Imprimir(IMPRIMIR), Exportar(EXPORTAR) — testIDs perm-BOTAO|CLIENTE|<acao>. (6) Marcar MENU 'Cadastros' propaga para TELAs e BOTAOs (13 itens: 1 MENU + 2 TELA + 10 BOTAO). Desmarcar TELA 'Clientes' deixa parent CADASTROS em estado parcial → ícone remove-circle (icon glyph 0xF21A vs square-outline 0xF593 confirmado via DOM). (7) Salvar retorna feedback 'N permissão(ões) salva(s).' — confirmado: 13 (full Cadastros), 7 (após desmarcar Clientes TELA = 1 MENU partial + 1 TELA + 5 BOTAOs de Produtos). (8) Persistência testada de 3 formas: (a) trocar VENDEDOR→GERENTE→VENDEDOR mantém marcação; (b) trocar VENDEDOR→ADMIN (vazio) →VENDEDOR mantém; (c) page.reload() completo + reselecionar VENDEDOR retorna 7 itens persistidos no SQL. NENHUM BUG funcional. ÚNICO 'gotcha' encontrado foi de TESTE não de produto: Playwright `page.click(force=True)` em selector NÃO dispara onPress do Pressable do react-native-web nas linhas da árvore (somente o disparo via page.mouse.click(cx,cy) ou via dispatch de PointerEvent funciona) — isto NÃO afeta o usuário real, mas é importante para futuros scripts. Warnings de console: 'shadow* style props are deprecated. Use boxShadow' (react-native-web; cosmético).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "permissoes",
+        "issues": [
+          "Os BOTÕES (Abrir Tela, Gravar, Excluir, Imprimir, Exportar) ficam ocultos por padrão pois as TELAs entram colapsadas; o usuário precisa clicar no caret pequeno (chevron, ~22px) ao lado da TELA — touch target do caret é exatamente 22px, abaixo do guideline iOS de 44px. Considerar aumentar hitSlop do caret de 8 para algo como {top:12,bottom:12,left:12,right:12} ou tornar todo o rótulo da TELA também expandível. Não bloqueia testes."
+        ]
+      }
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/A_vendedor_reload.png (reload VENDEDOR mostra 13 marcas — Cadastros+filhos completos)",
+    "/tmp/B_expand_clientes.png (expansão da TELA Clientes mostrando 5 BOTÕES)",
+    "/tmp/C_admin.png (ADMIN — sem marcas, isolamento por classe OK)",
+    "/tmp/D_back_vendedor.png (persistência: voltar p/ VENDEDOR mantém marcas)",
+    "/tmp/F_partial.png (estado parcial: Cadastros em remove-circle ao desmarcar Clientes)",
+    "/tmp/G_after_reload.png (após page.reload() + relogin de sessão localStorage, VENDEDOR ainda tem 7 marcas no SQL)"
+  ],
+  "action_items": [
+    "(MENOR/Design) Aumentar área tocável do chevron de expansão das TELAs na tela /permissoes — atualmente 22x44 efetivo, abaixo do mínimo 44x44. Sugestão: usar hitSlop maior ou wrap o caret+label em uma única Pressable que faz expand no toggle de label (deixando o checkbox no ícone à esquerda).",
+    "(MENOR/Cosmético) Warning do react-native-web: substituir prop `shadow*` (shadowColor/shadowOpacity/shadowRadius/shadowOffset) por `boxShadow` no estilo styles.saveBtn de /app/frontend/app/permissoes.tsx (linhas 408-412) e em outras telas que ainda usam shadow*. Não bloqueia funcionalidade."
+  ],
+  "critical_code_review_comments": [
+    "/app/frontend/app/permissoes.tsx:33-47 — `collectKeys` e `flatten` recursivos OK e idempotentes. `keyOf` produz chave estável `${tipo}|${tela}|${comando||''}`. ✓",
+    "/app/frontend/app/permissoes.tsx:137-143 — `nodeState` retorna boolean | 'partial' baseado em selected.size de descendentes; integra com Ionicons corretamente (checkbox/remove-circle/square-outline). Confirmado visualmente: Cadastros vira remove-circle quando 1 das 2 TELAs filhas está marcada. ✓",
+    "/app/frontend/app/permissoes.tsx:166-175 — `handleSave` reconstrói itens a partir de `flatMap[k]` e envia POST. O backend faz delete+insert por (classe, sistema=50), o que justifica feedback '7 permissão(ões) salva(s).' refletindo o NOVO total e não delta. Persistência confirmada via reload + reseleção da classe. ✓",
+    "/app/frontend/app/permissoes.tsx:88-89 — Por padrão expanda apenas MENUs (`setExpanded(new Set((catR.catalogo).map((m) => keyOf(m))))`). As TELAs ficam colapsadas o que esconde os BOTÕES inicialmente — comportamento intencional, porém ver action_items sobre touch target do caret. ✓",
+    "/app/frontend/app/(tabs)/configuracoes.tsx:34-43 — Gate `canManagePermissoes` validado em runtime para KONTACTO (u.master===true OU usuario==='KONTACTO'). Confirmado: tile config-permissoes aparece somente para o master neste teste. Não foi testado o caso de funcionário cod_funcao 01/02 não-master (Estela ou CARLOS) — recomenda-se cobertura adicional pelo main agent.",
+    "/app/frontend/app/permissoes.tsx — TouchableOpacity/Pressable do react-native-web em ambiente de testes Playwright respondem apenas a `mouse.click(x,y)` ou PointerEvent dispatch, NÃO ao `page.click(selector, force=True)`. Para próximos testing-agents: usar helper `rn_click(testid)` que faz `page.mouse.click(bbox.center)`. Isto é peculiaridade do RNW + Playwright e NÃO afeta usuários reais.",
+    "/app/frontend/app/permissoes.tsx:1 — Arquivo possui 426 linhas, dentro do limite (700). Componentização aceitável; recursão `renderNode` clara. ✓"
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "Não testado nesta iteração (review_request: frontend only). Backend dos 4 endpoints /api/permissoes/* foi validado em iterações anteriores via curl.",
+    "frontend": "100% — 8/8 cenários do review_request PASSARAM. Login master, tile Permissões, tela /permissoes, combobox 4 grupos, árvore MENU>TELA>BOTÕES, propagação parent→filhos, estado parcial remove-circle, feedback de save, e persistência (3 estratégias: troca de grupo, ADMIN vazio→volta, page.reload() + reseleção)."
+  },
+  "seed_data_creation": "Conexão criada no LocalStorage do web preview: empresa='BACKON TESTE', servidor='gibanweb.database.windows.net', banco='BDREACTAPP', api='https://order-crud-discounts.preview.emergentagent.com'. Dados gravados na tabela SQL `permissoes` para classe=4 (VENDEDOR), sistema=50: ao final do teste restaram 7 permissões (1 MENU CADASTROS partial + 1 TELA PRODUTO + 5 BOTOEs PRODUTO ABRIR/GRAVAR/EXCLUIR/IMPRIMIR/EXPORTAR). Se main agent quiser estado limpo: POST /api/permissoes/salvar com itens=[] para classe=4 zera tudo.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "MÓDULO PERMISSÕES OK em produção (preview). Para reproduzir os testes: (1) localStorage do web limpa entre sessões de Playwright, então sempre crie a conexão BACKON TESTE primeiro via tela /connections; (2) login KONTACTO/$KONT2011 vai direto para /principal; (3) helper crítico: `async def rn_click(testid)` que faz `page.mouse.click(bbox.center)` — o `page.click(force=True)` NÃO dispara onPress do react-native-web Pressable nas linhas da árvore; (4) testIDs confirmados: config-permissoes (tile), permissoes-screen, perm-classe-picker, perm-classe-{1..4}, perm-save, e da árvore: perm-MENU|CADASTROS|, perm-MENU|MOVIMENTO|, perm-MENU|RELATORIOS|, perm-MENU|CONFIG|, perm-TELA|CLIENTE|, perm-TELA|PRODUTO|, perm-TELA|PEDIDO|, perm-TELA|REL_PEDIDOS|, perm-TELA|REL_DESCONTOS|, perm-TELA|CONEXAO|, e quando expandido perm-BOTAO|CLIENTE|<ABRIR|GRAVAR|EXCLUIR|IMPRIMIR|EXPORTAR> (idem para os demais TELA); (5) caret de expansão fica ~12px à esquerda do testID — clicar via `page.mouse.click(bbox.x - 12, bbox.y + bbox.h/2)`; (6) tabela SQL: deixou classe=4 com 7 itens persistidos; (7) gate canManagePermissoes não foi testado para Estela/cod_funcao 01 — recomendar cobertura adicional.",
+  "rca_of_issue": "N/A — não há bug. Único ponto digno de nota: o `page.click()` do Playwright com `force=True` NÃO aciona o `onPress` do Pressable do react-native-web nesta árvore (provavelmente porque RNW usa handlers de pointer/touch que dependem de PointerEvent disparado pelo motor do browser, e o synthetic click do Playwright em modo force pula isso). Solução de TESTE: usar `page.mouse.click(x, y)` apontando para o centro do bounding box do testID. Para o usuário real (toque/clique nativo) o evento é gerado pelo OS/browser e funciona corretamente — confirmado pelo fluxo end-to-end real."
+}

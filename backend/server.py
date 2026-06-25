@@ -30,7 +30,7 @@ from starlette.middleware.cors import CORSMiddleware  # noqa: E402
 from db import mongo  # noqa: E402
 from routes import (  # noqa: E402
     auth, clientes, controle, descontos, lookups, misc, pedidos,
-    produtos, relatorios,
+    permissoes, produtos, relatorios,
 )
 
 app = FastAPI()
@@ -47,6 +47,7 @@ api_router.include_router(descontos.router)
 api_router.include_router(controle.router)
 api_router.include_router(relatorios.router)
 api_router.include_router(lookups.router)
+api_router.include_router(permissoes.router)
 
 app.include_router(api_router)
 
