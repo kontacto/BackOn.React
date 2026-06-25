@@ -15,6 +15,7 @@ type PermState = {
   keys: Set<string>;
   classe: number | null;
   disabledTelas: Set<string>;
+  modules: Record<string, boolean>;
 };
 
 // Mapa: módulo (coluna controle_configuracao) -> telas controladas.
@@ -26,6 +27,7 @@ const MODULE_TELAS: Record<string, string[]> = {
 
 type PermContextValue = PermState & {
   can: (key: string) => boolean;
+  moduleOn: (name: string) => boolean;
   reload: () => Promise<void>;
 };
 
@@ -44,6 +46,7 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
     keys: new Set(),
     classe: null,
     disabledTelas: new Set(),
+    modules: {},
   });
 
   const reload = useCallback(async () => {
@@ -67,6 +70,7 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
     const conn = conns.find((c) => c.empresa === session.empresa);
     const keys = new Set<string>();
     const disabledTelas = new Set<string>();
+    const modules: Record<string, boolean> = {};
 
     if (conn) {
       const base = conn.api.replace(/\/+$/, "");
@@ -75,6 +79,7 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
       try {
         const cfg = await fetch(`${base}/api/controle-config?${cq}`).then((x) => x.json());
         if (cfg?.success && cfg.valores) {
+          Object.assign(modules, cfg.valores);
           Object.entries(MODULE_TELAS).forEach(([mod, telas]) => {
             if (!cfg.valores[mod]) telas.forEach((t) => disabledTelas.add(t.toUpperCase()));
           });
@@ -97,7 +102,7 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
       }
     }
 
-    setState({ loading: false, isMaster, keys, classe, disabledTelas });
+    setState({ loading: false, isMaster, keys, classe, disabledTelas, modules });
   }, []);
 
   useEffect(() => {
@@ -120,9 +125,14 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
     [state.isMaster, state.keys, state.disabledTelas]
   );
 
+  const moduleOn = useCallback(
+    (name: string) => state.modules[name] === true,
+    [state.modules]
+  );
+
   const value = useMemo<PermContextValue>(
-    () => ({ ...state, can, reload }),
-    [state, can, reload]
+    () => ({ ...state, can, moduleOn, reload }),
+    [state, can, moduleOn, reload]
   );
 
   return <PermissionsContext.Provider value={value}>{children}</PermissionsContext.Provider>;
@@ -138,7 +148,9 @@ export function usePermissions(): PermContextValue {
       keys: new Set(),
       classe: null,
       disabledTelas: new Set(),
+      modules: {},
       can: () => false,
+      moduleOn: () => false,
       reload: async () => {},
     };
   }

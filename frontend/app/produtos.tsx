@@ -42,7 +42,8 @@ function parseNum(s: string): number {
 
 export default function ProdutosScreen() {
   const router = useRouter();
-  const { can } = usePermissions();
+  const { can, moduleOn } = usePermissions();
+  const servicosOn = moduleOn("servicos");
   const params = useLocalSearchParams<{ pedido?: string }>();
   const selectPedido = params.pedido ? parseInt(String(params.pedido), 10) : null;
   const selecting = !!selectPedido;
@@ -114,7 +115,7 @@ export default function ProdutosScreen() {
           `?servidor=${encodeURIComponent(conn.servidor)}` +
           `&banco=${encodeURIComponent(conn.banco)}` +
           `&search=${encodeURIComponent(term)}` +
-          `&page=${pg}&size=40&tipo=${tp}`;
+          `&page=${pg}&size=40&tipo=${servicosOn ? tp : "P"}`;
         const r = await fetch(url, { signal: ac.signal });
         const j = await r.json();
         if (!j?.success) {
@@ -136,7 +137,7 @@ export default function ProdutosScreen() {
         }
       }
     },
-    [conn]
+    [conn, servicosOn]
   );
 
   // Recarrega quando muda search / tipo (debounce 300ms na busca)
@@ -277,7 +278,8 @@ export default function ProdutosScreen() {
         />
       </View>
 
-      {/* Chips de tipo — chrome sticky, scroll horizontal NÃO necessário (só 3 chips) */}
+      {/* Chips de tipo — ocultos quando o módulo Serviços está desligado */}
+      {servicosOn ? (
       <View style={styles.chips}>
         {([
           { key: "all" as const, label: "Tudo", count: counts.p + counts.s },
@@ -303,6 +305,7 @@ export default function ProdutosScreen() {
           );
         })}
       </View>
+      ) : null}
 
       {error ? (
         <Text style={styles.errorText} testID="produtos-error">

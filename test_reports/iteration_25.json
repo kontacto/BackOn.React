@@ -1,0 +1,35 @@
+{
+  "summary": "Iter25 — Módulo 'servicos' (controle_configuracao.servicos) controla os chips e a lista da tela Produtos & Serviços. Frontend (mobile 390x844, sessão master KONTACTO + conexão BACKON TESTE/gibanweb/BDREACTAPP semeadas via localStorage) validado em 5 passos: (STEP1) servicos=true → /produtos exibe os 3 chips testIDs produtos-chip-all, produtos-chip-P, produtos-chip-S (counts {all:1,P:1,S:1}) ✓; (STEP2) /modulos-recursos → tap em mod-servicos + mod-save → API GET /api/controle-config retorna servicos=false ✓ (e PermissionsProvider.reloadPermissions é disparado pela tela); (STEP3) /produtos com servicos=false → chips somem (counts {all:0,P:0,S:0}) e a lista contém apenas tag PRODUTO (4 itens P001-P004, ZERO tag 'SERVIÇO') ✓ (screenshot /tmp/produtos_off.png mostra cabeçalho 'Produtos & Serviços (4)' sem fileira de chips); (STEP4) /modulos-recursos → reativar mod-servicos + mod-save → API retorna servicos=true ✓; (STEP5) /produtos → chips voltam (counts {all:1,P:1,S:1}) e a lista exibe 6 itens (4 PRODUTO + 2 SERVIÇO: S01 Buffet, S02 Garçom) ✓ (screenshot /tmp/produtos_on_again.png). Estado final no banco: servicos=true (verificado via GET /api/controle-config após cleanup). Comportamento da query confirmado: produtos.tsx envia tipo=P quando servicos=off, e tipo=<chip selecionado> quando on. Nenhum erro 5xx observado nos logs do backend durante o teste.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/tmp/produtos_off.png",
+    "/tmp/produtos_on_again.png"
+  ],
+  "action_items": [
+    "(Não bloqueia esta feature) app/(tabs)/configuracoes.tsx:30 — fallback do displayName usa `session?.usuario` (objeto) como string, o que pode quebrar a tela com 'Objects are not valid as a React child' quando funcionario for null/sem nome. Em produção o backend (_build_master_session) sempre retorna funcionario.nome, então não dispara no fluxo normal; mas o cast deveria ser explícito, ex.: `String((session?.usuario as Record<string,unknown>|null)?.usuario ?? '') || 'Usuário'`. Detectado ao testar com session seed funcionario=null."
+  ],
+  "critical_code_review_comments": [
+    "produtos.tsx:118 — quando servicos=off, força tipo=P sempre, ignorando o estado local `tipo` (correto). Bom: chip Serviços é escondido (linha 282) e não pode ser selecionado, prevenindo inconsistência. ✓",
+    "permissions/index.tsx — `modules` foi populado a partir de /api/controle-config, e `reload()` é exposto via PermissionsContext e chamado por modulos-recursos.tsx (linha 80) após salvar. Re-render do produtos.tsx ocorre porque `moduleOn('servicos')` muda o estado consumido por useMemo/useCallback do `load`. ✓",
+    "controle_config_service.py:99 — UPDATE sem WHERE (já documentado em iter24); permanece válido pois é registro único."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "N/A (frontend-only request)",
+    "frontend": "100% (5/5 passos: chips visíveis com servicos=true, save off, chips ocultos + zero SERVIÇO com servicos=false, save on, chips voltam com 2 SERVIÇO na lista)"
+  },
+  "seed_data_creation": "Apenas localStorage do navegador: @back_on/connections (BACKON TESTE → gibanweb.database.windows.net/BDREACTAPP) e @back_on/session (master KONTACTO). Toggle temporário de controle_configuracao.servicos no Azure SQL durante o teste, RESTAURADO para true ao final (verificado via GET /api/controle-config: servicos=true).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "MODULE_TELAS em controle_config_service.py NÃO inclui 'servicos' (não desliga uma tela inteira) — o efeito do flag 'servicos' é apenas na UI da tela Produtos (esconder chips + forçar tipo=P na query /api/produtos-servicos). Para acionar o reload de PermissionsProvider via UI, a tela /modulos-recursos chama reloadPermissions() após handleSave. Para semear master pulando login/onboarding: localStorage @back_on/session = {usuario:{usuario:'KONTACTO',master:true,...},funcionario:{nome:'KONTACTO Sistemas',nome_guerra:'KONTACTO',...},empresa:'BACKON TESTE',...} e @back_on/connections=[{empresa,servidor,banco,api}]. ATENÇÃO: ao semear session com funcionario=null, /configuracoes (não esta feature) crasha pelo bug do displayName (action_items #1). Estado atual da empresa: servicos=true, Pedido_venda=true, Clientes=true.",
+  "rca_of_issue": "N/A — feature integrada corretamente. moduleOn('servicos') controla render dos chips (produtos.tsx:282) e o parâmetro tipo na URL da API (produtos.tsx:118). reloadPermissions após save em modulos-recursos.tsx:80 propaga o novo estado para o PermissionsProvider, refletindo na próxima entrada em /produtos."
+}
