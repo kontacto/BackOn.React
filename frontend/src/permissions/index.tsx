@@ -12,6 +12,7 @@ import { listConnections } from "@/src/utils/storage/connections";
 type PermState = {
   loading: boolean;
   isMaster: boolean;
+  isManagerFuncao: boolean;
   keys: Set<string>;
   classe: number | null;
   disabledTelas: Set<string>;
@@ -43,6 +44,7 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
   const [state, setState] = useState<PermState>({
     loading: true,
     isMaster: false,
+    isManagerFuncao: false,
     keys: new Set(),
     classe: null,
     disabledTelas: new Set(),
@@ -53,13 +55,17 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
     setState((s) => ({ ...s, loading: true }));
     const session = await getSession();
     if (!session) {
-      setState({ loading: false, isMaster: false, keys: new Set(), classe: null, disabledTelas: new Set() });
+      setState({ loading: false, isMaster: false, isManagerFuncao: false, keys: new Set(), classe: null, disabledTelas: new Set(), modules: {} });
       return;
     }
     const usuario = (session.usuario ?? {}) as Record<string, unknown>;
     const isMaster =
       usuario?.master === true ||
       String(usuario?.usuario ?? "").toUpperCase() === "KONTACTO";
+    // Gerente por função: cod_funcao 01/02 (ou master). Controla "ver todos os vendedores".
+    const funcionario = (session.funcionario ?? {}) as Record<string, unknown>;
+    const codFuncao = parseInt(String(funcionario?.cod_funcao ?? ""), 10);
+    const isManagerFuncao = isMaster || codFuncao === 1 || codFuncao === 2;
     const classeRaw = usuario?.classe;
     const classe =
       classeRaw === undefined || classeRaw === null || classeRaw === ""
@@ -102,7 +108,7 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
       }
     }
 
-    setState({ loading: false, isMaster, keys, classe, disabledTelas, modules });
+    setState({ loading: false, isMaster, isManagerFuncao, keys, classe, disabledTelas, modules });
   }, []);
 
   useEffect(() => {
@@ -145,6 +151,7 @@ export function usePermissions(): PermContextValue {
     return {
       loading: false,
       isMaster: false,
+      isManagerFuncao: false,
       keys: new Set(),
       classe: null,
       disabledTelas: new Set(),

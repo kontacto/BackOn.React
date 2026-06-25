@@ -19,6 +19,7 @@ import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import DateField from "@/src/components/DateField";
+import SelectField, { SelectOption } from "@/src/components/SelectField";
 
 type Pedido = {
   pedido: number;
@@ -58,10 +59,13 @@ function formatDate(iso: string | null) {
 
 export default function PedidosScreen() {
   const router = useRouter();
-  const { can } = usePermissions();
+  const { can, isManagerFuncao } = usePermissions();
   const [conn, setConn] = useState<Connection | null>(null);
   const [search, setSearch] = useState("");
   const [situacao, setSituacao] = useState("");
+  const [vendedor, setVendedor] = useState<string | number | null>(null);
+  const [vendedorOpts, setVendedorOpts] = useState<SelectOption[]>([]);
+  const [ownVendedor, setOwnVendedor] = useState<number | null>(null);
   const [dataIni, setDataIni] = useState<string | null>(null);
   const [dataFim, setDataFim] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
@@ -76,13 +80,42 @@ export default function PedidosScreen() {
     (async () => {
       const s = await getSession();
       const cs = await listConnections();
-      setConn(cs.find((x) => x.empresa === s?.empresa) || null);
+      const c = cs.find((x) => x.empresa === s?.empresa) || null;
+      setConn(c);
+      const own = (s?.funcionario as { codigo_int?: number } | null)?.codigo_int;
+      setOwnVendedor(own ?? null);
+      // Gerentes (cod_funcao 01/02) e KONTACTO podem filtrar por vendedor.
+      if (c && isManagerFuncao) {
+        try {
+          const base = c.api.replace(/\/+$/, "");
+          const qs = `servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`;
+          const j = await fetch(`${base}/api/funcionarios?${qs}`).then((r) => r.json());
+          const fs: { codigo: number; nome: string; nome_guerra: string }[] = Array.isArray(j?.items) ? j.items : [];
+          setVendedorOpts(
+            fs.map((f) => ({
+              value: f.codigo,
+              label: f.nome || f.nome_guerra || `#${f.codigo}`,
+              sub: f.nome_guerra && f.nome_guerra !== f.nome ? `@${f.nome_guerra}` : undefined,
+            }))
+          );
+        } catch {
+          // silencioso
+        }
+      }
     })();
-  }, []);
+  }, [isManagerFuncao]);
+
+  const effVendedor = isManagerFuncao
+    ? vendedor == null
+      ? "all"
+      : String(vendedor)
+    : ownVendedor != null
+    ? String(ownVendedor)
+    : "-1";
 
   const load = useCallback(
     async (
-      term: string, sit: string, di: string | null, df: string | null,
+      term: string, sit: string, vend: string, di: string | null, df: string | null,
       pg: number, append: boolean,
     ) => {
       if (!conn) return;
@@ -98,7 +131,7 @@ export default function PedidosScreen() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             servidor: conn.servidor, banco: conn.banco,
-            search: term, situacao: sit,
+            search: term, situacao: sit, vendedor: vend,
             data_ini: di, data_fim: df,
             page: pg, size: 20,
           }),
@@ -130,20 +163,20 @@ export default function PedidosScreen() {
     if (!conn) return;
     const t = setTimeout(() => {
       setPage(1);
-      load(search, situacao, dataIni, dataFim, 1, false);
+      load(search, situacao, effVendedor, dataIni, dataFim, 1, false);
     }, 350);
     return () => clearTimeout(t);
-  }, [search, situacao, dataIni, dataFim, conn, load]);
+  }, [search, situacao, effVendedor, dataIni, dataFim, conn, load]);
 
   useFocusEffect(useCallback(() => {
-    if (conn) load(search, situacao, dataIni, dataFim, 1, false);
-  }, [conn, search, situacao, dataIni, dataFim, load]));
+    if (conn) load(search, situacao, effVendedor, dataIni, dataFim, 1, false);
+  }, [conn, search, situacao, effVendedor, dataIni, dataFim, load]));
 
   const loadMore = () => {
     if (loading || items.length >= total) return;
     const next = page + 1;
     setPage(next);
-    load(search, situacao, dataIni, dataFim, next, true);
+    load(search, situacao, effVendedor, dataIni, dataFim, next, true);
   };
 
   const clearDateFilters = () => {
@@ -248,6 +281,20 @@ export default function PedidosScreen() {
               minimumDate={dataIni ? new Date(dataIni) : undefined}
             />
           </View>
+          {isManagerFuncao ? (
+            <View style={{ marginTop: spacing.md }} testID="pedidos-vendedor-filter">
+              <SelectField
+                label="Vendedor"
+                value={vendedor}
+                onChange={setVendedor}
+                options={vendedorOpts}
+                placeholder="Todos os vendedores"
+                modalTitle="Selecionar vendedor"
+                allowClear
+                testID="pedidos-vendedor-select"
+              />
+            </View>
+          ) : null}
         </View>
       ) : null}
 

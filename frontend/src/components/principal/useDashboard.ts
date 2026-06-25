@@ -10,7 +10,6 @@ import {
 import { listConnections } from "@/src/utils/storage/connections";
 import { apiGet } from "@/src/utils/api";
 import { usePermissions } from "@/src/permissions";
-import { SelectOption } from "@/src/components/SelectField";
 
 export type DashboardTotals = {
   pedidos: number; produtos: number; servicos: number; descontos: number; margem: number; margem_pct: number;
@@ -30,7 +29,7 @@ export function pickFirst(obj: Record<string, unknown> | null | undefined, keys:
 
 export function useDashboard() {
   const router = useRouter();
-  const { can } = usePermissions();
+  const { can, isManagerFuncao } = usePermissions();
   const [session, setSessionState] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -38,8 +37,6 @@ export function useDashboard() {
   const [pedidos, setPedidos] = useState<DashboardPedido[]>([]);
   const [dashLoading, setDashLoading] = useState(false);
   const [dashError, setDashError] = useState<string | null>(null);
-  const [vendedorOpts, setVendedorOpts] = useState<SelectOption[]>([]);
-  const [vendedorFiltro, setVendedorFiltro] = useState<string | number | null>(null);
   const [situacaoFiltro, setSituacaoFiltro] = useState<string>("");
   const [fantasia, setFantasia] = useState<string | null>(null);
 
@@ -48,7 +45,8 @@ export function useDashboard() {
     setSituacaoPref(value);
   }, []);
 
-  const canSeeAll = useMemo(() => can("GERENCIAL.TODOS_VEND"), [can]);
+  // "Ver todos os vendedores": cod_funcao 01/02 ou KONTACTO. Os demais veem só os próprios.
+  const canSeeAll = isManagerFuncao;
   const showTotais = useMemo(() => can("GERENCIAL.TOTAIS"), [can]);
   const showMargem = useMemo(() => can("GERENCIAL.MARGEM"), [can]);
   const showDescontos = useMemo(() => can("GERENCIAL.DESCONTOS"), [can]);
@@ -65,22 +63,6 @@ export function useDashboard() {
     const conns = await listConnections();
     return conns.find((c) => c.empresa === s.empresa) || null;
   }, []);
-
-  const loadVendedores = useCallback(async (s: Session) => {
-    try {
-      const conn = await connFor(s);
-      if (!conn) return;
-      const j = await apiGet(conn, "/api/funcionarios");
-      const items: { codigo: number; nome: string; nome_guerra: string }[] = Array.isArray(j?.items) ? j.items : [];
-      setVendedorOpts(items.map((f) => ({
-        value: f.codigo,
-        label: f.nome || f.nome_guerra || `#${f.codigo}`,
-        sub: f.nome_guerra && f.nome_guerra !== f.nome ? `@${f.nome_guerra}` : undefined,
-      })));
-    } catch {
-      // silencioso
-    }
-  }, [connFor]);
 
   const loadEmpresa = useCallback(async (s: Session) => {
     try {
@@ -101,7 +83,7 @@ export function useDashboard() {
   }, []);
 
   const loadDashboard = useCallback(
-    async (s: Session, vendedorOverride?: string | number | null, situacaoOverride?: string) => {
+    async (s: Session, situacaoOverride?: string) => {
       setDashLoading(true);
       setDashError(null);
       try {
@@ -109,7 +91,7 @@ export function useDashboard() {
         if (!conn) { setDashError("Conexão não encontrada."); return; }
         let vendedorParam: string;
         if (canSeeAll) {
-          vendedorParam = vendedorOverride === undefined || vendedorOverride === null ? "all" : String(vendedorOverride);
+          vendedorParam = "all";
         } else {
           const own = s.funcionario?.codigo_int;
           if (own === undefined || own === null) { setDashError("Vendedor não identificado na sessão."); return; }
@@ -134,17 +116,16 @@ export function useDashboard() {
 
   useEffect(() => {
     if (session) {
-      loadDashboard(session, vendedorFiltro);
+      loadDashboard(session);
       loadEmpresa(session);
-      if (canSeeAll) loadVendedores(session);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, canSeeAll, loadDashboard, loadVendedores, loadEmpresa]);
+  }, [session, canSeeAll, loadDashboard, loadEmpresa]);
 
   useEffect(() => {
-    if (session) loadDashboard(session, vendedorFiltro, situacaoFiltro);
+    if (session) loadDashboard(session, situacaoFiltro);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vendedorFiltro, situacaoFiltro]);
+  }, [situacaoFiltro]);
 
   const handleLogout = useCallback(async () => {
     await clearSession();
@@ -164,7 +145,7 @@ export function useDashboard() {
 
   return {
     session, loading, totais, pedidos, dashLoading, dashError,
-    vendedorOpts, vendedorFiltro, setVendedorFiltro, situacaoFiltro, handleSituacao,
+    situacaoFiltro, handleSituacao,
     fantasia, canSeeAll, showTotais, showMargem, showDescontos,
     handleLogout, displayName, nomeGuerra, totalPedidos, classe,
   };

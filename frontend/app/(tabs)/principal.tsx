@@ -2,7 +2,6 @@ import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-nati
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 
-import SelectField from "@/src/components/SelectField";
 import { colors } from "@/src/theme/colors";
 import { styles } from "@/src/components/principal/styles";
 import { useDashboard } from "@/src/components/principal/useDashboard";
@@ -54,21 +53,6 @@ export default function PrincipalScreen() {
         <Text style={styles.sectionSub}>Painel de controle. Os módulos do sistema são exibidos abaixo.</Text>
 
         <ModuleTiles />
-
-        {d.canSeeAll ? (
-          <View style={styles.filterRow} testID="principal-vendedor-filter">
-            <SelectField
-              label="Filtrar por vendedor"
-              value={d.vendedorFiltro}
-              onChange={d.setVendedorFiltro}
-              options={d.vendedorOpts}
-              placeholder="Todos os vendedores"
-              modalTitle="Selecionar vendedor"
-              allowClear
-              testID="principal-vendedor-select"
-            />
-          </View>
-        ) : null}
 
         <SituacaoFilter value={d.situacaoFiltro} onChange={d.handleSituacao} />
 

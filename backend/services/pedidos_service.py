@@ -27,6 +27,9 @@ def _list_pedidos_sync(req: PedidosListRequest) -> dict:
         if req.situacao:
             where_parts.append("p.situacao = %s")
             params.append(req.situacao)
+        if req.vendedor and str(req.vendedor).lower() != "all":
+            where_parts.append("p.vendedor = %s")
+            params.append(req.vendedor)
         if req.data_ini:
             where_parts.append("p.data >= %s")
             params.append(req.data_ini)

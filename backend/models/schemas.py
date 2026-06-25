@@ -54,6 +54,7 @@ class PedidosListRequest(BaseModel):
     banco: str
     search: Optional[str] = ""
     situacao: Optional[str] = ""  # vazio = todos
+    vendedor: Optional[str] = None  # None/"all" = todos; número = filtra por vendedor
     data_ini: Optional[str] = None  # ISO YYYY-MM-DD
     data_fim: Optional[str] = None  # ISO YYYY-MM-DD
     page: int = 1

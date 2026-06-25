@@ -1,0 +1,44 @@
+{
+  "summary": "Iter26 — Filtro de Vendedor movido da Principal para a Lista de Pedidos. Backend (pytest 5/5 passou /app/backend/tests/e2e/test_iter26_pedidos_vendedor_filter.py): POST /api/pedidos respeita 'vendedor' (all → total=1; omitido === all; '-1' → 0 items; numérico filtra pelo codigo_int), e GET /api/funcionarios retorna lista usada pelo Select. Frontend (mobile 390x844, sessão master KONTACTO + conexão BACKON TESTE seedadas via localStorage) — Principal (/principal): principal-screen carrega, principal-vendedor-filter NÃO existe (testIDs presentes: principal-situacao-filter, principal-sit-{todos,A,F,PG,C}, principal-pedidos-list) ✓; Pedidos (/pedidos): pedidos-screen carrega com Pedidos (1), pedidos-toggle-filters abre pedidos-filter-card, dentro do card aparecem testIDs pedidos-data-ini, pedidos-data-fim, pedidos-vendedor-filter e pedidos-vendedor-select (porque KONTACTO é master → isManagerFuncao=true) ✓; modal de seleção abre com opções 'Todos os vendedores' + lista (CARLOS, ESTELA, MARIA) — testIDs pedidos-vendedor-select-opt-all/opt-1/opt-2/opt-3 ✓; selecionar opt-1 (Carlos) recarrega: cabeçalho 'Pedidos (1)' + card mostra '#1 Aberto · CARLOS ALBERTO SILVA · R$ 54,50' e label do SelectField fica 'CARLOS ALBERTO SILVA @CARLOS' ✓; selecionar opt-2/opt-3 → 'Pedidos (0)' (lista esvazia) ✓; voltar para opt-all → 'Pedidos (1)' ✓. Não-gerente (sessão CARLOS classe 4, cod_funcao '03') cai em pedidos-locked (sem PEDIDO.ABRIR) — esperado pelo módulo de permissões; portanto a verificação visual de 'ocultar Select para não-gerente' não pôde ser feita via UI sem permissão prévia (o código em pedidos.tsx:284 condiciona o render ao isManagerFuncao, comportamento idêntico no useDashboard.canSeeAll).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/e2e/test_iter26_pedidos_vendedor_filter.py",
+    "/app/test_reports/pytest/iter26_results.xml",
+    "/tmp/principal_iter26.png",
+    "/tmp/pedidos_filter_open.png",
+    "/tmp/pedidos_vendedor_modal.png",
+    "/tmp/pedidos_after_filter.png",
+    "/tmp/pedidos_nonmgr.png"
+  ],
+  "action_items": [
+    "(Não bloqueante p/ esta feature) Para confirmar visualmente em UI que o Select de Vendedor é OCULTADO para usuários não-gerentes (cod_funcao != 01/02 e não-master), seria preciso uma classe seedada com permissão PEDIDO.ABRIR mas cod_funcao 03/04. Code review já confirma o gating (pedidos.tsx:284). Sem ação.",
+    "(Carryover do iter25) configuracoes.tsx:30 — fallback do displayName ainda usa session?.usuario como string; permanece latente."
+  ],
+  "critical_code_review_comments": [
+    "permissions/index.tsx:68 — isManagerFuncao = isMaster || codFuncao===1 || codFuncao===2. Correto e consistente com o requisito de 'KONTACTO + cod_funcao 1/2 veem todos'.",
+    "pedidos.tsx:108-114 — effVendedor força 'all' p/ gerente sem seleção, 'String(ownVendedor)' p/ não-gerente, e '-1' como fallback quando codigo_int ausente (resulta em 0 pedidos, evitando vazamento de dados). ✓",
+    "pedidos.tsx:88-104 — GET /api/funcionarios só é chamado se isManagerFuncao; payload do options usa { value: f.codigo, label: f.nome }. ✓",
+    "useDashboard.ts:48-49 + 93-99 — Principal usa canSeeAll (=isManagerFuncao) e não expõe mais vendedorFiltro/vendedorOpts; passa 'all' ou String(ownCodigoInt). ✓",
+    "pedidos_service.py:30-32 — `if req.vendedor and str(req.vendedor).lower() != 'all'` aplica corretamente o filtro p.vendedor = %s; quando vendedor é None ou 'all', não restringe (equivalência confirmada por teste).",
+    "schemas.py:57 — PedidosListRequest.vendedor: Optional[str] = None — aceita 'all', número como string, ou ausência."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "100% (5/5)",
+    "frontend": "100% — Principal sem vendedor-filter + Situacao mantida; Pedidos com vendedor-filter funcional (modal abre, seleção altera lista, label do select reflete escolha)"
+  },
+  "seed_data_creation": "Apenas localStorage do navegador: @back_on/connections=[BACKON TESTE → gibanweb/BDREACTAPP] e @back_on/session={master KONTACTO}. Nenhum dado tocado no Azure SQL.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Para entrar direto em /principal ou /pedidos como master, semeie localStorage: @back_on/connections=[{empresa:'BACKON TESTE',servidor:'gibanweb.database.windows.net',banco:'BDREACTAPP',api:<EXPO_PUBLIC_BACKEND_URL>}] e @back_on/session={empresa:'BACKON TESTE',usuario:{usuario:'KONTACTO',master:true},funcionario:{nome:'KONTACTO Sistemas',nome_guerra:'KONTACTO',codigo_int:-2,cod_funcao:'00'}}. PedidosScreen expõe testIDs: pedidos-screen, pedidos-toggle-filters, pedidos-filter-card, pedidos-data-ini, pedidos-data-fim, pedidos-vendedor-filter, pedidos-vendedor-select, pedidos-vendedor-select-opt-{all,<codigo>}, pedidos-chip-{all,A,F,PG,C}, pedido-<num>, pedidos-fab-new, pedidos-locked. PrincipalScreen NÃO tem mais principal-vendedor-filter (removido conforme requisito). Azure SQL serverless: 1ª request pode demorar 5-15s — o test helper já retentou com sleep.",
+  "rca_of_issue": "N/A — refactor entregue conforme PRD. canSeeAll/isManagerFuncao (master OU cod_funcao 1/2) unifica a regra no PermissionsProvider; useDashboard manda vendedor='all' ou String(ownId); /pedidos.tsx adiciona SelectField (vendedorOpts via /api/funcionarios) que envia 'vendedor' no POST /api/pedidos. Validação ponta-a-ponta confirma: trocar a opção do select dispara nova requisição (visto pela mudança no header 'Pedidos (N)' e na presença/ausência do card) e o backend já aplica o filtro corretamente."
+}
