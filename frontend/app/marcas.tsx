@@ -25,6 +25,7 @@ export default function MarcasScreen() {
   const router = useRouter();
   const { can, isMaster } = usePermissions();
   const [conn, setConn] = useState<Conn | null>(null);
+  const [userFuncao, setUserFuncao] = useState<number | null>(null);
   const [items, setItems] = useState<Marca[]>([]);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -60,6 +61,8 @@ export default function MarcasScreen() {
     (async () => {
       const s = await getSession();
       if (!s) { router.replace("/login"); return; }
+      const fnc = (s as { funcionario?: { funcao?: number | string } })?.funcionario?.funcao;
+      setUserFuncao(fnc != null ? parseInt(String(fnc), 10) : null);
       const c = (await listConnections()).find((x) => x.empresa === s.empresa);
       if (!c) return;
       const cc = { servidor: c.servidor, banco: c.banco, api: c.api };
@@ -133,6 +136,8 @@ export default function MarcasScreen() {
 
   const canSave = can("MARCAS.GRAVAR") || isMaster;
   const canDel = can("MARCAS.EXCLUIR") || isMaster;
+  // Importar da FIPE: KONTACTO (master) ou funcionários função 1/2.
+  const canFipe = isMaster || userFuncao === 1 || userFuncao === 2;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="marcas-screen">
@@ -141,7 +146,7 @@ export default function MarcasScreen() {
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
         <Text style={styles.headerTitle}>Marcas</Text>
-        {isMaster ? (
+        {canFipe ? (
           <Pressable onPress={openFipe} hitSlop={12} style={styles.back} testID="marcas-fipe-btn">
             <Ionicons name="cloud-download-outline" size={22} color={colors.onBrandPrimary} />
           </Pressable>
