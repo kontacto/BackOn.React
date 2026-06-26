@@ -35,6 +35,7 @@ ACOES_PADRAO = [
 ACOES_PEDIDO = [
     ("ABRIR", "Abrir tela"),
     ("GRAVAR", "Gravar pedido"),
+    ("WHATSAPP", "Enviar por WhatsApp"),
     ("ADD_ITEM", "Adicionar item"),
     ("EDIT_ITEM", "Editar item"),
     ("DEL_ITEM", "Excluir item"),
@@ -50,6 +51,7 @@ ACOES_PEDIDO = [
 ACOES_OS = [
     ("ABRIR", "Abrir tela"),
     ("GRAVAR", "Gravar OS"),
+    ("WHATSAPP", "Enviar por WhatsApp"),
     ("ADD_ITEM", "Adicionar item"),
     ("EDIT_ITEM", "Editar item"),
     ("DEL_ITEM", "Excluir item"),

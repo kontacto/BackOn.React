@@ -1,0 +1,30 @@
+{
+  "summary": "Validated full WhatsApp module (Fase 1, text-only) end-to-end. Backend: 11 unit + 9 e2e API tests = 20/20 PASS (config mask + secret preservation, preview OS/PED, send disabled returns 'desativado', send with active+bogus evolution provider returns success=false and persists FAILED log, /logs lists entries, tables auto-created). Frontend: /whatsapp-config loads, all 3 provider chips work, docs swap per provider, toggle + save shows success, secrets show '••••• (mantém o salvo — digite p/ alterar)'. OS-form (?os=7) and Pedido-form (?pedido=1) render WA buttons (testID whatsapp-btn-OS, whatsapp-btn-PED). Modal opens with Enviar/Histórico tabs (wa-tab-send, wa-tab-history). Preview fills phone (E.164) and message correctly (OS includes 'Ordem de Serviço: Nº 7', vehicle, série; PED includes 'Pedido de Venda: Nº 1'). Send with active config + invalid provider returns friendly error 'Evolution falha de comunicação' and creates a FAILED log entry visible in Histórico tab with red dot, timestamp, provider 'evolution', and error message. PED phone normalized from '97252487' → '+5597252487' (E.164 valid). State preserved: WhatsApp config disabled and Oficina=false restored after tests.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/e2e/test_iter31_whatsapp_api.py",
+    "/app/backend/tests/test_whatsapp.py",
+    "/app/test_reports/pytest/iter31_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "services/whatsapp/service.py:148 — retry loop calls time.sleep inside asyncio.to_thread; OK for thread pool, but consider exposing MAX_RETRIES/RETRY_BACKOFF as config (non-blocking).",
+    "providers.py:67/99/133 — provider HTTP calls have no proxy support; if customer infra requires outbound proxy, will fail silently into FAILED log (acceptable for Fase 1)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/e2e/test_iter31_whatsapp_api.py (new)",
+    "/app/test_reports/iteration_31.json (new)"
+  ],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100% (config + OS modal + PED modal + history)"},
+  "seed_data_creation": "Temporarily enabled Oficina=true in controle_configuracao to allow OS #7 to appear; restored to false at the end. Toggled WhatsApp config enabled=true during tests; restored to enabled=false. Created 3 FAILED log entries for OS #7 and 1 FAILED log for PED #1 in whatsapp_send_log (expected as part of test).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "WhatsApp config currently disabled in DB. Re-enable via POST /api/whatsapp/config if needed. Oficina=false restored. Frontend route params: /os-form?os=<codigo> (NOT ?codigo=), /pedido-form?pedido=<num>. /whatsapp-config is reachable directly via Configurações → Administração → WhatsApp.",
+  "rca_of_issue": "N/A — feature works as specified."
+}

@@ -24,6 +24,7 @@ import EditItemModal from "@/src/components/pedido/EditItemModal";
 import GeneralDiscountModal from "@/src/components/pedido/GeneralDiscountModal";
 import DiscountsReportModal from "@/src/components/pedido/DiscountsReportModal";
 import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
+import WhatsappButton from "@/src/components/WhatsappButton";
 
 // Funções que podem alterar vendedor: 01 (Administrador) e 02 (Gerente)
 const VENDEDOR_EDIT_FUNCOES = ["01", "02"];
@@ -68,6 +69,7 @@ export default function PedidoFormScreen() {
   // Código do usuário logado p/ log de descontos (-2 = KONTACTO master)
   const [usuarioCod, setUsuarioCod] = useState<number>(-2);
   const [funcaoCod, setFuncaoCod] = useState<number>(1); // 1=gerente,2=supervisor,3=vendedor
+  const [waCompany, setWaCompany] = useState<string | null>(null);
 
   const isAberto = (pedido?.situacao || "A").toUpperCase() === "A";
   const it = usePedidoItens({ conn, editing, pedidoId, isAberto, usuarioCod, funcaoCod, showToast });
@@ -79,7 +81,7 @@ export default function PedidoFormScreen() {
       const cs = await listConnections();
       const c = cs.find((x) => x.empresa === s?.empresa) || null;
       setConn(c);
-
+      setWaCompany(s?.empresa ?? null);
       // Vendedor da sessão
       const cod = s?.funcionario?.codigo_int;
       const vCod = typeof cod === "number"
@@ -362,6 +364,16 @@ export default function PedidoFormScreen() {
               <Text style={styles.analiseBtnText}>Analisar margem & descontos</Text>
               <Ionicons name="chevron-forward" size={16} color={colors.brandPrimary} />
             </TouchableOpacity>
+          ) : null}
+
+          {editing && pedidoId && can("PEDIDO.WHATSAPP") ? (
+            <WhatsappButton
+              conn={conn}
+              documentType="PED"
+              documentId={pedidoId}
+              userId={usuarioCod}
+              companyId={waCompany}
+            />
           ) : null}
 
           <View style={{ height: 80 }} />

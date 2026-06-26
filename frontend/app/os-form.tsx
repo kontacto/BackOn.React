@@ -16,6 +16,7 @@ import { colors, radius, spacing } from "@/src/theme/colors";
 import { formatBRL, parseNum, fmtNum, fmtMoney2, calcDescUnit, formatDateBR, todayISO } from "@/src/utils/format";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
+import WhatsappButton from "@/src/components/WhatsappButton";
 import { ClienteRow, ProdutoServico } from "@/src/components/pedido/types";
 
 const SIT_COLOR: Record<string, string> = { A: "#1e88e5", F: "#43a047", PG: "#8e24aa", C: "#e53935" };
@@ -65,6 +66,8 @@ export default function OSFormScreen() {
   const osId = params.os ? parseInt(String(params.os), 10) : null;
 
   const [conn, setConn] = useState<Connection | null>(null);
+  const [waUserId, setWaUserId] = useState<number | null>(null);
+  const [waCompany, setWaCompany] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
@@ -143,6 +146,10 @@ export default function OSFormScreen() {
       const cs = await listConnections();
       const c = cs.find((x) => x.empresa === s?.empresa) || null;
       setConn(c);
+      const func = (s?.funcionario as Record<string, unknown> | null) || null;
+      const fid = func?.codigo_int ?? func?.codigo;
+      setWaUserId(fid != null ? parseInt(String(fid), 10) : null);
+      setWaCompany(s?.empresa ?? null);
       if (c) {
         try {
           const [ra, rf] = await Promise.all([
@@ -644,6 +651,16 @@ export default function OSFormScreen() {
               <Text style={styles.actionBtnText}>Analisar margem & descontos</Text>
               <Ionicons name="chevron-forward" size={16} color={colors.brandPrimary} />
             </TouchableOpacity>
+          ) : null}
+
+          {editing && osId && can("OS.WHATSAPP") ? (
+            <WhatsappButton
+              conn={conn}
+              documentType="OS"
+              documentId={osId}
+              userId={waUserId}
+              companyId={waCompany}
+            />
           ) : null}
 
           <View style={{ height: 60 }} />
