@@ -185,7 +185,7 @@ export default function RelatorioOSScreen() {
               <View style={styles.totItem}>
                 <Text style={styles.totLbl}>Margem</Text>
                 <Text style={[styles.totVal, { color: margemColor(totais.margem_pct) }]}>
-                  {formatBRL(totais.margem)} · {totais.margem_pct}%
+                  {formatBRL(totais.margem)} · {(totais.margem_pct || 0).toFixed(2).replace(".", ",")}%
                 </Text>
               </View>
             </View>

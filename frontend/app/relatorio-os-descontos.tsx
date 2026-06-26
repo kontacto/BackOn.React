@@ -238,7 +238,7 @@ export default function RelatorioOSDescontosScreen() {
                 <View style={styles.totItem}>
                   <Text style={styles.totLbl}>Margem</Text>
                   <Text style={[styles.totVal, { color: margemColor(totais.margem_pct) }]}>
-                    {formatBRL(totais.margem)} · {totais.margem_pct}%
+                    {formatBRL(totais.margem)} · {(totais.margem_pct || 0).toFixed(2).replace(".", ",")}%
                   </Text>
                 </View>
               </View>
@@ -260,7 +260,7 @@ export default function RelatorioOSDescontosScreen() {
                         {g.pedidos.length} OS · Venda {formatBRL(g.sub_venda)} · Desc {formatBRL(g.sub_desconto)}
                       </Text>
                     </View>
-                    <Text style={[styles.groupMargem, { color: margemColor(g.sub_margem_pct) }]}>{g.sub_margem_pct}%</Text>
+                    <Text style={[styles.groupMargem, { color: margemColor(g.sub_margem_pct) }]}>{(g.sub_margem_pct || 0).toFixed(2).replace(".", ",")}%</Text>
                   </Pressable>
 
                   {expanded[g.vendedor] ? (
@@ -281,7 +281,7 @@ export default function RelatorioOSDescontosScreen() {
                           </View>
                           <View style={{ alignItems: "flex-end" }}>
                             <Text style={[styles.pedMargem, { color: margemColor(p.margem_pct) }]}>{formatBRL(p.margem)}</Text>
-                            <Text style={[styles.pedMargemPct, { color: margemColor(p.margem_pct) }]}>{p.margem_pct}%</Text>
+                            <Text style={[styles.pedMargemPct, { color: margemColor(p.margem_pct) }]}>{(p.margem_pct || 0).toFixed(2).replace(".", ",")}%</Text>
                           </View>
                         </Pressable>
                       ))}
