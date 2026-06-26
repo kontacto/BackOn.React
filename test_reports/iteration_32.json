@@ -1,0 +1,39 @@
+{
+  "summary": "Iter32 — Validação BACKEND + FRONTEND dos 2 recursos novos: (A) modelo de mensagem WhatsApp editável por empresa com variáveis, e (B) desconto geral na Ordem de Serviço distribuído proporcionalmente entre os itens. BACKEND (pytest 8/8 PASS — iter32_results.xml): WhatsApp config persiste message_template; preview renderiza template ('Olá {primeiro_nome}, {tipo} {numero} = {valor}. {assinatura}' → 'Olá TESTE, Ordem de Serviço 7 = R$ 158,50. Equipe KONTACTO'); variáveis desconhecidas viram vazio (sem deixar literal '{nao_existe}' nem chaves); template vazio cai no modelo padrão multi-linha ('Segue seu(sua)…'); POST /api/os/7/desconto-geral valor=10 reduz total de 158,50 → 148,50; soma de descontos lista bate (~10,00); valor=0 zera /descontos (lista vazia); /analise pós-desconto retorna totais consistentes (desconto≥4,5; venda>0). FRONTEND (viewport 390×844, login KONTACTO/$KONT2011, Oficina=true temporário): (1) /whatsapp-config — campo testID wa-config-template presente; card de variáveis disponíveis visível ({cliente},{primeiro_nome},{numero},{tipo},{data},{valor},{status},{assinatura} + OS: {veiculo},{serie},{relato},{servico_executado},{obs}); preencher template → Salvar → reabrir → valor persistido ✓; limpar e salvar → reabrir → vazio (modelo padrão) ✓. (2) /os-form?os=7 — botão testID os-form-desc-geral-btn aparece quando há itens; modal abre com testID os-desc-geral-input + os-desc-geral-apply; aplicar 5 → toast 'Desconto geral aplicado (3.15%)' e Total caiu de R$158,50→R$153,50 com itens reprecificados (Coca 8,50→8,23 e Buffet 150,00→145,27) ✓; aplicar 0 → toast 0.00% e total volta a R$158,50 com preços cheios ✓. (3) Integração WhatsApp — com template salvo + enabled=true, botão whatsapp-btn-OS na OS#7 abre modal e pré-visualização exibe a mensagem renderizada do template ('Olá TESTE, Ordem de Serviço 7 = R$ 158,50. Equipe KONTACTO') no campo 'Mensagem (pré-visualização)' ✓. REGRESSÃO: /analise e /descontos continuam OK após desconto geral; envio WhatsApp (config inválida) cria log FAILED como esperado (testado em iter31). Estado restaurado ao final: Oficina=false, WhatsApp enabled=false e message_template='', OS#7 sem desconto.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/e2e/test_iter32_template_desconto_geral.py",
+    "/app/test_reports/pytest/iter32_results.xml",
+    "/tmp/iter32_principal.png",
+    "/tmp/iter32_waconfig.png",
+    "/tmp/iter32_osform.png",
+    "/tmp/iter32_desc_modal.png",
+    "/tmp/iter32_desc_applied5.png",
+    "/tmp/iter32_desc_applied0.png",
+    "/tmp/iter32_wa_modal.png"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "os_itens_service.py:401-472 — _aplicar_desconto_geral_sync distribui usando base = SUM(preco_unitario*quant) e atualiza desconto/p_venda item a item. Bloqueia valor<0 e valor>base; valida limite por função (usuario_codigo=-2 ignora). Estrutura espelha o desconto-geral do Pedido — bem.",
+    "whatsapp/repository.py:69-73 — migração idempotente da coluna message_template (ALTER ADD IF NOT EXISTS via sys.columns). Boa prática para clientes em produção.",
+    "whatsapp/service.py:75-83 — render_template usa replace simples (sem escape de chaves dentro do valor) e remove variáveis desconhecidas com regex /\\{[a-zA-Z_]+\\}/. Se o usuário tiver chaves literais em um valor (ex.: assinatura contendo '{teste}'), elas serão removidas. Aceitável para o caso de uso atual; documentar como limitação.",
+    "whatsapp-config.tsx:260 — placeholder do TextInput multiline está bem; minHeight=120 + textAlignVertical='top' funciona no web preview.",
+    "os-form.tsx:1043-1050 — botão Aplicar usa Pressable com disabled durante saving; sem testID no Cancelar (fecha pelo overlay). OK."
+  ],
+  "updated_files": [
+    "/app/backend/tests/e2e/test_iter32_template_desconto_geral.py (novo)",
+    "/app/test_reports/iteration_32.json"
+  ],
+  "success_rate": {"backend": "100% (8/8 pytest)", "frontend": "100% (config template + variáveis + persistência + clear→default; desconto geral aplicar/zerar; integração WA modal renderiza template)"},
+  "seed_data_creation": "Habilitado Oficina=true em controle_configuracao temporariamente; WhatsApp enabled=true + template salvo durante teste de integração. RESTAURADO ao final: Oficina=false, WhatsApp enabled=false, message_template='', OS#7 com desconto=0 (total cheio R$158,50).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "TestIDs novos validados: wa-config-template (whatsapp-config.tsx), os-form-desc-geral-btn / os-desc-geral-input / os-desc-geral-apply (os-form.tsx). Endpoint: POST /api/os/{codigo}/desconto-geral body {servidor,banco,valor,usuario_codigo=-2,funcao=1}. Coluna SQL whatsapp_config.message_template (NVARCHAR MAX NULL) criada via migração idempotente em ensure_tables(). OS#7 contém 2 itens (Coca-Cola 600ml R$8,50×1 e Buffet Tradicional R$150,00×1) = total cheio R$158,50.",
+  "rca_of_issue": "N/A — ambos os recursos funcionam conforme especificado."
+}

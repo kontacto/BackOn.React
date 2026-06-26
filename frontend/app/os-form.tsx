@@ -105,6 +105,10 @@ export default function OSFormScreen() {
   const [analiseModal, setAnaliseModal] = useState(false);
   const [analiseData, setAnaliseData] = useState<{ itens: { cod: number; descricao: string; venda: number; desconto: number; custo: number; margem: number; margem_pct: number }[]; totais: { venda: number; desconto: number; custo: number; margem: number; margem_pct: number; qtd_itens: number } } | null>(null);
   const [analiseLoading, setAnaliseLoading] = useState(false);
+  // desconto geral
+  const [descGeralModal, setDescGeralModal] = useState(false);
+  const [descGeralVal, setDescGeralVal] = useState("");
+  const [descGeralSaving, setDescGeralSaving] = useState(false);
 
   const [areas, setAreas] = useState<{ codigo: number; descricao: string }[]>([]);
   const [funcionarios, setFuncionarios] = useState<{ codigo: number; nome: string; nome_guerra: string }[]>([]);
@@ -403,6 +407,28 @@ export default function OSFormScreen() {
     finally { setAnaliseLoading(false); }
   };
 
+  const applyDescGeral = async () => {
+    if (!conn || !osId) return;
+    const valor = parseNum(descGeralVal);
+    if (valor < 0) { showToast("Valor inválido.", "error"); return; }
+    setDescGeralSaving(true);
+    try {
+      const j = await apiSend(conn, `/api/os/${osId}/desconto-geral`, "POST", {
+        servidor: conn.servidor, banco: conn.banco,
+        valor, usuario_codigo: waUserId ?? -2, funcao: 1,
+      });
+      if (j?.success) {
+        setDescGeralModal(false);
+        showToast(`Desconto geral aplicado (${(j.percentual || 0).toFixed(2)}%).`, "success");
+        loadItens();
+      } else {
+        showToast(j?.message || "Falha ao aplicar desconto.", "error");
+      }
+    } catch (e) {
+      showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
+    } finally { setDescGeralSaving(false); }
+  };
+
   const areaOptions: SelectOption[] = useMemo(
     () => areas.map((a) => ({ value: a.codigo, label: a.descricao })),
     [areas]
@@ -635,6 +661,14 @@ export default function OSFormScreen() {
               <Text style={styles.subtotalLabel}>Total da OS</Text>
               <Text style={styles.subtotalValue}>{formatBRL(subtotal)}</Text>
             </View>
+          ) : null}
+
+          {editing && osId && can("OS.DESC_ITEM") && itens.length > 0 ? (
+            <TouchableOpacity onPress={() => { setDescGeralVal(""); setDescGeralModal(true); }} activeOpacity={0.85} style={styles.actionBtn} testID="os-form-desc-geral-btn">
+              <Ionicons name="cash-outline" size={18} color={colors.brandPrimary} />
+              <Text style={styles.actionBtnText}>Desconto geral</Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.brandPrimary} />
+            </TouchableOpacity>
           ) : null}
 
           {editing && osId && can("OS.VER_DESCONTOS") ? (
@@ -982,6 +1016,38 @@ export default function OSFormScreen() {
                 ))}
               </ScrollView>
             )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Modal: Desconto geral */}
+      <Modal visible={descGeralModal} transparent animationType="slide" onRequestClose={() => setDescGeralModal(false)}>
+        <Pressable style={styles.modalBg} onPress={() => setDescGeralModal(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Desconto Geral</Text>
+              <Pressable onPress={() => setDescGeralModal(false)} hitSlop={8}><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
+            </View>
+            <Text style={styles.hintText}>O valor é distribuído proporcionalmente entre os itens da OS. Use 0 para zerar os descontos.</Text>
+            <Text style={styles.fieldLabel}>Valor do desconto (R$)</Text>
+            <TextInput
+              value={descGeralVal}
+              onChangeText={setDescGeralVal}
+              keyboardType="decimal-pad"
+              placeholder="0,00"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+              testID="os-desc-geral-input"
+            />
+            <Pressable
+              onPress={applyDescGeral}
+              disabled={descGeralSaving}
+              style={({ pressed }) => [styles.primaryBtn, { marginTop: spacing.lg }, (pressed || descGeralSaving) && { opacity: 0.85 }]}
+              testID="os-desc-geral-apply"
+            >
+              {descGeralSaving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Aplicar</Text>}
+            </Pressable>
           </Pressable>
         </Pressable>
       </Modal>

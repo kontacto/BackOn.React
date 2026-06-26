@@ -1,7 +1,7 @@
 """Rotas de Ordem de Serviço (cabeçalho `os`) e seus itens (`os_produto`)."""
 from fastapi import APIRouter
 
-from models.schemas import OSListRequest, OSSaveRequest, OSItemSaveRequest
+from models.schemas import OSListRequest, OSSaveRequest, OSItemSaveRequest, DescontoGeralRequest
 from services import os_service, os_itens_service
 
 router = APIRouter()
@@ -56,3 +56,8 @@ async def list_descontos(codigo: int, servidor: str, banco: str):
 @router.get("/os/{codigo}/analise")
 async def analise(codigo: int, servidor: str, banco: str):
     return await os_itens_service.analise(servidor, banco, codigo)
+
+
+@router.post("/os/{codigo}/desconto-geral")
+async def desconto_geral(codigo: int, req: DescontoGeralRequest):
+    return await os_itens_service.aplicar_desconto_geral(req, codigo)

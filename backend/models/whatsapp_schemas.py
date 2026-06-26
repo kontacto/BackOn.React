@@ -17,6 +17,7 @@ class WhatsappConfigRequest(BaseModel):
     evolution_instance: Optional[str] = ""
     evolution_apikey: Optional[str] = ""
     signature: Optional[str] = ""
+    message_template: Optional[str] = ""
     enabled: bool = False
 
 

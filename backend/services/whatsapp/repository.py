@@ -65,6 +65,12 @@ _CONFIG_COLS = [
 def ensure_tables(cur) -> None:
     cur.execute(DDL_CONFIG)
     cur.execute(DDL_LOG)
+    # migração idempotente: coluna de template de mensagem
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='message_template' AND Object_ID=Object_ID('whatsapp_config')) "
+        "ALTER TABLE whatsapp_config ADD message_template NVARCHAR(MAX) NULL"
+    )
 
 
 def get_config_raw(servidor: str, banco: str) -> dict:
@@ -88,6 +94,7 @@ def get_config_raw(servidor: str, banco: str) -> dict:
             "evolution_instance": (row.get("evolution_instance") or "").strip(),
             "evolution_apikey": (row.get("evolution_apikey") or "").strip(),
             "signature": (row.get("signature") or "").strip(),
+            "message_template": (row.get("message_template") or ""),
             "enabled": bool(row.get("enabled")),
             "configured": bool(row),
         }
@@ -114,20 +121,21 @@ def save_config(servidor: str, banco: str, values: dict) -> None:
             (values.get("evolution_apikey") or "").strip() or None,
             (values.get("signature") or "").strip() or None,
             1 if values.get("enabled") else 0,
+            (values.get("message_template") or "").strip() or None,
         ]
         if existing:
             cur.execute(
                 "UPDATE whatsapp_config SET provider=%s, from_number=%s, twilio_sid=%s, "
                 "twilio_token=%s, meta_phone_id=%s, meta_token=%s, evolution_url=%s, "
                 "evolution_instance=%s, evolution_apikey=%s, signature=%s, enabled=%s, "
-                "updated_at=GETDATE() WHERE id=%s",
+                "message_template=%s, updated_at=GETDATE() WHERE id=%s",
                 (*params, existing["id"]),
             )
         else:
             cur.execute(
                 "INSERT INTO whatsapp_config (provider, from_number, twilio_sid, twilio_token, "
                 "meta_phone_id, meta_token, evolution_url, evolution_instance, evolution_apikey, "
-                "signature, enabled) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "signature, enabled, message_template) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 tuple(params),
             )
         conn.commit()

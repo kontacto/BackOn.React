@@ -42,9 +42,7 @@ def is_valid_e164(phone: str) -> bool:
 
 
 # ---------------- Message builder ----------------
-def build_message(summary: dict, signature: str) -> str:
-    nome = summary.get("cliente_nome") or "cliente"
-    primeiro = nome.split(" ")[0] if nome else "cliente"
+def _template_vars(summary: dict, signature: str) -> dict:
     data = summary.get("data")
     data_br = "—"
     if data:
@@ -55,13 +53,47 @@ def build_message(summary: dict, signature: str) -> str:
             data_br = data
     total = summary.get("total") or 0
     total_br = f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    nome = summary.get("cliente_nome") or "cliente"
+    return {
+        "cliente": nome,
+        "primeiro_nome": nome.split(" ")[0] if nome else "cliente",
+        "numero": str(summary.get("doc") or ""),
+        "documento": str(summary.get("doc") or ""),
+        "tipo": summary.get("doc_label") or "",
+        "data": data_br,
+        "valor": total_br,
+        "status": summary.get("situacao_label") or "",
+        "assinatura": signature or "Equipe",
+        "veiculo": summary.get("veiculo") or "",
+        "serie": summary.get("serie") or "",
+        "relato": summary.get("descricao_cliente") or "",
+        "servico_executado": summary.get("resumo") or "",
+        "obs": summary.get("obs") or "",
+    }
 
+
+def render_template(template: str, variables: dict) -> str:
+    """Substitui {chave} pelos valores. Chaves desconhecidas viram string vazia."""
+    out = template
+    for key, val in variables.items():
+        out = out.replace("{" + key + "}", str(val))
+    # remove quaisquer variáveis restantes não reconhecidas
+    out = re.sub(r"\{[a-zA-Z_]+\}", "", out)
+    return out.strip()
+
+
+def build_message(summary: dict, signature: str, template: Optional[str] = "") -> str:
+    variables = _template_vars(summary, signature)
+    if template and template.strip():
+        return render_template(template, variables)
+
+    primeiro = variables["primeiro_nome"]
     linhas = [
         f"Olá {primeiro},",
         "",
         f"Segue seu(sua) {summary.get('doc_label')}: Nº {summary.get('doc')}.",
         "",
-        f"Data: {data_br}",
+        f"Data: {variables['data']}",
     ]
     if summary.get("doc_type") == "OS":
         if summary.get("veiculo"):
@@ -76,7 +108,7 @@ def build_message(summary: dict, signature: str) -> str:
         linhas.append(f"Obs: {summary['obs']}")
     if summary.get("situacao_label"):
         linhas.append(f"Status: {summary['situacao_label']}")
-    linhas.append(f"Valor: {total_br}")
+    linhas.append(f"Valor: {variables['valor']}")
     linhas.append("")
     linhas.append("Qualquer dúvida estamos à disposição.")
     linhas.append("")
@@ -98,7 +130,7 @@ def _preview_sync(servidor: str, banco: str, doc_type: str, doc_id: int) -> dict
         return {"success": False, "message": "Documento não encontrado."}
     cfg = repo.get_config_raw(servidor, banco)
     phone = normalize_phone(summary.get("telefone"))
-    message = build_message(summary, cfg.get("signature") or "")
+    message = build_message(summary, cfg.get("signature") or "", cfg.get("message_template") or "")
     return {
         "success": True,
         "cliente_nome": summary.get("cliente_nome"),
@@ -134,7 +166,7 @@ def _send_sync(servidor: str, banco: str, doc_type: str, doc_id: int,
     if not is_valid_e164(phone):
         return {"success": False, "message": "Cliente sem celular válido (formato E.164)."}
 
-    message = sanitize_text(override_message) or build_message(summary, cfg.get("signature") or "")
+    message = sanitize_text(override_message) or build_message(summary, cfg.get("signature") or "", cfg.get("message_template") or "")
 
     # envio com retry em falhas transitórias + observabilidade (duração)
     started = time.time()

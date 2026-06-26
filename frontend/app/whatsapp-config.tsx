@@ -62,6 +62,7 @@ export default function WhatsappConfigScreen() {
   const [provider, setProvider] = useState<Provider>("twilio");
   const [enabled, setEnabled] = useState(false);
   const [signature, setSignature] = useState("");
+  const [template, setTemplate] = useState("");
   const [fromNumber, setFromNumber] = useState("");
   const [twilioSid, setTwilioSid] = useState("");
   const [twilioToken, setTwilioToken] = useState("");
@@ -86,6 +87,7 @@ export default function WhatsappConfigScreen() {
           if (cfg.provider) setProvider(cfg.provider);
           setEnabled(!!cfg.enabled);
           setSignature(cfg.signature || "");
+          setTemplate(cfg.message_template || "");
           setFromNumber(cfg.from_number || "");
           setEvoUrl(cfg.evolution_url || "");
           setEvoInstance(cfg.evolution_instance || "");
@@ -132,6 +134,7 @@ export default function WhatsappConfigScreen() {
         evolution_url: evoUrl.trim(),
         evolution_instance: evoInstance.trim(),
         evolution_apikey: clean(evoKey),
+        message_template: template.trim(),
       };
       const j = await apiSend(conn, "/api/whatsapp/config", "POST", body);
       if (j?.success) setMsg({ text: "Configuração salva com sucesso.", ok: true });
@@ -250,6 +253,26 @@ export default function WhatsappConfigScreen() {
           <Text style={styles.sectionTitle}>Mensagem</Text>
           <Field label="Assinatura (rodapé da mensagem)" value={signature} onChange={setSignature} placeholder="Ex.: Equipe KONTACTO" />
 
+          <Text style={styles.fieldLabel}>Modelo de mensagem (opcional)</Text>
+          <TextInput
+            value={template}
+            onChangeText={setTemplate}
+            placeholder={"Deixe vazio para usar o modelo padrão.\nEx.: Olá {primeiro_nome}! Segue seu {tipo} nº {numero}. Valor: {valor}. {assinatura}"}
+            placeholderTextColor={colors.muted}
+            style={[styles.input, { minHeight: 120, textAlignVertical: "top", paddingTop: 12 }]}
+            multiline
+            testID="wa-config-template"
+          />
+          <View style={styles.varsCard}>
+            <Text style={styles.varsTitle}>Variáveis disponíveis:</Text>
+            <Text style={styles.varsText}>
+              {"{cliente}, {primeiro_nome}, {numero}, {tipo}, {data}, {valor}, {status}, {assinatura}"}
+            </Text>
+            <Text style={styles.varsText}>
+              {"OS: {veiculo}, {serie}, {relato}, {servico_executado}, {obs}"}
+            </Text>
+          </View>
+
           {msg ? (
             <View style={[styles.msgBox, { backgroundColor: msg.ok ? "#E7F6EC" : "#FDE7E7" }]} testID="wa-config-msg">
               <Ionicons name={msg.ok ? "checkmark-circle" : "alert-circle"} size={18} color={msg.ok ? colors.success : colors.error} />
@@ -294,4 +317,7 @@ const styles = StyleSheet.create({
   input: { backgroundColor: colors.surface, borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: 12, borderWidth: 1, borderColor: colors.border, color: colors.onSurface, fontSize: 14 },
   msgBox: { flexDirection: "row", alignItems: "center", gap: 8, borderRadius: radius.md, padding: spacing.md, marginTop: spacing.md },
   msgText: { flex: 1, fontSize: 13, fontWeight: "500" },
+  varsCard: { backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, padding: spacing.md, marginTop: spacing.sm, borderWidth: 1, borderColor: colors.border },
+  varsTitle: { fontSize: 12, fontWeight: "700", color: colors.brandPrimary, marginBottom: 4 },
+  varsText: { fontSize: 12, color: colors.onSurface, lineHeight: 18 },
 });

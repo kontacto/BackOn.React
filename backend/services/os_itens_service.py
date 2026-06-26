@@ -395,3 +395,82 @@ async def list_descontos(servidor: str, banco: str, codigo: int) -> dict:
 
 async def analise(servidor: str, banco: str, codigo: int) -> dict:
     return await asyncio.to_thread(_analise_sync, servidor, banco, codigo)
+
+
+# ---------- Desconto geral (distribuído entre os itens) ----------
+def _aplicar_desconto_geral_sync(req, codigo: int) -> dict:
+    from services.controle_service import _get_limites_sync
+    from services.descontos_service import _limite_por_funcao
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        existe, sit = _check_os_aberta(cur, codigo)
+        if not existe:
+            conn.close()
+            return {"success": False, "message": "OS não encontrada."}
+        if sit != "A":
+            conn.close()
+            return {"success": False, "message": f"OS '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterada."}
+
+        valor = float(req.valor or 0)
+        if valor < 0:
+            conn.close()
+            return {"success": False, "message": "Valor inválido."}
+
+        cur.execute(
+            "SELECT cod_os_prod, preco_unitario, acrescimo, quant FROM os_produto "
+            "WHERE os=%s AND ISNULL(item_cancelado,0)=0",
+            (codigo,),
+        )
+        itens = cur.fetchall()
+        if not itens:
+            conn.close()
+            return {"success": False, "message": "OS sem itens para aplicar desconto."}
+
+        # base = soma dos itens a preço cheio (preco_unitario * quant)
+        base = sum(float(it.get("preco_unitario") or 0) * float(it.get("quant") or 0) for it in itens)
+        if valor > 0 and base <= 0:
+            conn.close()
+            return {"success": False, "message": "Itens sem valor para distribuir o desconto."}
+
+        pct_efetivo = round(valor / base * 100, 4) if base > 0 else 0
+        if valor > 0:
+            lim = _get_limites_sync(req.servidor, req.banco)
+            limite = _limite_por_funcao(lim, int(req.funcao or 1))
+            usuario = req.usuario_codigo if req.usuario_codigo is not None else -2
+            if usuario != -2 and limite > 0 and pct_efetivo > limite + 1e-6:
+                conn.close()
+                return {"success": False, "message": f"Desconto ({pct_efetivo:g}%) acima do limite ({limite:g}%) para sua função."}
+            if valor > base + 1e-6:
+                conn.close()
+                return {"success": False, "message": "Desconto maior que o total dos itens."}
+
+        for it in itens:
+            cod = int(it["cod_os_prod"])
+            p_normal = float(it.get("preco_unitario") or 0)
+            acr = float(it.get("acrescimo") or 0)
+            desconto_unit = round(valor * p_normal / base, 2) if (valor > 0 and base > 0) else 0.0
+            p_venda = round(p_normal - desconto_unit + acr, 4)
+            cur.execute(
+                "UPDATE os_produto SET desconto=%s, p_venda=%s, "
+                "data_alteracao_item=CAST(GETDATE() AS DATE) WHERE cod_os_prod=%s AND os=%s",
+                (desconto_unit, p_venda, cod, codigo),
+            )
+        novo_total = _recalc_os_total(cur, codigo)
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "total": novo_total, "valor": valor, "percentual": pct_efetivo}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao aplicar desconto geral: {e}"}
+
+
+async def aplicar_desconto_geral(req, codigo: int) -> dict:
+    return await asyncio.to_thread(_aplicar_desconto_geral_sync, req, codigo)

@@ -13,6 +13,7 @@ def _mask(cfg: dict) -> dict:
         "provider": cfg.get("provider") or "",
         "from_number": cfg.get("from_number") or "",
         "signature": cfg.get("signature") or "",
+        "message_template": cfg.get("message_template") or "",
         "enabled": bool(cfg.get("enabled")),
         "configured": bool(cfg.get("configured")),
         "twilio_sid_set": bool(cfg.get("twilio_sid")),
