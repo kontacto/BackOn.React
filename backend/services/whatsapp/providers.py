@@ -10,11 +10,15 @@ Provedores suportados:
   - evolution  → Evolution API (self-hosted)
 
 Fase 1: somente mensagem de texto (sem mídia).
+HTTP via biblioteca padrão (urllib) — não requer dependências externas.
 """
+import base64
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
 from abc import ABC, abstractmethod
 from typing import Optional
-
-import requests
 
 GRAPH_VERSION = "v20.0"
 HTTP_TIMEOUT = 30
@@ -23,6 +27,35 @@ HTTP_TIMEOUT = 30
 def _digits(phone: str) -> str:
     """Remove tudo que não é dígito (E.164 sem '+')."""
     return "".join(ch for ch in (phone or "") if ch.isdigit())
+
+
+def _http_post(url: str, *, form: Optional[dict] = None, json_body: Optional[dict] = None,
+               headers: Optional[dict] = None, basic_auth: Optional[tuple] = None) -> tuple:
+    """POST via urllib. Retorna (status_code, texto). status_code=0 em falha de comunicação."""
+    headers = dict(headers or {})
+    if form is not None:
+        body = urllib.parse.urlencode(form).encode("utf-8")
+        headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+    else:
+        body = json.dumps(json_body or {}).encode("utf-8")
+        headers.setdefault("Content-Type", "application/json")
+    if basic_auth:
+        token = base64.b64encode(f"{basic_auth[0]}:{basic_auth[1]}".encode()).decode()
+        headers["Authorization"] = f"Basic {token}"
+
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        return e.code, detail
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return 0, f"comunicação: {e}"
 
 
 class WhatsappResult:
@@ -64,19 +97,18 @@ class TwilioProvider(IWhatsappProvider):
     def send_text(self, to_e164: str, message: str) -> WhatsappResult:
         url = f"https://api.twilio.com/2010-04-01/Accounts/{self.sid}/Messages.json"
         from_fmt = self.from_number if self.from_number.startswith("whatsapp:") else f"whatsapp:+{_digits(self.from_number)}"
-        data = {"From": from_fmt, "To": f"whatsapp:+{_digits(to_e164)}", "Body": message}
-        try:
-            r = requests.post(url, data=data, auth=(self.sid, self.token), timeout=HTTP_TIMEOUT)
-            if r.status_code in (200, 201):
-                sid = ""
-                try:
-                    sid = r.json().get("sid", "")
-                except Exception:
-                    pass
-                return WhatsappResult(True, provider_message_id=sid)
-            return WhatsappResult(False, error=f"Twilio HTTP {r.status_code}: {r.text[:300]}")
-        except requests.RequestException as e:
-            return WhatsappResult(False, error=f"Twilio falha de comunicação: {e}")
+        form = {"From": from_fmt, "To": f"whatsapp:+{_digits(to_e164)}", "Body": message}
+        status, text = _http_post(url, form=form, basic_auth=(self.sid, self.token))
+        if status in (200, 201):
+            sid = ""
+            try:
+                sid = json.loads(text).get("sid", "")
+            except Exception:
+                pass
+            return WhatsappResult(True, provider_message_id=sid)
+        if status == 0:
+            return WhatsappResult(False, error=f"Twilio falha de {text}")
+        return WhatsappResult(False, error=f"Twilio HTTP {status}: {text[:300]}")
 
 
 class MetaProvider(IWhatsappProvider):
@@ -93,25 +125,24 @@ class MetaProvider(IWhatsappProvider):
 
     def send_text(self, to_e164: str, message: str) -> WhatsappResult:
         url = f"https://graph.facebook.com/{GRAPH_VERSION}/{self.phone_id}/messages"
-        headers = {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"}
+        headers = {"Authorization": f"Bearer {self.token}"}
         payload = {
             "messaging_product": "whatsapp",
             "to": _digits(to_e164),
             "type": "text",
             "text": {"preview_url": True, "body": message},
         }
-        try:
-            r = requests.post(url, json=payload, headers=headers, timeout=HTTP_TIMEOUT)
-            if r.status_code == 200:
-                mid = ""
-                try:
-                    mid = (r.json().get("messages") or [{}])[0].get("id", "")
-                except Exception:
-                    pass
-                return WhatsappResult(True, provider_message_id=mid)
-            return WhatsappResult(False, error=f"Meta HTTP {r.status_code}: {r.text[:300]}")
-        except requests.RequestException as e:
-            return WhatsappResult(False, error=f"Meta falha de comunicação: {e}")
+        status, text = _http_post(url, json_body=payload, headers=headers)
+        if status == 200:
+            mid = ""
+            try:
+                mid = (json.loads(text).get("messages") or [{}])[0].get("id", "")
+            except Exception:
+                pass
+            return WhatsappResult(True, provider_message_id=mid)
+        if status == 0:
+            return WhatsappResult(False, error=f"Meta falha de {text}")
+        return WhatsappResult(False, error=f"Meta HTTP {status}: {text[:300]}")
 
 
 class EvolutionProvider(IWhatsappProvider):
@@ -129,21 +160,20 @@ class EvolutionProvider(IWhatsappProvider):
 
     def send_text(self, to_e164: str, message: str) -> WhatsappResult:
         url = f"{self.base}/message/sendText/{self.instance}"
-        headers = {"apikey": self.apikey, "Content-Type": "application/json"}
+        headers = {"apikey": self.apikey}
         payload = {"number": _digits(to_e164), "text": message}
-        try:
-            r = requests.post(url, json=payload, headers=headers, timeout=HTTP_TIMEOUT)
-            if r.status_code in (200, 201):
-                mid = ""
-                try:
-                    j = r.json()
-                    mid = (j.get("key") or {}).get("id", "") if isinstance(j, dict) else ""
-                except Exception:
-                    pass
-                return WhatsappResult(True, provider_message_id=mid)
-            return WhatsappResult(False, error=f"Evolution HTTP {r.status_code}: {r.text[:300]}")
-        except requests.RequestException as e:
-            return WhatsappResult(False, error=f"Evolution falha de comunicação: {e}")
+        status, text = _http_post(url, json_body=payload, headers=headers)
+        if status in (200, 201):
+            mid = ""
+            try:
+                j = json.loads(text)
+                mid = (j.get("key") or {}).get("id", "") if isinstance(j, dict) else ""
+            except Exception:
+                pass
+            return WhatsappResult(True, provider_message_id=mid)
+        if status == 0:
+            return WhatsappResult(False, error=f"Evolution falha de {text}")
+        return WhatsappResult(False, error=f"Evolution HTTP {status}: {text[:300]}")
 
 
 _PROVIDERS = {"twilio": TwilioProvider, "meta": MetaProvider, "evolution": EvolutionProvider}
