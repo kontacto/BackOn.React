@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
@@ -34,6 +34,23 @@ export default function WhatsappButton({ conn, documentType, documentId, userId,
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [logs, setLogs] = useState<LogItem[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
+  // Status global do envio por WhatsApp (flag "enabled" em Configurações).
+  // null = carregando; false = desativado → botão fica desabilitado.
+  const [globalEnabled, setGlobalEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!conn) return;
+    let active = true;
+    (async () => {
+      try {
+        const j = await apiGet(conn, "/api/whatsapp/config");
+        if (active) setGlobalEnabled(!!j?.config?.enabled);
+      } catch {
+        if (active) setGlobalEnabled(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [conn]);
 
   const loadPreview = async () => {
     if (!conn) return;
@@ -109,12 +126,24 @@ export default function WhatsappButton({ conn, documentType, documentId, userId,
     <>
       <Pressable
         onPress={handleOpen}
-        style={({ pressed }) => [styles.btn, pressed && { opacity: 0.85 }]}
+        disabled={globalEnabled === false}
+        style={({ pressed }) => [
+          styles.btn,
+          globalEnabled === false && styles.btnDisabled,
+          pressed && globalEnabled !== false && { opacity: 0.85 },
+        ]}
         testID={`whatsapp-btn-${documentType}`}
       >
         <Ionicons name="logo-whatsapp" size={18} color="#fff" />
-        <Text style={styles.btnText}>Enviar por WhatsApp</Text>
+        <Text style={styles.btnText}>
+          {globalEnabled === false ? "WhatsApp desativado" : "Enviar por WhatsApp"}
+        </Text>
       </Pressable>
+      {globalEnabled === false ? (
+        <Text style={styles.disabledHint} testID={`whatsapp-disabled-${documentType}`}>
+          O envio por WhatsApp está desativado em Configurações.
+        </Text>
+      ) : null}
 
       <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
         <Pressable style={styles.modalBg} onPress={() => setOpen(false)}>
@@ -229,6 +258,8 @@ export default function WhatsappButton({ conn, documentType, documentId, userId,
 
 const styles = StyleSheet.create({
   btn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm, backgroundColor: "#25D366", borderRadius: radius.md, paddingVertical: 14, marginTop: spacing.md },
+  btnDisabled: { backgroundColor: colors.muted, opacity: 0.6 },
+  disabledHint: { fontSize: 12, color: colors.muted, textAlign: "center", marginTop: spacing.xs },
   btnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
   modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
   modalCard: { backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.xxl, minHeight: 360 },
