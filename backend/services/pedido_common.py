@@ -69,3 +69,30 @@ def _resolve_produto(cur, codigo: str) -> Optional[dict]:
             "custo": valor,  # serviço: custo = valor_hora (regra de negócio)
         }
     return None
+
+
+
+def _is_peca(cur, codigo: str) -> bool:
+    """True se o código pertence a uma peça (movimenta estoque)."""
+    cur.execute("SELECT 1 AS ok FROM pecas WHERE codigo_int=%s", (codigo,))
+    return cur.fetchone() is not None
+
+
+def _mover_estoque(cur, codigo: str, delta_qtd: float, campo_reservado: str) -> None:
+    """Movimenta o estoque de uma PEÇA dentro da transação corrente.
+
+    Efeito: pecas.qtd -= delta_qtd ; pecas.<campo_reservado> += delta_qtd.
+    `campo_reservado` deve ser 'reservado' (Pedido) ou 'reservado_os' (O.S.).
+    Não faz nada para serviços/itens inexistentes. delta_qtd pode ser negativo
+    (estorno ao remover/reduzir item).
+    """
+    if campo_reservado not in ("reservado", "reservado_os"):
+        raise ValueError("campo_reservado inválido")
+    if not delta_qtd or not _is_peca(cur, codigo):
+        return
+    cur.execute(
+        f"UPDATE pecas SET qtd = ISNULL(qtd,0) - %s, "
+        f"{campo_reservado} = ISNULL({campo_reservado},0) + %s "
+        f"WHERE codigo_int=%s",
+        (delta_qtd, delta_qtd, codigo),
+    )

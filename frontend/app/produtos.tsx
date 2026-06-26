@@ -28,6 +28,10 @@ type Item = {
   descricao: string;
   valor: number;
   estoque: number | null;
+  qtd?: number | null;
+  reservado?: number | null;
+  reservado_os?: number | null;
+  estoque_total?: number | null;
   cod_fab?: string;
   unidade?: string;
 };
@@ -372,15 +376,24 @@ export default function ProdutosScreen() {
                   <Text
                     style={[
                       styles.estoque,
-                      (item.estoque ?? 0) <= 0 && { color: colors.error },
+                      (item.qtd ?? item.estoque ?? 0) <= 0 && { color: colors.error },
                     ]}
                   >
-                    Estoque: {item.estoque ?? 0}
+                    Disponível: {item.qtd ?? item.estoque ?? 0}
                   </Text>
                 ) : (
                   <Text style={styles.estoque}>por hora</Text>
                 )}
               </View>
+              {item.tipo === "P" ? (
+                <View style={styles.estoqueRow} testID={`estoque-detalhe-${item.codigo}`}>
+                  <Text style={styles.estoqueChip}>Res. Pedido: {item.reservado ?? 0}</Text>
+                  <Text style={styles.estoqueChip}>Res. O.S.: {item.reservado_os ?? 0}</Text>
+                  <Text style={[styles.estoqueChip, styles.estoqueChipTotal]}>
+                    Total: {item.estoque_total ?? ((item.qtd ?? 0) + (item.reservado ?? 0) + (item.reservado_os ?? 0))}
+                  </Text>
+                </View>
+              ) : null}
             </View>
             {selecting ? (
               <Ionicons name="add-circle" size={26} color={colors.brandPrimary} />
@@ -584,6 +597,12 @@ const styles = StyleSheet.create({
   cardFooter: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 6 },
   cardValor: { fontSize: 15, fontWeight: "600", color: colors.brandPrimary },
   estoque: { fontSize: 12, color: colors.muted, fontWeight: "500" },
+  estoqueRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 6 },
+  estoqueChip: {
+    fontSize: 10, color: colors.muted, backgroundColor: colors.surfaceSecondary,
+    borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, overflow: "hidden",
+  },
+  estoqueChipTotal: { color: colors.brandPrimary, fontWeight: "700" },
   tipoTag: {
     paddingHorizontal: 8, paddingVertical: 2,
     borderRadius: 4, alignSelf: "flex-start",

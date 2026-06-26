@@ -110,6 +110,17 @@ CATALOGO = [
 
 
 # ---------------- DB ----------------
+def tem_permissao(cur, classe: int, tela: str, comando: str) -> bool:
+    """True se existe a linha (classe, sistema=50, tela, comando) em `permissoes`.
+    Usa um cursor já aberto (mesma transação)."""
+    cur.execute(
+        "SELECT TOP 1 1 AS ok FROM permissoes "
+        "WHERE sistema=%s AND classe=%s AND tela=%s AND comando=%s",
+        (SISTEMA, classe, tela, comando),
+    )
+    return cur.fetchone() is not None
+
+
 def _list_classes_sync(servidor: str, banco: str) -> dict:
     try:
         conn = _open_conn(servidor, banco)

@@ -10,8 +10,9 @@ import asyncio
 from typing import Optional
 
 from db.connection import _open_conn, _get_col_sizes, _trunc
-from models.schemas import OSListRequest, OSSaveRequest
+from models.schemas import OSListRequest, OSSaveRequest, FecharRequest
 from services.constants import SITUACAO_LABEL
+from services.permissoes_service import tem_permissao
 
 
 def _list_os_sync(req: OSListRequest) -> dict:
@@ -235,3 +236,50 @@ async def get_os(servidor: str, banco: str, codigo: int) -> dict:
 
 async def save_os(req: OSSaveRequest, codigo: Optional[int]) -> dict:
     return await asyncio.to_thread(_save_os_sync, req, codigo)
+
+
+
+def _fechar_os_sync(req: FecharRequest, codigo: int) -> dict:
+    """Fecha a O.S. (situação A -> F). Valida itens e permissão.
+    O estoque das peças já foi movido na INCLUSÃO do item (reservado_os),
+    portanto o fechamento NÃO movimenta estoque novamente."""
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT situacao FROM os WHERE codigo=%s", (codigo,))
+        ex = cur.fetchone()
+        if not ex:
+            conn.close()
+            return {"success": False, "message": "OS não encontrada."}
+        sit = (ex.get("situacao") or "").strip().upper()
+        if sit != "A":
+            conn.close()
+            return {"success": False, "message": f"OS '{SITUACAO_LABEL.get(sit, sit)}' não pode ser fechada."}
+        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, "OS", "SITUACAO"):
+            conn.close()
+            return {"success": False, "message": "Sem permissão para fechar a O.S."}
+        cur.execute(
+            "SELECT TOP 1 1 AS ok FROM os_produto WHERE os=%s AND ISNULL(item_cancelado,0)=0",
+            (codigo,),
+        )
+        if not cur.fetchone():
+            conn.close()
+            return {"success": False, "message": "Inclua pelo menos um produto ou serviço antes de fechar."}
+        cur.execute("UPDATE os SET situacao='F' WHERE codigo=%s", (codigo,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "message": "Pré-venda Fechada.", "situacao": "F"}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao fechar: {e}"}
+
+
+async def fechar_os(req: FecharRequest, codigo: int) -> dict:
+    return await asyncio.to_thread(_fechar_os_sync, req, codigo)

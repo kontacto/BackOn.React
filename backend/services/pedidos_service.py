@@ -3,8 +3,10 @@ import asyncio
 from typing import Optional
 
 from db.connection import _open_conn
-from models.schemas import PedidosListRequest, PedidoSaveRequest
+from models.schemas import PedidosListRequest, PedidoSaveRequest, FecharRequest
 from services.constants import SITUACAO_LABEL
+from services.pedido_common import _mover_estoque
+from services.permissoes_service import tem_permissao
 
 
 def _list_pedidos_sync(req: PedidosListRequest) -> dict:
@@ -231,3 +233,56 @@ async def get_pedido(servidor: str, banco: str, pedido: int) -> dict:
 
 async def save_pedido(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> dict:
     return await asyncio.to_thread(_save_pedido_sync, req, pedido_codigo)
+
+
+def _fechar_pedido_sync(req: FecharRequest, pedido: int) -> dict:
+    """Fecha o Pedido (situação A -> F). Valida itens e permissão e baixa o
+    estoque das PEÇAS (qtd -= q ; reservado += q). Serviços não movem estoque.
+    Tudo numa única transação."""
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT situacao FROM pedido_venda WHERE pedido=%s", (pedido,))
+        ex = cur.fetchone()
+        if not ex:
+            conn.close()
+            return {"success": False, "message": "Pedido não encontrado."}
+        sit = (ex.get("situacao") or "").strip().upper()
+        if sit != "A":
+            conn.close()
+            return {"success": False, "message": f"Pedido '{SITUACAO_LABEL.get(sit, sit)}' não pode ser fechado."}
+        # Permissão (master ignora)
+        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, "PEDIDO", "SITUACAO"):
+            conn.close()
+            return {"success": False, "message": "Sem permissão para fechar o pedido."}
+        # Pelo menos 1 item (produto OU serviço)
+        cur.execute(
+            "SELECT produto, qtd_pedida FROM pedido_venda_prod "
+            "WHERE pedido=%s AND ISNULL(item_cancelado,0)=0",
+            (pedido,),
+        )
+        itens = cur.fetchall()
+        if not itens:
+            conn.close()
+            return {"success": False, "message": "Inclua pelo menos um produto ou serviço antes de fechar."}
+        # Baixa de estoque (somente peças)
+        for it in itens:
+            _mover_estoque(cur, (it.get("produto") or "").strip(), float(it.get("qtd_pedida") or 0), "reservado")
+        cur.execute("UPDATE pedido_venda SET situacao='F' WHERE pedido=%s", (pedido,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "message": "Pré-venda Fechada.", "situacao": "F"}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao fechar: {e}"}
+
+
+async def fechar_pedido(req: FecharRequest, pedido: int) -> dict:
+    return await asyncio.to_thread(_fechar_pedido_sync, req, pedido)

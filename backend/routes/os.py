@@ -1,7 +1,7 @@
 """Rotas de Ordem de Serviço (cabeçalho `os`) e seus itens (`os_produto`)."""
 from fastapi import APIRouter
 
-from models.schemas import OSListRequest, OSSaveRequest, OSItemSaveRequest, DescontoGeralRequest
+from models.schemas import OSListRequest, OSSaveRequest, OSItemSaveRequest, DescontoGeralRequest, FecharRequest
 from services import os_service, os_itens_service
 
 router = APIRouter()
@@ -25,6 +25,11 @@ async def create_os(req: OSSaveRequest):
 @router.put("/os/{codigo}")
 async def update_os(codigo: int, req: OSSaveRequest):
     return await os_service.save_os(req, codigo)
+
+
+@router.post("/os/{codigo}/fechar")
+async def fechar_os(codigo: int, req: FecharRequest):
+    return await os_service.fechar_os(req, codigo)
 
 
 # ---------- itens da OS ----------

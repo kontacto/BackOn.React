@@ -30,7 +30,7 @@ import WhatsappButton from "@/src/components/WhatsappButton";
 const VENDEDOR_EDIT_FUNCOES = ["01", "02"];
 export default function PedidoFormScreen() {
   const router = useRouter();
-  const { can } = usePermissions();
+  const { can, isMaster, classe } = usePermissions();
   const params = useLocalSearchParams<{ pedido?: string; cliente?: string; cliente_nome?: string }>();
   const editing = !!params.pedido;
   const pedidoId = params.pedido ? parseInt(String(params.pedido), 10) : null;
@@ -227,6 +227,24 @@ export default function PedidoFormScreen() {
   const sit = pedido?.situacao || "A";
   const sitColor = useMemo(() => SIT_COLOR[sit] || colors.muted, [sit]);
 
+  const [fechando, setFechando] = useState(false);
+  const handleFechar = useCallback(async () => {
+    if (!conn || !pedidoId) return;
+    if (!it.itens.length) { showToast("Inclua pelo menos um produto ou serviço.", "error"); return; }
+    setFechando(true);
+    try {
+      const j = await apiSend(conn, `/api/pedidos/${pedidoId}/fechar`, "POST", { classe, master: isMaster });
+      if (j?.success) {
+        showToast(j.message || "Pré-venda Fechada.", "success");
+        setPedido((p) => (p ? { ...p, situacao: "F", situacao_label: "Fechado" } : p));
+      } else {
+        showToast(j?.message || "Não foi possível fechar.", "error");
+      }
+    } catch (e) {
+      showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
+    } finally { setFechando(false); }
+  }, [conn, pedidoId, it.itens.length, classe, isMaster, showToast]);
+
   // Opções dos comboboxes
   const areaOptions: SelectOption[] = useMemo(
     () => areas.map((a) => ({ value: a.codigo, label: a.descricao })),
@@ -266,7 +284,7 @@ export default function PedidoFormScreen() {
         saving={saving}
         onBack={() => router.back()}
         onSave={handleSave}
-        canSave={can("PEDIDO.GRAVAR")}
+        canSave={can("PEDIDO.GRAVAR") && isAberto}
       />
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
@@ -352,6 +370,23 @@ export default function PedidoFormScreen() {
 
           {/* Itens do Pedido */}
           <ItemList editing={editing} isAberto={isAberto} it={it} />
+
+          {editing && pedidoId && isAberto && can("PEDIDO.SITUACAO") ? (
+            <TouchableOpacity
+              onPress={handleFechar}
+              activeOpacity={0.85}
+              disabled={fechando || it.itens.length === 0}
+              style={[styles.fecharBtn, (fechando || it.itens.length === 0) && { opacity: 0.5 }]}
+              testID="pedido-form-fechar-btn"
+            >
+              {fechando ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="lock-closed-outline" size={18} color="#fff" />
+              )}
+              <Text style={styles.fecharBtnText}>Fechar pré-venda</Text>
+            </TouchableOpacity>
+          ) : null}
 
           {editing && pedidoId && can("PEDIDO.ANALISE") ? (
             <TouchableOpacity

@@ -156,6 +156,12 @@ export const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary,
   },
   analiseBtnText: { color: colors.brandPrimary, fontWeight: "600", fontSize: 14 },
+  fecharBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    marginTop: spacing.md, paddingVertical: 14, borderRadius: radius.md,
+    backgroundColor: colors.success,
+  },
+  fecharBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   descRow: {
     flexDirection: "row", alignItems: "center", gap: spacing.sm,
     paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border,

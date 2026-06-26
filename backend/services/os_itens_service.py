@@ -14,7 +14,7 @@ import asyncio
 from db.connection import _open_conn
 from models.schemas import OSItemSaveRequest
 from services.constants import SITUACAO_LABEL
-from services.pedido_common import _resolve_produto
+from services.pedido_common import _resolve_produto, _mover_estoque
 
 
 def _check_os_aberta(cur, codigo: int) -> tuple[bool, str]:
@@ -160,6 +160,9 @@ def _add_item_sync(req: OSItemSaveRequest, codigo: int) -> dict:
         )
         row = cur.fetchone()
         cod_os_prod = int(row["cod_os_prod"] if isinstance(row, dict) else row[0])
+        # Estoque: OS aberta reserva imediatamente (qtd -= q ; reservado_os += q).
+        # _mover_estoque ignora serviços automaticamente.
+        _mover_estoque(cur, prod_cod, qtd, "reservado_os")
         novo_total = _recalc_os_total(cur, codigo)
         conn.commit()
         cur.close()
@@ -198,6 +201,16 @@ def _update_item_sync(req: OSItemSaveRequest, codigo: int, cod_os_prod: int) -> 
         p_venda = round(p_normal - desc + acr, 4)
         complemento = (req.complemento or "").strip()
 
+        # Quantidade anterior p/ ajustar estoque reservado (somente peças).
+        cur.execute("SELECT quant, codigo_interno FROM os_produto WHERE cod_os_prod=%s AND os=%s",
+                    (cod_os_prod, codigo))
+        old = cur.fetchone()
+        if not old:
+            conn.rollback(); conn.close()
+            return {"success": False, "message": "Item não encontrado."}
+        old_qtd = float(old.get("quant") or 0)
+        old_cod = (old.get("codigo_interno") or "").strip()
+
         cur.execute(
             "UPDATE os_produto SET "
             " quant=%s, preco_unitario=%s, p_venda=%s, desconto=%s, acrescimo=%s, "
@@ -210,6 +223,8 @@ def _update_item_sync(req: OSItemSaveRequest, codigo: int, cod_os_prod: int) -> 
         if cur.rowcount == 0:
             conn.rollback(); conn.close()
             return {"success": False, "message": "Item não encontrado."}
+        # Ajusta a reserva pela diferença de quantidade.
+        _mover_estoque(cur, old_cod, qtd - old_qtd, "reservado_os")
         novo_total = _recalc_os_total(cur, codigo)
         conn.commit()
         cur.close()
@@ -237,10 +252,20 @@ def _delete_item_sync(servidor: str, banco: str, codigo: int, cod_os_prod: int) 
         if sit != "A":
             conn.close()
             return {"success": False, "message": f"OS '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterada."}
+        # Captura qtd/produto antes de excluir p/ estornar a reserva de estoque.
+        cur.execute("SELECT quant, codigo_interno FROM os_produto WHERE cod_os_prod=%s AND os=%s",
+                    (cod_os_prod, codigo))
+        old = cur.fetchone()
+        if not old:
+            conn.rollback(); conn.close()
+            return {"success": False, "message": "Item não encontrado."}
         cur.execute("DELETE FROM os_produto WHERE cod_os_prod=%s AND os=%s", (cod_os_prod, codigo))
         if cur.rowcount == 0:
             conn.rollback(); conn.close()
             return {"success": False, "message": "Item não encontrado."}
+        # Estorno: qtd += quant ; reservado_os -= quant (delta negativo).
+        _mover_estoque(cur, (old.get("codigo_interno") or "").strip(),
+                       -float(old.get("quant") or 0), "reservado_os")
         novo_total = _recalc_os_total(cur, codigo)
         conn.commit()
         cur.close()

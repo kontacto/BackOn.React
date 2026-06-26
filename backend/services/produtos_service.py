@@ -28,18 +28,25 @@ def _list_produtos_servicos_sync(
                 params_p = (like, like)
             cur.execute(
                 f"SELECT 'P' AS tipo, p.codigo_int AS codigo, p.descricao, "
-                f"       p.p_venda AS valor, p.estoque, p.codigo_fab, p.uni "
+                f"       p.p_venda AS valor, p.qtd, p.reservado, p.reservado_os, p.codigo_fab, p.uni "
                 f"FROM pecas p {where_p} "
                 f"ORDER BY p.descricao",
                 params_p,
             )
             for r in cur.fetchall():
+                qtd = float(r.get("qtd") or 0)
+                reservado = float(r.get("reservado") or 0)
+                reservado_os = float(r.get("reservado_os") or 0)
                 items.append({
                     "tipo": "P",
                     "codigo": (r.get("codigo") or "").strip() if isinstance(r.get("codigo"), str) else str(r.get("codigo") or ""),
                     "descricao": (r.get("descricao") or "").strip(),
                     "valor": float(r.get("valor") or 0),
-                    "estoque": float(r.get("estoque") or 0),
+                    "estoque": qtd,                       # disponível = pecas.qtd
+                    "qtd": qtd,
+                    "reservado": reservado,               # reservado p/ Pedido
+                    "reservado_os": reservado_os,         # reservado p/ O.S.
+                    "estoque_total": round(qtd + reservado + reservado_os, 3),
                     "cod_fab": (r.get("codigo_fab") or "").strip(),
                     "unidade": (r.get("uni") or "").strip(),
                 })

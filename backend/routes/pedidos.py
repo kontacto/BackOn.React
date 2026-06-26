@@ -1,7 +1,7 @@
 """Rotas de pedidos (cabeçalho) e seus itens."""
 from fastapi import APIRouter
 
-from models.schemas import PedidosListRequest, PedidoSaveRequest, ItemSaveRequest
+from models.schemas import PedidosListRequest, PedidoSaveRequest, ItemSaveRequest, FecharRequest
 from services import pedidos_service, itens_service
 
 router = APIRouter()
@@ -25,6 +25,11 @@ async def create_pedido(req: PedidoSaveRequest):
 @router.put("/pedidos/{pedido}")
 async def update_pedido(pedido: int, req: PedidoSaveRequest):
     return await pedidos_service.save_pedido(req, pedido)
+
+
+@router.post("/pedidos/{pedido}/fechar")
+async def fechar_pedido(pedido: int, req: FecharRequest):
+    return await pedidos_service.fechar_pedido(req, pedido)
 
 
 # ---------- itens do pedido ----------

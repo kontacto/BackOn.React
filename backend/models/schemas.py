@@ -141,6 +141,15 @@ class DescontoGeralRequest(BaseModel):
     funcao: Optional[int] = 1       # 1=gerente, 2=supervisor, 3=vendedor
 
 
+class FecharRequest(BaseModel):
+    """Fechar (situação = 'F') um Pedido ou O.S. Reutilizado por ambos."""
+    servidor: str
+    banco: str
+    classe: Optional[int] = None    # grupo do usuário (para validar permissão SITUACAO)
+    master: Optional[bool] = False  # KONTACTO/master ignora checagem de permissão
+
+
+
 class TelefoneInput(BaseModel):
     ddd: Optional[str] = ""
     tel: Optional[str] = ""

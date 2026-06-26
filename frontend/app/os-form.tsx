@@ -34,8 +34,6 @@ const STATUS_OS = [
 const SITUACOES = [
   { value: "A", label: "Aberta" },
   { value: "F", label: "Fechada" },
-  { value: "PG", label: "Faturada" },
-  { value: "C", label: "Cancelada" },
 ];
 
 const margemColor = (pct: number) => (pct >= 30 ? colors.success : pct >= 10 ? colors.warning : colors.error);
@@ -60,7 +58,7 @@ type Toast = { msg: string; tone: "info" | "error" | "success" } | null;
 
 export default function OSFormScreen() {
   const router = useRouter();
-  const { can, moduleOn } = usePermissions();
+  const { can, moduleOn, isMaster, classe } = usePermissions();
   const params = useLocalSearchParams<{ os?: string }>();
   const editing = !!params.os;
   const osId = params.os ? parseInt(String(params.os), 10) : null;
@@ -429,6 +427,26 @@ export default function OSFormScreen() {
     } finally { setDescGeralSaving(false); }
   };
 
+  const [fechandoOS, setFechandoOS] = useState(false);
+  const handleFecharOS = async () => {
+    if (!conn || !osId) return;
+    if (itens.length === 0) { showToast("Inclua pelo menos um produto ou serviço.", "error"); return; }
+    setFechandoOS(true);
+    try {
+      const j = await apiSend(conn, `/api/os/${osId}/fechar`, "POST", { classe, master: isMaster });
+      if (j?.success) {
+        showToast(j.message || "Pré-venda Fechada.", "success");
+        setOs((o) => (o ? { ...o, situacao: "F" } : o));
+        setSituacao("F");
+      } else {
+        showToast(j?.message || "Não foi possível fechar.", "error");
+      }
+    } catch (e) {
+      showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
+    } finally { setFechandoOS(false); }
+  };
+
+
   const areaOptions: SelectOption[] = useMemo(
     () => areas.map((a) => ({ value: a.codigo, label: a.descricao })),
     [areas]
@@ -538,6 +556,7 @@ export default function OSFormScreen() {
                 placeholder="Situação"
                 modalTitle="Situação da O.S."
                 searchable={false}
+                disabled
                 testID="os-form-situacao"
               />
             </View>
@@ -695,6 +714,23 @@ export default function OSFormScreen() {
               userId={waUserId}
               companyId={waCompany}
             />
+          ) : null}
+
+          {editing && osId && isAberta && can("OS.SITUACAO") ? (
+            <TouchableOpacity
+              onPress={handleFecharOS}
+              activeOpacity={0.85}
+              disabled={fechandoOS || itens.length === 0}
+              style={[styles.fecharOsBtn, (fechandoOS || itens.length === 0) && { opacity: 0.5 }]}
+              testID="os-form-fechar-btn"
+            >
+              {fechandoOS ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="lock-closed-outline" size={18} color="#fff" />
+              )}
+              <Text style={styles.fecharOsBtnText}>Fechar pré-venda</Text>
+            </TouchableOpacity>
           ) : null}
 
           <View style={{ height: 60 }} />
@@ -1121,6 +1157,12 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
   },
   actionBtnText: { flex: 1, fontSize: 14, fontWeight: "600", color: colors.brandPrimary },
+  fecharOsBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    backgroundColor: colors.success, borderRadius: radius.md,
+    paddingVertical: 15, marginTop: spacing.md,
+  },
+  fecharOsBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   sheetHandle: { alignSelf: "center", width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: spacing.sm },
   descRow: {
     flexDirection: "row", alignItems: "center", gap: spacing.md,

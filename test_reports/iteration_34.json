@@ -1,0 +1,51 @@
+{
+  "summary": "Iter 34: validei regras de FECHAMENTO de Pedido/OS, integridade de estoque e tela de produtos. Backend 9/9 PASS (test_iter34_fechar_estoque.py): (a) POST /api/os/{cod}/fechar com OS vazia retorna 'Inclua pelo menos um produto ou serviço.', com item retorna success+message 'Pré-venda Fechada.'+situacao 'F', e OS já fechada retorna erro; (b) POST /api/pedidos/{ped}/fechar idem; (c) integridade OS: ao incluir item peça em OS aberta, pecas.qtd -=q e pecas.reservado_os +=q (delta exato); ao remover, estorna; ao FECHAR a OS, estoque NÃO move novamente (já reservado); (d) integridade Pedido: enquanto Aberto, incluir item NÃO move estoque; somente ao FECHAR o estoque baixa (qtd-=3 e reservado+=3 exato); (e) /api/produtos-servicos?tipo=P expõe qtd, reservado, reservado_os e estoque_total. Frontend (mobile 390x844, KONTACTO master): tela /produtos mostra 'Disponível: -8' + linha estoque-detalhe-P001 com 'Res. Pedido: 6 · Res. O.S.: 2 · Total: 0' OK. ⚠️ ENCONTREI BUG CRÍTICO: red-screen em /pedido-form — 'Cannot read properties of undefined (reading length)' no useCallback handleFechar (pedido-form.tsx:233/246/378-379). Causa: o código usava `it.items.length` mas o hook usePedidoItens expõe `itens` (em PT). APLIQUEI O FIX trocando `it.items` por `it.itens` em 4 ocorrências. Re-testado: pedido #7 abre normal, botão 'Fechar pré-venda' (testID pedido-form-fechar-btn) visível (desabilitado quando 0 itens — comportamento correto). Não consegui validar a tela /os-form pelo browser nesta sessão (rota intermitente caiu em 'Acesso restrito' após fechar várias OS de teste); por code review confirmei: SITUACOES = [Aberta, Fechada] apenas (sem Faturada/Cancelada), SelectField com prop `disabled` e testID os-form-situacao, os-form-fechar-btn presente quando isAberta && can('OS.SITUACAO').",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "pedido-form.tsx",
+        "issue": "RED SCREEN ao abrir qualquer pedido: 'Cannot read properties of undefined (reading length)' em handleFechar — usava it.items.length em vez de it.itens.length (4 ocorrências). CORRIGIDO no Iter34. Reference: /app/frontend/app/pedido-form.tsx:233,246,378,379.",
+        "testID": "pedido-form-fechar-btn",
+        "priority": "CRITICAL (already fixed)"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "shadow* style props",
+        "issue": "Warning de console persistente 'shadow* style props are deprecated. Use boxShadow' (legado de iter33, não bloqueante)."
+      },
+      {
+        "component": "props.pointerEvents",
+        "issue": "Warning 'props.pointerEvents is deprecated. Use style.pointerEvents' (legado de iter33)."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/e2e/test_iter34_fechar_estoque.py",
+    "/app/test_reports/pytest/iter34_results.xml"
+  ],
+  "action_items": [
+    "Validar manualmente o fluxo end-to-end de /os-form (incluir item peça → ver estoque na lista de produtos → fechar OS) — não consegui exercer o UI nesta sessão; o backend está OK.",
+    "Investigar a intermitência 'Acesso restrito' em /os-form e /pedido-form quando o item de movimento clicado pertence a uma OS/Pedido que foi fechado em outra sessão — talvez não seja problema, mas vale confirmar que master KONTACTO sempre passa pelo PermissionsProvider para OS Fechada.",
+    "(Baixa prioridade) Substituir shadow*/pointerEvents props legacy por boxShadow/style.pointerEvents."
+  ],
+  "critical_code_review_comments": [
+    "BUG: pedido-form.tsx referenciava `it.items.length` em handleFechar e no botão Fechar, mas o hook usePedidoItens.ts retorna `itens` (PT). Como `it.items` é undefined, qualquer render do form com `editing && pedidoId && classe?` quebrava na linha 233 e provocava red-screen. Fix aplicado (4 ocorrências).",
+    "os-form.tsx:559 corretamente passa `disabled` para o SelectField de Situação; SITUACOES inclui apenas Aberta/Fechada (linhas 34-37) — atende ao requisito de remover Faturada/Cancelada.",
+    "produtos.tsx renderiza 'Disponível: {qtd}' (linha 382) e estoque-detalhe-{codigo} com Res. Pedido, Res. O.S. e Total (linhas 389-393) — atende ao requisito 6/7.",
+    "_mover_estoque em pedido_common.py:81 está correto: ignora serviços via _is_peca; aceita delta_qtd negativo (estorno). Backend pedidos_service.fechar baixa para reservado; os_itens_service add/update/delete movem reservado_os; os_service.fechar NÃO movimenta estoque (correto)."
+  ],
+  "updated_files": [
+    "/app/frontend/app/pedido-form.tsx (fix `it.items` → `it.itens` em 4 ocorrências — linhas 233, 246, 378, 379)",
+    "/app/backend/tests/e2e/test_iter34_fechar_estoque.py (criado, 9 testes)"
+  ],
+  "success_rate": { "backend": "100% (9/9)", "frontend": "85% (produtos+pedido-form OK após fix; OS-form via UI não validado nesta sessão — somente code review)" },
+  "seed_data_creation": "Criados via testes: OS #8 e #9 (fechadas), Pedido #4 (fechado com baixa de estoque), Pedido #5 (vazio, ainda Aberto). Nada deve impactar fluxos novos — todos com obs 'TEST_iter34*'.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Para acessar /os-form e /pedido-form via UI usar mov-OS-* / mov-PED-* da Tela Principal (testID principal-screen). KONTACTO/$KONT2011 é master. Connection demo deve estar no localStorage (@back_on/connections). Pedido #7 está Aberto sem itens (TEST_iter34_empty) — bom para testar botão Fechar desabilitado e fluxo de adição de item. Para fechar a partir do UI usar /pedido-form?pedido=N + adicionar item peça via modal e clicar 'Fechar pré-venda'.",
+  "rca_of_issue": "Bug do red-screen: o hook usePedidoItens (em src/components/pedido/usePedidoItens.ts) expõe a chave `itens` (PT), mas a tela pedido-form.tsx — provavelmente após refactor — começou a referenciar `it.items` (EN). Como TypeScript narrowing não capturou (o objeto retornado é largo), `undefined.length` quebrou o componente no momento em que o useCallback handleFechar era criado (logo após o pedido carregar e antes do primeiro render visível). Fix: padronizar `itens` na tela. Repro: abra qualquer pedido em /pedido-form?pedido=N. Mitigação: 4 substituições simples; lint passa."
+}
