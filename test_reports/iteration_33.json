@@ -1,0 +1,49 @@
+{
+  "summary": "Iter 33: Validado o movimento de OS no Painel Principal e os 2 novos relatórios de OS. Backend: 5/5 testes pytest passaram (test_iter33_os_dashboard_relatorios.py) — /api/dashboard/me retorna totais com chaves pedidos/os/produtos/servicos/descontos/margem/margem_pct e movimento com tipos PED/OS; /api/relatorios/os retorna lista+totais e o filtro vendedor=3 reduz vendas de R$342,50 para R$192,50; /api/relatorios/os/descontos-margem retorna agrupamento por vendedor. Frontend (mobile 390x844, KONTACTO master): Painel Principal renderiza corretamente cards 'Pedidos' (2) e 'OS' (3), Produtos R$42,50 + Serviços R$300,00, Margem R$18,95 (5,53%) e Descontos R$0,00 (testado interceptando a chamada para forçar data=2026-06-25). Lista 'Movimento de Hoje' renderiza linhas com etiqueta PED/OS e testIDs mov-PED-3, mov-PED-2, mov-OS-7, mov-OS-4, mov-OS-1; clicar em mov-OS-7 navega para /os-form?codigo=7. Tela Relatórios exibe os 4 tiles esperados, incluindo 'Relatório de OS' e 'OS · Descontos & Margem' para o usuário master. /relatorio-os: período padrão (01-26/06/2026) gera lista de 8 OS, totais Vendas R$342,50/Custo R$323,55/Margem R$18,95·5,53%; filtro por vendedor ESTELA (cod=3) reduz Vendas para R$192,50 e mostra apenas 3 OS — match exato com o backend. /relatorio-os-descontos: agrupa em 'Sem vendedor' e 'ESTELA' com sub-totais e expansão funcionando; cabeçalho mostra 4 OS no consolidado. Nenhuma red screen, nenhum erro de console crítico.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "/relatorio-os e /relatorio-os-descontos",
+        "issues": [
+          "Margem percentual exibida com ponto decimal ('5.53%') em vez de vírgula ('5,53%') no totais — inconsistente com o Painel Principal que mostra '5,53%'. Referência: /app/frontend/app/relatorio-os.tsx:188 e /app/frontend/app/relatorio-os-descontos.tsx:241 (usa `${totais.margem_pct}%` sem replace('.', ','))."
+        ]
+      }
+    ],
+    "react_native_issues": [
+      {
+        "component": "shadow* style props",
+        "issue": "Console warning 'shadow* style props are deprecated. Use boxShadow.' aparece de forma recorrente. Reference: provavelmente em src/theme ou componentes com sombra (vários screens)."
+      },
+      {
+        "component": "props.pointerEvents",
+        "issue": "Console warning 'props.pointerEvents is deprecated. Use style.pointerEvents'. Reference: componentes que passam pointerEvents como prop em vez de via style."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/e2e/test_iter33_os_dashboard_relatorios.py",
+    "/app/test_reports/pytest/iter33_results.xml"
+  ],
+  "action_items": [
+    "(Baixa prioridade) Padronizar separador decimal do margem_pct nos relatórios de OS (e idealmente nos de Pedido) — usar `.toFixed(2).replace('.', ',')` como já é feito em PedidosTable.",
+    "(Baixa prioridade) Substituir uso de shadowColor/shadowOffset/shadowOpacity/shadowRadius por boxShadow no theme/styles para silenciar deprecation warnings.",
+    "(Baixa prioridade) Migrar props.pointerEvents para style.pointerEvents nos componentes que ainda usam a prop legada."
+  ],
+  "critical_code_review_comments": [
+    "useDashboard.ts faz fallback de movimento para j?.pedidos quando j?.movimento não vem (linha 104) — bom para compatibilidade retroativa. Backend já retorna ambos.",
+    "TotalsCards mostra fontSize 16 para Produtos/Serviços quando os valores podem ser longos (ex.: 'R$ 1.234,56'); está OK em 390px mas pode quebrar em telas estreitas.",
+    "Os 2 novos relatórios de OS usam fetch direto em vez de utilitário apiGet — ok pois passam servidor/banco como query, mas perde-se a centralização. Não bloqueador."
+  ],
+  "updated_files": [
+    "/app/backend/tests/e2e/test_iter33_os_dashboard_relatorios.py (criado)"
+  ],
+  "success_rate": { "backend": "100% (5/5)", "frontend": "100% (todos os fluxos críticos)" },
+  "seed_data_creation": "Nenhum dado novo criado. Conexão DEMO injetada no localStorage do navegador (@back_on/connections) para permitir login KONTACTO/$KONT2011.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Para testar o Painel com dados, interceptar a chamada /api/dashboard/me e adicionar data=2026-06-25 (hoje 26/06/2026 está vazio). O backend usa params servidor/banco/vendedor; vendedor=all (master) ou códigos numéricos. Relatórios de OS usam período padrão início do mês até hoje. ESTELA = código 3. Login via testID login-usuario-input/login-senha-input/login-submit-button. Após login a primeira rota é principal-screen.",
+  "rca_of_issue": "N/A — implementação aprovada nas funcionalidades pedidas."
+}

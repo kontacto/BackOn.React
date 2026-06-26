@@ -12,11 +12,11 @@ import { apiGet } from "@/src/utils/api";
 import { usePermissions } from "@/src/permissions";
 
 export type DashboardTotals = {
-  pedidos: number; produtos: number; servicos: number; descontos: number; margem: number; margem_pct: number;
+  pedidos: number; os: number; produtos: number; servicos: number; descontos: number; margem: number; margem_pct: number;
 };
-export type DashboardPedido = { pedido: number; cliente: string; valor: number };
+export type MovimentoItem = { tipo: "PED" | "OS"; doc: number; cliente: string; valor: number };
 
-const ZERO: DashboardTotals = { pedidos: 0, produtos: 0, servicos: 0, descontos: 0, margem: 0, margem_pct: 0 };
+const ZERO: DashboardTotals = { pedidos: 0, os: 0, produtos: 0, servicos: 0, descontos: 0, margem: 0, margem_pct: 0 };
 
 export function pickFirst(obj: Record<string, unknown> | null | undefined, keys: string[]): string | null {
   if (!obj) return null;
@@ -34,7 +34,7 @@ export function useDashboard() {
   const [loading, setLoading] = useState(true);
 
   const [totais, setTotais] = useState<DashboardTotals>(ZERO);
-  const [pedidos, setPedidos] = useState<DashboardPedido[]>([]);
+  const [movimento, setMovimento] = useState<MovimentoItem[]>([]);
   const [dashLoading, setDashLoading] = useState(false);
   const [dashError, setDashError] = useState<string | null>(null);
   const [situacaoFiltro, setSituacaoFiltro] = useState<string>("");
@@ -101,7 +101,7 @@ export function useDashboard() {
         const j = await apiGet(conn, "/api/dashboard/me", { vendedor: vendedorParam, situacao: sit || undefined });
         if (!j?.success) setDashError(j?.message || "Não foi possível obter os totais.");
         setTotais(j?.totais || ZERO);
-        setPedidos(Array.isArray(j?.pedidos) ? j.pedidos : []);
+        setMovimento(Array.isArray(j?.movimento) ? j.movimento : (Array.isArray(j?.pedidos) ? j.pedidos : []));
       } catch (e) {
         setDashError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
@@ -140,13 +140,13 @@ export function useDashboard() {
   }, [session]);
 
   const nomeGuerra = useMemo(() => pickFirst(session?.funcionario, ["nome_guerra"]) || null, [session]);
-  const totalPedidos = useMemo(() => pedidos.reduce((s, p) => s + (p.valor || 0), 0), [pedidos]);
+  const totalMovimento = useMemo(() => movimento.reduce((s, p) => s + (p.valor || 0), 0), [movimento]);
   const classe = useMemo(() => pickFirst(session?.usuario, ["classe_descricao", "classe_label", "classe"]) || null, [session]);
 
   return {
-    session, loading, totais, pedidos, dashLoading, dashError,
+    session, loading, totais, movimento, dashLoading, dashError,
     situacaoFiltro, handleSituacao,
     fantasia, canSeeAll, showTotais, showMargem, showDescontos,
-    handleLogout, displayName, nomeGuerra, totalPedidos, classe,
+    handleLogout, displayName, nomeGuerra, totalMovimento, classe,
   };
 }

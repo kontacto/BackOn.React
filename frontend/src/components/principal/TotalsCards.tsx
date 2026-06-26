@@ -33,6 +33,12 @@ export default function TotalsCards({
               <Text style={styles.totalLabel}>Pedidos</Text>
               <Text style={styles.totalValue} testID="totals-pedidos">{dashLoading ? "…" : totais.pedidos}</Text>
             </View>
+            <View style={[styles.totalCard, { borderLeftColor: colors.brandSecondary || colors.brandPrimary }]}>
+              <Text style={styles.totalLabel}>OS</Text>
+              <Text style={styles.totalValue} testID="totals-os">{dashLoading ? "…" : (totais.os ?? 0)}</Text>
+            </View>
+          </View>
+          <View style={[styles.totalsRow, { marginTop: 8 }]}>
             <View style={[styles.totalCard, { borderLeftColor: colors.success }]}>
               <Text style={styles.totalLabel}>Produtos</Text>
               <Text style={[styles.totalValue, { fontSize: 16 }]} testID="totals-produtos">{dashLoading ? "…" : formatBRL(totais.produtos)}</Text>

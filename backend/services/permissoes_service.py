@@ -100,6 +100,8 @@ CATALOGO = [
     _menu("RELATORIOS", "Relatórios", [
         _tela("REL_PEDIDOS", "Relatório de Pedidos"),
         _tela("REL_DESCONTOS", "Descontos & Margem"),
+        _tela("REL_OS", "Relatório de OS"),
+        _tela("REL_OS_DESCONTOS", "OS · Descontos & Margem"),
     ]),
     _menu("CONFIG", "Configurações", [
         _tela("CONEXAO", "Conexões"),

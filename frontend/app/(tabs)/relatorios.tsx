@@ -10,7 +10,7 @@ type ReportTile = {
   label: string;
   desc: string;
   icon: keyof typeof Ionicons.glyphMap;
-  route: "/relatorio-descontos" | "/relatorio-pedidos" | null;
+  route: "/relatorio-descontos" | "/relatorio-pedidos" | "/relatorio-os" | "/relatorio-os-descontos" | null;
   perm: string | null;
 };
 
@@ -28,6 +28,20 @@ const REPORTS: ReportTile[] = [
     icon: "trending-down-outline",
     route: "/relatorio-descontos",
     perm: "REL_DESCONTOS.ABRIR",
+  },
+  {
+    label: "Relatório de OS",
+    desc: "Ordens de Serviço por período/vendedor/situação, com totais e margem.",
+    icon: "construct-outline",
+    route: "/relatorio-os",
+    perm: "REL_OS.ABRIR",
+  },
+  {
+    label: "OS · Descontos & Margem",
+    desc: "Consolidado de OS por vendedor: vendas, descontos, custo e margem.",
+    icon: "trending-down-outline",
+    route: "/relatorio-os-descontos",
+    perm: "REL_OS_DESCONTOS.ABRIR",
   },
   { label: "Vendas (em breve)", desc: "Resumo de vendas por período.", icon: "cart-outline", route: null, perm: null },
 ];

@@ -65,10 +65,10 @@ export default function PrincipalScreen() {
         />
 
         <PedidosTable
-          pedidos={d.pedidos}
+          movimento={d.movimento}
           dashLoading={d.dashLoading}
           dashError={d.dashError}
-          totalPedidos={d.totalPedidos}
+          totalMovimento={d.totalMovimento}
         />
       </ScrollView>
     </SafeAreaView>

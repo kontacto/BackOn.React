@@ -272,16 +272,53 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
             tuple([data_iso] + vparams),
         )
         agg = _ratear_totais_por_pedido(cur.fetchall())
+
+        # --- Agregados das OS do dia (vendedor é POR ITEM em os_produto) ---
+        osfilter = ""
+        osparams: list = []
+        if vendedor not in (None, "", "all"):
+            osfilter += " AND i.vendedor = %s"
+            osparams.append(vendedor)
+        if situacao not in (None, "", "all"):
+            osfilter += " AND o.situacao = %s"
+            osparams.append(situacao)
+        cur.execute(
+            "SELECT ISNULL(SUM(i.p_venda*i.quant),0) AS venda, "
+            "  ISNULL(SUM(CASE WHEN sv.codigo IS NOT NULL THEN i.p_venda*i.quant ELSE 0 END),0) AS serv_sum, "
+            "  ISNULL(SUM(i.custo_os*i.quant),0) AS custo_sum, "
+            "  ISNULL(SUM(ISNULL(i.desconto,0)*i.quant),0) AS desc_sum, "
+            "  COUNT(DISTINCT i.os) AS qtd_os "
+            "FROM os_produto i "
+            "JOIN os o ON o.codigo = i.os "
+            "LEFT JOIN pecas pe ON pe.codigo_int = i.codigo_interno "
+            "LEFT JOIN servicos sv ON sv.codigo = i.codigo_interno "
+            "WHERE CAST(o.data_entrada AS DATE) = %s AND ISNULL(i.item_cancelado,0)=0" + osfilter,
+            tuple([data_iso] + osparams),
+        )
+        osr = cur.fetchone() or {}
+        os_venda = float(osr.get("venda") or 0)
+        os_serv = float(osr.get("serv_sum") or 0)
+        os_custo = float(osr.get("custo_sum") or 0)
+        os_desc = float(osr.get("desc_sum") or 0)
+        os_prod = os_venda - os_serv
+        qtd_os = int(osr.get("qtd_os") or 0)
+
+        # Totais combinados (Pedido + OS)
+        venda_total = agg["venda"] + os_venda
+        custo_total = agg["custo"] + os_custo
+        margem_total = round(venda_total - custo_total, 2)
         totais = {
             "pedidos": agg["qtd_pedidos"],
-            "produtos": agg["produtos"],
-            "servicos": agg["servicos"],
-            "descontos": agg["descontos"],
-            "margem": agg["margem"],
-            "margem_pct": agg["margem_pct"],
+            "os": qtd_os,
+            "produtos": round(agg["produtos"] + os_prod, 2),
+            "servicos": round(agg["servicos"] + os_serv, 2),
+            "descontos": round(agg["descontos"] + os_desc, 2),
+            "margem": margem_total,
+            "margem_pct": round((margem_total / venda_total * 100), 2) if venda_total > 0 else 0.0,
         }
 
-        # Lista de pedidos do dia
+        # Lista de movimento do dia (Pedidos + OS) com etiqueta de tipo
+        movimento = []
         cur.execute(
             "SELECT TOP 50 pv.pedido, c.nome AS cliente, ISNULL(pv.total,0) AS valor, "
             "       f.nome AS vendedor_nome "
@@ -292,17 +329,34 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
             "ORDER BY pv.pedido DESC",
             tuple([data_iso] + vparams),
         )
-        pedidos = []
         for r in cur.fetchall():
-            pedidos.append({
-                "pedido": int(r.get("pedido") or 0),
+            movimento.append({
+                "tipo": "PED",
+                "doc": int(r.get("pedido") or 0),
                 "cliente": (r.get("cliente") or "").strip(),
                 "vendedor_nome": (r.get("vendedor_nome") or "").strip(),
                 "valor": float(r.get("valor") or 0),
             })
+        cur.execute(
+            "SELECT TOP 50 i.os AS doc, MAX(c.nome) AS cliente, SUM(i.p_venda*i.quant) AS valor "
+            "FROM os_produto i "
+            "JOIN os o ON o.codigo = i.os "
+            "LEFT JOIN cliente c ON c.codigo = o.cliente "
+            "WHERE CAST(o.data_entrada AS DATE) = %s AND ISNULL(i.item_cancelado,0)=0" + osfilter + " "
+            "GROUP BY i.os ORDER BY i.os DESC",
+            tuple([data_iso] + osparams),
+        )
+        for r in cur.fetchall():
+            movimento.append({
+                "tipo": "OS",
+                "doc": int(r.get("doc") or 0),
+                "cliente": (r.get("cliente") or "").strip(),
+                "vendedor_nome": "",
+                "valor": float(r.get("valor") or 0),
+            })
         cur.close()
         conn.close()
-        return {"success": True, "totais": totais, "pedidos": pedidos}
+        return {"success": True, "totais": totais, "movimento": movimento, "pedidos": movimento}
     except Exception as e:
         try:
             conn.close()
@@ -315,7 +369,6 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
 async def relatorio_pedidos(servidor: str, banco: str, data_ini: str, data_fim: str,
                             vendedor: Optional[str], situacao: Optional[str]) -> dict:
     return await asyncio.to_thread(_relatorio_pedidos_sync, servidor, banco, data_ini, data_fim, vendedor, situacao)
-
 
 async def relatorio_desc_margem(servidor: str, banco: str, data_ini: str, data_fim: str,
                                 vendedor: Optional[str], pedido: Optional[int],
@@ -330,3 +383,193 @@ async def dashboard_me(servidor: str, banco: str, vendedor: Optional[str],
     # data padrão = hoje (YYYY-MM-DD); vendedor/situacao vazio/None/all = todos
     data_iso = data or date.today().isoformat()
     return await asyncio.to_thread(_dashboard_sync, servidor, banco, vendedor, data_iso, situacao)
+
+
+
+# ===================== RELATÓRIOS DE ORDEM DE SERVIÇO =====================
+def _relatorio_os_sync(servidor: str, banco: str, data_ini: str, data_fim: str,
+                       vendedor: Optional[str], situacao: Optional[str]) -> dict:
+    """Lista de OS por período + filtros (vendedor por item / situação) e totais.
+    Quando um vendedor é informado, o total de cada OS e os totais consolidados
+    consideram apenas os itens daquele vendedor."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "os": []}
+    try:
+        cur = conn.cursor(as_dict=True)
+        vfilter = ""
+        vparams: list = []
+        if vendedor not in (None, "", "all"):
+            vfilter = " AND i.vendedor = %s"
+            vparams = [vendedor]
+        sit_clause = ""
+        sit_params: list = []
+        if situacao not in (None, "", "all"):
+            sit_clause = " AND o.situacao = %s"
+            sit_params = [situacao]
+        # Lista de OS (total = soma dos itens que casam o filtro de vendedor)
+        only_match = " AND ag.venda IS NOT NULL" if vparams else ""
+        cur.execute(
+            "SELECT TOP 300 o.codigo, o.data_entrada AS data, o.situacao, "
+            "       c.nome AS cliente, ISNULL(ag.venda,0) AS total "
+            "FROM os o LEFT JOIN cliente c ON c.codigo = o.cliente "
+            "OUTER APPLY (SELECT SUM(i.p_venda*i.quant) AS venda FROM os_produto i "
+            "   WHERE i.os = o.codigo AND ISNULL(i.item_cancelado,0)=0" + vfilter + ") ag "
+            "WHERE CAST(o.data_entrada AS DATE) BETWEEN %s AND %s" + sit_clause + only_match +
+            " ORDER BY o.data_entrada DESC, o.codigo DESC",
+            tuple(vparams + [data_ini, data_fim] + sit_params),
+        )
+        rows = cur.fetchall()
+        # Totais consolidados (itens filtrados por vendedor/situação)
+        cur.execute(
+            "SELECT ISNULL(SUM(i.p_venda*i.quant),0) AS venda, "
+            "  ISNULL(SUM(i.custo_os*i.quant),0) AS custo, "
+            "  ISNULL(SUM(ISNULL(i.desconto,0)*i.quant),0) AS desconto, "
+            "  COUNT(DISTINCT i.os) AS qtd_os "
+            "FROM os_produto i JOIN os o ON o.codigo = i.os "
+            "WHERE CAST(o.data_entrada AS DATE) BETWEEN %s AND %s AND ISNULL(i.item_cancelado,0)=0"
+            + vfilter + sit_clause,
+            tuple([data_ini, data_fim] + vparams + sit_params),
+        )
+        t = cur.fetchone() or {}
+        cur.close(); conn.close()
+        os_list = []
+        for r in rows:
+            d = r.get("data")
+            os_list.append({
+                "os": int(r.get("codigo") or 0),
+                "data": d.isoformat() if hasattr(d, "isoformat") else (str(d) if d else None),
+                "situacao": (r.get("situacao") or "").strip(),
+                "situacao_label": SIT_LABELS.get((r.get("situacao") or "").strip(), r.get("situacao") or "—"),
+                "total": float(r.get("total") or 0),
+                "cliente": (r.get("cliente") or "").strip() or "—",
+            })
+        venda = float(t.get("venda") or 0)
+        custo = float(t.get("custo") or 0)
+        margem = round(venda - custo, 2)
+        totais = {
+            "qtd_pedidos": int(t.get("qtd_os") or 0),
+            "venda": round(venda, 2),
+            "desconto": round(float(t.get("desconto") or 0), 2),
+            "custo": round(custo, 2),
+            "margem": margem,
+            "margem_pct": round((margem / venda * 100), 2) if venda > 0 else 0.0,
+        }
+        return {"success": True, "os": os_list, "totais": totais}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "os": []}
+
+
+def _relatorio_os_desc_margem_sync(servidor: str, banco: str, data_ini: str, data_fim: str,
+                                   vendedor: Optional[str], os_cod: Optional[int],
+                                   cliente_nome: Optional[str] = None) -> dict:
+    """Consolidado de OS agrupado por vendedor (vendedor é por item em os_produto).
+    Cada linha = (vendedor, OS) com venda/desconto/custo/margem dos itens daquele
+    vendedor naquela OS. O campo 'pedido' carrega o código da OS p/ reuso de UI."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "vendedores": [], "totais": {}}
+    try:
+        cur = conn.cursor(as_dict=True)
+        where = ["CAST(o.data_entrada AS DATE) BETWEEN %s AND %s", "ISNULL(i.item_cancelado,0)=0"]
+        params: list = [data_ini, data_fim]
+        if vendedor:
+            where.append("i.vendedor = %s")
+            params.append(vendedor)
+        if os_cod:
+            where.append("o.codigo = %s")
+            params.append(os_cod)
+        if cliente_nome and cliente_nome.strip():
+            where.append("c.nome LIKE %s")
+            params.append(f"%{cliente_nome.strip()}%")
+        cur.execute(
+            "SELECT i.vendedor, o.codigo AS pedido, o.data_entrada AS data, o.situacao, "
+            "       f.nome AS vendedor_nome, c.nome AS cliente_nome, "
+            "       SUM(i.p_venda*i.quant) AS venda, "
+            "       SUM(ISNULL(i.desconto,0)*i.quant) AS desconto, "
+            "       SUM(i.custo_os*i.quant) AS custo "
+            "FROM os_produto i JOIN os o ON o.codigo = i.os "
+            "LEFT JOIN funcionarios f ON f.codigo_int = i.vendedor "
+            "LEFT JOIN cliente c ON c.codigo = o.cliente "
+            f"WHERE {' AND '.join(where)} "
+            "GROUP BY i.vendedor, o.codigo, o.data_entrada, o.situacao, f.nome, c.nome "
+            "ORDER BY i.vendedor, o.codigo",
+            tuple(params),
+        )
+        grupos: dict = {}
+        tot_venda = tot_desc = tot_custo = 0.0
+        for r in cur.fetchall():
+            vcod = str(r.get("vendedor") or "").strip()
+            vnome = (r.get("vendedor_nome") or "").strip() or (f"Vendedor {vcod}" if vcod else "Sem vendedor")
+            venda = float(r.get("venda") or 0)
+            desc = float(r.get("desconto") or 0)
+            custo = float(r.get("custo") or 0)
+            margem = round(venda - custo, 2)
+            margem_pct = round((margem / venda * 100), 2) if venda > 0 else 0.0
+            data_val = r.get("data")
+            data_str = data_val.strftime("%Y-%m-%d") if hasattr(data_val, "strftime") else (str(data_val)[:10] if data_val else "")
+            ped_obj = {
+                "pedido": int(r["pedido"]),
+                "data": data_str,
+                "situacao": (r.get("situacao") or "").strip(),
+                "cliente": (r.get("cliente_nome") or "").strip(),
+                "venda": round(venda, 2),
+                "desconto": round(desc, 2),
+                "custo": round(custo, 2),
+                "margem": margem,
+                "margem_pct": margem_pct,
+            }
+            g = grupos.setdefault(vcod, {
+                "vendedor": vcod, "vendedor_nome": vnome, "pedidos": [],
+                "sub_venda": 0.0, "sub_desconto": 0.0, "sub_custo": 0.0, "sub_margem": 0.0,
+            })
+            g["pedidos"].append(ped_obj)
+            g["sub_venda"] += venda
+            g["sub_desconto"] += desc
+            g["sub_custo"] += custo
+            g["sub_margem"] += margem
+            tot_venda += venda; tot_desc += desc; tot_custo += custo
+        cur.close(); conn.close()
+        vendedores = []
+        for g in grupos.values():
+            g["sub_venda"] = round(g["sub_venda"], 2)
+            g["sub_desconto"] = round(g["sub_desconto"], 2)
+            g["sub_custo"] = round(g["sub_custo"], 2)
+            g["sub_margem"] = round(g["sub_margem"], 2)
+            g["sub_margem_pct"] = round((g["sub_margem"] / g["sub_venda"] * 100), 2) if g["sub_venda"] > 0 else 0.0
+            vendedores.append(g)
+        margem_geral = round(tot_venda - tot_custo, 2)
+        totais = {
+            "venda": round(tot_venda, 2),
+            "desconto": round(tot_desc, 2),
+            "custo": round(tot_custo, 2),
+            "margem": margem_geral,
+            "margem_pct": round((margem_geral / tot_venda * 100), 2) if tot_venda > 0 else 0.0,
+            "qtd_pedidos": sum(len(g["pedidos"]) for g in vendedores),
+        }
+        return {"success": True, "vendedores": vendedores, "totais": totais}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "vendedores": [], "totais": {}}
+
+
+async def relatorio_os(servidor: str, banco: str, data_ini: str, data_fim: str,
+                       vendedor: Optional[str], situacao: Optional[str]) -> dict:
+    return await asyncio.to_thread(_relatorio_os_sync, servidor, banco, data_ini, data_fim, vendedor, situacao)
+
+
+async def relatorio_os_desc_margem(servidor: str, banco: str, data_ini: str, data_fim: str,
+                                   vendedor: Optional[str], os_cod: Optional[int],
+                                   cliente_nome: Optional[str]) -> dict:
+    return await asyncio.to_thread(
+        _relatorio_os_desc_margem_sync, servidor, banco, data_ini, data_fim, vendedor, os_cod, cliente_nome
+    )

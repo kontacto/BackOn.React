@@ -1,4 +1,4 @@
-// Tabela de pedidos do dia + erro de dashboard + linha de total.
+// Tabela de movimento do dia (Pedidos + OS) + erro de dashboard + linha de total.
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
@@ -6,21 +6,25 @@ import { useRouter } from "expo-router";
 import { colors } from "@/src/theme/colors";
 import { formatBRL } from "@/src/utils/format";
 import { styles } from "./styles";
-import { DashboardPedido } from "./useDashboard";
+import { MovimentoItem } from "./useDashboard";
 
 type Props = {
-  pedidos: DashboardPedido[];
+  movimento: MovimentoItem[];
   dashLoading: boolean;
   dashError: string | null;
-  totalPedidos: number;
+  totalMovimento: number;
 };
 
-export default function PedidosTable({ pedidos, dashLoading, dashError, totalPedidos }: Props) {
+export default function PedidosTable({ movimento, dashLoading, dashError, totalMovimento }: Props) {
   const router = useRouter();
+  const openItem = (m: MovimentoItem) => {
+    if (m.tipo === "OS") router.push({ pathname: "/os-form", params: { codigo: String(m.doc) } });
+    else router.push({ pathname: "/pedido-form", params: { pedido: String(m.doc) } });
+  };
   return (
     <>
       <View style={styles.pedidosHeader}>
-        <Text style={styles.sectionTitle}>Pedidos de Hoje</Text>
+        <Text style={styles.sectionTitle}>Movimento de Hoje</Text>
         {dashLoading ? <ActivityIndicator size="small" color={colors.brandPrimary} /> : null}
       </View>
 
@@ -33,30 +37,44 @@ export default function PedidosTable({ pedidos, dashLoading, dashError, totalPed
 
       <View style={styles.pedidosCard} testID="principal-pedidos-list">
         <View style={styles.pedidosHead}>
-          <Text style={[styles.pedidoCell, { flex: 0.7 }]}>Pedido</Text>
+          <Text style={[styles.pedidoCell, { flex: 1.1 }]}>Documento</Text>
           <Text style={[styles.pedidoCell, { flex: 2 }]}>Cliente</Text>
           <Text style={[styles.pedidoCell, { flex: 1.2, textAlign: "right" }]}>Valor</Text>
         </View>
-        {pedidos.length === 0 && !dashLoading ? (
-          <Text style={styles.empty}>Nenhum pedido hoje.</Text>
+        {movimento.length === 0 && !dashLoading ? (
+          <Text style={styles.empty}>Nenhum movimento hoje.</Text>
         ) : (
-          pedidos.map((p) => (
+          movimento.map((m) => (
             <Pressable
-              key={p.pedido}
-              onPress={() => router.push({ pathname: "/pedido-form", params: { pedido: String(p.pedido) } })}
+              key={`${m.tipo}-${m.doc}`}
+              onPress={() => openItem(m)}
               style={({ pressed }) => [styles.pedidoRow, pressed && { backgroundColor: colors.brandTertiary }]}
-              testID={`pedido-${p.pedido}`}
+              testID={`mov-${m.tipo}-${m.doc}`}
             >
-              <Text style={[styles.pedidoCellValue, { flex: 0.7 }]}>#{p.pedido}</Text>
-              <Text style={[styles.pedidoCellValue, { flex: 2 }]} numberOfLines={1}>{p.cliente || "—"}</Text>
-              <Text style={[styles.pedidoCellValue, { flex: 1.2, textAlign: "right", fontWeight: "500" }]}>{formatBRL(p.valor)}</Text>
+              <View style={[{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1.1 }]}>
+                <View
+                  style={{
+                    backgroundColor: m.tipo === "OS" ? "#E8F0FE" : colors.brandTertiary,
+                    borderRadius: 4,
+                    paddingHorizontal: 5,
+                    paddingVertical: 1,
+                  }}
+                >
+                  <Text style={{ fontSize: 10, fontWeight: "700", color: m.tipo === "OS" ? "#2563EB" : colors.brandPrimary }}>
+                    {m.tipo}
+                  </Text>
+                </View>
+                <Text style={styles.pedidoCellValue}>#{m.doc}</Text>
+              </View>
+              <Text style={[styles.pedidoCellValue, { flex: 2 }]} numberOfLines={1}>{m.cliente || "—"}</Text>
+              <Text style={[styles.pedidoCellValue, { flex: 1.2, textAlign: "right", fontWeight: "500" }]}>{formatBRL(m.valor)}</Text>
             </Pressable>
           ))
         )}
-        {pedidos.length > 0 ? (
+        {movimento.length > 0 ? (
           <View style={styles.pedidoTotalRow} testID="principal-pedidos-total">
-            <Text style={[styles.pedidoTotalLabel, { flex: 2.7 }]}>Total ({pedidos.length})</Text>
-            <Text style={[styles.pedidoTotalValue, { flex: 1.2, textAlign: "right" }]}>{formatBRL(totalPedidos)}</Text>
+            <Text style={[styles.pedidoTotalLabel, { flex: 3.1 }]}>Total ({movimento.length})</Text>
+            <Text style={[styles.pedidoTotalValue, { flex: 1.2, textAlign: "right" }]}>{formatBRL(totalMovimento)}</Text>
           </View>
         ) : null}
       </View>

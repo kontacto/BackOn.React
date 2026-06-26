@@ -29,3 +29,20 @@ async def relatorio_descontos_margem(
 async def dashboard_me(servidor: str, banco: str, vendedor: Optional[str] = None,
                        data: Optional[str] = None, situacao: Optional[str] = None):
     return await relatorios_service.dashboard_me(servidor, banco, vendedor, data, situacao)
+
+
+@router.get("/relatorios/os")
+async def relatorio_os(servidor: str, banco: str, data_ini: str, data_fim: str,
+                       vendedor: Optional[str] = None, situacao: Optional[str] = None):
+    return await relatorios_service.relatorio_os(servidor, banco, data_ini, data_fim, vendedor, situacao)
+
+
+@router.get("/relatorios/os/descontos-margem")
+async def relatorio_os_descontos_margem(
+    servidor: str, banco: str, data_ini: str, data_fim: str,
+    vendedor: Optional[str] = None, os_cod: Optional[int] = None,
+    cliente_nome: Optional[str] = None,
+):
+    return await relatorios_service.relatorio_os_desc_margem(
+        servidor, banco, data_ini, data_fim, vendedor, os_cod, cliente_nome
+    )
