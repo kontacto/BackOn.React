@@ -93,3 +93,64 @@ async def list_produtos_servicos(servidor: str, banco: str, search: str,
     return await asyncio.to_thread(
         _list_produtos_servicos_sync, servidor, banco, search, page, size, tipo
     )
+
+
+
+def _reservas_produto_sync(servidor: str, banco: str, codigo: str, tipo: str) -> dict:
+    """Documentos reais que reservam a peça `codigo`.
+    tipo='PED' -> Pedidos Fechados; tipo='OS' -> O.S. Abertas/Fechadas.
+    Lê os ITENS dos documentos (não usa os campos agregados pecas.reservado*).
+    Agrupa por documento e soma a quantidade do produto naquele documento."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": []}
+    try:
+        cur = conn.cursor(as_dict=True)
+        if tipo == "PED":
+            cur.execute(
+                "SELECT i.pedido AS doc, MAX(c.nome) AS cliente, MAX(p.data) AS data, "
+                "       MAX(p.situacao) AS situacao, SUM(i.qtd_pedida) AS qtd "
+                "FROM pedido_venda_prod i "
+                "JOIN pedido_venda p ON p.pedido = i.pedido "
+                "LEFT JOIN cliente c ON c.codigo = p.cliente "
+                "WHERE i.produto = %s AND p.situacao = 'F' AND ISNULL(i.item_cancelado,0)=0 "
+                "GROUP BY i.pedido ORDER BY i.pedido DESC",
+                (codigo,),
+            )
+        else:  # OS
+            cur.execute(
+                "SELECT i.os AS doc, MAX(c.nome) AS cliente, MAX(o.data_entrada) AS data, "
+                "       MAX(o.situacao) AS situacao, SUM(i.quant) AS qtd "
+                "FROM os_produto i "
+                "JOIN os o ON o.codigo = i.os "
+                "LEFT JOIN cliente c ON c.codigo = o.cliente "
+                "WHERE i.codigo_interno = %s AND o.situacao IN ('A','F') AND ISNULL(i.item_cancelado,0)=0 "
+                "GROUP BY i.os ORDER BY i.os DESC",
+                (codigo,),
+            )
+        labels = {"A": "Aberta", "F": "Fechada", "PG": "Faturada", "C": "Cancelada"}
+        items = []
+        for r in cur.fetchall():
+            d = r.get("data")
+            sit = (r.get("situacao") or "").strip().upper()
+            items.append({
+                "doc": int(r.get("doc") or 0),
+                "cliente": (r.get("cliente") or "").strip() or "—",
+                "data": d.isoformat() if hasattr(d, "isoformat") else (str(d) if d else None),
+                "situacao": sit,
+                "situacao_label": labels.get(sit, sit or "—"),
+                "qtd": float(r.get("qtd") or 0),
+            })
+        cur.close(); conn.close()
+        return {"success": True, "items": items}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": []}
+
+
+async def reservas_produto(servidor: str, banco: str, codigo: str, tipo: str) -> dict:
+    return await asyncio.to_thread(_reservas_produto_sync, servidor, banco, codigo, tipo)

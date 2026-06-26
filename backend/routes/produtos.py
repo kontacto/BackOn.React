@@ -26,6 +26,11 @@ async def list_produtos_servicos(
     return await produtos_service.list_produtos_servicos(servidor, banco, search, page, size, tipo)
 
 
+@router.get("/produtos/{codigo}/reservas")
+async def produto_reservas(codigo: str, servidor: str, banco: str, tipo: str = "PED"):
+    return await produtos_service.reservas_produto(servidor, banco, codigo, tipo)
+
+
 @router.get("/produtos/foto/{codigo}")
 async def get_produto_foto(codigo: str):
     # Sanitiza pra evitar path traversal

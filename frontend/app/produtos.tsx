@@ -5,6 +5,7 @@ import {
   Image,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -245,6 +246,38 @@ export default function ProdutosScreen() {
     } finally { setSelSaving(false); }
   };
 
+  // --- Reservas do produto (Pedidos Fechados / O.S. Abertas+Fechadas) ---
+  const [resModal, setResModal] = useState<{ item: Item; tipo: "PED" | "OS" } | null>(null);
+  const [resItems, setResItems] = useState<
+    { doc: number; cliente: string; data: string | null; situacao_label: string; qtd: number }[]
+  >([]);
+  const [resLoading, setResLoading] = useState(false);
+
+  const openReservas = useCallback(async (item: Item, tipo: "PED" | "OS") => {
+    if (!conn) return;
+    setResModal({ item, tipo });
+    setResItems([]);
+    setResLoading(true);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const r = await fetch(
+        `${base}/api/produtos/${encodeURIComponent(item.codigo)}/reservas` +
+        `?servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}&tipo=${tipo}`
+      );
+      const j = await r.json();
+      setResItems(j?.success ? (j.items || []) : []);
+    } catch {
+      setResItems([]);
+    } finally {
+      setResLoading(false);
+    }
+  }, [conn]);
+
+  const brDate = (iso: string | null) => {
+    const [y, m, d] = (iso || "").split("-");
+    return d ? `${d}/${m}/${y}` : "—";
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="produtos-screen">
       {!(selecting ? can("PEDIDO.GRAVAR") : can("PRODUTO.ABRIR")) ? (
@@ -387,8 +420,24 @@ export default function ProdutosScreen() {
               </View>
               {item.tipo === "P" ? (
                 <View style={styles.estoqueRow} testID={`estoque-detalhe-${item.codigo}`}>
-                  <Text style={styles.estoqueChip}>Res. Pedido: {item.reservado ?? 0}</Text>
-                  <Text style={styles.estoqueChip}>Res. O.S.: {item.reservado_os ?? 0}</Text>
+                  <Pressable
+                    onPress={() => openReservas(item, "PED")}
+                    hitSlop={6}
+                    style={({ pressed }) => [styles.estoqueChip, styles.estoqueChipBtn, pressed && { opacity: 0.6 }]}
+                    testID={`reservado-pedido-${item.codigo}`}
+                  >
+                    <Text style={styles.estoqueChipText}>Res. Pedido: {item.reservado ?? 0}</Text>
+                    <Ionicons name="chevron-forward" size={11} color={colors.brandPrimary} />
+                  </Pressable>
+                  <Pressable
+                    onPress={() => openReservas(item, "OS")}
+                    hitSlop={6}
+                    style={({ pressed }) => [styles.estoqueChip, styles.estoqueChipBtn, pressed && { opacity: 0.6 }]}
+                    testID={`reservado-os-${item.codigo}`}
+                  >
+                    <Text style={styles.estoqueChipText}>Res. O.S.: {item.reservado_os ?? 0}</Text>
+                    <Ionicons name="chevron-forward" size={11} color={colors.brandPrimary} />
+                  </Pressable>
                   <Text style={[styles.estoqueChip, styles.estoqueChipTotal]}>
                     Total: {item.estoque_total ?? ((item.qtd ?? 0) + (item.reservado ?? 0) + (item.reservado_os ?? 0))}
                   </Text>
@@ -492,6 +541,54 @@ export default function ProdutosScreen() {
                 </Pressable>
               </View>
             ) : null}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Modal: reservas do produto (Pedidos Fechados / O.S. Abertas+Fechadas) */}
+      <Modal visible={!!resModal} transparent animationType="slide" onRequestClose={() => setResModal(null)}>
+        <Pressable style={styles.modalBg} onPress={() => setResModal(null)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {resModal?.tipo === "OS" ? "Reservado para O.S." : "Reservado para Pedido"}
+              </Text>
+              <Pressable onPress={() => setResModal(null)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+            {resModal ? (
+              <Text style={styles.cardSub}>
+                #{resModal.item.codigo} · {resModal.item.descricao}
+              </Text>
+            ) : null}
+            {resLoading ? (
+              <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 24 }} />
+            ) : resItems.length === 0 ? (
+              <Text style={[styles.empty, { marginVertical: 24 }]} testID="reservas-empty">
+                Nenhum documento reservando este produto.
+              </Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 380 }} testID="reservas-list">
+                <View style={styles.resHeadRow}>
+                  <Text style={[styles.resHead, { flex: 1 }]}>{resModal?.tipo === "OS" ? "O.S." : "Pedido"}</Text>
+                  <Text style={[styles.resHead, { flex: 2 }]}>Cliente</Text>
+                  <Text style={[styles.resHead, { flex: 1.1 }]}>Data</Text>
+                  <Text style={[styles.resHead, { flex: 0.8, textAlign: "right" }]}>Qtd</Text>
+                </View>
+                {resItems.map((r) => (
+                  <View key={r.doc} style={styles.resRow} testID={`reserva-doc-${r.doc}`}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.resDoc}>#{r.doc}</Text>
+                      <Text style={styles.resSit}>{r.situacao_label}</Text>
+                    </View>
+                    <Text style={[styles.resCell, { flex: 2 }]} numberOfLines={1}>{r.cliente}</Text>
+                    <Text style={[styles.resCell, { flex: 1.1 }]}>{brDate(r.data)}</Text>
+                    <Text style={[styles.resCell, { flex: 0.8, textAlign: "right", fontWeight: "700" }]}>{r.qtd}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
           </Pressable>
         </Pressable>
       </Modal>
@@ -603,6 +700,17 @@ const styles = StyleSheet.create({
     borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, overflow: "hidden",
   },
   estoqueChipTotal: { color: colors.brandPrimary, fontWeight: "700" },
+  estoqueChipBtn: {
+    flexDirection: "row", alignItems: "center", gap: 2,
+    borderWidth: 1, borderColor: colors.brandPrimary,
+  },
+  estoqueChipText: { fontSize: 10, color: colors.brandPrimary, fontWeight: "600" },
+  resHeadRow: { flexDirection: "row", paddingBottom: 6, borderBottomWidth: 1, borderBottomColor: colors.border, marginTop: 8 },
+  resHead: { fontSize: 11, color: colors.muted, fontWeight: "600", textTransform: "uppercase" },
+  resRow: { flexDirection: "row", alignItems: "center", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
+  resDoc: { fontSize: 13, fontWeight: "700", color: colors.onSurface },
+  resSit: { fontSize: 11, color: colors.brandPrimary, marginTop: 1 },
+  resCell: { fontSize: 12, color: colors.onSurface },
   tipoTag: {
     paddingHorizontal: 8, paddingVertical: 2,
     borderRadius: 4, alignSelf: "flex-start",
