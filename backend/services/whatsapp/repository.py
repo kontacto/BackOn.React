@@ -203,6 +203,59 @@ def list_logs(servidor: str, banco: str, document_type: str, document_id: int) -
         conn.close()
 
 
+def get_document_items(servidor: str, banco: str, doc_type: str, doc_id: int) -> list:
+    """Itens do documento (Pedido ou OS) p/ compor a mensagem.
+    Retorna lista de dicts: {descricao, qtd, valor_unitario, desconto, total}.
+    `desconto` aqui é o desconto TOTAL do item (unitário * quantidade).
+    """
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        if doc_type == "PED":
+            cur.execute(
+                "SELECT i.produto, i.qtd_pedida AS qtd, i.p_venda, i.desconto, "
+                "       i.descricao_produto, pe.descricao AS peca_desc, sv.descricao AS serv_desc "
+                "FROM pedido_venda_prod i "
+                "LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
+                "LEFT JOIN servicos sv ON sv.codigo = i.produto "
+                "WHERE i.pedido = %s AND ISNULL(i.item_cancelado,0) = 0 "
+                "ORDER BY i.codauto",
+                (doc_id,),
+            )
+        else:  # OS
+            cur.execute(
+                "SELECT i.codigo_interno AS produto, i.quant AS qtd, i.p_venda, i.desconto, "
+                "       i.descricao_produto_os AS descricao_produto, "
+                "       pe.descricao AS peca_desc, sv.descricao AS serv_desc "
+                "FROM os_produto i "
+                "LEFT JOIN pecas pe ON pe.codigo_int = i.codigo_interno "
+                "LEFT JOIN servicos sv ON sv.codigo = i.codigo_interno "
+                "WHERE i.os = %s AND ISNULL(i.item_cancelado,0) = 0 "
+                "ORDER BY i.cod_os_prod",
+                (doc_id,),
+            )
+        out = []
+        for r in cur.fetchall():
+            base = (r.get("peca_desc") or r.get("serv_desc") or "").strip()
+            compl = (r.get("descricao_produto") or "").strip()
+            nome = base or compl or (r.get("produto") or "").strip()
+            qtd = float(r.get("qtd") or 0)
+            pv = float(r.get("p_venda") or 0)
+            desc_unit = float(r.get("desconto") or 0)
+            out.append({
+                "descricao": nome,
+                "qtd": qtd,
+                "valor_unitario": pv,
+                "desconto": round(desc_unit * qtd, 2),
+                "total": round(qtd * pv, 2),
+            })
+        cur.close()
+        return out
+    finally:
+        conn.close()
+
+
+
 def get_document_summary(servidor: str, banco: str, doc_type: str, doc_id: int) -> Optional[dict]:
     """Resumo do documento (Pedido ou OS) para montar a mensagem."""
     conn = _open_conn(servidor, banco)
@@ -211,7 +264,8 @@ def get_document_summary(servidor: str, banco: str, doc_type: str, doc_id: int) 
         if doc_type == "PED":
             cur.execute(
                 "SELECT p.pedido AS doc, p.cliente, p.data, p.total, p.situacao, p.obs, "
-                "c.nome AS cliente_nome, c.telefone_cli AS telefone "
+                "c.nome AS cliente_nome, "
+                "LTRIM(RTRIM(ISNULL(CAST(c.ddd_cli AS NVARCHAR(4)),'') + ISNULL(c.telefone_cli,''))) AS telefone "
                 "FROM pedido_venda p LEFT JOIN cliente c ON c.codigo = p.cliente "
                 "WHERE p.pedido = %s",
                 (doc_id,),
@@ -236,7 +290,8 @@ def get_document_summary(servidor: str, banco: str, doc_type: str, doc_id: int) 
             cur.execute(
                 "SELECT o.codigo AS doc, o.cliente, o.data_entrada, o.valor, o.situacao, o.obs, "
                 "o.descricao_cliente, o.resumo, o.placa, o.marca, o.modelo, o.chassi, o.numero_de_serie, "
-                "c.nome AS cliente_nome, c.telefone_cli AS telefone "
+                "c.nome AS cliente_nome, "
+                "LTRIM(RTRIM(ISNULL(CAST(c.ddd_cli AS NVARCHAR(4)),'') + ISNULL(c.telefone_cli,''))) AS telefone "
                 "FROM os o LEFT JOIN cliente c ON c.codigo = o.cliente WHERE o.codigo = %s",
                 (doc_id,),
             )

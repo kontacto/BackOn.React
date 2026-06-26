@@ -79,6 +79,33 @@ def test_build_message_pedido_sem_campos_os():
     assert "R$ 50,50" in msg
 
 
+def test_build_message_inclui_itens_e_descontos():
+    items = [
+        {"descricao": "Coca-Cola", "qtd": 2, "valor_unitario": 8.5, "desconto": 0, "total": 17.0},
+        {"descricao": "Heineken", "qtd": 1, "valor_unitario": 10.8, "desconto": 2.4, "total": 10.8},
+    ]
+    summary = {
+        "doc_type": "PED", "doc_label": "Pedido de Venda", "doc": 5,
+        "cliente_nome": "Ana", "data": "2026-06-01", "total": 27.8,
+        "situacao_label": "Aberto", "obs": "",
+    }
+    msg = build_message(summary, "Loja", "", items)
+    assert "Itens:" in msg
+    assert "• 2x Coca-Cola — R$ 17,00" in msg
+    assert "Descontos aplicados:" in msg
+    assert "Heineken: -R$ 2,40" in msg
+    assert "Total de descontos: -R$ 2,40" in msg
+
+
+def test_template_itens_descontos_vars():
+    items = [{"descricao": "X", "qtd": 1, "valor_unitario": 5, "desconto": 0, "total": 5}]
+    summary = {"doc_type": "PED", "doc_label": "Pedido", "doc": 1, "cliente_nome": "Z",
+               "data": "2026-06-01", "total": 5, "situacao_label": "Aberto", "obs": ""}
+    msg = build_message(summary, "Loja", "Itens:\n{itens}", items)
+    assert "• 1x X — R$ 5,00" in msg
+
+
+
 # ---------- factory / providers ----------
 def test_factory_resolve_providers():
     assert isinstance(build_provider({"provider": "twilio"}), TwilioProvider)

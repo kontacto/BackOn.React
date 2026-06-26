@@ -42,7 +42,42 @@ def is_valid_e164(phone: str) -> bool:
 
 
 # ---------------- Message builder ----------------
-def _template_vars(summary: dict, signature: str) -> dict:
+def _brl(value) -> str:
+    return f"R$ {float(value or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _format_itens(items: Optional[list]) -> str:
+    """Lista de itens no formato '• 2x Coca-Cola — R$ 17,00'."""
+    if not items:
+        return ""
+    linhas = []
+    for it in items:
+        qtd = it.get("qtd") or 0
+        qtd_str = f"{int(qtd)}" if float(qtd).is_integer() else f"{qtd:g}"
+        nome = (it.get("descricao") or "item").strip()
+        linhas.append(f"• {qtd_str}x {nome} — {_brl(it.get('total'))}")
+    return "\n".join(linhas)
+
+
+def _format_descontos(items: Optional[list]) -> str:
+    """Resumo de descontos aplicados por item + total."""
+    if not items:
+        return ""
+    linhas = []
+    total_desc = 0.0
+    for it in items:
+        d = float(it.get("desconto") or 0)
+        if d > 0:
+            total_desc += d
+            nome = (it.get("descricao") or "item").strip()
+            linhas.append(f"• {nome}: -{_brl(d)}")
+    if not linhas:
+        return ""
+    linhas.append(f"Total de descontos: -{_brl(total_desc)}")
+    return "\n".join(linhas)
+
+
+def _template_vars(summary: dict, signature: str, items: Optional[list] = None) -> dict:
     data = summary.get("data")
     data_br = "—"
     if data:
@@ -52,9 +87,11 @@ def _template_vars(summary: dict, signature: str) -> dict:
         except Exception:
             data_br = data
     total = summary.get("total") or 0
-    total_br = f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    total_br = _brl(total)
     nome = summary.get("cliente_nome") or "cliente"
     return {
+        "itens": _format_itens(items),
+        "descontos": _format_descontos(items),
         "cliente": nome,
         "primeiro_nome": nome.split(" ")[0] if nome else "cliente",
         "numero": str(summary.get("doc") or ""),
@@ -82,8 +119,8 @@ def render_template(template: str, variables: dict) -> str:
     return out.strip()
 
 
-def build_message(summary: dict, signature: str, template: Optional[str] = "") -> str:
-    variables = _template_vars(summary, signature)
+def build_message(summary: dict, signature: str, template: Optional[str] = "", items: Optional[list] = None) -> str:
+    variables = _template_vars(summary, signature, items)
     if template and template.strip():
         return render_template(template, variables)
 
@@ -104,11 +141,20 @@ def build_message(summary: dict, signature: str, template: Optional[str] = "") -
             linhas.append(f"Relato do cliente: {summary['descricao_cliente']}")
         if summary.get("resumo"):
             linhas.append(f"Serviço executado: {summary['resumo']}")
+    if variables["itens"]:
+        linhas.append("")
+        linhas.append("Itens:")
+        linhas.append(variables["itens"])
+    if variables["descontos"]:
+        linhas.append("")
+        linhas.append("Descontos aplicados:")
+        linhas.append(variables["descontos"])
     if summary.get("obs"):
         linhas.append(f"Obs: {summary['obs']}")
     if summary.get("situacao_label"):
         linhas.append(f"Status: {summary['situacao_label']}")
-    linhas.append(f"Valor: {variables['valor']}")
+    linhas.append("")
+    linhas.append(f"Valor total: {variables['valor']}")
     linhas.append("")
     linhas.append("Qualquer dúvida estamos à disposição.")
     linhas.append("")
@@ -130,7 +176,8 @@ def _preview_sync(servidor: str, banco: str, doc_type: str, doc_id: int) -> dict
         return {"success": False, "message": "Documento não encontrado."}
     cfg = repo.get_config_raw(servidor, banco)
     phone = normalize_phone(summary.get("telefone"))
-    message = build_message(summary, cfg.get("signature") or "", cfg.get("message_template") or "")
+    items = repo.get_document_items(servidor, banco, doc_type, doc_id)
+    message = build_message(summary, cfg.get("signature") or "", cfg.get("message_template") or "", items)
     return {
         "success": True,
         "cliente_nome": summary.get("cliente_nome"),
@@ -166,7 +213,10 @@ def _send_sync(servidor: str, banco: str, doc_type: str, doc_id: int,
     if not is_valid_e164(phone):
         return {"success": False, "message": "Cliente sem celular válido (formato E.164)."}
 
-    message = sanitize_text(override_message) or build_message(summary, cfg.get("signature") or "", cfg.get("message_template") or "")
+    message = sanitize_text(override_message) or build_message(
+        summary, cfg.get("signature") or "", cfg.get("message_template") or "",
+        repo.get_document_items(servidor, banco, doc_type, doc_id),
+    )
 
     # envio com retry em falhas transitórias + observabilidade (duração)
     started = time.time()

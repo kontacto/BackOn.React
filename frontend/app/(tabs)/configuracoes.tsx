@@ -141,13 +141,15 @@ export default function ConfiguracoesScreen() {
                   testID="config-modulos"
                 />
               ) : null}
-              <Item
-                icon="logo-whatsapp"
-                label="WhatsApp"
-                hint="Configurar envio de Pedidos e OS por WhatsApp"
-                onPress={() => router.push("/whatsapp-config")}
-                testID="config-whatsapp"
-              />
+              {isKontacto ? (
+                <Item
+                  icon="logo-whatsapp"
+                  label="WhatsApp"
+                  hint="Configurar envio de Pedidos e OS por WhatsApp"
+                  onPress={() => router.push("/whatsapp-config")}
+                  testID="config-whatsapp"
+                />
+              ) : null}
             </View>
           </>
         ) : null}

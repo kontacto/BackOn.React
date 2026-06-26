@@ -269,6 +269,9 @@ export default function WhatsappConfigScreen() {
               {"{cliente}, {primeiro_nome}, {numero}, {tipo}, {data}, {valor}, {status}, {assinatura}"}
             </Text>
             <Text style={styles.varsText}>
+              {"Itens/descontos: {itens}, {descontos}"}
+            </Text>
+            <Text style={styles.varsText}>
               {"OS: {veiculo}, {serie}, {relato}, {servico_executado}, {obs}"}
             </Text>
           </View>
