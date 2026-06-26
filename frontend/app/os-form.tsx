@@ -110,6 +110,11 @@ export default function OSFormScreen() {
 
   const [areas, setAreas] = useState<{ codigo: number; descricao: string }[]>([]);
   const [funcionarios, setFuncionarios] = useState<{ codigo: number; nome: string; nome_guerra: string }[]>([]);
+  const [userFuncao, setUserFuncao] = useState<number | null>(null);
+  const [marcasList, setMarcasList] = useState<{ codigo: string; descricao: string }[]>([]);
+  const [modelosList, setModelosList] = useState<{ codigo: string; descricao: string }[]>([]);
+  // Atendente só pode ser trocado por funcao 1/2 ou KONTACTO (master).
+  const canChangeAtendente = isMaster || userFuncao === 1 || userFuncao === 2;
 
   // itens
   const [itens, setItens] = useState<OSItem[]>([]);
@@ -151,12 +156,16 @@ export default function OSFormScreen() {
       const func = (s?.funcionario as Record<string, unknown> | null) || null;
       const fid = func?.codigo_int ?? func?.codigo;
       setWaUserId(fid != null ? parseInt(String(fid), 10) : null);
+      const fnc = func?.funcao;
+      setUserFuncao(fnc != null ? parseInt(String(fnc), 10) : null);
+      if (!editing && fid != null) setAtendente(parseInt(String(fid), 10));
       setWaCompany(s?.empresa ?? null);
       if (c) {
         try {
-          const [ra, rf] = await Promise.all([
+          const [ra, rf, rm] = await Promise.all([
             apiGet(c, `/api/area-atuacao`).catch(() => null),
             apiGet(c, `/api/funcionarios`).catch(() => null),
+            apiGet(c, `/api/tabelas/marcas`, { marca_produto: "false" }).catch(() => null),
           ]);
           if (ra?.success) {
             const arr = ra.items || [];
@@ -164,6 +173,7 @@ export default function OSFormScreen() {
             if (arr.length === 1) setAreaAtuacao((prev) => (prev == null ? arr[0].codigo : prev));
           }
           if (rf?.success) setFuncionarios(rf.items || []);
+          if (rm?.success) setMarcasList(rm.items || []);
         } catch {
           // silencioso
         }
@@ -175,6 +185,14 @@ export default function OSFormScreen() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Carrega modelos da marca selecionada (na O.S.).
+  useEffect(() => {
+    if (!conn || !marca) { setModelosList([]); return; }
+    apiGet(conn, `/api/tabelas/modelos`, { cod_marca: marca })
+      .then((j) => setModelosList(j?.success ? j.items || [] : []))
+      .catch(() => setModelosList([]));
+  }, [conn, marca]);
 
   const loadOS = async (c: Connection, id: number) => {
     try {
@@ -259,6 +277,7 @@ export default function OSFormScreen() {
   const handleSaveHeader = async () => {
     if (!conn) return;
     if (!cliente) { showToast("Selecione um cliente.", "error"); return; }
+    if (atendente == null) { showToast("A O.S. precisa de um atendente.", "error"); return; }
     setSaving(true);
     try {
       const isOficina = moduleOn("Oficina");
@@ -543,7 +562,7 @@ export default function OSFormScreen() {
                 options={funcOptions}
                 placeholder="Atendente"
                 modalTitle="Selecionar Atendente"
-                allowClear
+                disabled={!canChangeAtendente}
                 testID="os-form-atendente"
               />
             </View>
@@ -551,12 +570,12 @@ export default function OSFormScreen() {
               <Text style={styles.sectionTitle}>Situação</Text>
               <SelectField
                 value={situacao}
-                onChange={(v) => setSituacao(v == null ? "A" : String(v))}
+                onChange={(v) => { if (String(v) === "F") handleFecharOS(); }}
                 options={situacaoOptions}
                 placeholder="Situação"
                 modalTitle="Situação da O.S."
                 searchable={false}
-                disabled
+                disabled={situacao !== "A"}
                 testID="os-form-situacao"
               />
             </View>
@@ -949,11 +968,26 @@ export default function OSFormScreen() {
               <View style={styles.fieldRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.fieldLabel}>Marca</Text>
-                  <TextInput value={marca} onChangeText={setMarca} maxLength={3} placeholder="Marca" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-marca" />
+                  <SelectField
+                    value={marca || null}
+                    onChange={(v) => { setMarca(v == null ? "" : String(v)); setModelo(""); }}
+                    options={marcasList.map((m) => ({ value: m.codigo, label: m.descricao }))}
+                    placeholder="Selecione a marca"
+                    modalTitle="Marca do veículo"
+                    testID="os-form-marca"
+                  />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.fieldLabel}>Modelo</Text>
-                  <TextInput value={modelo} onChangeText={setModelo} maxLength={3} placeholder="Modelo" placeholderTextColor={colors.muted} style={styles.input} testID="os-form-modelo" />
+                  <SelectField
+                    value={modelo || null}
+                    onChange={(v) => setModelo(v == null ? "" : String(v))}
+                    options={modelosList.map((m) => ({ value: m.codigo, label: m.descricao }))}
+                    placeholder={marca ? "Selecione o modelo" : "Escolha a marca primeiro"}
+                    modalTitle="Modelo do veículo"
+                    disabled={!marca}
+                    testID="os-form-modelo"
+                  />
                 </View>
               </View>
               <View style={styles.fieldRow}>

@@ -84,6 +84,8 @@ CATALOGO = [
     _menu("CADASTROS", "Cadastros", [
         _tela("CLIENTE", "Clientes"),
         _tela("PRODUTO", "Produtos & Serviços"),
+        _tela("MARCAS", "Tabelas Aux. · Marcas"),
+        _tela("MODELOS", "Tabelas Aux. · Modelos"),
     ]),
     _menu("MOVIMENTO", "Movimento", [
         _tela("PEDIDO", "Pedidos", ACOES_PEDIDO),

@@ -46,6 +46,14 @@ export default function CadastrosScreen() {
         route: "/produtos?tipo=S",
         visible: can("PRODUTO.ABRIR") && moduleOn("servicos"),
       },
+      {
+        key: "tabelas-aux",
+        label: "Tabelas Auxiliares",
+        hint: "Marcas e Modelos",
+        icon: "list-outline",
+        route: "/tabelas-auxiliares",
+        visible: can("MARCAS.ABRIR") || can("MODELOS.ABRIR"),
+      },
     ],
     [can, moduleOn]
   );
