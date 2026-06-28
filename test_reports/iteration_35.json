@@ -1,0 +1,41 @@
+{
+  "summary": "Iter 35 — frontend only (mobile 390x844, web preview): VALIDEI a integração de Login por Biometria e a NÃO-REGRESSÃO do login por SENHA após o refactor da função compartilhada applySession(). Todos os 4 cenários do request PASSARAM. (1) REGRESSÃO LOGIN POR SENHA: criei conexão Teste→gibanweb→BDREACTAPP→api preview, abri /login, selecionei a empresa, KONTACTO/$KONT2011, cliquei Entrar — navegou para /principal e o cabeçalho mostra 'KONTACTO Sistemas / @KONTACTO / Grupo: Master / Bem-vindo à Teste' (login-error não apareceu; URL final = /principal; principal-screen visível). (2) Tela /connections: novo Switch [data-testid=connection-biometria-switch] LIGADO foi persistido — localStorage @back_on/connections contém `\"permitirBiometria\":true`; ao reabrir a conexão em edit, o switch continua ligado (visualmente azul na screenshot de connection-editor-sheet). (3) Tela /login renderiza sem erros (login-screen visível) e o botão BiometricButton NÃO aparece no web (canBiometricLogin=false porque BiometricService.hasHardware=false em web) — comportamento esperado conforme request. (4) Tela /(tabs)/configuracoes carrega normalmente (configuracoes-screen visível, item config-logout presente) e a opção 'Desativar Login por Biometria' (config-disable-biometria) NÃO aparece — esperado pois secureStorageService.hasCredentials() retorna false no web. Observação técnica: o console mostra repetidamente `[biometria] SecureStorage.get error TypeError: ExpoSecureStore.default.getValueWithKeyAsync is not a function` — isso vem de expo-secure-store que não tem implementação completa para web; o SecureStorageService trata o erro graciosamente (devLog + return null) então a UI não quebra, mas há ruído no console. Avisos legacy persistem do iter33/34: shadow*/pointerEvents deprecated (não bloqueantes).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "expo-secure-store (web)",
+        "issue": "Console error ruidoso (não bloqueante): 'ExpoSecureStore.default.getValueWithKeyAsync is not a function' disparado a cada checagem em /configuracoes e /login. SecureStorageService.getCredentials já captura e devLog'a, então a UI não quebra; mas o erro aparece como CONSOLE[log] (e não warn) toda vez que useBiometricLogin.refresh() ou configuracoes.useFocusEffect rodam. Reference: /app/frontend/src/services/SecureStorageService.ts (método getCredentials e hasCredentials)."
+      },
+      {
+        "component": "shadow* style props",
+        "issue": "Warning persistente '\"shadow*\" style props are deprecated. Use \"boxShadow\"' (legado; já reportado em iters anteriores)."
+      },
+      {
+        "component": "props.pointerEvents",
+        "issue": "Warning 'props.pointerEvents is deprecated. Use style.pointerEvents' (legado)."
+      }
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "(Baixa prioridade) Em SecureStorageService.ts, fazer um guard adicional para Platform.OS === 'web' nos métodos get/has/save/delete (retornar null/false direto sem chamar SecureStore) — assim o console fica limpo sem precisar de try/catch no caminho feliz.",
+    "(Baixa prioridade) Substituir shadow*/pointerEvents legacy por boxShadow/style.pointerEvents."
+  ],
+  "critical_code_review_comments": [
+    "OK: login.tsx aplica applySession(data, selected) tanto no fluxo de senha (handleSubmit, linha 174) quanto no biométrico (handleBiometricLogin, linha 223). A função reaproveita setSession + reloadPermissions corretamente — não há regressão.",
+    "OK: connections.tsx persiste o campo permitirBiometria via updateConnection/addConnection (linhas 127/129) e o storage layer (connections.ts) já tem migração backward-compatible (linha 34 — `c.permitirBiometria ?? false`) para conexões antigas.",
+    "OK: useBiometricLogin.canBiometricLogin = enabledByConfig && support.supported && hasStored. No web, support.supported=false (BiometricService.getSupport retorna hasHardware=false), então o botão biométrico nunca aparece — comportamento esperado e validado.",
+    "OK: configuracoes.tsx só renderiza o item 'Desativar Login por Biometria' quando hasBio=true (linha 190), que vem de secureStorageService.hasCredentials. Como expo-secure-store falha em web, hasBio=false e o item é ocultado corretamente."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "N/A (não testado)", "frontend": "100% (4/4 cenários do request)" },
+  "seed_data_creation": "Criada 1 conexão no localStorage do navegador de teste: empresa=Teste, servidor=gibanweb.database.windows.net, banco=BDREACTAPP, api=https://order-crud-discounts.preview.emergentagent.com, permitirBiometria=true. Persistida em @back_on/connections (AsyncStorage→localStorage no web). Não impacta produção.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "A integração da Biometria está estável no web (fluxos nativos não são testáveis aqui). Para validar realmente FaceID/digital + ativação/desativação é necessário build nativo (Expo Go ou EAS). O switch 'Permitir Login por Biometria' em /connections persiste corretamente como booleano no AsyncStorage. Login KONTACTO/$KONT2011 segue funcionando após o refactor de applySession.",
+  "rca_of_issue": "Nenhum bug encontrado. Apenas ruído de console por expo-secure-store em web — opcionalmente E1 pode adicionar guard `Platform.OS === 'web' ? null : ...` em SecureStorageService para silenciar."
+}

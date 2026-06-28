@@ -1,11 +1,13 @@
 import { useCallback, useState } from "react";
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { Session, clearSession, getSession } from "@/src/utils/storage/session";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import { secureStorageService } from "@/src/services/SecureStorageService";
+import { connId } from "@/src/services/types";
 
 function pickFirst(obj: Record<string, unknown> | undefined | null, keys: string[]): string | null {
   if (!obj) return null;
@@ -19,12 +21,43 @@ function pickFirst(obj: Record<string, unknown> | undefined | null, keys: string
 export default function ConfiguracoesScreen() {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
+  const [hasBio, setHasBio] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
-      (async () => setSession(await getSession()))();
+      (async () => {
+        const s = await getSession();
+        setSession(s);
+        if (s?.empresa && s?.database) {
+          setHasBio(await secureStorageService.hasCredentials(connId(s.empresa, s.database)));
+        } else {
+          setHasBio(false);
+        }
+      })();
     }, [])
   );
+
+  const handleDisableBio = () => {
+    Alert.alert(
+      "Desativar biometria",
+      "Deseja remover o login por biometria deste dispositivo?",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Desativar",
+          style: "destructive",
+          onPress: async () => {
+            if (session?.empresa && session?.database) {
+              await secureStorageService.deleteCredentials(
+                connId(session.empresa, session.database)
+              );
+            }
+            setHasBio(false);
+          },
+        },
+      ]
+    );
+  };
 
   const displayName =
     pickFirst(session?.funcionario, ["nome", "nome_guerra"]) ||
@@ -150,6 +183,21 @@ export default function ConfiguracoesScreen() {
                   testID="config-whatsapp"
                 />
               ) : null}
+            </View>
+          </>
+        ) : null}
+
+        {hasBio ? (
+          <>
+            <Text style={styles.sectionTitle}>Segurança</Text>
+            <View style={styles.group}>
+              <Item
+                icon="finger-print-outline"
+                label="Desativar Login por Biometria"
+                hint="Remover digital/Face ID deste dispositivo"
+                onPress={handleDisableBio}
+                testID="config-disable-biometria"
+              />
             </View>
           </>
         ) : null}

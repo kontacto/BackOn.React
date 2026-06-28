@@ -9,6 +9,7 @@ export type Connection = {
   banco: string;
   api: string;
   logo: string;
+  permitirBiometria: boolean;
   createdAt: string;
 };
 
@@ -30,6 +31,7 @@ export async function listConnections(): Promise<Connection[]> {
       banco: c.banco ?? "",
       api: c.api ?? "",
       logo: c.logo ?? "",
+      permitirBiometria: c.permitirBiometria ?? false,
       createdAt: c.createdAt ?? new Date().toISOString(),
     }));
   } catch {
@@ -47,6 +49,7 @@ export async function addConnection(input: {
   banco: string;
   api: string;
   logo: string;
+  permitirBiometria?: boolean;
 }): Promise<Connection> {
   const items = await listConnections();
   const conn: Connection = {
@@ -56,6 +59,7 @@ export async function addConnection(input: {
     banco: input.banco.trim(),
     api: input.api.trim(),
     logo: input.logo.trim(),
+    permitirBiometria: !!input.permitirBiometria,
     createdAt: new Date().toISOString(),
   };
   items.push(conn);
@@ -65,7 +69,7 @@ export async function addConnection(input: {
 
 export async function updateConnection(
   id: string,
-  input: { empresa: string; servidor: string; banco: string; api: string; logo: string }
+  input: { empresa: string; servidor: string; banco: string; api: string; logo: string; permitirBiometria?: boolean }
 ): Promise<Connection | null> {
   const items = await listConnections();
   const idx = items.findIndex((c) => c.id === id);
@@ -77,6 +81,7 @@ export async function updateConnection(
     banco: input.banco.trim(),
     api: input.api.trim(),
     logo: input.logo.trim(),
+    permitirBiometria: !!input.permitirBiometria,
   };
   await saveAll(items);
   return items[idx];

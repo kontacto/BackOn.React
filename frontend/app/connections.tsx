@@ -8,6 +8,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -43,6 +44,7 @@ export default function ConnectionsScreen() {
   const [banco, setBanco] = useState("");
   const [api, setApi] = useState("");
   const [logo, setLogo] = useState("");
+  const [permitirBiometria, setPermitirBiometria] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<Connection | null>(null);
@@ -65,6 +67,7 @@ export default function ConnectionsScreen() {
     setBanco("");
     setApi("");
     setLogo("");
+    setPermitirBiometria(false);
     setFormError(null);
     setEditorVisible(true);
   };
@@ -76,6 +79,7 @@ export default function ConnectionsScreen() {
     setBanco(c.banco ?? "");
     setApi(c.api ?? "");
     setLogo(c.logo ?? "");
+    setPermitirBiometria(c.permitirBiometria ?? false);
     setFormError(null);
     setEditorVisible(true);
   };
@@ -88,6 +92,7 @@ export default function ConnectionsScreen() {
     setBanco("");
     setApi("");
     setLogo("");
+    setPermitirBiometria(false);
     setFormError(null);
   };
 
@@ -119,9 +124,9 @@ export default function ConnectionsScreen() {
     setSaving(true);
     try {
       if (editing) {
-        await updateConnection(editing.id, { empresa: e, servidor: s, banco: b, api: a, logo: logo.trim() });
+        await updateConnection(editing.id, { empresa: e, servidor: s, banco: b, api: a, logo: logo.trim(), permitirBiometria });
       } else {
-        await addConnection({ empresa: e, servidor: s, banco: b, api: a, logo: logo.trim() });
+        await addConnection({ empresa: e, servidor: s, banco: b, api: a, logo: logo.trim(), permitirBiometria });
       }
       await reload();
       closeEditor();
@@ -332,6 +337,21 @@ export default function ConnectionsScreen() {
               <Text style={styles.helper}>
                 Link público da logo do cliente (PNG/JPG). Aparece na tela Principal.
               </Text>
+            </View>
+
+            <View style={styles.switchRow}>
+              <View style={{ flex: 1, paddingRight: spacing.md }}>
+                <Text style={styles.label}>Permitir Login por Biometria</Text>
+                <Text style={styles.helper}>
+                  Habilita entrar com digital/Face ID neste dispositivo após o primeiro login.
+                </Text>
+              </View>
+              <Switch
+                value={permitirBiometria}
+                onValueChange={setPermitirBiometria}
+                trackColor={{ false: colors.border, true: colors.brandPrimary }}
+                testID="connection-biometria-switch"
+              />
             </View>
 
             {formError ? (
@@ -576,6 +596,12 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   helper: { marginTop: 6, fontSize: 11, color: colors.muted },
+  switchRow: {
+    marginTop: spacing.lg,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   errorText: { marginTop: spacing.md, color: colors.error, fontSize: 13 },
   sheetActions: {
     flexDirection: "row",

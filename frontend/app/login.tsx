@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -19,6 +19,9 @@ import { Connection, listConnections } from "@/src/utils/storage/connections";
 import { setSession } from "@/src/utils/storage/session";
 import { usePermissions } from "@/src/permissions";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import BiometricButton from "@/src/components/BiometricButton";
+import EnableBiometricModal from "@/src/components/EnableBiometricModal";
+import { useBiometricLogin } from "@/src/hooks/useBiometricLogin";
 
 const GENERIC_AUTH_ERROR = "Usuário ou senha inválidos.";
 
@@ -59,6 +62,33 @@ export default function LoginScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<LoginResult | null>(null);
+  const [showEnable, setShowEnable] = useState(false);
+  const [enabling, setEnabling] = useState(false);
+  const pendingCredsRef = useRef<{ usuario: string; senha: string } | null>(null);
+
+  const {
+    canBiometricLogin,
+    shouldOfferEnable,
+    loginWithBiometrics,
+    enableBiometrics,
+  } = useBiometricLogin(selected);
+
+  // Centraliza a persistência da sessão (reaproveitada pelo login por senha e por biometria).
+  const applySession = useCallback(
+    async (data: LoginResult, conn: Connection) => {
+      await setSession({
+        empresa: data.empresa || conn.empresa,
+        server: data.server || conn.servidor,
+        database: data.database || conn.banco,
+        logo: conn.logo || "",
+        usuario: data.usuario ?? null,
+        funcionario: data.funcionario ?? null,
+        loggedAt: new Date().toISOString(),
+      });
+      await reloadPermissions();
+    },
+    [reloadPermissions]
+  );
 
   const reload = useCallback(async () => {
     const items = await listConnections();
@@ -141,18 +171,15 @@ export default function LoginScreen() {
         return;
       }
       if (data.success) {
-        await setSession({
-          empresa: data.empresa || selected.empresa,
-          server: data.server || selected.servidor,
-          database: data.database || selected.banco,
-          logo: selected.logo || "",
-          usuario: data.usuario ?? null,
-          funcionario: data.funcionario ?? null,
-          loggedAt: new Date().toISOString(),
-        });
-        setSenha("");
-        await reloadPermissions();
-        router.replace("/principal");
+        await applySession(data, selected);
+        if (shouldOfferEnable) {
+          // Oferece ativar a biometria para os próximos logins neste dispositivo.
+          pendingCredsRef.current = { usuario: usuario.trim(), senha };
+          setShowEnable(true);
+        } else {
+          setSenha("");
+          router.replace("/principal");
+        }
       } else {
         setErrorDetails(data);
         if (data.message === GENERIC_AUTH_ERROR) {
@@ -182,6 +209,47 @@ export default function LoginScreen() {
       }
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleBiometricLogin = async () => {
+    if (!selected) return;
+    setError(null);
+    setErrorDetails(null);
+    setSubmitting(true);
+    try {
+      const res = await loginWithBiometrics();
+      if (res.ok && res.data) {
+        await applySession(res.data as LoginResult, selected);
+        setSenha("");
+        router.replace("/principal");
+      } else if (res.message) {
+        setError(res.message);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const finishAndGo = () => {
+    setShowEnable(false);
+    pendingCredsRef.current = null;
+    setSenha("");
+    router.replace("/principal");
+  };
+
+  const handleEnableAccept = async () => {
+    const creds = pendingCredsRef.current;
+    if (!creds) {
+      finishAndGo();
+      return;
+    }
+    setEnabling(true);
+    try {
+      await enableBiometrics(creds);
+    } finally {
+      setEnabling(false);
+      finishAndGo();
     }
   };
 
@@ -364,6 +432,9 @@ export default function LoginScreen() {
               <Text style={styles.primaryBtnText}>Entrar</Text>
             )}
           </Pressable>
+          {canBiometricLogin ? (
+            <BiometricButton onPress={handleBiometricLogin} busy={submitting} />
+          ) : null}
         </View>
       </KeyboardAvoidingView>
 
@@ -420,6 +491,13 @@ export default function LoginScreen() {
           </Pressable>
         </View>
       </Modal>
+
+      <EnableBiometricModal
+        visible={showEnable}
+        busy={enabling}
+        onAccept={handleEnableAccept}
+        onDecline={finishAndGo}
+      />
     </SafeAreaView>
   );
 }
