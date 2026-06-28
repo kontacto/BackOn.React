@@ -164,12 +164,17 @@ export default function ProdutosScreen() {
     load(search, next, tipo, true);
   };
 
-  // Tipo da rota da foto — codigo é string (nvarchar). URL-encode pra segurança.
-  const fotoUrl = useCallback(
-    (item: Item): string | null => {
-      if (!conn) return null;
-      if (item.tipo === "S") return null;
-      return `${conn.api.replace(/\/+$/, "")}/api/produtos/foto/${encodeURIComponent(item.codigo)}`;
+  // Imagens dos produtos vêm da URL configurada na conexão (campo "Imagens Produtos").
+  // Nome do arquivo = pecas.codigo_int (que é o item.codigo para produtos).
+  // Tenta extensões em ordem (jpg → jpeg → png → webp); se nenhuma existir, cai no ícone.
+  // Quando a URL não está configurada, retorna [] (ícone padrão direto, sem chamar backend).
+  const fotoUrls = useCallback(
+    (item: Item): string[] => {
+      if (!conn || item.tipo === "S") return [];
+      const base = (conn.imagensUrl || "").trim().replace(/\/+$/, "");
+      if (!base) return [];
+      const cod = encodeURIComponent(item.codigo);
+      return ["jpg", "jpeg", "png", "webp"].map((ext) => `${base}/${cod}.${ext}`);
     },
     [conn]
   );
@@ -377,7 +382,7 @@ export default function ProdutosScreen() {
             testID={`item-${item.tipo}-${item.codigo}`}
           >
             {item.tipo === "P" ? (
-              <ProdutoFoto url={fotoUrl(item)} />
+              <ProdutoFoto urls={fotoUrls(item)} />
             ) : (
               <View style={[styles.thumb, styles.thumbServico]}>
                 <Ionicons name="construct-outline" size={26} color={colors.brandPrimary} />
@@ -604,13 +609,16 @@ export default function ProdutosScreen() {
   );
 }
 
-// Foto do produto com fallback (placeholder com ícone quando o endpoint retorna 204).
-function ProdutoFoto({ url }: { url: string | null }) {
-  const [erro, setErro] = useState(false);
+// Foto do produto: tenta as URLs em ordem (extensões diferentes). Se todas falharem
+// (ou a lista vier vazia, quando não há URL configurada), mostra o ícone padrão.
+function ProdutoFoto({ urls }: { urls: string[] }) {
+  const [idx, setIdx] = useState(0);
+  const key = urls.join("|");
   useEffect(() => {
-    setErro(false);
-  }, [url]);
-  if (!url || erro) {
+    setIdx(0);
+  }, [key]);
+  const current = urls[idx];
+  if (!current) {
     return (
       <View style={[styles.thumb, styles.thumbProduto]}>
         <Ionicons name="cube-outline" size={26} color={colors.brandPrimary} />
@@ -619,9 +627,9 @@ function ProdutoFoto({ url }: { url: string | null }) {
   }
   return (
     <Image
-      source={{ uri: url }}
+      source={{ uri: current }}
       style={styles.thumb}
-      onError={() => setErro(true)}
+      onError={() => setIdx((i) => i + 1)}
       resizeMode="cover"
     />
   );

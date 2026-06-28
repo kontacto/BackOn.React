@@ -44,6 +44,7 @@ export default function ConnectionsScreen() {
   const [banco, setBanco] = useState("");
   const [api, setApi] = useState("");
   const [logo, setLogo] = useState("");
+  const [imagensUrl, setImagensUrl] = useState("");
   const [permitirBiometria, setPermitirBiometria] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -67,6 +68,7 @@ export default function ConnectionsScreen() {
     setBanco("");
     setApi("");
     setLogo("");
+    setImagensUrl("");
     setPermitirBiometria(false);
     setFormError(null);
     setEditorVisible(true);
@@ -79,6 +81,7 @@ export default function ConnectionsScreen() {
     setBanco(c.banco ?? "");
     setApi(c.api ?? "");
     setLogo(c.logo ?? "");
+    setImagensUrl(c.imagensUrl ?? "");
     setPermitirBiometria(c.permitirBiometria ?? false);
     setFormError(null);
     setEditorVisible(true);
@@ -92,6 +95,7 @@ export default function ConnectionsScreen() {
     setBanco("");
     setApi("");
     setLogo("");
+    setImagensUrl("");
     setPermitirBiometria(false);
     setFormError(null);
   };
@@ -124,9 +128,9 @@ export default function ConnectionsScreen() {
     setSaving(true);
     try {
       if (editing) {
-        await updateConnection(editing.id, { empresa: e, servidor: s, banco: b, api: a, logo: logo.trim(), permitirBiometria });
+        await updateConnection(editing.id, { empresa: e, servidor: s, banco: b, api: a, logo: logo.trim(), imagensUrl: imagensUrl.trim(), permitirBiometria });
       } else {
-        await addConnection({ empresa: e, servidor: s, banco: b, api: a, logo: logo.trim(), permitirBiometria });
+        await addConnection({ empresa: e, servidor: s, banco: b, api: a, logo: logo.trim(), imagensUrl: imagensUrl.trim(), permitirBiometria });
       }
       await reload();
       closeEditor();
@@ -336,6 +340,25 @@ export default function ConnectionsScreen() {
               />
               <Text style={styles.helper}>
                 Link público da logo do cliente (PNG/JPG). Aparece na tela Principal.
+              </Text>
+            </View>
+
+            <View style={{ marginTop: spacing.lg }}>
+              <Text style={styles.label}>Imagens Produtos (URL opcional)</Text>
+              <TextInput
+                value={imagensUrl}
+                onChangeText={setImagensUrl}
+                placeholder="Ex: https://cdn.cliente.com/produtos"
+                placeholderTextColor={colors.muted}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                style={styles.input}
+                testID="connection-imagens-input"
+              />
+              <Text style={styles.helper}>
+                Local onde ficam as imagens dos produtos. O arquivo deve ter o nome do código do produto
+                (ex: 1234.jpg ou 1234.png). Usado para exibir as fotos na lista de produtos.
               </Text>
             </View>
 
