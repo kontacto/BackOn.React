@@ -47,7 +47,7 @@ def test_agregar_item_e_dav_nao_operacional():
         _row(doc=10, qtd=2, liquido=50, custo=30),   # venda=100 custo=60 lucro=40
         _row(doc=10, qtd=1, liquido=200, custo=100),  # venda=200 custo=100 lucro=100
     ]
-    davs, venda, custo = svc._agregar(rows, operacional=False)
+    davs, venda, custo, _desc = svc._agregar(rows, operacional=False)
     assert len(davs) == 1
     dav = davs[0]
     assert dav["total_venda"] == 300.0
@@ -63,7 +63,7 @@ def test_agregar_item_e_dav_nao_operacional():
 def test_agregar_os_item_nao_cobrado_zera_venda_mas_mantem_custo():
     # situacao_item > 0 => venda zerada, custo continua (regra legada)
     rows = [_row(tipo="OS", doc=5, situacao_item=2, qtd=3, liquido=80, custo=20)]
-    davs, venda, custo = svc._agregar(rows, operacional=False)
+    davs, venda, custo, _desc = svc._agregar(rows, operacional=False)
     item = davs[0]["itens"][0]
     assert item["total_venda"] == 0.0
     assert item["total_custo"] == 60.0  # 3 * 20
@@ -76,7 +76,7 @@ def test_agregar_separa_davs_por_tipo_e_doc():
         _row(tipo="OS", doc=1, qtd=1, liquido=20, custo=5),
         _row(tipo="PED", doc=1, qtd=1, liquido=10, custo=5),
     ]
-    davs, _, _ = svc._agregar(rows, operacional=False)
+    davs, _, _, _ = svc._agregar(rows, operacional=False)
     # PED-1 (2 itens) e OS-1 (1 item) => 2 DAVs
     assert len(davs) == 2
 
@@ -84,7 +84,7 @@ def test_agregar_separa_davs_por_tipo_e_doc():
 def test_agregar_itens_aparecem_em_resultado_operacional():
     # Bug legado: itens sumiam quando operacional=True. Aqui devem aparecer.
     rows = [_row(qtd=1, liquido=100, custo=50)]
-    davs, _, _ = svc._agregar(rows, operacional=True)
+    davs, _, _, _ = svc._agregar(rows, operacional=True)
     assert len(davs[0]["itens"]) == 1
     assert davs[0]["itens"][0]["margem_pct"] == 100.0  # (100-50)/50*100
 

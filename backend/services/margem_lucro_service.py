@@ -233,7 +233,7 @@ def _montar_query(f: dict) -> tuple[str, list]:
 def _agregar(rows: list, operacional: bool) -> tuple[list, float, float]:
     """Agrega linhas de itens em DAVs (pura, testável). Retorna (davs, venda, custo)."""
     davs: dict = {}
-    emp_venda = emp_custo = 0.0
+    emp_venda = emp_custo = emp_desconto = 0.0
     for r in rows:
         situ = int(r.get("situacao_item") or 0)
         qtd = float(r.get("qtd") or 0)
@@ -248,6 +248,7 @@ def _agregar(rows: list, operacional: bool) -> tuple[list, float, float]:
             liquido = float(r.get("liquido") or 0)
         tot_venda = round(qtd * liquido, 2)
         tot_custo = round(qtd * custo_unit, 2)
+        desc_line = round(desconto * qtd, 2)
         lucro = round(tot_venda - tot_custo, 2)
 
         tipo = (r.get("tipo") or "").strip()
@@ -261,7 +262,7 @@ def _agregar(rows: list, operacional: bool) -> tuple[list, float, float]:
             dav = {
                 "tipo": tipo, "codigo": doc, "data": data_str,
                 "cliente": (r.get("cliente_nome") or "").strip(),
-                "itens": [], "total_venda": 0.0, "total_custo": 0.0,
+                "itens": [], "total_venda": 0.0, "total_custo": 0.0, "total_desconto": 0.0,
             }
             davs[key] = dav
         dav["itens"].append({
@@ -280,8 +281,10 @@ def _agregar(rows: list, operacional: bool) -> tuple[list, float, float]:
         })
         dav["total_venda"] += tot_venda
         dav["total_custo"] += tot_custo
+        dav["total_desconto"] += desc_line
         emp_venda += tot_venda
         emp_custo += tot_custo
+        emp_desconto += desc_line
 
     dav_list = []
     for dav in davs.values():
@@ -290,7 +293,7 @@ def _agregar(rows: list, operacional: bool) -> tuple[list, float, float]:
         dav["lucro"] = round(dav["total_venda"] - dav["total_custo"], 2)
         dav["margem_pct"] = _margem_pct(dav["total_venda"], dav["total_custo"], operacional)
         dav_list.append(dav)
-    return dav_list, round(emp_venda, 2), round(emp_custo, 2)
+    return dav_list, round(emp_venda, 2), round(emp_custo, 2), round(emp_desconto, 2)
 
 
 def _consultar_empresa_sync(empresa: str, servidor: str, banco: str, f: dict) -> dict:
@@ -317,7 +320,7 @@ def _consultar_empresa_sync(empresa: str, servidor: str, banco: str, f: dict) ->
             pass
         return {**base, "success": False, "message": f"Erro na consulta: {e}", "davs": []}
 
-    dav_list, emp_venda, emp_custo = _agregar(rows, operacional)
+    dav_list, emp_venda, emp_custo, emp_desconto = _agregar(rows, operacional)
     # Limita o volume de detalhe enviado ao app (os totais permanecem completos).
     # Mantém os DAVs mais recentes primeiro.
     dav_list.sort(key=lambda d: d.get("data") or "", reverse=True)
@@ -327,7 +330,7 @@ def _consultar_empresa_sync(empresa: str, servidor: str, banco: str, f: dict) ->
         dav_list = dav_list[:MAX_DAVS_DETALHE]
     return {
         **base, "success": True, "davs": dav_list,
-        "total_venda": emp_venda, "total_custo": emp_custo,
+        "total_venda": emp_venda, "total_custo": emp_custo, "total_desconto": emp_desconto,
         "lucro": round(emp_venda - emp_custo, 2),
         "margem_pct": _margem_pct(emp_venda, emp_custo, operacional),
         "qtd_davs": qtd_total,
@@ -353,12 +356,13 @@ async def margem_lucro(conexoes: list[dict], f: dict) -> dict:
     ])
 
     operacional = bool(f.get("resultado_operacional"))
-    tot_venda = tot_custo = 0.0
+    tot_venda = tot_custo = tot_desconto = 0.0
     qtd_davs = 0
     for emp in resultados:
         if emp.get("success"):
             tot_venda += emp.get("total_venda", 0.0)
             tot_custo += emp.get("total_custo", 0.0)
+            tot_desconto += emp.get("total_desconto", 0.0)
             qtd_davs += emp.get("qtd_davs", 0)
 
     tot_venda = round(tot_venda, 2)
@@ -366,6 +370,7 @@ async def margem_lucro(conexoes: list[dict], f: dict) -> dict:
     consolidado = {
         "total_venda": tot_venda,
         "total_custo": tot_custo,
+        "desconto": round(tot_desconto, 2),
         "lucro": round(tot_venda - tot_custo, 2),
         "margem_pct": _margem_pct(tot_venda, tot_custo, operacional),
         "qtd_davs": qtd_davs,

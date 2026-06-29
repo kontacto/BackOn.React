@@ -18,7 +18,7 @@ export type MLEmpresa = {
   qtd_davs?: number; davs?: MLDav[]; truncated?: boolean; davs_exibidos?: number;
 };
 export type MLConsolidado = {
-  total_venda: number; total_custo: number; lucro: number; margem_pct: number;
+  total_venda: number; total_custo: number; desconto: number; lucro: number; margem_pct: number;
   qtd_davs: number; qtd_empresas: number;
 };
 export type MLPayload = {
@@ -108,6 +108,7 @@ function buildHtml(p: MLPayload): string {
     <div class="totais">
       <div class="tot"><div class="lbl">DAVs</div><div class="val">${c.qtd_davs}</div></div>
       <div class="tot"><div class="lbl">Total Vendas</div><div class="val">${brl(c.total_venda)}</div></div>
+      <div class="tot"><div class="lbl">Descontos</div><div class="val">${brl(c.desconto)}</div></div>
       <div class="tot"><div class="lbl">Total Custos</div><div class="val">${brl(c.total_custo)}</div></div>
       <div class="tot"><div class="lbl">Lucro</div><div class="val">${brl(c.lucro)}</div></div>
       <div class="tot"><div class="lbl">Margem %</div><div class="val">${c.margem_pct}%</div></div>
