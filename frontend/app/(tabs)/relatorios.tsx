@@ -10,12 +10,19 @@ type ReportTile = {
   label: string;
   desc: string;
   icon: keyof typeof Ionicons.glyphMap;
-  route: "/relatorio-descontos" | "/relatorio-pedidos" | "/relatorio-os" | null;
+  route: "/relatorio-descontos" | "/relatorio-pedidos" | "/relatorio-os" | "/relatorio-margem-lucro" | null;
   perm: string | null;
 };
 
 // Relatórios do grupo "Vendas".
 const VENDAS_REPORTS: ReportTile[] = [
+  {
+    label: "Margem de Lucro",
+    desc: "Faturamento e margem consolidados (multiempresa): Pedidos, O.S. e Comandas, por Empresa → DAV → Itens.",
+    icon: "trending-up-outline",
+    route: "/relatorio-margem-lucro",
+    perm: null,
+  },
   {
     label: "Relatório de Pedidos",
     desc: "Pedidos por período/vendedor/situação. Expanda para ver descontos e margem.",

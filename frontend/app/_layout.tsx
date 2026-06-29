@@ -1,9 +1,14 @@
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { PermissionsProvider } from "@/src/permissions";
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
+});
 
 // Keep the native splash visible from cold start until icon fonts register.
 // Required because @expo/vector-icons' componentDidMount fallback fires
@@ -25,8 +30,10 @@ export default function RootLayout() {
   if (!loaded && !error) return null;
 
   return (
-    <PermissionsProvider>
-      <Stack screenOptions={{ headerShown: false }} />
-    </PermissionsProvider>
+    <QueryClientProvider client={queryClient}>
+      <PermissionsProvider>
+        <Stack screenOptions={{ headerShown: false }} />
+      </PermissionsProvider>
+    </QueryClientProvider>
   );
 }

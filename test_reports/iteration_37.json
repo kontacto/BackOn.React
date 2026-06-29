@@ -1,0 +1,36 @@
+{
+  "summary": "Iter 37 — frontend only (mobile 390x844, web preview). VALIDEI o NOVO relatório 'Margem de Lucro e Faturamento' (multiempresa) que substitui a rotina VB6. TODOS os 6 cenários do request PASSARAM. (1) Aba Relatórios → seção 'VENDAS' agora exibe o NOVO card 'Margem de Lucro' (testID relatorio-Margem de Lucro), com ícone trending-up-outline e a descrição correta. Aparece como 1º item da lista. Confirmado screenshot. (2) Tap no card navega para /relatorio-margem-lucro e a tela margem-lucro-screen renderiza sem erro (URL final correta, header 'Margem de Lucro', botão back, botão share, toggle de filtros). (3) Filtros recolhíveis (ml-toggle-filtros, count=1) — abertos por default. Seletor de Empresas mostra chip 'Teste' (ml-emp-test-conn-1, count=1) JÁ SELECIONADO por padrão, conforme spec do useFocusEffect (linhas 80-91 do relatorio-margem-lucro.tsx). (4) TODOS os 20 testIDs de filtro renderizados: ml-data-ini, ml-data-fim, ml-f-pedidos, ml-f-os, ml-f-comandas, ml-i-prod, ml-i-serv, ml-s-aberto, ml-s-fechado, ml-s-faturado, ml-o-oper, ml-o-gar, ml-o-vd, ml-o-nc, ml-cliente, ml-area, ml-nivel, ml-dav, ml-gerar, ml-export (cada um count=1). Datas defaults isoDaysAgo(30) / hoje renderizadas como '30/05/2026' e '29/06/2026'. (5) Tap em 'Gerar Relatório' (ml-gerar) disparou POST https://order-crud-discounts.preview.emergentagent.com/api/relatorios/margem-lucro e a resposta foi STATUS 200 (interceptado via page.on('response')). Sem erro, sem red-screen, sem texto 'Erro ao gerar'. (6) Após gerar: cards de resumo renderizaram corretamente — 'Total Vendas R$ 0,00', 'Total Custos R$ 0,00', 'Lucro R$ 0,00', 'Margem % 0%' (todos os 4 labels presentes). Meta '1 empresa(s) · 0 DAV(s)' exibida — confirma o consolidado ZERADO esperado já que o banco BDREACTAPP está vazio. Caixa de busca (ml-busca) PASSOU a aparecer (count=1) após o relatório ser gerado, e o botão de exportar (ml-export) MUDOU de aria-disabled=true para enabled (atributo aria-disabled=None) — wiring 'disabled={!data}' funcionando. Painel de empresa expandido por default mostra 'Teste · 0 DAV(s) · Lucro R$ 0,00 (0%)' e 'Nenhum registro.' Validei tudo via interceptação de rede + DOM. Avisos legacy persistem (shadow*, pointerEvents) — não bloqueantes, já reportados em iters 33-36.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "shadow* style props",
+        "issue": "Warning legacy persistente (não bloqueante): '\"shadow*\" style props are deprecated. Use \"boxShadow\".' Já reportado em iters anteriores."
+      },
+      {
+        "component": "props.pointerEvents",
+        "issue": "Warning legacy persistente (não bloqueante): 'props.pointerEvents is deprecated. Use style.pointerEvents.'"
+      }
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "OK relatorios.tsx (linhas 18-25): novo tile 'Margem de Lucro' adicionado em VENDAS_REPORTS como 1º item com route='/relatorio-margem-lucro' e perm=null (visível para todos). Ícone trending-up-outline, descrição correta.",
+    "OK relatorio-margem-lucro.tsx (linhas 80-91): useFocusEffect carrega listConnections() + getSession() e auto-seleciona TODAS as conexões salvas na 1ª montagem (selIds vazio → set com todos os IDs). Comportamento confirmado.",
+    "OK relatorio-margem-lucro.tsx (linhas 101-129): gerar() monta o payload corretamente (conexoes com empresa/servidor/banco + filtros completos) e chama useMargemLucro.mutate. onSuccess fecha os filtros e expande as empresas. Lógica num() converte string→int>0 ou null (linha 106-109).",
+    "OK useMargemLucro.ts (linhas 37-49): postMargemLucro faz POST em `${api}/api/relatorios/margem-lucro` com body { conexoes, ...filtros }. Lança Error se !json.success. Endpoint correto e prefixo /api preservado.",
+    "OK relatorio-margem-lucro.tsx (linhas 171-173): botão ml-export usa disabled={!data} — confirmado via aria-disabled true→none após mutation completar.",
+    "OK relatorio-margem-lucro.tsx (linhas 274-290): cards de resumo só renderizam quando consolidado existe; ml-busca aparece junto. Wiring correto."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "N/A (não testado)", "frontend": "100% (6/6 cenários do request)" },
+  "seed_data_creation": "Seedei 1 conexão no localStorage do browser de teste (chave @back_on/connections): id=test-conn-1, empresa=Teste, servidor=gibanweb.database.windows.net, banco=BDREACTAPP, api=https://order-crud-discounts.preview.emergentagent.com. Não impacta produção. Login KONTACTO/$KONT2011 efetuado para chegar nas telas.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Endpoint POST /api/relatorios/margem-lucro responde 200 mesmo com banco BDREACTAPP vazio (consolidado zerado, qtd_davs=0). Frontend trata bem o caso vazio: cards mostram R$ 0,00 / 0%, painel de empresa mostra 'Nenhum registro.'. Para testar render de DAVs/itens reais, é preciso seedar dados em pedido_venda/pecas/os/movimentacao no BDREACTAPP. Lógica de exportar PDF (exportMargemLucroPdf) NÃO foi acionada fisicamente (envolve share nativo do device); apenas validei que o botão ml-export ficou habilitado após gerar — code review do callback exportar() (linhas 148-160) está OK. O endpoint GET /api/relatorios/margem-lucro/niveis existe mas não é consumido pela tela atual (campo Nível é input livre).",
+  "rca_of_issue": "Nenhum bug encontrado. Todas as funcionalidades especificadas no request estão funcionando: navegação card→tela, filtros completos com testIDs, geração com sucesso (200), cards de resumo zerados, ml-busca aparecendo, ml-export habilitando após gerar."
+}
