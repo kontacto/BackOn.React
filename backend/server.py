@@ -29,7 +29,7 @@ from starlette.middleware.cors import CORSMiddleware  # noqa: E402
 
 from db import mongo  # noqa: E402
 from routes import (  # noqa: E402
-    auth, clientes, controle, controle_config, descontos, lookups, misc, os, pedidos,
+    auth, clientes, controle, controle_config, descontos, lookups, margem_lucro, misc, os, pedidos,
     permissoes, produtos, relatorios, tabelas_aux, whatsapp,
 )
 
@@ -48,6 +48,7 @@ api_router.include_router(whatsapp.router)
 api_router.include_router(descontos.router)
 api_router.include_router(controle.router)
 api_router.include_router(relatorios.router)
+api_router.include_router(margem_lucro.router)
 api_router.include_router(lookups.router)
 api_router.include_router(permissoes.router)
 api_router.include_router(controle_config.router)
