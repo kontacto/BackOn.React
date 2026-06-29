@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
@@ -14,6 +14,7 @@ import { ClienteRow } from "@/src/components/pedido/types";
 import { apiGet } from "@/src/utils/api";
 import { Connection, listConnections } from "@/src/utils/storage/connections";
 import { getSession } from "@/src/utils/storage/session";
+import { loadMLFilters, mlKey, MLSavedFilters, saveMLFilters } from "@/src/utils/storage/mlFilters";
 import { useMargemLucro, MargemLucroFiltros } from "@/src/hooks/useMargemLucro";
 import { exportMargemLucroPdf, MLDav, MLEmpresa } from "@/src/utils/export-margem-lucro";
 import { colors, radius, spacing } from "@/src/theme/colors";
@@ -89,6 +90,34 @@ export default function RelatorioMargemLucroScreen() {
   const [cliLoading, setCliLoading] = useState(false);
   const [niveisOpen, setNiveisOpen] = useState(false);
 
+  const storageKeyRef = useRef<string>("");
+  const loadedRef = useRef(false);
+
+  // Aplica as seleções salvas previamente para o usuário/conexão.
+  const applySaved = (s: MLSavedFilters, list: Connection[]) => {
+    const validIds = (s.selIds || []).filter((id) => list.some((c) => c.id === id));
+    setSelIds(new Set(validIds.length ? validIds : list.map((c) => c.id)));
+    if (s.dataIni) setDataIni(s.dataIni);
+    if (s.dataFim) setDataFim(s.dataFim);
+    setIncluirPedidos(s.incluirPedidos);
+    setIncluirOS(s.incluirOS);
+    setIncluirComandas(s.incluirComandas);
+    setRetProdutos(s.retProdutos);
+    setRetServicos(s.retServicos);
+    setSitAbertos(s.sitAbertos);
+    setSitFechados(s.sitFechados);
+    setSitFaturados(s.sitFaturados);
+    setOpOperacional(s.opOperacional);
+    setOpGarantias(s.opGarantias);
+    setOpVendaDireta(s.opVendaDireta);
+    setOpOsNaoCobrados(s.opOsNaoCobrados);
+    setArea(s.area ?? 0);
+    setNivel(s.nivel || "");
+    setNivelLabel(s.nivelLabel || "");
+    setCodCliente(s.codCliente ?? null);
+    setClienteNome(s.clienteNome || "");
+  };
+
   const [busca, setBusca] = useState("");
   const [empExp, setEmpExp] = useState<Record<string, boolean>>({});
   const [davExp, setDavExp] = useState<Record<string, boolean>>({});
@@ -102,7 +131,14 @@ export default function RelatorioMargemLucroScreen() {
         const active = list.find((c) => c.empresa === sess?.empresa && c.banco === sess?.database) || list[0] || null;
         setActiveConn(active);
         setApiBase(active?.api || "");
-        setSelIds((prev) => (prev.size > 0 ? prev : new Set(list.map((c) => c.id))));
+        const key = mlKey(sess?.empresa, sess?.database, sess?.usuario);
+        storageKeyRef.current = key;
+        if (!loadedRef.current) {
+          loadedRef.current = true;
+          const saved = await loadMLFilters(key);
+          if (saved) applySaved(saved, list);
+          else setSelIds(new Set(list.map((c) => c.id)));
+        }
       })();
     }, [])
   );
@@ -174,6 +210,20 @@ export default function RelatorioMargemLucroScreen() {
       somente_garantias: opGarantias, somente_venda_direta: opVendaDireta,
       resultado_operacional: opOperacional,
     };
+    // Salva as seleções para o usuário/conexão atual.
+    if (storageKeyRef.current) {
+      const snapshot: MLSavedFilters = {
+        selIds: Array.from(selIds),
+        dataIni, dataFim,
+        incluirPedidos, incluirOS, incluirComandas,
+        retProdutos, retServicos,
+        sitAbertos, sitFechados, sitFaturados,
+        opOperacional, opGarantias, opVendaDireta, opOsNaoCobrados,
+        area, nivel, nivelLabel,
+        codCliente, clienteNome,
+      };
+      saveMLFilters(storageKeyRef.current, snapshot);
+    }
     ml.mutate({ api: apiBase, conexoes, filtros }, {
       onSuccess: (data) => {
         const exp: Record<string, boolean> = {};

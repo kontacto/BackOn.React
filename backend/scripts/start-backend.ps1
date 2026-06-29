@@ -64,12 +64,21 @@ if ($StartupDelaySeconds -gt 0) {
 
 Set-Location $BackendDir
 
+# IMPORTANTE: o uvicorn escreve os logs (INFO/WARNING) no STDERR. Com
+# $ErrorActionPreference = "Stop", o PowerShell trata QUALQUER saida em stderr de
+# um processo nativo como erro TERMINANTE, cai no catch e reinicia em loop infinito
+# (mesmo o backend tendo subido com sucesso). Por isso, a partir daqui usamos
+# "Continue" para que a saida do uvicorn no stderr NAO derrube o supervisor.
+$ErrorActionPreference = "Continue"
+
 # --- Loop de supervisão: mantém o uvicorn sempre no ar ---
 while ($true) {
     Write-Log "Subindo uvicorn server:app em $BindHost`:$Port ..."
     try {
-        # Sem --reload (modo produção). Saida e erros vao para o log.
-        & $Python -m uvicorn "server:app" --host $BindHost --port $Port *>> $LogFile
+        # Sem --reload (modo produção). Junta stderr ao stdout (2>&1) e grava no log.
+        # NAO usar "*>>" com ErrorActionPreference=Stop (vira excecao no boot do uvicorn).
+        & $Python -m uvicorn "server:app" --host $BindHost --port $Port 2>&1 |
+            Tee-Object -FilePath $LogFile -Append
         $code = $LASTEXITCODE
         Write-Log "uvicorn encerrou (exit code $code)."
     } catch {
