@@ -10,6 +10,7 @@ import DateField from "@/src/components/DateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Conn = { servidor: string; banco: string; api: string };
@@ -46,6 +47,7 @@ function brDate(iso: string | null): string {
 
 export default function RelatorioOSScreen() {
   const router = useRouter();
+  const feedback = useFeedback();
   const [conn, setConn] = useState<Conn | null>(null);
   const [dataIni, setDataIni] = useState<string | null>(firstOfMonthISO());
   const [dataFim, setDataFim] = useState<string | null>(todayISO());
@@ -54,7 +56,6 @@ export default function RelatorioOSScreen() {
   const [situacao, setSituacao] = useState<string | number | null>(null);
 
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [osList, setOsList] = useState<OSItem[]>([]);
   const [totais, setTotais] = useState<Totais | null>(null);
 
@@ -64,7 +65,7 @@ export default function RelatorioOSScreen() {
       if (!s) { router.replace("/login"); return; }
       const conns = await listConnections();
       const c = conns.find((x) => x.empresa === s.empresa);
-      if (!c) { setError("Conexão não encontrada."); return; }
+      if (!c) { feedback.showError("Conexão não encontrada."); return; }
       const cc = { servidor: c.servidor, banco: c.banco, api: c.api };
       setConn(cc);
       try {
@@ -83,9 +84,8 @@ export default function RelatorioOSScreen() {
 
   const buscar = useCallback(async () => {
     if (!conn) return;
-    if (!dataIni || !dataFim) { setError("Informe o período."); return; }
+    if (!dataIni || !dataFim) { feedback.showWarning("Informe o período."); return; }
     setLoading(true);
-    setError(null);
     try {
       const base = conn.api.replace(/\/+$/, "");
       let url = `${base}/api/relatorios/os?servidor=${encodeURIComponent(conn.servidor)}` +
@@ -94,14 +94,14 @@ export default function RelatorioOSScreen() {
       if (situacao) url += `&situacao=${encodeURIComponent(String(situacao))}`;
       const r = await fetch(url);
       const j = await r.json();
-      if (!j?.success) { setError(j?.message || "Falha ao gerar relatório."); setOsList([]); setTotais(null); }
+      if (!j?.success) { feedback.showError(j?.message || "Falha ao gerar relatório."); setOsList([]); setTotais(null); }
       else { setOsList(Array.isArray(j.os) ? j.os : []); setTotais(j.totais || null); }
     } catch (e) {
-      setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+      feedback.showError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
-  }, [conn, dataIni, dataFim, vendedor, situacao]);
+  }, [conn, dataIni, dataFim, vendedor, situacao, feedback]);
 
   const margemColor = (pct: number) => (pct >= 30 ? colors.success : pct >= 10 ? colors.warning : colors.error);
 
@@ -162,14 +162,7 @@ export default function RelatorioOSScreen() {
           </Pressable>
         </View>
 
-        {error ? (
-          <View style={styles.errorBox} testID="relos-error">
-            <Ionicons name="alert-circle-outline" size={16} color={colors.error} />
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        ) : null}
-
-        {!loading && !error && totais && osList.length === 0 ? (
+        {!loading && totais && osList.length === 0 ? (
           <Text style={styles.empty}>Nenhuma OS no período/filtros.</Text>
         ) : null}
 
@@ -229,11 +222,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 13, marginTop: spacing.sm,
   },
   searchBtnText: { color: colors.onBrandPrimary, fontWeight: "600", fontSize: 15 },
-  errorBox: {
-    flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#fdecea",
-    padding: spacing.sm, borderRadius: radius.sm,
-  },
-  errorText: { color: colors.error, fontSize: 12, flex: 1 },
   totaisCard: {
     backgroundColor: colors.brandTertiary, borderRadius: radius.md, padding: spacing.md,
     borderWidth: 1, borderColor: colors.border,

@@ -15,6 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { getSession } from "@/src/utils/storage/session";
 import { Connection, listConnections } from "@/src/utils/storage/connections";
 import { usePermissions } from "@/src/permissions";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 // ---------------- Tipos ----------------
@@ -50,6 +51,7 @@ function flatten(nodes: CatNode[], map: Record<string, CatNode> = {}): Record<st
 export default function PermissoesScreen() {
   const router = useRouter();
   const { reload: reloadPermissions } = usePermissions();
+  const fb = useFeedback();
   const [conn, setConn] = useState<Connection | null>(null);
   const [catalogo, setCatalogo] = useState<CatNode[]>([]);
   const [classes, setClasses] = useState<Classe[]>([]);
@@ -58,8 +60,6 @@ export default function PermissoesScreen() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   const flatMap = useMemo(() => flatten(catalogo), [catalogo]);
@@ -77,19 +77,17 @@ export default function PermissoesScreen() {
   const toggleAll = () => {
     const allOn = allKeys.length > 0 && allKeys.every((k) => selected.has(k));
     setSelected(allOn ? new Set() : new Set(allKeys));
-    setFeedback(null);
   };
 
   // Carrega catálogo + classes ao abrir
   const boot = useCallback(async () => {
     setLoading(true);
-    setError(null);
     const session = await getSession();
     const conns = await listConnections();
     const c = conns.find((x) => x.empresa === session?.empresa) ?? null;
     setConn(c);
     if (!c) {
-      setError("Conexão não encontrada.");
+      fb.showError("Conexão não encontrada.");
       setLoading(false);
       return;
     }
@@ -106,13 +104,13 @@ export default function PermissoesScreen() {
         setExpanded(new Set((catR.catalogo as CatNode[]).map((m) => keyOf(m))));
       }
       if (clsR?.success) setClasses(clsR.items);
-      else setError(clsR?.message || "Erro ao carregar classes.");
+      else fb.showError(clsR?.message || "Erro ao carregar classes.");
     } catch (e) {
-      setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+      fb.showError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fb]);
 
   useFocusEffect(
     useCallback(() => {
@@ -125,8 +123,6 @@ export default function PermissoesScreen() {
     async (cl: Classe) => {
       if (!conn) return;
       setClasse(cl);
-      setFeedback(null);
-      setError(null);
       setLoading(true);
       const base = conn.api.replace(/\/+$/, "");
       const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(
@@ -140,15 +136,15 @@ export default function PermissoesScreen() {
           );
           setSelected(s);
         } else {
-          setError(r?.message || "Erro ao carregar permissões.");
+          fb.showError(r?.message || "Erro ao carregar permissões.");
         }
       } catch (e) {
-        setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+        fb.showError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
         setLoading(false);
       }
     },
-    [conn]
+    [conn, fb]
   );
 
   // estado de um nó: true (todos descendentes), false (nenhum), "partial"
@@ -167,7 +163,6 @@ export default function PermissoesScreen() {
     if (allOn) keys.forEach((k) => next.delete(k));
     else keys.forEach((k) => next.add(k));
     setSelected(next);
-    setFeedback(null);
   };
 
   const toggleExpand = (k: string) => {
@@ -180,8 +175,6 @@ export default function PermissoesScreen() {
   const handleSave = async () => {
     if (!conn || !classe) return;
     setSaving(true);
-    setError(null);
-    setFeedback(null);
     const itens = Array.from(selected)
       .map((k) => flatMap[k])
       .filter(Boolean)
@@ -204,11 +197,11 @@ export default function PermissoesScreen() {
           itens,
         }),
       }).then((x) => x.json());
-      if (r?.success) setFeedback(r.message || "Permissões salvas.");
-      else setError(r?.message || "Erro ao salvar.");
+      if (r?.success) fb.showSuccess(r.message || "Permissões salvas.");
+      else fb.showError(r?.message || "Erro ao salvar.");
       if (r?.success) await reloadPermissions();
     } catch (e) {
-      setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+      fb.showError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSaving(false);
     }
@@ -286,8 +279,6 @@ export default function PermissoesScreen() {
         </Pressable>
       </View>
 
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
-      {feedback ? <Text style={styles.feedbackText}>{feedback}</Text> : null}
 
       {loading ? (
         <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 24 }} />
@@ -419,14 +410,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   pickerValue: { fontSize: 15, color: colors.onSurface, fontWeight: "500" },
-  errorText: { marginHorizontal: spacing.lg, marginTop: spacing.sm, color: colors.error, fontSize: 13 },
-  feedbackText: {
-    marginHorizontal: spacing.lg,
-    marginTop: spacing.sm,
-    color: colors.success,
-    fontSize: 13,
-    fontWeight: "500",
-  },
   placeholder: { alignItems: "center", justifyContent: "center", marginTop: 60, gap: 12, paddingHorizontal: spacing.xl },
   placeholderText: { color: colors.muted, fontSize: 14, textAlign: "center" },
   selectAllRow: {

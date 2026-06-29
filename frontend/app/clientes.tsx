@@ -16,6 +16,7 @@ import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Cliente = {
@@ -31,6 +32,7 @@ type Cliente = {
 export default function ClientesScreen() {
   const router = useRouter();
   const { can } = usePermissions();
+  const feedback = useFeedback();
   const canNovoCliente = can("CLIENTE.GRAVAR");
   const canNovoPedido = can("PEDIDO.GRAVAR");
   const [items, setItems] = useState<Cliente[]>([]);
@@ -38,16 +40,14 @@ export default function ClientesScreen() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async (q: string, p: number, append: boolean) => {
     setLoading(true);
-    setError(null);
     const session = await getSession();
     const conns = await listConnections();
     const conn = conns.find((c) => c.empresa === session?.empresa);
     if (!conn) {
-      setError("Conexão não encontrada.");
+      feedback.showError("Conexão não encontrada.");
       setLoading(false);
       return;
     }
@@ -65,17 +65,17 @@ export default function ClientesScreen() {
       });
       const data = await resp.json();
       if (!data.success) {
-        setError(data.message || "Erro ao carregar");
+        feedback.showError(data.message || "Erro ao carregar");
       } else {
         setItems((prev) => (append ? [...prev, ...data.items] : data.items));
         setTotal(data.total);
       }
     } catch (e) {
-      setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+      feedback.showError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [feedback]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -127,10 +127,6 @@ export default function ClientesScreen() {
           testID="clientes-search-input"
         />
       </View>
-
-      {error ? (
-        <Text style={styles.errorText} testID="clientes-error">{error}</Text>
-      ) : null}
 
       <FlatList
         data={items}
@@ -248,10 +244,6 @@ const styles = StyleSheet.create({
   },
   cardTitle: { fontSize: 15, fontWeight: "500", color: colors.onSurface },
   cardSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
-  errorText: {
-    marginHorizontal: spacing.lg, marginBottom: spacing.sm,
-    color: colors.error, fontSize: 13,
-  },
   empty: {
     textAlign: "center", color: colors.muted, fontSize: 14, marginTop: 40,
   },

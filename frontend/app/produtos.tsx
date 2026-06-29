@@ -20,6 +20,7 @@ import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Tipo = "all" | "P" | "S";
@@ -48,6 +49,7 @@ function parseNum(s: string): number {
 export default function ProdutosScreen() {
   const router = useRouter();
   const { can, moduleOn } = usePermissions();
+  const feedback = useFeedback();
   const servicosOn = moduleOn("servicos");
   const params = useLocalSearchParams<{ pedido?: string; tipo?: string }>();
   const selectPedido = params.pedido ? parseInt(String(params.pedido), 10) : null;
@@ -74,7 +76,6 @@ export default function ProdutosScreen() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const aborter = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -114,7 +115,6 @@ export default function ProdutosScreen() {
       const ac = new AbortController();
       aborter.current = ac;
       setLoading(true);
-      setError(null);
       try {
         const base = conn.api.replace(/\/+$/, "");
         const url =
@@ -126,7 +126,7 @@ export default function ProdutosScreen() {
         const r = await fetch(url, { signal: ac.signal });
         const j = await r.json();
         if (!j?.success) {
-          setError(j?.message || "Falha ao consultar.");
+          feedback.showError(j?.message || "Falha ao consultar.");
           if (!append) setItems([]);
         } else {
           const fetched: Item[] = j.items || [];
@@ -135,7 +135,7 @@ export default function ProdutosScreen() {
         }
       } catch (e: unknown) {
         if ((e as { name?: string })?.name !== "AbortError") {
-          setError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
+          feedback.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
         }
       } finally {
         if (aborter.current === ac) {
@@ -144,7 +144,7 @@ export default function ProdutosScreen() {
         }
       }
     },
-    [conn, servicosOn]
+    [conn, servicosOn, feedback]
   );
 
   // Recarrega quando muda search / tipo (debounce 300ms na busca)
@@ -349,12 +349,6 @@ export default function ProdutosScreen() {
           );
         })}
       </View>
-      ) : null}
-
-      {error ? (
-        <Text style={styles.errorText} testID="produtos-error">
-          {error}
-        </Text>
       ) : null}
 
       <FlatList
@@ -679,9 +673,6 @@ const styles = StyleSheet.create({
   },
   chipSel: { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary },
   chipText: { fontSize: 13, color: colors.onSurface, fontWeight: "500" },
-  errorText: {
-    color: colors.error, fontSize: 13, marginHorizontal: spacing.lg, marginBottom: spacing.sm,
-  },
   card: {
     flexDirection: "row", alignItems: "center", gap: spacing.md,
     backgroundColor: colors.surfaceSecondary,

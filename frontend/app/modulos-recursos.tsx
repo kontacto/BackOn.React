@@ -7,6 +7,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { getSession } from "@/src/utils/storage/session";
 import { Connection, listConnections } from "@/src/utils/storage/connections";
 import { usePermissions } from "@/src/permissions";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Campo = { campo: string; label: string };
@@ -14,24 +15,21 @@ type Campo = { campo: string; label: string };
 export default function ModulosRecursosScreen() {
   const router = useRouter();
   const { reload: reloadPermissions } = usePermissions();
+  const fb = useFeedback();
   const [conn, setConn] = useState<Connection | null>(null);
   const [campos, setCampos] = useState<Campo[]>([]);
   const [valores, setValores] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<string | null>(null);
 
   const boot = useCallback(async () => {
     setLoading(true);
-    setError(null);
-    setFeedback(null);
     const session = await getSession();
     const conns = await listConnections();
     const c = conns.find((x) => x.empresa === session?.empresa) ?? null;
     setConn(c);
     if (!c) {
-      setError("Conexão não encontrada.");
+      fb.showError("Conexão não encontrada.");
       setLoading(false);
       return;
     }
@@ -44,13 +42,13 @@ export default function ModulosRecursosScreen() {
       ]);
       if (campR?.campos) setCampos(campR.campos);
       if (cfgR?.success) setValores(cfgR.valores || {});
-      else setError(cfgR?.message || "Erro ao carregar configuração.");
+      else fb.showError(cfgR?.message || "Erro ao carregar configuração.");
     } catch (e) {
-      setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+      fb.showError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [fb]);
 
   useFocusEffect(
     useCallback(() => {
@@ -60,14 +58,11 @@ export default function ModulosRecursosScreen() {
 
   const toggle = (campo: string) => {
     setValores((v) => ({ ...v, [campo]: !v[campo] }));
-    setFeedback(null);
   };
 
   const handleSave = async () => {
     if (!conn) return;
     setSaving(true);
-    setError(null);
-    setFeedback(null);
     try {
       const base = conn.api.replace(/\/+$/, "");
       const r = await fetch(`${base}/api/controle-config/salvar`, {
@@ -76,13 +71,13 @@ export default function ModulosRecursosScreen() {
         body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, valores }),
       }).then((x) => x.json());
       if (r?.success) {
-        setFeedback(r.message || "Salvo.");
+        fb.showSuccess(r.message || "Salvo.");
         await reloadPermissions();
       } else {
-        setError(r?.message || "Erro ao salvar.");
+        fb.showError(r?.message || "Erro ao salvar.");
       }
     } catch (e) {
-      setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+      fb.showError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setSaving(false);
     }
@@ -102,9 +97,6 @@ export default function ModulosRecursosScreen() {
         Ative os módulos que esta empresa utiliza. Módulos desativados ficam ocultos no sistema
         inteiro — inclusive na configuração de Permissões.
       </Text>
-
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
-      {feedback ? <Text style={styles.feedbackText}>{feedback}</Text> : null}
 
       {loading ? (
         <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 24 }} />

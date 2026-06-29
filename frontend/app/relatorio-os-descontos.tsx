@@ -11,6 +11,7 @@ import SelectField, { SelectOption } from "@/src/components/SelectField";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { exportReportPdf } from "@/src/utils/export-report";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Conn = { servidor: string; banco: string; api: string };
@@ -44,6 +45,7 @@ function brDate(iso: string): string {
 
 export default function RelatorioOSDescontosScreen() {
   const router = useRouter();
+  const feedback = useFeedback();
 
   const [conn, setConn] = useState<Conn | null>(null);
   const [dataIni, setDataIni] = useState<string | null>(firstOfMonthISO());
@@ -56,7 +58,6 @@ export default function RelatorioOSDescontosScreen() {
   const [loading, setLoading] = useState(false);
   const [vendedores, setVendedores] = useState<VendedorGroup[]>([]);
   const [totais, setTotais] = useState<Totais | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [exporting, setExporting] = useState(false);
 
@@ -66,7 +67,7 @@ export default function RelatorioOSDescontosScreen() {
       if (!s) { router.replace("/login"); return; }
       const conns = await listConnections();
       const c = conns.find((x) => x.empresa === s.empresa);
-      if (!c) { setError("Conexão não encontrada."); return; }
+      if (!c) { feedback.showError("Conexão não encontrada."); return; }
       const cc = { servidor: c.servidor, banco: c.banco, api: c.api };
       setConn(cc);
       try {
@@ -87,9 +88,8 @@ export default function RelatorioOSDescontosScreen() {
 
   const buscar = useCallback(async () => {
     if (!conn) return;
-    if (!dataIni || !dataFim) { setError("Informe o período."); return; }
+    if (!dataIni || !dataFim) { feedback.showWarning("Informe o período."); return; }
     setLoading(true);
-    setError(null);
     try {
       const base = conn.api.replace(/\/+$/, "");
       let url = `${base}/api/relatorios/os/descontos-margem?servidor=${encodeURIComponent(conn.servidor)}` +
@@ -100,7 +100,7 @@ export default function RelatorioOSDescontosScreen() {
       if (Number.isFinite(of) && of > 0) url += `&os_cod=${of}`;
       const r = await fetch(url);
       const j = await r.json();
-      if (!j?.success) { setError(j?.message || "Falha ao gerar relatório."); setVendedores([]); setTotais(null); }
+      if (!j?.success) { feedback.showError(j?.message || "Falha ao gerar relatório."); setVendedores([]); setTotais(null); }
       else {
         setVendedores(j.vendedores || []);
         setTotais(j.totais || null);
@@ -109,18 +109,17 @@ export default function RelatorioOSDescontosScreen() {
         setExpanded(exp);
       }
     } catch (e) {
-      setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+      feedback.showError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
-  }, [conn, dataIni, dataFim, vendedor, osFiltro, clienteFiltro]);
+  }, [conn, dataIni, dataFim, vendedor, osFiltro, clienteFiltro, feedback]);
 
   const margemColor = (pct: number) => (pct >= 30 ? colors.success : pct >= 10 ? colors.warning : colors.error);
 
   const handleExport = useCallback(async () => {
     if (!totais) return;
     setExporting(true);
-    setError(null);
     try {
       await exportReportPdf({
         titulo: "OS · Descontos & Margem",
@@ -129,11 +128,11 @@ export default function RelatorioOSDescontosScreen() {
         vendedores,
       });
     } catch (e) {
-      setError(`Falha ao exportar: ${e instanceof Error ? e.message : String(e)}`);
+      feedback.showError(`Falha ao exportar: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setExporting(false);
     }
-  }, [totais, vendedores, dataIni, dataFim]);
+  }, [totais, vendedores, dataIni, dataFim, feedback]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="relatorio-os-descontos-screen">
@@ -217,13 +216,6 @@ export default function RelatorioOSDescontosScreen() {
             )}
           </Pressable>
         </View>
-
-        {error ? (
-          <View style={styles.errorBox} testID="relosdesc-error">
-            <Ionicons name="alert-circle-outline" size={16} color={colors.error} />
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        ) : null}
 
         {totais ? (
           <>
@@ -318,11 +310,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 13, marginTop: spacing.sm,
   },
   searchBtnText: { color: colors.onBrandPrimary, fontWeight: "600", fontSize: 15 },
-  errorBox: {
-    flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#fdecea",
-    padding: spacing.sm, borderRadius: radius.sm,
-  },
-  errorText: { color: colors.error, fontSize: 12, flex: 1 },
   totaisCard: {
     backgroundColor: colors.brandTertiary, borderRadius: radius.md, padding: spacing.md,
     borderWidth: 1, borderColor: colors.border,

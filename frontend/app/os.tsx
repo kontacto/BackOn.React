@@ -17,6 +17,7 @@ import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import DateField from "@/src/components/DateField";
 
@@ -56,6 +57,7 @@ function formatDate(iso: string | null) {
 export default function OSScreen() {
   const router = useRouter();
   const { can } = usePermissions();
+  const feedback = useFeedback();
   const [conn, setConn] = useState<Connection | null>(null);
   const [search, setSearch] = useState("");
   const [situacao, setSituacao] = useState("");
@@ -66,7 +68,6 @@ export default function OSScreen() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const aborter = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -88,7 +89,6 @@ export default function OSScreen() {
       const ac = new AbortController();
       aborter.current = ac;
       setLoading(true);
-      setError(null);
       try {
         const base = conn.api.replace(/\/+$/, "");
         const r = await fetch(`${base}/api/os`, {
@@ -104,7 +104,7 @@ export default function OSScreen() {
         });
         const j = await r.json();
         if (!j?.success) {
-          setError(j?.message || "Falha na consulta.");
+          feedback.showError(j?.message || "Falha na consulta.");
           if (!append) setItems([]);
         } else {
           setItems((prev) => (append ? [...prev, ...j.items] : j.items));
@@ -112,7 +112,7 @@ export default function OSScreen() {
         }
       } catch (e: unknown) {
         if ((e as { name?: string })?.name !== "AbortError") {
-          setError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
+          feedback.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
         }
       } finally {
         if (aborter.current === ac) {
@@ -121,7 +121,7 @@ export default function OSScreen() {
         }
       }
     },
-    [conn]
+    [conn, feedback]
   );
 
   useEffect(() => {
@@ -221,8 +221,6 @@ export default function OSScreen() {
           </View>
         </View>
       ) : null}
-
-      {error ? <Text style={styles.errorText} testID="os-error">{error}</Text> : null}
     </View>
   );
 
