@@ -397,7 +397,10 @@ export default function RelatorioMargemLucroScreen() {
               <View style={styles.card}><Text style={styles.cardLbl}>Total Custos</Text><Text style={styles.cardVal}>{brl(consolidado.total_custo)}</Text></View>
             </View>
             <View style={styles.cardsRow}>
+              <View style={styles.card}><Text style={styles.cardLbl}>Descontos</Text><Text style={[styles.cardVal, { color: colors.danger }]}>{brl(consolidado.desconto)}</Text></View>
               <View style={styles.card}><Text style={styles.cardLbl}>Lucro</Text><Text style={[styles.cardVal, { color: colors.brandPrimary }]}>{brl(consolidado.lucro)}</Text></View>
+            </View>
+            <View style={styles.cardsRow}>
               <View style={styles.card}><Text style={styles.cardLbl}>Margem %</Text><Text style={[styles.cardVal, { color: colors.brandPrimary }]}>{consolidado.margem_pct}%</Text></View>
             </View>
             <Text style={styles.resumoMeta}>{consolidado.qtd_empresas} empresa(s) · {consolidado.qtd_davs} DAV(s)</Text>

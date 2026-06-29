@@ -49,7 +49,9 @@ const VENDAS_REPORTS: ReportTile[] = [
 export default function RelatoriosScreen() {
   const router = useRouter();
   const { can } = usePermissions();
-  const vendas = VENDAS_REPORTS.filter((r) => !r.perm || can(r.perm));
+  const vendas = VENDAS_REPORTS
+    .filter((r) => !r.perm || can(r.perm))
+    .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="relatorios-screen">
       <View style={styles.header}>

@@ -1,0 +1,38 @@
+{
+  "summary": "Validadas as 2 mudancas da iter40: (1) campo 'desconto' no consolidado e 'total_desconto' por empresa/DAV no POST /api/relatorios/margem-lucro; (2) lista de relatorios da aba Vendas ordenada alfabeticamente A->Z e novo card 'Descontos' (vermelho) no resumo da tela Margem de Lucro. Backend: 14 testes unitarios + 4 testes API contra sql.juansouza.com.br -> TODOS PASSARAM. Frontend: ordem dos cards confirmada igual ao esperado, card 'Descontos' presente no resumo, exportacao PDF funcionando sem erros.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_margem_lucro.py",
+    "/app/backend/tests/test_margem_lucro_api.py",
+    "/app/test_reports/pytest/iter40_results.xml",
+    "/app/test_reports/pytest/iter40_api_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "services/margem_lucro_service.py: _agregar retorna agora 4 valores (davs, venda, custo, desconto) e _consultar_empresa_sync expoe total_desconto por empresa - coerente com a mudanca incremental. Consolidado.desconto = soma(empresa.total_desconto) confirmado em multi-empresa (154.220,74 == 154.220,74).",
+    "app/(tabs)/relatorios.tsx linha 54: .sort((a,b) => a.label.localeCompare(b.label, 'pt-BR')) - ordena cards de Vendas em A->Z corretamente.",
+    "app/relatorio-margem-lucro.tsx linha 400: card 'Descontos' usa colors.danger e exibe consolidado.desconto formatado em BRL.",
+    "utils/export-margem-lucro.ts linha 111: PDF inclui coluna/card 'Descontos' com brl(c.desconto)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_margem_lucro_api.py (novo - 4 testes contra servidor real)"
+  ],
+  "success_rate": {
+    "backend": "100% (18/18 - 14 unit + 4 API)",
+    "frontend": "100% (ordem A->Z confirmada, card Descontos renderizado em vermelho com R$ 1,00 sobre BD_ESTELA real, PDF export sem erros)"
+  },
+  "seed_data_creation": "Conexao criada via UI: ESTELA -> sql.juansouza.com.br / BD_ESTELA durante o teste.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Para testar UI do app: AsyncStorage no web nao persiste entre sessoes do Playwright; criar a conexao via 'Nova Conexao' DENTRO do mesmo script. Sequencia que funciona: Nova Conexao -> Salvar -> mouse.click(20,30) volta para login -> KONTACTO/$KONT2011 -> tab Relatorios. Periodo default (ultimos 30 dias) ja traz dados em BD_ESTELA.",
+  "rca_of_issue": "N/A - nenhum bug encontrado nesta iteracao."
+}
