@@ -16,6 +16,7 @@ import { Connection, listConnections } from "@/src/utils/storage/connections";
 import { getSession } from "@/src/utils/storage/session";
 import { loadMLFilters, mlKey, MLSavedFilters, saveMLFilters } from "@/src/utils/storage/mlFilters";
 import { useMargemLucro, MargemLucroFiltros } from "@/src/hooks/useMargemLucro";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { exportMargemLucroPdf, MLDav, MLEmpresa } from "@/src/utils/export-margem-lucro";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
@@ -52,6 +53,7 @@ function Chip({ label, active, onPress, testID }: {
 export default function RelatorioMargemLucroScreen() {
   const router = useRouter();
   const ml = useMargemLucro();
+  const feedback = useFeedback();
 
   const [conns, setConns] = useState<Connection[]>([]);
   const [apiBase, setApiBase] = useState<string>("");
@@ -231,6 +233,7 @@ export default function RelatorioMargemLucroScreen() {
         setEmpExp(exp);
         setFiltrosOpen(false);
       },
+      onError: (e) => feedback.showError(e.message),
     });
   };
 
@@ -384,7 +387,7 @@ export default function RelatorioMargemLucroScreen() {
           </View>
         ) : null}
 
-        {ml.isError ? <Text style={styles.erro}>{ml.error?.message || "Erro ao gerar."}</Text> : null}
+        {/* Erros agora são exibidos no centro da tela (feedback global). */}
 
         {/* ---------------- RESUMO ---------------- */}
         {consolidado ? (

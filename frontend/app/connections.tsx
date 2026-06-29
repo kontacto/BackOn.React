@@ -26,6 +26,7 @@ import {
   updateConnection,
 } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 
 const EMPTY_IMG =
   "https://images.unsplash.com/photo-1449247709967-d4461a6a6103?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2Mzl8MHwxfHNlYXJjaHwxfHxjbGVhbiUyMGVtcHR5JTIwZGVzayUyMG1pbmltYWxpc3R8ZW58MHx8fHwxNzgxMTE2MTU3fDA&ixlib=rb-4.1.0&q=85";
@@ -46,7 +47,7 @@ export default function ConnectionsScreen() {
   const [logo, setLogo] = useState("");
   const [imagensUrl, setImagensUrl] = useState("");
   const [permitirBiometria, setPermitirBiometria] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
+  const feedback = useFeedback();
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<Connection | null>(null);
 
@@ -70,7 +71,7 @@ export default function ConnectionsScreen() {
     setLogo("");
     setImagensUrl("");
     setPermitirBiometria(false);
-    setFormError(null);
+    // (mensagens de erro agora via feedback global centralizado)
     setEditorVisible(true);
   };
 
@@ -83,7 +84,7 @@ export default function ConnectionsScreen() {
     setLogo(c.logo ?? "");
     setImagensUrl(c.imagensUrl ?? "");
     setPermitirBiometria(c.permitirBiometria ?? false);
-    setFormError(null);
+    // (mensagens de erro agora via feedback global centralizado)
     setEditorVisible(true);
   };
 
@@ -97,7 +98,7 @@ export default function ConnectionsScreen() {
     setLogo("");
     setImagensUrl("");
     setPermitirBiometria(false);
-    setFormError(null);
+    // (mensagens de erro agora via feedback global centralizado)
   };
 
   const handleSave = async () => {
@@ -106,23 +107,23 @@ export default function ConnectionsScreen() {
     const b = banco.trim();
     const a = api.trim();
     if (!e) {
-      setFormError("Informe o nome da Empresa.");
+      feedback.showError("Informe o nome da Empresa.");
       return;
     }
     if (!s) {
-      setFormError("Informe o Servidor.");
+      feedback.showError("Informe o Servidor.");
       return;
     }
     if (!b) {
-      setFormError("Informe o Banco.");
+      feedback.showError("Informe o Banco.");
       return;
     }
     if (!a) {
-      setFormError("Informe o endereço da API.");
+      feedback.showError("Informe o endereço da API.");
       return;
     }
     if (!/^https?:\/\//i.test(a)) {
-      setFormError("A API deve começar com http:// ou https://");
+      feedback.showError("A API deve começar com http:// ou https://");
       return;
     }
     setSaving(true);
@@ -376,12 +377,6 @@ export default function ConnectionsScreen() {
                 testID="connection-biometria-switch"
               />
             </View>
-
-            {formError ? (
-              <Text style={styles.errorText} testID="connection-form-error">
-                {formError}
-              </Text>
-            ) : null}
           </ScrollView>
 
             <View style={styles.sheetActions}>

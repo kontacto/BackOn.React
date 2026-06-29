@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { PermissionsProvider } from "@/src/permissions";
+import { FeedbackProvider } from "@/src/components/feedback/FeedbackProvider";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -31,9 +32,11 @@ export default function RootLayout() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <PermissionsProvider>
-        <Stack screenOptions={{ headerShown: false }} />
-      </PermissionsProvider>
+      <FeedbackProvider>
+        <PermissionsProvider>
+          <Stack screenOptions={{ headerShown: false }} />
+        </PermissionsProvider>
+      </FeedbackProvider>
     </QueryClientProvider>
   );
 }
