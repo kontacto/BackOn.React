@@ -17,6 +17,7 @@ type Conn = { servidor: string; banco: string; api: string };
 type PedidoRow = {
   pedido: number; data: string; situacao: string; cliente: string;
   venda: number; desconto: number; custo: number; margem: number; margem_pct: number;
+  origem?: "P" | "OS";
 };
 type VendedorGroup = {
   vendedor: string; vendedor_nome: string; pedidos: PedidoRow[];
@@ -41,6 +42,64 @@ function brDate(iso: string): string {
   const [y, m, d] = (iso || "").split("-");
   return d ? `${d}/${m}/${y}` : iso;
 }
+function round2(n: number): number {
+  return Math.round((n || 0) * 100) / 100;
+}
+
+type RelResult = { vendedores: VendedorGroup[]; totais: Totais | null };
+
+// Marca a origem (P/OS) em cada linha do grupo.
+function tagOrigem(vendedores: VendedorGroup[], origem: "P" | "OS"): VendedorGroup[] {
+  return (vendedores || []).map((g) => ({
+    ...g,
+    pedidos: (g.pedidos || []).map((p) => ({ ...p, origem })),
+  }));
+}
+
+// Mescla os dois relatórios (Pedidos + OS) por vendedor, recalculando subtotais e totais.
+function mergeReports(jp: { vendedores?: VendedorGroup[]; totais?: Totais } | null,
+                      jo: { vendedores?: VendedorGroup[]; totais?: Totais } | null): RelResult {
+  const map = new Map<string, VendedorGroup>();
+  const addGroups = (groups: VendedorGroup[] | undefined, origem: "P" | "OS") => {
+    (groups || []).forEach((g) => {
+      const key = g.vendedor || "";
+      const rows = (g.pedidos || []).map((p) => ({ ...p, origem }));
+      const ex = map.get(key);
+      if (!ex) {
+        map.set(key, { ...g, pedidos: [...rows] });
+      } else {
+        ex.pedidos = [...ex.pedidos, ...rows];
+        ex.sub_venda += g.sub_venda;
+        ex.sub_desconto += g.sub_desconto;
+        ex.sub_custo += g.sub_custo;
+        ex.sub_margem += g.sub_margem;
+      }
+    });
+  };
+  addGroups(jp?.vendedores, "P");
+  addGroups(jo?.vendedores, "OS");
+  const vendedores = Array.from(map.values())
+    .map((g) => ({
+      ...g,
+      sub_venda: round2(g.sub_venda),
+      sub_desconto: round2(g.sub_desconto),
+      sub_custo: round2(g.sub_custo),
+      sub_margem: round2(g.sub_margem),
+      sub_margem_pct: g.sub_venda > 0 ? round2((g.sub_margem / g.sub_venda) * 100) : 0,
+    }))
+    .sort((a, b) => b.sub_venda - a.sub_venda);
+  const tp = jp?.totais; const to = jo?.totais;
+  const venda = round2((tp?.venda || 0) + (to?.venda || 0));
+  const desconto = round2((tp?.desconto || 0) + (to?.desconto || 0));
+  const custo = round2((tp?.custo || 0) + (to?.custo || 0));
+  const margem = round2((tp?.margem || 0) + (to?.margem || 0));
+  const totais: Totais = {
+    venda, desconto, custo, margem,
+    margem_pct: venda > 0 ? round2((margem / venda) * 100) : 0,
+    qtd_pedidos: (tp?.qtd_pedidos || 0) + (to?.qtd_pedidos || 0),
+  };
+  return { vendedores, totais };
+}
 
 export default function RelatorioDescontosScreen() {
   const router = useRouter();
@@ -53,7 +112,8 @@ export default function RelatorioDescontosScreen() {
   const [vendedorOpts, setVendedorOpts] = useState<SelectOption[]>([]);
   const [vendedor, setVendedor] = useState<string | number | null>(null);
   const [clienteFiltro, setClienteFiltro] = useState<string>("");
-  const [pedidoFiltro, setPedidoFiltro] = useState<string>(pedidoParam ? String(pedidoParam) : "");
+  const [codigoFiltro, setCodigoFiltro] = useState<string>(pedidoParam ? String(pedidoParam) : "");
+  const [origem, setOrigem] = useState<"all" | "P" | "OS">(pedidoParam ? "P" : "all");
 
   const [loading, setLoading] = useState(false);
   const [vendedores, setVendedores] = useState<VendedorGroup[]>([]);
@@ -97,28 +157,52 @@ export default function RelatorioDescontosScreen() {
     setError(null);
     try {
       const base = conn.api.replace(/\/+$/, "");
-      let url = `${base}/api/relatorios/descontos-margem?servidor=${encodeURIComponent(conn.servidor)}` +
+      const qsBase = `servidor=${encodeURIComponent(conn.servidor)}` +
         `&banco=${encodeURIComponent(conn.banco)}&data_ini=${di}&data_fim=${df}`;
-      if (vendedor) url += `&vendedor=${encodeURIComponent(String(vendedor))}`;
-      if (clienteFiltro.trim()) url += `&cliente_nome=${encodeURIComponent(clienteFiltro.trim())}`;
-      const pf = parseInt(pedidoFiltro, 10);
-      if (Number.isFinite(pf) && pf > 0) url += `&pedido=${pf}`;
-      const r = await fetch(url);
-      const j = await r.json();
-      if (!j?.success) { setError(j?.message || "Falha ao gerar relatório."); setVendedores([]); setTotais(null); }
-      else {
-        setVendedores(j.vendedores || []);
-        setTotais(j.totais || null);
-        const exp: Record<string, boolean> = {};
-        (j.vendedores || []).forEach((g: VendedorGroup) => { exp[g.vendedor] = true; });
-        setExpanded(exp);
+      const vendQs = vendedor ? `&vendedor=${encodeURIComponent(String(vendedor))}` : "";
+      const cliQs = clienteFiltro.trim() ? `&cliente_nome=${encodeURIComponent(clienteFiltro.trim())}` : "";
+      const codNum = parseInt(codigoFiltro, 10);
+      const hasCod = Number.isFinite(codNum) && codNum > 0;
+
+      const fetchPed = async () => {
+        let url = `${base}/api/relatorios/descontos-margem?${qsBase}${vendQs}${cliQs}`;
+        if (hasCod) url += `&pedido=${codNum}`;
+        return (await fetch(url)).json();
+      };
+      const fetchOS = async () => {
+        let url = `${base}/api/relatorios/os/descontos-margem?${qsBase}${vendQs}${cliQs}`;
+        if (hasCod) url += `&os_cod=${codNum}`;
+        return (await fetch(url)).json();
+      };
+
+      let result: RelResult;
+      if (origem === "P") {
+        const j = await fetchPed();
+        if (!j?.success) { setError(j?.message || "Falha ao gerar relatório."); setVendedores([]); setTotais(null); return; }
+        result = { vendedores: tagOrigem(j.vendedores || [], "P"), totais: j.totais || null };
+      } else if (origem === "OS") {
+        const j = await fetchOS();
+        if (!j?.success) { setError(j?.message || "Falha ao gerar relatório."); setVendedores([]); setTotais(null); return; }
+        result = { vendedores: tagOrigem(j.vendedores || [], "OS"), totais: j.totais || null };
+      } else {
+        const [jp, jo] = await Promise.all([fetchPed(), fetchOS()]);
+        if (!jp?.success && !jo?.success) {
+          setError(jp?.message || jo?.message || "Falha ao gerar relatório.");
+          setVendedores([]); setTotais(null); return;
+        }
+        result = mergeReports(jp?.success ? jp : null, jo?.success ? jo : null);
       }
+      setVendedores(result.vendedores);
+      setTotais(result.totais);
+      const exp: Record<string, boolean> = {};
+      result.vendedores.forEach((g) => { exp[g.vendedor] = true; });
+      setExpanded(exp);
     } catch (e) {
       setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
-  }, [conn, dataIni, dataFim, vendedor, pedidoFiltro, clienteFiltro]);
+  }, [conn, dataIni, dataFim, vendedor, codigoFiltro, clienteFiltro, origem]);
 
   // busca automática quando vier de um pedido específico (usa range amplo, sem depender do state)
   useEffect(() => {
@@ -184,6 +268,26 @@ export default function RelatorioDescontosScreen() {
       <ScrollView contentContainerStyle={styles.scroll}>
         {!pedidoParam ? (
           <View style={styles.filters}>
+            <Text style={styles.fieldLabel}>Origem</Text>
+            <View style={styles.origemRow}>
+              {([
+                { key: "all" as const, label: "Todos" },
+                { key: "P" as const, label: "Pedidos" },
+                { key: "OS" as const, label: "OS" },
+              ]).map((o) => {
+                const sel = origem === o.key;
+                return (
+                  <Pressable
+                    key={o.key}
+                    onPress={() => setOrigem(o.key)}
+                    style={({ pressed }) => [styles.origemChip, sel && styles.origemChipSel, pressed && { opacity: 0.8 }]}
+                    testID={`rel-origem-${o.key}`}
+                  >
+                    <Text style={[styles.origemChipText, sel && styles.origemChipTextSel]}>{o.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
             <View style={styles.dateRow}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.fieldLabel}>De</Text>
@@ -214,10 +318,10 @@ export default function RelatorioDescontosScreen() {
               autoCapitalize="characters"
               testID="rel-cliente"
             />
-            <Text style={styles.fieldLabel}>Código do pedido / pré-venda (opcional)</Text>
+            <Text style={styles.fieldLabel}>Código (Pedido / OS) (opcional)</Text>
             <TextInput
-              value={pedidoFiltro}
-              onChangeText={setPedidoFiltro}
+              value={codigoFiltro}
+              onChangeText={setCodigoFiltro}
               keyboardType="number-pad"
               placeholder="Ex.: 1024"
               placeholderTextColor={colors.muted}
@@ -291,13 +395,17 @@ export default function RelatorioDescontosScreen() {
                     <View>
                       {g.pedidos.map((p) => (
                         <Pressable
-                          key={p.pedido}
-                          onPress={() => router.push({ pathname: "/pedido-form", params: { pedido: String(p.pedido) } })}
+                          key={`${p.origem || "P"}-${p.pedido}`}
+                          onPress={() =>
+                            p.origem === "OS"
+                              ? router.push({ pathname: "/os-form", params: { codigo: String(p.pedido) } })
+                              : router.push({ pathname: "/pedido-form", params: { pedido: String(p.pedido) } })
+                          }
                           style={({ pressed }) => [styles.pedRow, pressed && { backgroundColor: colors.brandTertiary }]}
-                          testID={`rel-pedido-${p.pedido}`}
+                          testID={`rel-pedido-${p.origem || "P"}-${p.pedido}`}
                         >
                           <View style={{ flex: 1 }}>
-                            <Text style={styles.pedTitle}>#{p.pedido} · {brDate(p.data)}</Text>
+                            <Text style={styles.pedTitle}>{p.origem === "OS" ? "OS #" : "#"}{p.pedido} · {brDate(p.data)}</Text>
                             <Text style={styles.pedCliente} numberOfLines={1}>{p.cliente || "—"}</Text>
                             <Text style={styles.pedVals}>
                               Venda {formatBRL(p.venda)} · Desc {formatBRL(p.desconto)} · Custo {formatBRL(p.custo)}
@@ -331,6 +439,15 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, textAlign: "center", fontSize: 17, fontWeight: "500", color: colors.onBrandPrimary },
   scroll: { padding: spacing.lg, gap: spacing.md, paddingBottom: spacing.xxl },
   filters: { gap: spacing.sm },
+  origemRow: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.xs },
+  origemChip: {
+    flex: 1, alignItems: "center", justifyContent: "center",
+    paddingVertical: 9, borderRadius: radius.pill,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary,
+  },
+  origemChipSel: { borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary },
+  origemChipText: { fontSize: 13, color: colors.onSurface, fontWeight: "500" },
+  origemChipTextSel: { color: colors.brandPrimary, fontWeight: "700" },
   dateRow: { flexDirection: "row", gap: spacing.sm },
   fieldLabel: { fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "500" },
   input: {

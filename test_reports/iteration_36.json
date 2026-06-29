@@ -1,0 +1,39 @@
+{
+  "summary": "Iter 36 — frontend only (mobile 390x844). Validei a reorganização da aba Relatórios e a UNIFICAÇÃO dos relatórios de Descontos & Margens (Pedidos + OS) sob seletor de Origem. 6 cenários do request passaram: (1) /relatorios exibe a seção 'VENDAS' com EXATAMENTE 3 cartões nesta ordem — 'Relatório de Pedidos', 'Descontos & Margens', 'Relatório de OS' (testIDs relatorio-Relatório de Pedidos / relatorio-Descontos & Margens / relatorio-Relatório de OS). O antigo cartão 'OS · Descontos & Margem' NÃO está mais presente. (2) /relatorio-descontos renderiza com os 3 chips de origem (rel-origem-all, rel-origem-P, rel-origem-OS) e Origem='Todos' já vem selecionado por default. (3) Interceptando o tráfego de rede: Origem='Pedidos' chamou APENAS /api/relatorios/descontos-margem. Origem='OS' chamou APENAS /api/relatorios/os/descontos-margem. Origem='Todos' chamou OS DOIS endpoints em paralelo (Promise.all). (4) O campo 'Código (Pedido / OS)' (testID rel-pedido) aplica corretamente: em origem=P vira ?pedido=99 no endpoint de pedidos; em origem=OS vira ?os_cod=99 no endpoint de OS; em origem='Todos', ?pedido=99 vai no endpoint de pedidos E ?os_cod=99 vai no endpoint de OS, simultaneamente. (5) Navegação por URL com ?pedido=1 abriu /relatorio-descontos com header 'Análise do Pedido #1' e fez auto-fetch (origem=P + range 2000-01-01..2100-12-31), conforme useEffect. (6) Code review confirma a lógica de navegação por linha em relatorio-descontos.tsx (linhas 397-403): se p.origem==='OS' → router.push /os-form?codigo=X, senão → /pedido-form?pedido=X. NÃO consegui acionar fisicamente o clique numa linha porque o banco BDREACTAPP (Azure serverless) retornou 0 pedidos/OS no período corrente e o DateField em web usa o nativo @react-native-community/datetimepicker (sem hook acessível via Playwright). Mas todas as chamadas HTTP retornaram com sucesso (200) e o merge de totais (mergeReports) e a função tagOrigem estão corretos por inspeção. Login KONTACTO/$KONT2011 e seed da conexão via localStorage funcionaram. Sem erros nem red-screens.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "shadow* style props",
+        "issue": "Warning persistente (legado, não bloqueante): '\"shadow*\" style props are deprecated. Use \"boxShadow\".' Já reportado em iters anteriores. Reference: vários arquivos de estilo."
+      },
+      {
+        "component": "props.pointerEvents",
+        "issue": "Warning persistente (legado, não bloqueante): 'props.pointerEvents is deprecated. Use style.pointerEvents.'"
+      }
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "(Opcional / housekeeping) Remover o arquivo órfão /app/frontend/app/relatorio-os-descontos.tsx, já que /relatorio-descontos agora é a tela UNIFICADA e nada do menu aponta para a tela antiga. O agent-context confirma que era esperado mantê-la temporariamente, mas o ideal é apagar para evitar confusão futura.",
+    "(Opcional) Limpar warnings legacy shadow*/pointerEvents no codebase."
+  ],
+  "critical_code_review_comments": [
+    "OK relatorios.tsx (linhas 18-40): VENDAS_REPORTS contém EXATAMENTE 3 entradas — 'Relatório de Pedidos' → /relatorio-pedidos, 'Descontos & Margens' → /relatorio-descontos, 'Relatório de OS' → /relatorio-os. O título da seção 'Vendas' é renderizado em linha 57 e cada cartão filtrado por permissão (linha 45 — usePermissions().can).",
+    "OK relatorio-descontos.tsx (linhas 178-194): branch correto por origem — 'P' → fetchPed apenas; 'OS' → fetchOS apenas; default ('all') → Promise.all([fetchPed, fetchOS]) + mergeReports. mergeReports (linhas 60-102) agrupa por vendedor, soma sub_venda/sub_desconto/sub_custo/sub_margem e recalcula margem_pct com round2 — implementação correta para 'Todos = Pedidos + OS'.",
+    "OK relatorio-descontos.tsx (linhas 167-176): código vira ?pedido= no endpoint de pedidos e ?os_cod= no endpoint de OS — comportamento confirmado via interceptação de rede.",
+    "OK relatorio-descontos.tsx (linhas 397-403): cada linha sabe sua origem (via tagOrigem) e o onPress condicional roteia para /os-form com {codigo} se origem==='OS', ou para /pedido-form com {pedido} caso contrário. testID 'rel-pedido-OS-X' e 'rel-pedido-P-X' permitem distinguir nos testes.",
+    "OK relatorio-descontos.tsx (linhas 208-215): quando ?pedido=X vem na URL, o useEffect força range amplo (2000-01-01..2100-12-31) e dispara buscar com override imediato — não depende do setState assíncrono. Bom uso de override.",
+    "Atenção menor (não-bloqueante): relatorio-descontos.tsx (linha 408): rótulo '#' para Pedido e 'OS #' para OS. O destaque visual entre os dois tipos depende só do prefixo — pode ser útil adicionar um pequeno chip/badge para acessibilidade, mas atende à especificação atual."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "N/A (não testado)", "frontend": "100% (6/6 cenários do request — execução + revisão de código)" },
+  "seed_data_creation": "Seedei 1 conexão no localStorage do browser de teste (chave @back_on/connections): empresa=Teste, servidor=gibanweb.database.windows.net, banco=BDREACTAPP, api=https://order-crud-discounts.preview.emergentagent.com. Não impacta produção.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "O arquivo /app/frontend/app/relatorio-os-descontos.tsx ainda existe como órfão (sem entrada no menu). O backend NÃO foi alterado — continuam os dois endpoints separados (/api/relatorios/descontos-margem e /api/relatorios/os/descontos-margem) e o front faz o merge no client em origem='Todos'. O banco Azure BDREACTAPP retornou 0 linhas no período padrão (mês corrente) durante este teste — se for necessário validar render visual das linhas Pedido/OS e a navegação física por clique, é preciso seedar dados num período recente OU expandir o DateField (que em web usa picker nativo difícil de manipular em Playwright). A lógica de navegação por linha está coberta por inspeção de código (linhas 397-403 do relatorio-descontos.tsx).",
+  "rca_of_issue": "Nenhum bug encontrado. Todas as 5 features do request foram validadas conforme a especificação."
+}
