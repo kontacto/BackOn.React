@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
@@ -7,6 +7,11 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import DateField from "@/src/components/DateField";
+import SelectField, { SelectOption } from "@/src/components/SelectField";
+import NiveisModal from "@/src/components/NiveisModal";
+import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
+import { ClienteRow } from "@/src/components/pedido/types";
+import { apiGet } from "@/src/utils/api";
 import { Connection, listConnections } from "@/src/utils/storage/connections";
 import { getSession } from "@/src/utils/storage/session";
 import { useMargemLucro, MargemLucroFiltros } from "@/src/hooks/useMargemLucro";
@@ -68,10 +73,21 @@ export default function RelatorioMargemLucroScreen() {
   const [opVendaDireta, setOpVendaDireta] = useState(false);
   const [opOsNaoCobrados, setOpOsNaoCobrados] = useState(false);
 
-  const [codCliente, setCodCliente] = useState("");
-  const [areaAtuacao, setAreaAtuacao] = useState("");
+  const [codCliente, setCodCliente] = useState<number | null>(null);
+  const [clienteNome, setClienteNome] = useState("");
+  const [area, setArea] = useState<number>(0);
+  const [areaOptions, setAreaOptions] = useState<SelectOption[]>([]);
   const [nivel, setNivel] = useState("");
+  const [nivelLabel, setNivelLabel] = useState("");
   const [codDav, setCodDav] = useState("");
+
+  // pickers / lookups
+  const [activeConn, setActiveConn] = useState<Connection | null>(null);
+  const [cliOpen, setCliOpen] = useState(false);
+  const [cliTerm, setCliTerm] = useState("");
+  const [cliResults, setCliResults] = useState<ClienteRow[]>([]);
+  const [cliLoading, setCliLoading] = useState(false);
+  const [niveisOpen, setNiveisOpen] = useState(false);
 
   const [busca, setBusca] = useState("");
   const [empExp, setEmpExp] = useState<Record<string, boolean>>({});
@@ -83,12 +99,52 @@ export default function RelatorioMargemLucroScreen() {
         const list = await listConnections();
         const sess = await getSession();
         setConns(list);
-        const active = list.find((c) => c.empresa === sess?.empresa && c.banco === sess?.database) || list[0];
+        const active = list.find((c) => c.empresa === sess?.empresa && c.banco === sess?.database) || list[0] || null;
+        setActiveConn(active);
         setApiBase(active?.api || "");
         setSelIds((prev) => (prev.size > 0 ? prev : new Set(list.map((c) => c.id))));
       })();
     }, [])
   );
+
+  // Conexão usada para os lookups (cliente/área/nível): a 1ª empresa selecionada.
+  const lookupConn = useMemo<Connection | null>(
+    () => conns.find((c) => selIds.has(c.id)) || activeConn,
+    [conns, selIds, activeConn]
+  );
+
+  // Carrega as áreas de atuação da conexão de lookup.
+  useEffect(() => {
+    if (!lookupConn) return;
+    (async () => {
+      try {
+        const j = await apiGet(lookupConn, "/api/area-atuacao");
+        const opts: SelectOption[] = [{ value: 0, label: "Todas" }];
+        (j?.items || []).forEach((a: { codigo: number; descricao: string }) =>
+          opts.push({ value: a.codigo, label: a.descricao }));
+        setAreaOptions(opts);
+      } catch {
+        setAreaOptions([{ value: 0, label: "Todas" }]);
+      }
+    })();
+  }, [lookupConn]);
+
+  // Busca de cliente (debounce) na conexão de lookup.
+  useEffect(() => {
+    if (!cliOpen || !lookupConn) return;
+    const t = setTimeout(async () => {
+      setCliLoading(true);
+      try {
+        const j = await apiGet(lookupConn, "/api/clientes/find/search", { term: cliTerm });
+        setCliResults(j?.items || []);
+      } catch {
+        setCliResults([]);
+      } finally {
+        setCliLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [cliTerm, cliOpen, lookupConn]);
 
   const toggleEmpresa = (id: string) => {
     setSelIds((prev) => {
@@ -109,7 +165,7 @@ export default function RelatorioMargemLucroScreen() {
     };
     const filtros: MargemLucroFiltros = {
       data_ini: dataIni, data_fim: dataFim,
-      cod_cliente: num(codCliente), area_atuacao: num(areaAtuacao),
+      cod_cliente: codCliente, area_atuacao: area > 0 ? area : null,
       nivel: nivel.trim() || null, cod_dav: num(codDav),
       incluir_pedidos: incluirPedidos, incluir_os: incluirOS, incluir_comandas: incluirComandas,
       davs_abertos: sitAbertos, davs_fechados: sitFechados, davs_faturados: sitFaturados,
@@ -229,32 +285,42 @@ export default function RelatorioMargemLucroScreen() {
               <Chip label="Itens O.S. não cobrados" active={opOsNaoCobrados} onPress={() => setOpOsNaoCobrados((v) => !v)} testID="ml-o-nc" />
             </View>
 
-            <View style={styles.inputRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>Cód. Cliente</Text>
-                <TextInput value={codCliente} onChangeText={setCodCliente} keyboardType="number-pad"
-                  placeholder="opcional" placeholderTextColor={colors.muted} style={styles.input} testID="ml-cliente" />
-              </View>
-              <View style={{ width: spacing.md }} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>Área Atuação</Text>
-                <TextInput value={areaAtuacao} onChangeText={setAreaAtuacao} keyboardType="number-pad"
-                  placeholder="opcional" placeholderTextColor={colors.muted} style={styles.input} testID="ml-area" />
-              </View>
-            </View>
-            <View style={styles.inputRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>Nível (cód.)</Text>
-                <TextInput value={nivel} onChangeText={setNivel} autoCapitalize="none"
-                  placeholder="ex: 001002" placeholderTextColor={colors.muted} style={styles.input} testID="ml-nivel" />
-              </View>
-              <View style={{ width: spacing.md }} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>Nº DAV</Text>
-                <TextInput value={codDav} onChangeText={setCodDav} keyboardType="number-pad"
-                  placeholder="opcional" placeholderTextColor={colors.muted} style={styles.input} testID="ml-dav" />
-              </View>
-            </View>
+            <Text style={styles.label}>Cliente</Text>
+            <Pressable style={styles.selector} onPress={() => { setCliTerm(""); setCliResults([]); setCliOpen(true); }} testID="ml-cliente">
+              <Text style={clienteNome ? styles.selectorText : styles.selectorPlaceholder} numberOfLines={1}>
+                {clienteNome ? `#${codCliente} · ${clienteNome}` : "Todos os clientes"}
+              </Text>
+              {codCliente ? (
+                <Pressable onPress={() => { setCodCliente(null); setClienteNome(""); }} hitSlop={8} testID="ml-cliente-clear">
+                  <Ionicons name="close-circle" size={18} color={colors.muted} />
+                </Pressable>
+              ) : <Ionicons name="search" size={18} color={colors.muted} />}
+            </Pressable>
+
+            <SelectField
+              label="Área de Atuação"
+              value={area}
+              onChange={(v) => setArea(Number(v))}
+              options={areaOptions}
+              placeholder="Todas"
+              testID="ml-area"
+            />
+
+            <Text style={styles.label}>Nível</Text>
+            <Pressable style={styles.selector} onPress={() => setNiveisOpen(true)} testID="ml-nivel">
+              <Text style={nivel ? styles.selectorText : styles.selectorPlaceholder} numberOfLines={1}>
+                {nivel ? nivelLabel : "Todos os níveis"}
+              </Text>
+              {nivel ? (
+                <Pressable onPress={() => { setNivel(""); setNivelLabel(""); }} hitSlop={8} testID="ml-nivel-clear">
+                  <Ionicons name="close-circle" size={18} color={colors.muted} />
+                </Pressable>
+              ) : <Ionicons name="git-branch-outline" size={18} color={colors.muted} />}
+            </Pressable>
+
+            <Text style={styles.label}>Nº DAV (Pedido / O.S.)</Text>
+            <TextInput value={codDav} onChangeText={setCodDav} keyboardType="number-pad"
+              placeholder="opcional" placeholderTextColor={colors.muted} style={styles.input} testID="ml-dav" />
 
             <Pressable
               onPress={gerar}
@@ -282,6 +348,11 @@ export default function RelatorioMargemLucroScreen() {
               <View style={styles.card}><Text style={styles.cardLbl}>Margem %</Text><Text style={[styles.cardVal, { color: colors.brandPrimary }]}>{consolidado.margem_pct}%</Text></View>
             </View>
             <Text style={styles.resumoMeta}>{consolidado.qtd_empresas} empresa(s) · {consolidado.qtd_davs} DAV(s)</Text>
+            {data?.empresas?.some((e) => e.truncated) ? (
+              <Text style={styles.trunc}>
+                Exibindo apenas os DAVs mais recentes (limite de detalhe). Os totais consideram TODOS os registros — refine os filtros/período para ver tudo.
+              </Text>
+            ) : null}
 
             <View style={styles.searchWrap}>
               <Ionicons name="search" size={16} color={colors.muted} />
@@ -349,6 +420,23 @@ export default function RelatorioMargemLucroScreen() {
           </>
         ) : null}
       </ScrollView>
+
+      <ClientSearchModal
+        visible={cliOpen}
+        onClose={() => setCliOpen(false)}
+        term={cliTerm}
+        setTerm={setCliTerm}
+        loading={cliLoading}
+        results={cliResults}
+        onPick={(c) => { setCodCliente(c.codigo); setClienteNome(c.nome); setCliOpen(false); }}
+        onCreate={() => setCliOpen(false)}
+      />
+      <NiveisModal
+        visible={niveisOpen}
+        conn={activeConn}
+        onClose={() => setNiveisOpen(false)}
+        onPick={(codigo, label) => { setNivel(codigo); setNivelLabel(codigo ? label : ""); setNiveisOpen(false); }}
+      />
     </SafeAreaView>
   );
 }
@@ -386,6 +474,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md, paddingVertical: 10, borderWidth: 1, borderColor: colors.border,
     fontSize: 14, color: colors.onSurface, minHeight: 42,
   },
+  selector: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
+    paddingHorizontal: spacing.md, paddingVertical: 11, borderWidth: 1, borderColor: colors.border,
+    minHeight: 42, gap: spacing.sm,
+  },
+  selectorText: { flex: 1, fontSize: 14, color: colors.onSurface },
+  selectorPlaceholder: { flex: 1, fontSize: 14, color: colors.muted },
+  trunc: { fontSize: 12, color: colors.muted, marginBottom: spacing.sm, fontStyle: "italic" },
   btnGerar: {
     backgroundColor: colors.brandPrimary, borderRadius: radius.pill,
     alignItems: "center", justifyContent: "center", paddingVertical: 14, marginTop: spacing.md,

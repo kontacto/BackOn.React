@@ -15,7 +15,7 @@ export type MLDav = {
 export type MLEmpresa = {
   empresa: string; servidor: string; banco: string; success: boolean; message?: string;
   total_venda?: number; total_custo?: number; lucro?: number; margem_pct?: number;
-  qtd_davs?: number; davs?: MLDav[];
+  qtd_davs?: number; davs?: MLDav[]; truncated?: boolean; davs_exibidos?: number;
 };
 export type MLConsolidado = {
   total_venda: number; total_custo: number; lucro: number; margem_pct: number;

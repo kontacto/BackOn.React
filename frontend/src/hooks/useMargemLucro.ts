@@ -36,16 +36,34 @@ type Vars = { api: string; conexoes: ConexaoEmpresa[]; filtros: MargemLucroFiltr
 
 async function postMargemLucro({ api, conexoes, filtros }: Vars): Promise<MargemLucroResponse> {
   const base = api.replace(/\/+$/, "");
-  const res = await fetch(`${base}/api/relatorios/margem-lucro`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conexoes, ...filtros }),
-  });
-  const json = await res.json();
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/relatorios/margem-lucro`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conexoes, ...filtros }),
+    });
+  } catch (e) {
+    throw new Error(`Falha de conexão com o servidor: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!res.ok) {
+    let detalhe = "";
+    try { detalhe = (await res.text()).slice(0, 200); } catch { /* ignore */ }
+    if (res.status === 504 || res.status === 502) {
+      throw new Error(`Tempo limite excedido (${res.status}). O período pode ser muito amplo — reduza o intervalo de datas ou filtre por empresa/cliente.`);
+    }
+    throw new Error(`Erro ${res.status} ao gerar o relatório${detalhe ? `: ${detalhe}` : "."}`);
+  }
+  let json: MargemLucroResponse;
+  try {
+    json = (await res.json()) as MargemLucroResponse;
+  } catch {
+    throw new Error("Resposta inválida do servidor (provável tempo limite ou volume de dados muito grande). Reduza o período ou aplique filtros.");
+  }
   if (!json?.success) {
     throw new Error(json?.message || "Falha ao gerar o relatório.");
   }
-  return json as MargemLucroResponse;
+  return json;
 }
 
 /** Mutation para gerar o relatório de Margem de Lucro (acionado sob demanda). */

@@ -1,0 +1,30 @@
+{
+  "summary": "Iter 38 — frontend only (mobile 390x844, web preview). Validei os 4 NOVOS controles de filtro do relatório 'Margem de Lucro' + campo Nº DAV + fluxo de gerar com sucesso. TODOS os 7 cenários do request PASSARAM. (1) Navegação direta para /relatorio-margem-lucro renderiza a tela com testID margem-lucro-screen e todos os filtros visíveis. (2) Filtro CLIENTE (ml-cliente): tap abre o ClientSearchModal com título 'Buscar Cliente' e input placeholder 'Nome, CPF/CNPJ ou telefone…'; digitar 'teste' dispara GET /api/clientes/find/search?term=teste retornando 200 (lista vazia esperada no BDREACTAPP do Azure). Wiring debounce OK (1 call por término). Botão ml-cliente-clear não foi acionado pois nenhum cliente foi selecionado (banco vazio), mas o code review confirma o wiring nas linhas 293-297 de relatorio-margem-lucro.tsx. (3) Filtro ÁREA DE ATUAÇÃO (ml-area): tap abre SelectField combobox com a opção 'Todas' já marcada (check verde). GET /api/area-atuacao?banco=BDREACTAPP retornou 200 (lista vazia → apenas 'Todas' visível). (4) Filtro NÍVEL (ml-nivel): tap abre NiveisModal com título 'Selecionar Nível', barra de busca testID ml-niveis-search, opção ml-nivel-todos ('Todos os níveis') presente. Tap em ml-nivel-todos FECHA o modal corretamente (verificado: ml-niveis-search desaparece). Lista de níveis vazia ('Nenhum nível encontrado.') no banco Azure — esperado. (5) Campo Nº DAV (ml-dav) presente com rótulo 'Nº DAV (PEDIDO / O.S.)' e placeholder 'opcional', keyboardType number-pad. (6) Gerar Relatório (ml-gerar): POST /api/relatorios/margem-lucro retornou 200; cards TOTAL VENDAS / TOTAL CUSTOS / LUCRO / MARGEM % renderizaram (zeros), '1 empresa(s) · 0 DAV(s)', ml-export passou de aria-disabled=true para enabled (None), painel 'Teste · 0 DAV(s) · Lucro R$ 0,00 (0%)' com 'Nenhum registro.'. Filtros recolheram automaticamente após sucesso (setFiltrosOpen(false) no onSuccess). (7) Nenhum 'Falha ao gerar' ou 'Erro ao gerar' exibido no fluxo de sucesso — mensagem de erro fica restrita ao caminho ml.isError com error.message descritivo (verificado no useMargemLucro.ts linhas 49-66 onde 504/502 retornam mensagem de timeout específica e erros HTTP incluem o status+detalhe). Sem red-screen, sem PAGEERROR. Avisos legacy 'shadow*' e 'pointerEvents' persistem (não bloqueantes, já reportados).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      { "component": "shadow* style props", "issue": "Warning legacy persistente (não bloqueante) já reportado em iters anteriores." },
+      { "component": "props.pointerEvents", "issue": "Warning legacy persistente (não bloqueante) já reportado em iters anteriores." }
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "OK relatorio-margem-lucro.tsx (linhas 288-298): seletor de Cliente abre modal corretamente; estado cliTerm/cliResults limpos a cada abertura; botão ml-cliente-clear condicionado a codCliente!=null. Wiring perfeito.",
+    "OK relatorio-margem-lucro.tsx (linhas 117-130): areaOptions sempre inclui 'Todas' (value=0) como fallback mesmo em erro do endpoint. SelectField recebe options + placeholder='Todas'.",
+    "OK relatorio-margem-lucro.tsx (linhas 132-147): debounce 300ms no useEffect de busca de cliente; cancelamento via clearTimeout no cleanup; só dispara com cliOpen && lookupConn.",
+    "OK NiveisModal.tsx (linhas 32-47, 80-86): carrega /api/relatorios/margem-lucro/niveis ao abrir; trata erro com setErro; opção 'Todos os níveis' (ml-nivel-todos) chama onPick('', 'Todos os níveis') que zera o filtro e fecha o modal.",
+    "OK useMargemLucro.ts (linhas 37-66): mensagens de erro DESCRITIVAS — 504/502 dizem 'Tempo limite excedido... reduza o intervalo'; outros HTTPs incluem 'Erro {status} ao gerar o relatório: {detalhe}'; falha de fetch diz 'Falha de conexão com o servidor: ...'. Nunca exibe 'Falha ao gerar' genérico — só usa json.message do backend ou fallback 'Falha ao gerar o relatório.' (apenas se backend retornar success=false sem message). Atende ao requisito do usuário.",
+    "OK relatorio-margem-lucro.tsx (linhas 321-323): Nº DAV usa TextInput com keyboardType='number-pad' e label 'Nº DAV (Pedido / O.S.)'. Conversão para int>0 ou null no gerar() (linhas 162-165)."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "N/A (não testado)", "frontend": "100% (7/7 cenários do request)" },
+  "seed_data_creation": "Reusei o seed do localStorage: @back_on/connections com 1 conexão Teste/BDREACTAPP. Também seedei @back_on/session para pular o login KONTACTO e ir direto para /relatorio-margem-lucro (já que a navegação independe do menu).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Banco Azure BDREACTAPP está VAZIO — clientes/níveis/áreas retornam listas vazias. Isso NÃO é bug; o backend já foi validado contra sql.juansouza.com.br/BD_PAJE pelo main agent (15 clientes, 304 níveis, 24000 DAVs com truncated=true em 1500). Para testar a renderização das LISTAS preenchidas nos 3 modais (cliente/área/nível) é preciso conectar em uma das bases de homologação ou seedar dados no Azure. O fluxo de truncated=true (badge 'Exibindo apenas os DAVs mais recentes...') existe nas linhas 351-355 mas não foi possível disparar com o banco vazio.",
+  "rca_of_issue": "Nenhum bug encontrado. Os 4 novos controles de filtro estão integralmente funcionais e o fluxo de erro do hook useMargemLucro retorna mensagens descritivas conforme o ajuste solicitado (não há mais 'Falha ao gerar' genérico)."
+}

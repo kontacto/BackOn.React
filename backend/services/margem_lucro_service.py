@@ -23,6 +23,10 @@ from typing import Optional
 
 from db.connection import _open_conn
 
+# Máximo de DAVs detalhados retornados por empresa (protege o app de respostas
+# gigantes). Os TOTAIS são sempre calculados sobre todos os registros.
+MAX_DAVS_DETALHE = 1500
+
 
 # --------------------------------------------------------------------------- #
 # Helpers de cálculo
@@ -314,12 +318,21 @@ def _consultar_empresa_sync(empresa: str, servidor: str, banco: str, f: dict) ->
         return {**base, "success": False, "message": f"Erro na consulta: {e}", "davs": []}
 
     dav_list, emp_venda, emp_custo = _agregar(rows, operacional)
+    # Limita o volume de detalhe enviado ao app (os totais permanecem completos).
+    # Mantém os DAVs mais recentes primeiro.
+    dav_list.sort(key=lambda d: d.get("data") or "", reverse=True)
+    qtd_total = len(dav_list)
+    truncated = qtd_total > MAX_DAVS_DETALHE
+    if truncated:
+        dav_list = dav_list[:MAX_DAVS_DETALHE]
     return {
         **base, "success": True, "davs": dav_list,
         "total_venda": emp_venda, "total_custo": emp_custo,
         "lucro": round(emp_venda - emp_custo, 2),
         "margem_pct": _margem_pct(emp_venda, emp_custo, operacional),
-        "qtd_davs": len(dav_list),
+        "qtd_davs": qtd_total,
+        "truncated": truncated,
+        "davs_exibidos": len(dav_list),
     }
 
 
