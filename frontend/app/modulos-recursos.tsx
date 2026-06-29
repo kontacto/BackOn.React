@@ -155,8 +155,6 @@ const styles = StyleSheet.create({
   backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   headerTitle: { flex: 1, textAlign: "center", color: colors.onBrandPrimary, fontSize: 17, fontWeight: "600" },
   intro: { paddingHorizontal: spacing.lg, paddingTop: spacing.md, color: colors.muted, fontSize: 13, lineHeight: 18 },
-  errorText: { marginHorizontal: spacing.lg, marginTop: spacing.sm, color: colors.error, fontSize: 13 },
-  feedbackText: { marginHorizontal: spacing.lg, marginTop: spacing.sm, color: colors.success, fontSize: 13, fontWeight: "500" },
   row: {
     flexDirection: "row",
     alignItems: "center",

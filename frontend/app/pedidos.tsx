@@ -409,7 +409,6 @@ const styles = StyleSheet.create({
   clearBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
   clearBtnText: { fontSize: 12, color: colors.brandPrimary, fontWeight: "500" },
   filterRow: { flexDirection: "row", gap: 8 },
-  errorText: { color: colors.error, fontSize: 13, marginHorizontal: spacing.lg, marginBottom: spacing.sm },
   card: {
     flexDirection: "row", alignItems: "center", gap: spacing.md,
     backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
