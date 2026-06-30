@@ -34,6 +34,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $BackendDir = Split-Path -Parent $ScriptDir          # ...\backend
 $VenvPython = Join-Path $BackendDir ".venv\Scripts\python.exe"
+$VenvCfg    = Join-Path $BackendDir ".venv\pyvenv.cfg"
 $LogDir     = Join-Path $BackendDir "logs"
 
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
@@ -45,8 +46,12 @@ function Write-Log([string]$msg) {
 }
 
 # --- Escolhe o Python (venv de preferência) ---
-if (Test-Path $VenvPython) {
+if ((Test-Path $VenvPython) -and (Test-Path $VenvCfg)) {
     $Python = $VenvPython
+} elseif (Test-Path $VenvPython) {
+  $Python = "python"
+  Write-Log "AVISO: venv encontrado, mas sem pyvenv.cfg em $VenvCfg (venv corrompido)."
+  Write-Log "AVISO: usando 'python' do PATH temporariamente. Recrie o .venv para corrigir em definitivo."
 } else {
     $Python = "python"
     Write-Log "AVISO: venv nao encontrado em $VenvPython. Usando 'python' do PATH."
@@ -63,6 +68,19 @@ if ($StartupDelaySeconds -gt 0) {
 }
 
 Set-Location $BackendDir
+
+# Preflight para falhar de forma clara quando o ambiente Python nao estiver pronto.
+try {
+  & $Python -c "import uvicorn" 2>&1 | Tee-Object -FilePath $LogFile -Append
+  if ($LASTEXITCODE -ne 0) {
+    Write-Log "ERRO: modulo 'uvicorn' indisponivel no Python selecionado ($Python)."
+    Write-Log "ERRO: execute a recriacao do venv e instalacao de dependencias antes de subir o supervisor."
+    exit 1
+  }
+} catch {
+  Write-Log "ERRO no preflight do Python: $($_.Exception.Message)"
+  exit 1
+}
 
 # IMPORTANTE: o uvicorn escreve os logs (INFO/WARNING) no STDERR. Com
 # $ErrorActionPreference = "Stop", o PowerShell trata QUALQUER saida em stderr de
