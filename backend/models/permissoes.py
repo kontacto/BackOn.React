@@ -1,5 +1,5 @@
 """Modelos do módulo de Permissões (tabela SQL `permissoes`, sistema=50)."""
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -16,5 +16,10 @@ class PermItem(BaseModel):
 class SalvarPermissoesRequest(BaseModel):
     servidor: str
     banco: str
-    classe: int
+    classe: int  # grupo ALVO sendo editado — não dá pra reusar AuditFields aqui
+    # (mesma colisão de nomes documentada em routes/usuarios.py: "classe" já
+    # significa outra coisa neste request). Só usuario_alteracao/plataforma
+    # entram direto, pro log de auditoria.
+    usuario_alteracao: Optional[int] = None
+    plataforma: Optional[str] = None
     itens: List[PermItem] = []

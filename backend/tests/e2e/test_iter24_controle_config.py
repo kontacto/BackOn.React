@@ -98,9 +98,9 @@ class TestSalvarESobreposicao:
         r, data = _retry_get(api, f"{BASE_URL}/api/permissoes/catalogo", params=QS)
         assert r.status_code == 200, r.text
         assert data.get("success") is True, data
-        # Procura menu MOVIMENTO -> tela PEDIDO
+        # Procura menu TRANSACOES -> tela PEDIDO
         for menu in data["catalogo"]:
-            if menu.get("tela") == "MOVIMENTO":
+            if menu.get("tela") == "TRANSACOES":
                 for t in menu["children"]:
                     if t.get("tela") == "PEDIDO":
                         return True
@@ -144,10 +144,10 @@ class TestCatalogoSemFiltro:
         assert r.status_code == 200, r.text
         data = r.json()
         assert data["success"] is True
-        # Esperado conter MOVIMENTO > PEDIDO (sem filtro)
+        # Esperado conter TRANSACOES > PEDIDO (sem filtro)
         has = False
         for menu in data["catalogo"]:
-            if menu.get("tela") == "MOVIMENTO":
+            if menu.get("tela") == "TRANSACOES":
                 for t in menu["children"]:
                     if t.get("tela") == "PEDIDO":
                         has = True

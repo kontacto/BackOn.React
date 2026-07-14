@@ -1,7 +1,7 @@
 // Tela/bloco exibido quando o usuário não tem permissão de acesso.
 import { Text, View, StyleSheet } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors, spacing } from "@/src/theme/colors";
 

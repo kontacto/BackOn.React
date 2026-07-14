@@ -1,13 +1,20 @@
-// Modal de seleção de Nível (árvore de níveis de produto) para o relatório de Margem.
+// Modal de seleção de Nível (árvore de níveis de produto) — reaproveitado
+// pelo relatório de Margem de Lucro e pela Classificação Mercadológica
+// (somente leitura) em Serviços. Segue o mesmo padrão "compactWeb" de
+// SelectField.tsx (card centralizado com radius forte no web, bottom-sheet
+// no mobile) — ver CLAUDE.md > "Modal/Selector Standard (Web)".
 import { useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
+import { AppModal } from "@/src/components/AppModal";
 
 import { apiGet } from "@/src/utils/api";
 import { Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
+
+const isCompactWeb = Platform.OS === "web";
 
 export type NivelNode = {
   cod_nivel: number | string;
@@ -55,9 +62,9 @@ export default function NiveisModal({ visible, conn, onClose, onPick }: Props) {
   }, [niveis, term]);
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.bg} onPress={onClose}>
-        <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
+    <AppModal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={[styles.bg, isCompactWeb && styles.bgWebCompact]} onPress={onClose}>
+        <Pressable style={[styles.card, isCompactWeb && styles.cardWebCompact]} onPress={(e) => e.stopPropagation()}>
           <View style={styles.header}>
             <Text style={styles.title}>Selecionar Nível</Text>
             <Pressable onPress={onClose} hitSlop={8}>
@@ -109,15 +116,21 @@ export default function NiveisModal({ visible, conn, onClose, onPick }: Props) {
           </ScrollView>
         </Pressable>
       </Pressable>
-    </Modal>
+    </AppModal>
   );
 }
 
 const styles = StyleSheet.create({
   bg: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
+  bgWebCompact: { justifyContent: "center", paddingHorizontal: spacing.xl },
   card: {
     backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
     padding: spacing.lg, maxHeight: "85%",
+  },
+  cardWebCompact: {
+    width: "100%", maxWidth: 560, alignSelf: "center", maxHeight: "80%",
+    borderBottomLeftRadius: radius.lg, borderBottomRightRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.border,
   },
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
   title: { fontSize: 16, fontWeight: "700", color: colors.onSurface },
@@ -135,6 +148,6 @@ const styles = StyleSheet.create({
   rowTodos: { fontSize: 14, fontWeight: "700", color: colors.brandPrimary },
   rowDesc: { fontSize: 14, color: colors.onSurface },
   rowCod: { fontSize: 11, color: colors.muted, marginTop: 2 },
-  erro: { color: colors.danger, fontSize: 13, marginVertical: spacing.sm },
+  erro: { color: colors.error, fontSize: 13, marginVertical: spacing.sm },
   vazio: { color: colors.muted, fontSize: 13, padding: spacing.md, textAlign: "center" },
 });

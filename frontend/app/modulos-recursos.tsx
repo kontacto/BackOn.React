@@ -1,12 +1,13 @@
 import { useCallback, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { Connection, listConnections } from "@/src/utils/storage/connections";
 import { usePermissions } from "@/src/permissions";
+import { useAuditContext } from "@/src/hooks/useAuditContext";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
@@ -15,6 +16,7 @@ type Campo = { campo: string; label: string };
 export default function ModulosRecursosScreen() {
   const router = useRouter();
   const { reload: reloadPermissions } = usePermissions();
+  const auditCtx = useAuditContext();
   const fb = useFeedback();
   const [conn, setConn] = useState<Connection | null>(null);
   const [campos, setCampos] = useState<Campo[]>([]);
@@ -25,8 +27,13 @@ export default function ModulosRecursosScreen() {
   const boot = useCallback(async () => {
     setLoading(true);
     const session = await getSession();
+    if (!session) {
+      router.replace("/login");
+      setLoading(false);
+      return;
+    }
     const conns = await listConnections();
-    const c = conns.find((x) => x.empresa === session?.empresa) ?? null;
+    const c = conns.find((x) => x.empresa === session.empresa) ?? null;
     setConn(c);
     if (!c) {
       fb.showError("Conexão não encontrada.");
@@ -68,7 +75,7 @@ export default function ModulosRecursosScreen() {
       const r = await fetch(`${base}/api/controle-config/salvar`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, valores }),
+        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...auditCtx, valores }),
       }).then((x) => x.json());
       if (r?.success) {
         fb.showSuccess(r.message || "Salvo.");
@@ -89,6 +96,7 @@ export default function ModulosRecursosScreen() {
         <Pressable onPress={() => router.back()} hitSlop={8} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
+        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Módulos e Recursos</Text>
         <View style={{ width: 40 }} />
       </View>

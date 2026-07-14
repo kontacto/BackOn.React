@@ -47,6 +47,16 @@ def test_sanitize_remove_controle_preserva_quebras():
 
 
 # ---------- message builder ----------
+def test_build_message_cli_nao_referencia_documento():
+    # "CLI" (Telemarketing) é mensagem avulsa — não tem doc/itens/valor/situação.
+    summary = {"doc_type": "CLI", "cliente_nome": "Maria Souza"}
+    msg = build_message(summary, "Equipe XYZ")
+    assert "Maria" in msg
+    assert "Equipe XYZ" in msg
+    assert "Nº" not in msg  # não referencia número de Pedido/OS
+    assert "Valor total" not in msg
+
+
 def _summary_os():
     return {
         "doc_type": "OS", "doc_label": "Ordem de Serviço", "doc": 7,

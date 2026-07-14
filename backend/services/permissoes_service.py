@@ -13,6 +13,7 @@ O catálogo de telas/ações é declarativo (abaixo): ao adicionar uma nova tela
 ação aqui, ela aparece automaticamente na árvore do app — sem cadastro manual.
 """
 import asyncio
+import unicodedata
 
 from db.connection import _open_conn
 from models.permissoes import SalvarPermissoesRequest
@@ -62,7 +63,111 @@ ACOES_OS = [
 ]
 
 
+# Ações da tela de CFOP: além do padrão, o botão que abre o modal de
+# "Vínculos de CFOP das NFe's importadas por XML" (tabela `cfop_xml`) tem
+# permissão própria — é uma sub-funcionalidade separada dentro da mesma tela.
+ACOES_CFOP = ACOES_PADRAO + [
+    ("VINCULOS_XML", "Vínculos XML"),
+]
+
+
+# Ações da tela de Clientes: além do padrão, o botão "Lista Negra" (cadastro
+# na tabela `lista_negra`, botão por cliente na listagem) tem permissão
+# própria — mesmo padrão de sub-funcionalidade separada já usado em CFOP
+# (VINCULOS_XML) e Produtos Níveis.
+ACOES_CLIENTE = ACOES_PADRAO + [
+    ("LISTA_NEGRA", "Lista Negra"),
+]
+
+
+# Ações da tela de Funcionários: além do padrão, o CRUD embutido de
+# Especialidades (ícone dentro da aba Especialidades, tabela
+# `especialidades`) tem permissão própria — mesmo padrão de
+# sub-funcionalidade separada já usado em Clientes (LISTA_NEGRA).
+ACOES_FUNCIONARIOS = ACOES_PADRAO + [
+    ("ESPECIALIDADE", "Cad. Especialidades"),
+]
+
+
+# Ações da tela de Serviços: além do padrão, o botão "Previsão de Produtos"
+# (abre a composição de materiais do serviço, tabela `produtos_compostos`)
+# tem permissão própria — mesmo padrão de sub-funcionalidade separada já
+# usado em Funcionários (ESPECIALIDADE) e Clientes (LISTA_NEGRA). Regra
+# geral do usuário (2026-07-10): todo botão que abre uma tela secundária de
+# CADASTRO (permite incluir/excluir, não só visualizar) precisa da sua
+# própria permissão — "Exceções da Comissão" (mesma tela) é só leitura,
+# não se enquadra e por isso não ganhou permissão própria aqui.
+ACOES_SERVICO = ACOES_PADRAO + [
+    ("PREV_PRODUTOS", "Previsão de Produtos"),
+]
+
+
+# Ações da tela de Equipamentos: além do padrão, 3 sub-funcionalidades
+# ganham permissão própria (mesmo padrão de PREV_PRODUTOS/LISTA_NEGRA/
+# ESPECIALIDADE) — DISPONIBILIZAR e ALT_NUM_SERIE são ações de CADASTRO
+# secundárias (mexem em outras tabelas: contratos_produtos_disponiveis/
+# contratos_produtos/retifica). ALTERAR_TIPO é diferente das demais: no
+# legado, o campo "Tipo do Equipamento" (Avulso/Contrato) só é editável
+# por usuários "gerente" (cod_funcao IN ('01','07','02'), hardcoded) —
+# aqui vira uma permissão própria em vez de checar função hardcoded,
+# mesmo espírito das exceções REPROC_ITEM/REPROC_RESERV em
+# ACOES_PRODUTO_NIVEIS (restrição sensível liberada por admin via
+# Permissões, não por código fixo).
+ACOES_EQUIPAMENTOS = ACOES_PADRAO + [
+    ("ALTERAR_TIPO", "Alterar Tipo"),
+    ("DISPONIBILIZAR", "Disponibilizar"),
+    ("ALT_NUM_SERIE", "Alt. Núm. Série"),
+]
+
+
+# Ações da tela de Telemarketing: além do padrão, "WHATSAPP" segue o mesmo
+# padrão já usado em Pedido/O.S. (ACOES_PEDIDO/ACOES_OS) — botão de envio
+# com permissão própria, gated no frontend via can("TELEMARKETING.WHATSAPP").
+ACOES_TELEMARKETING = ACOES_PADRAO + [
+    ("WHATSAPP", "Enviar por WhatsApp"),
+]
+
+
+# Ações da tela "Notas Fiscais" (migração de FrmManRec.frm, Fase 1 — CRUD
+# sem emissão fiscal real, ver notas_fiscais_service.py). CRITICAR e
+# CANCELAR ganham permissão própria porque são ações irreversíveis/com
+# efeito colateral em estoque — mesmo raciocínio de ALT_NUM_SERIE em
+# Equipamentos.
+ACOES_NOTAS_FISCAIS = ACOES_PADRAO + [
+    ("CRITICAR", "Criticar"),
+    ("CANCELAR", "Cancelar"),
+]
+
+
+# Ações da tela "Alterações Cadastro de Produtos Níveis" (alteração em massa de
+# pecas/servicos por faixa de NCM ou nível — ver produtos_niveis_service.py).
+# REPROC_ITEM/REPROC_RESERV substituem a restrição hardcoded a "KONTACTO" do
+# legado: só quem o admin liberar explicitamente na tela de Permissões tem
+# acesso a esses 2 botões (recálculo pesado de estoque).
+ACOES_PRODUTO_NIVEIS = [
+    ("ABRIR", "Abrir Tela"),
+    ("GRAVAR", "Gravar Campos"),
+    ("REAJUSTAR", "Reajustar Preço"),
+    ("LEI_TRANSP", "% Lei Transparência"),
+    ("DESATIVAR_NEG", "Desat. Estoque Neg."),
+    ("DESATIVAR_ZERO", "Desat. Estoque Zero"),
+    ("REPROC_ITEM", "Reprocessar Item"),
+    ("REPROC_RESERV", "Reproc. Reservados"),
+]
+
+
+# Limites reais das colunas da tabela SQL `permissoes` (tela/comando nvarchar(15),
+# nome nvarchar(20)). `_salvar_sync` trunca silenciosamente ao gravar — um código
+# de tela/comando/nome maior que isso grava um valor diferente do que o resto do
+# app usa para checar permissão (`can("TELA.COMANDO")`), quebrando o acesso sem
+# nenhum erro visível. Já aconteceu uma vez (GRUPO_MERCADOLOGICO, 19 chars,
+# virou GRUPO_MERCADOLO no banco) — essas asserções pegam isso na hora de
+# declarar o catálogo, não depois que alguém salva permissões silenciosamente erradas.
 def _tela(tela: str, nome: str, acoes=ACOES_PADRAO) -> dict:
+    assert len(tela) <= 15, f"tela '{tela}' tem {len(tela)} chars — coluna permissoes.tela é nvarchar(15)"
+    assert len(nome) <= 20, f"nome '{nome}' tem {len(nome)} chars — coluna permissoes.nome é nvarchar(20)"
+    for c, lbl in acoes:
+        assert len(c) <= 15, f"comando '{c}' (tela '{tela}') tem {len(c)} chars — coluna permissoes.comando é nvarchar(15)"
     return {
         "tipo": "TELA",
         "tela": tela,
@@ -76,20 +181,107 @@ def _tela(tela: str, nome: str, acoes=ACOES_PADRAO) -> dict:
 
 
 def _menu(tela: str, nome: str, telas: list) -> dict:
+    assert len(tela) <= 15, f"tela '{tela}' tem {len(tela)} chars — coluna permissoes.tela é nvarchar(15)"
+    assert len(nome) <= 20, f"nome '{nome}' tem {len(nome)} chars — coluna permissoes.nome é nvarchar(20)"
     return {"tipo": "MENU", "tela": tela, "comando": "", "nome": nome, "children": telas}
 
 
 # Árvore declarativa (Menu > Tela > Botões).
 CATALOGO = [
     _menu("CADASTROS", "Cadastros", [
-        _tela("CLIENTE", "Clientes"),
+        _tela("CLIENTE", "Clientes", ACOES_CLIENTE),
+        _tela("FORNECEDOR", "Fornecedores"),
         _tela("PRODUTO", "Produtos & Serviços"),
-        _tela("MARCAS", "Tabelas Aux. · Marcas"),
-        _tela("MODELOS", "Tabelas Aux. · Modelos"),
+        _tela("SERVICO", "Serviços", ACOES_SERVICO),
+        _tela("PRODUTO_NIVEIS", "Alt. Produtos Níveis", ACOES_PRODUTO_NIVEIS),
+        _tela("VEICULOS", "Veículos"),
+        _tela("FUNCIONARIOS", "Funcionários", ACOES_FUNCIONARIOS),
+        # Entrada/Saída de Caixa fica em Cadastros, não em Financeiro — é o
+        # caixa OPERACIONAL da loja (recebe as vendas do dia), não o caixa
+        # financeiro; pedido explícito do usuário (ver PENDENCIAS.md).
+        _tela("MOV_CAIXA", "Entrada/Saída Caixa"),
+        _tela("CONTATOS", "Contatos"),
+        _tela("EQUIPAMENTOS", "Equipamentos", ACOES_EQUIPAMENTOS),
+        _tela("TELEMARKETING", "Telemarketing", ACOES_TELEMARKETING),
+        _tela("NOTAS_FISCAIS", "Notas Fiscais", ACOES_NOTAS_FISCAIS),
+        _menu("TABAUX", "Tabelas Auxiliares", [
+            _tela("MARCAS", "Marcas"),
+            _tela("MODELOS", "Modelos"),
+            _tela("AREA", "Área"),
+            _tela("AREA_ATUACAO", "Área de Atuação"),
+            _tela("FORMA_PAGAMENTO", "Forma de Pagamento"),
+            _tela("GRUPO_USUARIO", "Grupo de Usuário"),
+            _tela("GRUPO_MERCAD", "Grupo Mercadológico"),
+            _tela("CFOP", "Cfop", ACOES_CFOP),
+            _tela("CFOP_PISCOF", "Cfop x Pis/Cofins"),
+            _tela("CORES", "Cores"),
+            _tela("ICMS", "Icms"),
+            _tela("ORIGEM", "Origem"),
+            _tela("REGIOES", "Regiões"),
+            _tela("ROTAS", "Rotas"),
+            _tela("SEGMENTOS", "Segmentos"),
+            _tela("SITUACAO", "Situação"),
+            _tela("TAMANHO", "Tamanhos"),
+            _tela("TAXAS", "Taxas NFe/NFSe"),
+            _tela("TAXAS_NFCE", "Taxas NFCe"),
+            _tela("GRUPO_PISCOF", "Grupo PIS/COFINS"),
+            _tela("TIPO_CLIENTE", "Tipo Cliente/Forn."),
+            _tela("TIPO_DOC", "Tipo de Documento"),
+            _tela("STATUS_OS", "Status de O.S."),
+            _tela("FUNCOES", "Funções"),
+            _tela("MENSAGENS", "Mensagens"),
+            _tela("MENSAGENS_PDV", "Mensagens PDV", [("ABRIR", "Abrir Tela"), ("GRAVAR", "Gravar")]),
+            _tela("NUM_SERIE", "Números de Série"),
+            _tela("TIPO_MOV", "Tipo de Movimentação"),
+            _tela("TIPO_MOV_MSG", "Tipo Mov x Mensagem", [("ABRIR", "Abrir Tela"), ("GRAVAR", "Gravar")]),
+            _tela("TIPO_OS", "Tipo de Pré-Venda"),
+            _tela("EXECUTOR_PADRAO", "Executor Padrão OS"),
+            _tela("TIPO_PECA", "Tipo de Produto"),
+            _tela("TIPO_OS_PROD", "Tipo Dest. Itens OS"),
+            _tela("TIPO_SERVICO", "Tipo de Serviço"),
+            _tela("TRIBUTACAO", "Tributação"),
+            _tela("UNID", "Unidade de Medida"),
+        ]),
     ]),
-    _menu("MOVIMENTO", "Movimento", [
-        _tela("PEDIDO", "Pedidos", ACOES_PEDIDO),
-        _tela("OS", "Ordem de Serviço", ACOES_OS),
+    _menu("TRANSACOES", "Transações", [
+        _tela("PEDIDO", "Pedidos Mobile", ACOES_PEDIDO),
+        _tela("OS", "OS Mobile", ACOES_OS),
+        _tela("PEDIDO_COMP", "Pedido Completo"),
+        _tela("OS_COMP", "O.S. Completa"),
+    ]),
+    _menu("FINANCEIRO", "Financeiro", [
+        _tela("CONTAS_PAGAR", "Contas a Pagar"),
+        _tela("CONTAS_RECEBER", "Contas a Receber"),
+        _menu("FLUXO_CAIXA", "Fluxo de Caixa", [
+            _tela("PLANO_CONTAS", "Plano de Contas"),
+            _tela("CENTRO_CUSTO", "Centro de Custo"),
+        ]),
+    ]),
+    # Aba de topo própria (igual Financeiro), só visível no web e com o
+    # módulo "Posto" ligado (controle_configuracao.Posto — ver
+    # controle_config_service.CAMPOS). Correção 2026-07-13: a pasta VB6
+    # legada "Posto" (C:\Desenv\VB6\...\SQLSERVER\Posto) TEM sim telas
+    # exclusivas do segmento (achado anterior estava errado) — as 13
+    # abaixo vêm de lá (frmcadbom, frmmovbomba, FrmBaiABc2, FrmFecTurno,
+    # FrmReaTurno, frmcadmet, FRMMANCOM, frmmanest, frmmancus, frmmanilha,
+    # frmmantan, frmmantes, frmmantnf). Nenhuma foi migrada ainda nesta
+    # rodada — só a estrutura do painel (cards + permissão + gating de
+    # módulo); cada BOTAO abaixo existe pra já habilitar o gating por
+    # tela assim que a tela real for construída (ver PENDENCIAS.md).
+    _menu("POSTO", "Posto de Combustível", [
+        _tela("POSTO_BOMBA", "Bombas"),
+        _tela("POSTO_ENCERR", "Mov. Encerrantes"),
+        _tela("POSTO_AFERICAO", "Aferições/Despesas"),
+        _tela("POSTO_FEC_TURNO", "Fechamento Turno"),
+        _tela("POSTO_REA_TURNO", "Reabertura Turno"),
+        _tela("POSTO_META", "Metas Combustível"),
+        _tela("POSTO_COMBUST", "Combustíveis"),
+        _tela("POSTO_ESTOQUE", "Estoque Combustível"),
+        _tela("POSTO_CUSTO", "Custo Combustível"),
+        _tela("POSTO_ILHA", "Ilhas"),
+        _tela("POSTO_TANQUE", "Tanques"),
+        _tela("POSTO_TQ_EST", "Tanque/Estoque"),
+        _tela("POSTO_TQ_NF", "Tanque/Nota Fiscal"),
     ]),
     _menu("GERENCIAL", "Gerencial", [
         _tela("GERENCIAL", "Painel Gerencial", [
@@ -103,10 +295,21 @@ CATALOGO = [
         _tela("REL_PEDIDOS", "Relatório de Pedidos"),
         _tela("REL_DESCONTOS", "Descontos & Margem"),
         _tela("REL_OS", "Relatório de OS"),
-        _tela("REL_OS_DESCONTOS", "OS · Descontos & Margem"),
     ]),
     _menu("CONFIG", "Configurações", [
         _tela("CONEXAO", "Conexões"),
+        _tela("PERFIL_USUARIO", "Perfil de Usuário"),
+        _tela("LOG_AUDITORIA", "Log de Auditoria", [("ABRIR", "Abrir Tela")]),
+        _tela("CTRL_SISTEMA", "Controle do Sistema", [
+            ("ABRIR", "Abrir Tela"), ("GRAVAR", "Gravar"),
+            # Um botão por aba — controla a visibilidade de cada aba dentro da
+            # tela (não só o acesso à tela como um todo). A aba "Kontacto" não
+            # entra aqui: é liberada só pro usuário Master, hardcoded no
+            # frontend (`isMaster`), não por permissão de grupo.
+            ("EMPRESARIAL", "Aba Empresarial"), ("MOVIMENTACOES", "Aba Movimentações"),
+            ("DIVERSOS", "Aba Diversos"), ("FISCAL", "Aba Fiscal"), ("OUTROS", "Aba Outros"),
+            ("FINANCEIRO", "Aba Financeiro"), ("CONTRATOS", "Aba Contratos"),
+        ]),
     ]),
 ]
 
@@ -243,6 +446,28 @@ def disabled_telas(flags: dict) -> set:
     if not (flags.get("Oficina", False) or flags.get("Assistencia", False)):
         disabled.add("OS")
     return disabled
+
+
+def _sort_key(nome: str) -> str:
+    """Chave de ordenação sem acentos (NFKD + drop de combining marks), para que
+    'Área' ordene junto de palavras com A, e não depois de Z — .lower() sozinho
+    compara por code point e erra acentuação (á = U+00E1 vem depois de todo ASCII)."""
+    norm = unicodedata.normalize("NFKD", nome or "")
+    return "".join(c for c in norm if not unicodedata.combining(c)).lower()
+
+
+def sort_catalogo(nodes: list) -> list:
+    """Ordena Menus e Telas alfabeticamente (por `nome`), nível a nível, preservando
+    a hierarquia pai/filho. Os botões de ação de cada tela (children de uma TELA)
+    mantêm a ordem de fluxo de trabalho declarada (Abrir, Gravar, Excluir, Imprimir,
+    Exportar / ordem custom de Pedido e O.S.) — não são alfabetizados."""
+    out = []
+    for n in sorted(nodes, key=lambda x: _sort_key(x["nome"])):
+        node = dict(n)
+        if node.get("tipo") == "MENU" and node.get("children"):
+            node["children"] = sort_catalogo(node["children"])
+        out.append(node)
+    return out
 
 
 def filter_catalogo(disabled: set) -> list:

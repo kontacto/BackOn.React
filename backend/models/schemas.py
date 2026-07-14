@@ -69,6 +69,9 @@ class PedidoSaveRequest(BaseModel):
     validade: Optional[str] = None     # ISO date YYYY-MM-DD
     obs: Optional[str] = ""
     area_atuacao: Optional[int] = None  # area_atuacao.area (FK)
+    usuario_alteracao: Optional[int] = None  # só pro log de auditoria
+    classe: Optional[int] = None             # grupo do usuário — só pro log de auditoria
+    plataforma: Optional[str] = None         # "web"/"android"/"ios" — só pro log de auditoria
 
 
 class ItemSaveRequest(BaseModel):
@@ -81,8 +84,10 @@ class ItemSaveRequest(BaseModel):
     desconto: Optional[float] = 0          # desconto UNITÁRIO em R$
     desconto_pct: Optional[float] = 0      # % informado (0 se foi em R$) — só para o log
     acrescimo: Optional[float] = 0         # acréscimo UNITÁRIO em R$
-    usuario_codigo: Optional[int] = -2     # -2 = KONTACTO (master)
+    usuario_codigo: Optional[int] = -2     # -2 = KONTACTO (master) — também usado como ator no log de auditoria
     funcao: Optional[int] = None           # 1=gerente,2=supervisor,3=vendedor (p/ validar limite)
+    classe: Optional[int] = None           # grupo do usuário — só pro log de auditoria
+    plataforma: Optional[str] = None       # "web"/"android"/"ios" — só pro log de auditoria
 
 
 class OSListRequest(BaseModel):
@@ -115,6 +120,9 @@ class OSSaveRequest(BaseModel):
     ano: Optional[str] = ""                # os.ano
     chassi: Optional[str] = ""             # os.chassi (Oficina)
     numero_de_serie: Optional[str] = ""    # os.numero_de_serie (Assistência)
+    usuario_alteracao: Optional[int] = None  # só pro log de auditoria
+    classe: Optional[int] = None             # grupo do usuário — só pro log de auditoria
+    plataforma: Optional[str] = None         # "web"/"android"/"ios" — só pro log de auditoria
 
 
 class OSItemSaveRequest(BaseModel):
@@ -129,24 +137,30 @@ class OSItemSaveRequest(BaseModel):
     acrescimo: Optional[float] = 0         # acréscimo UNITÁRIO em R$
     vendedor: Optional[int] = None         # funcionarios.codigo_int — POR ITEM
     executor: Optional[int] = None         # funcionarios.codigo_int — POR ITEM
-    usuario_codigo: Optional[int] = -2
+    usuario_codigo: Optional[int] = -2     # também usado como ator no log de auditoria
     funcao: Optional[int] = None
+    classe: Optional[int] = None           # grupo do usuário — só pro log de auditoria
+    plataforma: Optional[str] = None       # "web"/"android"/"ios" — só pro log de auditoria
 
 
 class DescontoGeralRequest(BaseModel):
     servidor: str
     banco: str
     valor: float = 0               # valor TOTAL do desconto geral em R$ (0 = remover)
-    usuario_codigo: Optional[int] = -2
+    usuario_codigo: Optional[int] = -2  # também usado como ator no log de auditoria
     funcao: Optional[int] = 1       # 1=gerente, 2=supervisor, 3=vendedor
+    classe: Optional[int] = None    # grupo do usuário — só pro log de auditoria
+    plataforma: Optional[str] = None  # "web"/"android"/"ios" — só pro log de auditoria
 
 
 class FecharRequest(BaseModel):
     """Fechar (situação = 'F') um Pedido ou O.S. Reutilizado por ambos."""
     servidor: str
     banco: str
-    classe: Optional[int] = None    # grupo do usuário (para validar permissão SITUACAO)
+    classe: Optional[int] = None    # grupo do usuário (para validar permissão SITUACAO; também usado no log de auditoria)
     master: Optional[bool] = False  # KONTACTO/master ignora checagem de permissão
+    usuario_alteracao: Optional[int] = None  # só pro log de auditoria
+    plataforma: Optional[str] = None         # "web"/"android"/"ios" — só pro log de auditoria
 
 
 
@@ -167,6 +181,22 @@ class EnderecoInput(BaseModel):
     uf: Optional[str] = ""
 
 
+class ContatoInput(BaseModel):
+    """Pessoa de contato do cliente (tabela `cliente_contato`) — entidade
+    separada dos telefones do cliente (`cliente_tel`, aba Dados Principais)."""
+    contato: Optional[str] = ""
+    setor: Optional[str] = ""
+    cargo: Optional[str] = ""
+    ddd: Optional[str] = ""
+    telefone: Optional[str] = ""
+    ddd_fax: Optional[str] = ""
+    fax: Optional[str] = ""
+    ddd_celular: Optional[str] = ""
+    celular: Optional[str] = ""
+    e_mail: Optional[str] = ""
+    sexo: Optional[str] = ""
+
+
 class ClienteSaveRequest(BaseModel):
     servidor: str
     banco: str
@@ -179,8 +209,51 @@ class ClienteSaveRequest(BaseModel):
     vendedor: Optional[int] = None     # funcionarios.codigo_int do usuário logado
     usuario_cadastro: Optional[int] = None
     usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None       # grupo do usuário — só contexto pro log de auditoria
+    plataforma: Optional[str] = None   # "web"/"android"/"ios" — só pro log de auditoria
+
+    # ---- Dados Principais (legado Frame9) ----
+    nome_fantasia: Optional[str] = ""
+    sexo: Optional[str] = ""              # CPF apenas
+    data_nasc: Optional[str] = None       # ISO YYYY-MM-DD; CPF=data nasc, CNPJ=data abertura
+    inscr_mun: Optional[str] = ""         # CNPJ apenas (distinto de inscre/Insc. Estadual)
+    site: Optional[str] = ""
+    historico: Optional[str] = ""
+    situacao: Optional[str] = "A"         # 'A' Ativo / 'I' Inativo
+    status: Optional[str] = ""            # FK situacao.codigo (STATUS_CLIENTE)
+    inativo_em: Optional[str] = None      # ISO YYYY-MM-DD (DB column DATA_ENCERRAMENTO_CLIENTE)
+
+    # ---- Dados Secundários (legado Frame11) ----
+    contato: Optional[str] = ""                        # nome do contato principal (texto único)
+    limite_credito: Optional[float] = None
+    desconto: Optional[float] = None                    # desconto global do cliente
+    regime_tributario: Optional[int] = None             # crt
+    credita_icms: bool = False                          # legenda legada "Não Contribuinte"
+    consumidor_final: bool = False
+    tributa_iss_fora_municipio: bool = False
+    fatura_para: bool = False                           # checkbox "Fatura Para"
+    cliente_principal: Optional[int] = None             # FK cliente.codigo (DB column `faturar`)
+    prazo_faturamento: Optional[int] = None
+    indpres: Optional[str] = ""                         # indicador de presença (NFC-e/NFe)
+    canal_aquisicao_cliente: Optional[int] = None
+    dia_contato: Optional[int] = None                   # FK dia_semana
+    dia_entrega: Optional[int] = None                   # FK dia_semana.dia
+    forma_pagamento: Optional[str] = ""                 # FK forma_pagamento.codigo (DB column forma_pag, nvarchar(3))
+    segmento: Optional[str] = ""                        # FK segmentos.codigo (nvarchar(3))
+    rota: Optional[int] = None
+    regiao: Optional[int] = None
+    email_cobranca: Optional[str] = ""
+    email_nfe: Optional[str] = ""
+    centro_custo_cliente: Optional[int] = None
+    conta_transf_caixa: Optional[int] = None
+    cobra_tarifa_bancaria: bool = False
+    tipo_cobranca_tarifa: Optional[str] = ""            # 'B' Boleto / 'N' NFe (coluna nvarchar(1))
+    valor_frete: Optional[float] = None
+    classe_caixa: Optional[int] = None
+    sub_classe_caixa: Optional[int] = None
 
 
 class ClienteCreateRequest(ClienteSaveRequest):
-    endereco: Optional[EnderecoInput] = None
+    enderecos: List[EnderecoInput] = Field(default_factory=list)
     telefones: List[TelefoneInput] = Field(default_factory=list)
+    contatos: List[ContatoInput] = Field(default_factory=list)

@@ -1,10 +1,9 @@
 import { useEffect } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Image } from "expo-image";
-
 import { hasConnections } from "@/src/utils/storage/connections";
 import { colors, spacing } from "@/src/theme/colors";
+import { AppImage } from "@/src/components/AppImage";
 
 export default function SplashScreen() {
   const router = useRouter();
@@ -33,7 +32,7 @@ export default function SplashScreen() {
   return (
     <View style={styles.container} testID="splash-screen">
       <View style={styles.center}>
-        <Image
+        <AppImage
           source={require("../assets/images/kontacto-logo.png")}
           style={styles.logo}
           contentFit="contain"

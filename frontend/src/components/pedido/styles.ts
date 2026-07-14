@@ -1,6 +1,7 @@
 // StyleSheet compartilhado pela tela de pedido e seus modais/componentes.
 // Mantido idêntico ao original para preservar 100% do visual.
 import { StyleSheet } from "react-native";
+import { Platform } from "react-native";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 export const SIT_COLOR: Record<string, string> = { A: "#1e88e5", F: "#43a047", PG: "#8e24aa", C: "#e53935" };
@@ -60,11 +61,24 @@ export const styles = StyleSheet.create({
   sitTag: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 4 },
   sitTagText: { fontSize: 11, fontWeight: "700", letterSpacing: 0.4 },
   modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+  // "Redução forte" (Modal/Selector Standard, CLAUDE.md) — mesmo padrão
+  // canônico de SelectField.tsx/NiveisModal.tsx: no web, card centralizado,
+  // largura máxima, raio de canto completo (não só topo) + borda.
+  modalBgWebCompact: { justifyContent: "center", paddingHorizontal: spacing.xl },
   modalCard: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
     paddingHorizontal: spacing.lg, paddingTop: spacing.lg, paddingBottom: spacing.xxl,
     maxHeight: "88%",
+  },
+  modalCardWebCompact: {
+    width: "100%",
+    maxWidth: 560,
+    alignSelf: "center",
+    borderBottomLeftRadius: radius.lg,
+    borderBottomRightRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
   modalTitle: { fontSize: 17, fontWeight: "600", color: colors.onSurface },
@@ -95,7 +109,16 @@ export const styles = StyleSheet.create({
     position: "absolute", left: spacing.lg, right: spacing.lg, top: "45%",
     backgroundColor: colors.brandSecondary,
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.md,
-    shadowColor: "#000", shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 12,
+    ...Platform.select({
+      web: { boxShadow: "0 6px 12px rgba(0, 0, 0, 0.35)" },
+      default: {
+        shadowColor: "#000",
+        shadowOpacity: 0.35,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 6 },
+        elevation: 12,
+      },
+    }),
     alignItems: "center",
   },
   toastText: { color: colors.onBrandPrimary, fontSize: 14, fontWeight: "500", textAlign: "center" },

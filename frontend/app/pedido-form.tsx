@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
@@ -30,7 +30,7 @@ import WhatsappButton from "@/src/components/WhatsappButton";
 const VENDEDOR_EDIT_FUNCOES = ["01", "02"];
 export default function PedidoFormScreen() {
   const router = useRouter();
-  const { can, isMaster, classe } = usePermissions();
+  const { can, isMaster, classe, moduleOn } = usePermissions();
   const params = useLocalSearchParams<{ pedido?: string; cliente?: string; cliente_nome?: string }>();
   const editing = !!params.pedido;
   const pedidoId = params.pedido ? parseInt(String(params.pedido), 10) : null;
@@ -72,7 +72,7 @@ export default function PedidoFormScreen() {
   const [waCompany, setWaCompany] = useState<string | null>(null);
 
   const isAberto = (pedido?.situacao || "A").toUpperCase() === "A";
-  const it = usePedidoItens({ conn, editing, pedidoId, isAberto, usuarioCod, funcaoCod, showToast });
+  const it = usePedidoItens({ conn, editing, pedidoId, isAberto, usuarioCod, funcaoCod, classe, showToast, servicosOn: moduleOn("servicos") });
 
   // -------- Init
   useEffect(() => {
@@ -201,6 +201,9 @@ export default function PedidoFormScreen() {
         validade: validade || null,
         obs,
         area_atuacao: areaAtuacao,
+        usuario_alteracao: usuarioCod,
+        classe,
+        plataforma: Platform.OS,
       };
       const j = editing && pedidoId
         ? await apiSend(conn, `/api/pedidos/${pedidoId}`, "PUT", body)
@@ -233,7 +236,9 @@ export default function PedidoFormScreen() {
     if (!it.itens.length) { showToast("Inclua pelo menos um produto ou serviço.", "error"); return; }
     setFechando(true);
     try {
-      const j = await apiSend(conn, `/api/pedidos/${pedidoId}/fechar`, "POST", { classe, master: isMaster });
+      const j = await apiSend(conn, `/api/pedidos/${pedidoId}/fechar`, "POST", {
+        classe, master: isMaster, usuario_alteracao: usuarioCod, plataforma: Platform.OS,
+      });
       if (j?.success) {
         showToast(j.message || "Pré-venda Fechada.", "success");
         setPedido((p) => (p ? { ...p, situacao: "F", situacao_label: "Fechado" } : p));

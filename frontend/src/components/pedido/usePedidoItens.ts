@@ -2,6 +2,7 @@
 // (item, geral) e relatório de descontos. Mantém a lógica idêntica à tela
 // original; a tela apenas orquestra e renderiza os componentes.
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Platform } from "react-native";
 import { useFocusEffect } from "expo-router";
 
 import { apiGet, apiSend, apiDelete } from "@/src/utils/api";
@@ -16,10 +17,14 @@ type Params = {
   isAberto: boolean;
   usuarioCod: number;
   funcaoCod: number;
+  classe: number | null;
   showToast: (m: string, t?: ToastTone) => void;
+  // Módulo "Serviços" (Configurações > Módulos e Recursos) — desligado,
+  // a busca de item só retorna produtos (tipo=P), nunca serviços.
+  servicosOn: boolean;
 };
 
-export function usePedidoItens({ conn, editing, pedidoId, isAberto, usuarioCod, funcaoCod, showToast }: Params) {
+export function usePedidoItens({ conn, editing, pedidoId, isAberto, usuarioCod, funcaoCod, classe, showToast, servicosOn }: Params) {
   // -------- Itens do pedido
   const [itens, setItens] = useState<ItemRow[]>([]);
   const [subtotal, setSubtotal] = useState(0);
@@ -103,7 +108,7 @@ export function usePedidoItens({ conn, editing, pedidoId, isAberto, usuarioCod, 
       setProdLoading(true);
       try {
         const j = await apiGet(conn, `/api/produtos-servicos`, {
-          search: prodTerm, page: 1, size: 30, tipo: "all",
+          search: prodTerm, page: 1, size: 30, tipo: servicosOn ? "all" : "P",
         });
         setProdResults(j?.items || []);
       } catch {
@@ -113,7 +118,7 @@ export function usePedidoItens({ conn, editing, pedidoId, isAberto, usuarioCod, 
       }
     }, 300);
     return () => clearTimeout(t);
-  }, [prodTerm, addOpen, conn]);
+  }, [prodTerm, addOpen, conn, servicosOn]);
 
   const openAddModal = () => {
     setSelProd(null);
@@ -152,6 +157,8 @@ export function usePedidoItens({ conn, editing, pedidoId, isAberto, usuarioCod, 
         acrescimo: acr,
         usuario_codigo: usuarioCod,
         funcao: funcaoCod,
+        classe,
+        plataforma: Platform.OS,
         complemento: addCompl,
       });
       if (!j?.success) { showToast(j?.message || "Falha ao adicionar.", "error"); }
@@ -195,6 +202,8 @@ export function usePedidoItens({ conn, editing, pedidoId, isAberto, usuarioCod, 
         acrescimo: acr,
         usuario_codigo: usuarioCod,
         funcao: funcaoCod,
+        classe,
+        plataforma: Platform.OS,
       });
       if (!j?.success) { showToast(j?.message || "Falha ao salvar.", "error"); }
       else {
@@ -211,7 +220,9 @@ export function usePedidoItens({ conn, editing, pedidoId, isAberto, usuarioCod, 
     if (!conn || !pedidoId) return;
     setEditSaving(true);
     try {
-      const j = await apiDelete(conn, `/api/pedidos/${pedidoId}/itens/${it.codauto}`);
+      const j = await apiDelete(conn, `/api/pedidos/${pedidoId}/itens/${it.codauto}`, {
+        usuario_alteracao: usuarioCod, classe: classe ?? undefined, plataforma: Platform.OS,
+      });
       if (!j?.success) { showToast(j?.message || "Falha ao remover.", "error"); }
       else {
         setEditItem(null);
@@ -264,7 +275,7 @@ export function usePedidoItens({ conn, editing, pedidoId, isAberto, usuarioCod, 
     setGeralSaving(true);
     try {
       const j = await apiSend(conn, `/api/pedidos/${pedidoId}/desconto-geral`, "POST", {
-        valor, usuario_codigo: usuarioCod, funcao: funcaoCod,
+        valor, usuario_codigo: usuarioCod, funcao: funcaoCod, classe, plataforma: Platform.OS,
       });
       if (!j?.success) { showToast(j?.message || "Falha no desconto geral.", "error"); }
       else {

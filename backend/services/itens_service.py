@@ -16,6 +16,7 @@ from services.constants import SITUACAO_LABEL
 from services.descontos_service import _validar_limite_desconto, _log_desconto_item
 from services.pedido_common import (
     _item_total, _recalc_pedido_total, _check_pedido_aberto, _resolve_produto,
+    _modulo_servicos_ativo,
 )
 
 
@@ -111,6 +112,9 @@ def _add_item_sync(req: ItemSaveRequest, pedido: int) -> dict:
         if not prod:
             conn.close()
             return {"success": False, "message": f"Produto/serviço '{codigo}' não encontrado."}
+        if prod["tipo"] == "S" and not _modulo_servicos_ativo(cur):
+            conn.close()
+            return {"success": False, "message": "Módulo Serviço está desativado — não é possível incluir serviços no Pedido."}
 
         qtd = float(req.qtd or 0)
         if qtd <= 0:

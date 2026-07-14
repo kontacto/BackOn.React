@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from db.connection import _open_conn, _to_json_safe, _get_col_sizes, _trunc
 from models.schemas import (
-    ClientesRequest, ClienteSaveRequest, EnderecoInput, TelefoneInput,
+    ClientesRequest, ClienteSaveRequest, EnderecoInput, TelefoneInput, ContatoInput,
 )
 
 
@@ -115,15 +115,20 @@ def _list_clientes_sync(req: ClientesRequest) -> dict:
             f"       COALESCE(ct.ddd, CAST(c.ddd_cli AS NVARCHAR(4))) AS ddd_cli, "
             f"       COALESCE(ct.tel, c.telefone_cli) AS telefone_cli, "
             f"       c.e_mail, c.situacao, "
-            f"       t.descricao AS tipo_descricao "
+            f"       t.descricao AS tipo_descricao, "
+            f"       CASE WHEN ln.codigo IS NULL THEN 0 ELSE 1 END AS lista_negra, "
+            f"       ln.motivo AS lista_negra_motivo "
             f"FROM cliente c "
             f"OUTER APPLY (SELECT TOP 1 ddd, tel FROM cliente_tel WHERE codigo = c.codigo ORDER BY sequencia) ct "
             f"LEFT JOIN tipo_cliente t ON t.codigo = TRY_CAST(c.cliente_forn AS INT) "
+            f"LEFT JOIN lista_negra ln ON ln.codigo = CAST(c.codigo AS NVARCHAR(14)) "
             f"{where} "
             f"ORDER BY c.nome OFFSET {offset} ROWS FETCH NEXT {size} ROWS ONLY",
             params
         )
         rows = [_to_json_safe(r) for r in cur.fetchall()]
+        for r in rows:
+            r["lista_negra"] = bool(r.get("lista_negra"))
         # Telefone formatado
         for r in rows:
             ddd = r.get("ddd_cli") or ""
@@ -177,7 +182,17 @@ def _get_cliente_sync(servidor: str, banco: str, codigo: int) -> dict:
             "SELECT c.codigo, c.cgc_cpf, c.nome, c.e_mail, c.inscr_est AS inscre, c.cliente_forn AS tipo, "
             "       c.aceita_email, c.vendedor, c.situacao, "
             "       c.ddd_cli, c.telefone_cli, "
-            "       t.descricao AS tipo_descricao "
+            "       t.descricao AS tipo_descricao, "
+            "       c.fantasia AS nome_fantasia, c.sexo, c.data_nasc, c.inscr_mun, c.site, c.historico, "
+            "       c.DATA_ENCERRAMENTO_CLIENTE AS inativo_em, c.STATUS_CLIENTE AS status, "
+            "       c.contato, c.limite_credito, c.desconto, c.crt AS regime_tributario, "
+            "       c.credita_icms, c.consumidor_final, c.TRIBUTA_ISS_FORA AS tributa_iss_fora_municipio, "
+            "       c.faturamento_principal AS fatura_para, c.faturar AS cliente_principal, "
+            "       c.prazo_faturamento, c.indpres, "
+            "       c.canal_aquisicao_cliente, c.dia_contato, c.dia_entrega, c.forma_pag AS forma_pagamento, "
+            "       c.segmento, c.rota, c.regiao, c.email_cobranca, c.email_NFE AS email_nfe, "
+            "       c.centro_custo_cliente, c.conta_transf_caixa, c.cobra_tarifa_bancaria, "
+            "       c.tipo_cobranca_tarifa, c.valor_frete, c.classe_caixa, c.sub_classe_caixa "
             "FROM cliente c "
             "LEFT JOIN tipo_cliente t ON t.codigo = TRY_CAST(c.cliente_forn AS INT) "
             "WHERE c.codigo = %s",
@@ -190,14 +205,13 @@ def _get_cliente_sync(servidor: str, banco: str, codigo: int) -> dict:
             return {"success": False, "message": "Cliente não encontrado."}
         cliente = _to_json_safe(row)
 
-        # Endereço (pega o primeiro registro de cliente_end)
+        # Endereços (todos os registros de cliente_end — cliente pode ter vários)
         cur.execute(
-            "SELECT TOP 1 sequencia, tipo, endereco, numero, complemento, bairro, cidade, uf, cep "
+            "SELECT sequencia, tipo, endereco, numero, complemento, bairro, cidade, uf, cep "
             "FROM cliente_end WHERE codigo = %s ORDER BY sequencia",
             (codigo,),
         )
-        end_row = cur.fetchone()
-        endereco = _to_json_safe(end_row) if end_row else None
+        end_rows = [_to_json_safe(r) for r in cur.fetchall()]
 
         # Telefones (até 3)
         cur.execute(
@@ -207,13 +221,23 @@ def _get_cliente_sync(servidor: str, banco: str, codigo: int) -> dict:
         )
         tel_rows = [_to_json_safe(r) for r in cur.fetchall()]
 
+        # Contatos (pessoas de contato — entidade separada dos telefones)
+        cur.execute(
+            "SELECT sequencia, contato, setor, cargo, ddd, telefone, ddd_fax, fax, "
+            "       ddd_celular, celular, e_mail, sexo "
+            "FROM cliente_contato WHERE codigo = %s ORDER BY sequencia",
+            (codigo,),
+        )
+        contato_rows = [_to_json_safe(r) for r in cur.fetchall()]
+
         cur.close()
         conn.close()
         return {
             "success": True,
             "cliente": cliente,
-            "endereco": endereco,
+            "enderecos": end_rows,
             "telefones": tel_rows,
+            "contatos": contato_rows,
         }
     except Exception as e:
         try:
@@ -337,9 +361,10 @@ def _cliente_resumo_sync(servidor: str, banco: str, codigo: int) -> dict:
 # =====================================================================
 def _save_cliente_sync(
     req: ClienteSaveRequest,
-    endereco: Optional[EnderecoInput],
+    enderecos: Optional[List[EnderecoInput]],
     telefones: List[TelefoneInput],
     codigo: Optional[int],
+    contatos: Optional[List[ContatoInput]] = None,
 ) -> dict:
     # Validações de domínio
     nome = (req.nome or "").strip()
@@ -355,6 +380,9 @@ def _save_cliente_sync(
 
     if len(telefones) > 3:
         return {"success": False, "message": "Máximo de 3 telefones."}
+
+    enderecos = enderecos or []
+    contatos = contatos or []
 
     # cliente.cliente_forn é SMALLINT no banco (FK p/ tipo_cliente.codigo)
     tipo_int: Optional[int] = None
@@ -376,6 +404,7 @@ def _save_cliente_sync(
         sz_cli = _get_col_sizes(conn, req.banco, "cliente")
         sz_end = _get_col_sizes(conn, req.banco, "cliente_end")
         sz_tel = _get_col_sizes(conn, req.banco, "cliente_tel")
+        sz_cont = _get_col_sizes(conn, req.banco, "cliente_contato")
 
         # Telefone primário — gravado nos campos inline (compat com legacy).
         # cliente.ddd_cli é SMALLINT, cliente.telefone_cli é nvarchar(8).
@@ -394,26 +423,67 @@ def _save_cliente_sync(
         usuario_cad = req.usuario_cadastro if req.usuario_cadastro is not None else req.vendedor
         usuario_alt = req.usuario_alteracao if req.usuario_alteracao is not None else req.vendedor
 
+        situacao = (req.situacao or "A").strip().upper()[:1] or "A"
+
+        # Colunas comuns a INSERT e UPDATE (nome_coluna -> valor já tratado/truncado).
+        campos: dict = {
+            "cgc_cpf": _trunc(cgc, sz_cli, "cgc_cpf", 14) or None,
+            "nome": _trunc(nome, sz_cli, "nome", 60),
+            "e_mail": _trunc((req.e_mail or "").strip(), sz_cli, "e_mail", 60) or None,
+            "inscr_est": _trunc((req.inscre or "").strip(), sz_cli, "inscr_est", 18) or None,
+            "cliente_forn": tipo_int,
+            "aceita_email": 1 if req.aceita_email else 0,
+            "vendedor": req.vendedor,
+            "ddd_cli": ddd_int,
+            "telefone_cli": tel_inline,
+            "fantasia": _trunc((req.nome_fantasia or "").strip(), sz_cli, "fantasia", 60) or None,
+            "sexo": _trunc((req.sexo or "").strip(), sz_cli, "sexo", 1) or None,
+            "data_nasc": req.data_nasc or None,
+            "inscr_mun": _trunc((req.inscr_mun or "").strip(), sz_cli, "inscr_mun", 18) or None,
+            "site": _trunc((req.site or "").strip(), sz_cli, "site", 60) or None,
+            "historico": (req.historico or "").strip() or None,
+            "situacao": situacao,
+            "STATUS_CLIENTE": _trunc((req.status or "").strip(), sz_cli, "status_cliente", 2) or None,
+            "DATA_ENCERRAMENTO_CLIENTE": req.inativo_em or None,
+            "contato": _trunc((req.contato or "").strip(), sz_cli, "contato", 30) or None,
+            "limite_credito": req.limite_credito,
+            "desconto": req.desconto,
+            "crt": req.regime_tributario,
+            "credita_icms": 1 if req.credita_icms else 0,
+            "consumidor_final": 1 if req.consumidor_final else 0,
+            "TRIBUTA_ISS_FORA": 1 if req.tributa_iss_fora_municipio else 0,
+            "faturamento_principal": 1 if req.fatura_para else 0,
+            "faturar": req.cliente_principal,
+            "prazo_faturamento": req.prazo_faturamento,
+            "indpres": int(req.indpres) if (req.indpres or "").strip().lstrip("-").isdigit() else None,
+            # canal_aquisicao_cliente é NOT NULL no banco — nunca envia NULL explícito.
+            "canal_aquisicao_cliente": req.canal_aquisicao_cliente if req.canal_aquisicao_cliente is not None else 0,
+            "dia_contato": req.dia_contato,
+            "dia_entrega": req.dia_entrega,
+            "forma_pag": _trunc((req.forma_pagamento or "").strip(), sz_cli, "forma_pag", 3) or None,
+            "segmento": _trunc((req.segmento or "").strip(), sz_cli, "segmento", 3) or None,
+            "rota": req.rota,
+            "regiao": req.regiao,
+            "email_cobranca": _trunc((req.email_cobranca or "").strip(), sz_cli, "email_cobranca", 60) or None,
+            "email_NFE": _trunc((req.email_nfe or "").strip(), sz_cli, "email_nfe", 60) or None,
+            "centro_custo_cliente": req.centro_custo_cliente,
+            "conta_transf_caixa": req.conta_transf_caixa,
+            "cobra_tarifa_bancaria": 1 if req.cobra_tarifa_bancaria else 0,
+            "tipo_cobranca_tarifa": _trunc((req.tipo_cobranca_tarifa or "").strip(), sz_cli, "tipo_cobranca_tarifa", 1) or None,
+            "VALOR_FRETE": req.valor_frete,
+            "classe_caixa": req.classe_caixa,
+            "sub_classe_caixa": req.sub_classe_caixa,
+        }
+
         if codigo is None:
-            # INSERT cliente
+            colunas = list(campos.keys()) + ["usuario_cadastro", "data"]
+            placeholders = ["%s"] * len(campos) + ["%s", "CAST(GETDATE() AS DATE)"]
+            valores = list(campos.values()) + [usuario_cad]
             cur.execute(
-                "INSERT INTO cliente "
-                "(cgc_cpf, nome, e_mail, inscr_est, cliente_forn, aceita_email, vendedor, "
-                " usuario_cadastro, data, situacao, ddd_cli, telefone_cli) "
-                "OUTPUT INSERTED.codigo "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CAST(GETDATE() AS DATE), 'A', %s, %s)",
-                (
-                    _trunc(cgc, sz_cli, "cgc_cpf", 14) or None,
-                    _trunc(nome, sz_cli, "nome", 60),
-                    _trunc((req.e_mail or "").strip(), sz_cli, "e_mail", 60) or None,
-                    _trunc((req.inscre or "").strip(), sz_cli, "inscr_est", 18) or None,
-                    tipo_int,
-                    1 if req.aceita_email else 0,
-                    req.vendedor,
-                    usuario_cad,
-                    ddd_int,
-                    tel_inline,
-                ),
+                f"INSERT INTO cliente ({', '.join(colunas)}) "
+                f"OUTPUT INSERTED.codigo "
+                f"VALUES ({', '.join(placeholders)})",
+                tuple(valores),
             )
             new_id_row = cur.fetchone()
             if not new_id_row:
@@ -422,27 +492,12 @@ def _save_cliente_sync(
                 return {"success": False, "message": "Falha ao obter código do novo cliente."}
             cliente_codigo = int(new_id_row[0])
         else:
-            # UPDATE cliente
+            set_clause = ", ".join(f"{col}=%s" for col in campos.keys())
             cur.execute(
-                "UPDATE cliente SET "
-                " cgc_cpf=%s, nome=%s, e_mail=%s, inscr_est=%s, cliente_forn=%s, "
-                " aceita_email=%s, vendedor=%s, usuario_alteracao=%s, "
-                " data_alteracao=CAST(GETDATE() AS DATE), "
-                " ddd_cli=%s, telefone_cli=%s "
+                f"UPDATE cliente SET {set_clause}, "
+                " usuario_alteracao=%s, data_alteracao=CAST(GETDATE() AS DATE) "
                 "WHERE codigo=%s",
-                (
-                    _trunc(cgc, sz_cli, "cgc_cpf", 14) or None,
-                    _trunc(nome, sz_cli, "nome", 60),
-                    _trunc((req.e_mail or "").strip(), sz_cli, "e_mail", 60) or None,
-                    _trunc((req.inscre or "").strip(), sz_cli, "inscr_est", 18) or None,
-                    tipo_int,
-                    1 if req.aceita_email else 0,
-                    req.vendedor,
-                    usuario_alt,
-                    ddd_int,
-                    tel_inline,
-                    codigo,
-                ),
+                tuple(campos.values()) + (usuario_alt, codigo),
             )
             if cur.rowcount == 0:
                 conn.rollback()
@@ -450,12 +505,13 @@ def _save_cliente_sync(
                 return {"success": False, "message": "Cliente não encontrado para atualização."}
             cliente_codigo = codigo
 
-            # Limpa endereço e telefones existentes para regravar
+            # Limpa endereço, telefones e contatos existentes para regravar
             cur.execute("DELETE FROM cliente_end WHERE codigo=%s", (cliente_codigo,))
             cur.execute("DELETE FROM cliente_tel WHERE codigo=%s", (cliente_codigo,))
+            cur.execute("DELETE FROM cliente_contato WHERE codigo=%s", (cliente_codigo,))
 
-        # INSERT endereço (apenas 1)
-        if endereco:
+        # INSERT endereços (cliente pode ter vários — residencial, entrega, cobrança...)
+        for endereco in enderecos:
             cep = "".join(ch for ch in (endereco.cep or "") if ch.isdigit())[:8]
             uf = (endereco.uf or "").strip()[:2].upper()
             cur.execute(
@@ -492,6 +548,31 @@ def _save_cliente_sync(
                 ),
             )
 
+        # INSERT contatos (pessoas de contato — entidade separada dos telefones)
+        for contato in contatos:
+            nome_contato = _trunc((contato.contato or "").strip(), sz_cont, "contato", 30)
+            if not nome_contato:
+                continue
+            cur.execute(
+                "INSERT INTO cliente_contato "
+                "(codigo, contato, setor, cargo, ddd, telefone, ddd_fax, fax, ddd_celular, celular, e_mail, sexo) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    cliente_codigo,
+                    nome_contato,
+                    _trunc((contato.setor or "").strip(), sz_cont, "setor", 30) or None,
+                    _trunc((contato.cargo or "").strip(), sz_cont, "cargo", 30) or None,
+                    int(contato.ddd) if (contato.ddd or "").strip().isdigit() else None,
+                    _trunc((contato.telefone or "").strip(), sz_cont, "telefone", 9) or None,
+                    int(contato.ddd_fax) if (contato.ddd_fax or "").strip().isdigit() else None,
+                    _trunc((contato.fax or "").strip(), sz_cont, "fax", 9) or None,
+                    _trunc((contato.ddd_celular or "").strip(), sz_cont, "ddd_celular", 3) or None,
+                    _trunc((contato.celular or "").strip(), sz_cont, "celular", 9) or None,
+                    _trunc((contato.e_mail or "").strip(), sz_cont, "e_mail", 60) or None,
+                    _trunc((contato.sexo or "").strip(), sz_cont, "sexo", 1) or None,
+                ),
+            )
+
         conn.commit()
         cur.close()
         conn.close()
@@ -506,6 +587,70 @@ def _save_cliente_sync(
         except Exception:
             pass
         return {"success": False, "message": f"Erro ao gravar: {e}"}
+
+
+# =====================================================================
+# Lista Negra (tabela `lista_negra` — codigo nvarchar(14) PK, motivo
+# nvarchar(max)). Legado: FrmListaN ("Cadastro de Clientes na Lista Negra").
+# `codigo` guarda `cliente.codigo` (int) como string — sem FK real no banco.
+# Botão por cliente na listagem (`clientes.tsx`): preto se já cadastrado,
+# azul caso contrário.
+# =====================================================================
+def _save_lista_negra_sync(servidor: str, banco: str, codigo: int, motivo: str) -> dict:
+    mot = (motivo or "").strip()
+    if not mot:
+        return {"success": False, "message": "Preencha o motivo corretamente."}
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT TOP 1 1 AS ok FROM cliente WHERE codigo=%s", (codigo,))
+        if not cur.fetchone():
+            cur.close()
+            return {"success": False, "message": "Cliente não cadastrado."}
+        cod_str = str(codigo)
+        cur.execute("SELECT TOP 1 1 AS ok FROM lista_negra WHERE codigo=%s", (cod_str,))
+        if cur.fetchone():
+            cur.execute("UPDATE lista_negra SET motivo=%s WHERE codigo=%s", (mot, cod_str))
+        else:
+            cur.execute("INSERT INTO lista_negra (codigo, motivo) VALUES (%s,%s)", (cod_str, mot))
+        conn.commit()
+        cur.close()
+        return {"success": True, "message": "Registro gravado."}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao gravar: {e}"}
+    finally:
+        conn.close()
+
+
+def _delete_lista_negra_sync(servidor: str, banco: str, codigo: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("DELETE FROM lista_negra WHERE codigo=%s", (str(codigo),))
+        if cur.rowcount == 0:
+            conn.rollback()
+            return {"success": False, "message": "Registro não encontrado."}
+        conn.commit()
+        cur.close()
+        return {"success": True, "message": "Registro excluído."}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao excluir: {e}"}
+    finally:
+        conn.close()
 
 
 # ---------- wrappers assíncronos ----------
@@ -533,5 +678,13 @@ async def cliente_resumo(servidor: str, banco: str, codigo: int) -> dict:
     return await asyncio.to_thread(_cliente_resumo_sync, servidor, banco, codigo)
 
 
-async def save_cliente(req: ClienteSaveRequest, endereco, telefones, codigo) -> dict:
-    return await asyncio.to_thread(_save_cliente_sync, req, endereco, telefones, codigo)
+async def save_cliente(req: ClienteSaveRequest, enderecos, telefones, codigo, contatos=None) -> dict:
+    return await asyncio.to_thread(_save_cliente_sync, req, enderecos, telefones, codigo, contatos)
+
+
+async def save_lista_negra(servidor: str, banco: str, codigo: int, motivo: str) -> dict:
+    return await asyncio.to_thread(_save_lista_negra_sync, servidor, banco, codigo, motivo)
+
+
+async def delete_lista_negra(servidor: str, banco: str, codigo: int) -> dict:
+    return await asyncio.to_thread(_delete_lista_negra_sync, servidor, banco, codigo)

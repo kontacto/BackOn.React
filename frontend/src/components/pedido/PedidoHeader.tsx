@@ -1,6 +1,6 @@
 // Barra de cabeçalho da tela de pedido (voltar + título + gravar).
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors } from "@/src/theme/colors";
 import { styles } from "./styles";

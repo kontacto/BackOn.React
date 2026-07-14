@@ -5,7 +5,7 @@ from typing import Optional
 from db.connection import _open_conn
 from models.schemas import PedidosListRequest, PedidoSaveRequest, FecharRequest
 from services.constants import SITUACAO_LABEL
-from services.pedido_common import _mover_estoque
+from services.pedido_common import _check_cliente_ativo, _mover_estoque
 from services.permissoes_service import tem_permissao
 
 
@@ -160,6 +160,16 @@ def _save_pedido_sync(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> d
                 conn.close()
                 label = SITUACAO_LABEL.get(sit_atual, sit_atual)
                 return {"success": False, "message": f"Pedido com situação '{label}' não pode ser alterado."}
+        else:
+            # Novo pedido — cliente com STATUS_CLIENTE diferente de Ativo não pode
+            # gerar movimentação (venda/pré-venda).
+            ok, label = _check_cliente_ativo(cur, req.cliente)
+            if not ok:
+                conn.close()
+                return {
+                    "success": False,
+                    "message": f"Cliente com situação '{label}' não pode gerar novo pedido.",
+                }
         # Busca o nome e telefone do cliente para denormalizar em NOME_CLIENTE / TELEFONE_CLIENTE
         cur.execute(
             "SELECT TOP 1 c.nome, "

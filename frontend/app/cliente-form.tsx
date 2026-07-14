@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -14,514 +15,52 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
-import { getSession } from "@/src/utils/storage/session";
 import { usePermissions } from "@/src/permissions";
-import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import { useClienteForm, ENDERECO_TIPOS, toastBackgroundColor } from "@/src/hooks/useClienteForm";
 
-// ---------- Tipos ----------
-type TipoCliente = { codigo: number; descricao: string };
-type Telefone = { ddd: string; tel: string; descricao: string };
-type Endereco = {
-  tipo: number; // 0=Comercial, 1=Cobrança, 2=Entrega
-  cep: string;
-  endereco: string;
-  numero: string;
-  complemento: string;
-  bairro: string;
-  cidade: string;
-  uf: string;
-};
-
-const ENDERECO_TIPOS = [
-  { value: 0, label: "Comercial" },
-  { value: 1, label: "Cobrança" },
-  { value: 2, label: "Entrega" },
-];
-
-// ---------- Validação CPF/CNPJ (espelha backend) ----------
-function onlyAlnumUpper(s: string): string {
-  return (s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-}
-
-function validCPF(s: string): boolean {
-  const d = s.replace(/\D/g, "");
-  if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
-  for (const len of [9, 10]) {
-    let sum = 0;
-    for (let j = 0; j < len; j++) sum += parseInt(d[j], 10) * (len + 1 - j);
-    let dv = (sum * 10) % 11;
-    if (dv === 10) dv = 0;
-    if (dv !== parseInt(d[len], 10)) return false;
-  }
-  return true;
-}
-
-function validCNPJ(s: string): boolean {
-  const v = onlyAlnumUpper(s);
-  if (v.length !== 14) return false;
-  if (!/^[A-Z0-9]{12}\d{2}$/.test(v)) return false;
-  if (new Set(v.split("")).size === 1) return false;
-  const val = (c: string) => c.charCodeAt(0) - "0".charCodeAt(0);
-  const p1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
-  const p2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
-  let s1 = 0;
-  for (let i = 0; i < 12; i++) s1 += val(v[i]) * p1[i];
-  let dv1 = s1 % 11;
-  dv1 = dv1 < 2 ? 0 : 11 - dv1;
-  if (dv1 !== parseInt(v[12], 10)) return false;
-  let s2 = 0;
-  for (let i = 0; i < 13; i++) s2 += val(v[i]) * p2[i];
-  let dv2 = s2 % 11;
-  dv2 = dv2 < 2 ? 0 : 11 - dv2;
-  if (dv2 !== parseInt(v[13], 10)) return false;
-  return true;
-}
-
-function detectDocType(raw: string): "CPF" | "CNPJ" | "UNKNOWN" {
-  const v = onlyAlnumUpper(raw);
-  if (v.length === 0) return "UNKNOWN";
-  if (/[A-Z]/.test(v)) return "CNPJ";
-  if (v.length <= 11) return "CPF";
-  return "CNPJ";
-}
-
-function maskCgcCpf(raw: string): string {
-  const v = onlyAlnumUpper(raw).slice(0, 14);
-  const tipo = detectDocType(v);
-  if (tipo === "CPF") {
-    // 000.000.000-00
-    return v
-      .slice(0, 11)
-      .replace(/^(\d{0,3})(\d{0,3})?(\d{0,3})?(\d{0,2})?.*/, (_m, a, b, c, d) => {
-        let out = a;
-        if (b) out += "." + b;
-        if (c) out += "." + c;
-        if (d) out += "-" + d;
-        return out;
-      });
-  }
-  // CNPJ (numérico ou alfanumérico): XX.XXX.XXX/XXXX-DD
-  const padded = v.padEnd(14, " ").slice(0, 14);
-  let out = "";
-  for (let i = 0; i < v.length; i++) {
-    if (i === 2 || i === 5) out += ".";
-    if (i === 8) out += "/";
-    if (i === 12) out += "-";
-    out += padded[i];
-  }
-  return out;
-}
-
-function emailValido(s: string): boolean {
-  if (!s) return true; // opcional
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
-}
-
-// ---------- Toast simples ----------
-function useToast() {
-  const [msg, setMsg] = useState<string | null>(null);
-  const [tone, setTone] = useState<"info" | "error" | "success">("info");
-  const tRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const show = useCallback(
-    (m: string, t: "info" | "error" | "success" = "info") => {
-      setMsg(m);
-      setTone(t);
-      if (tRef.current) clearTimeout(tRef.current);
-      tRef.current = setTimeout(() => setMsg(null), 3500);
-    },
-    []
-  );
-  const node = msg ? (
-    <View
-      style={[
-        styles.toast,
-        tone === "error" && { backgroundColor: colors.error },
-        tone === "success" && { backgroundColor: colors.success },
-      ]}
-      testID="cliente-form-toast"
-    >
-      <Text style={styles.toastText}>{msg}</Text>
-    </View>
-  ) : null;
-  return { show, node };
-}
+const TOAST_SHADOW_STYLE =
+  Platform.OS === "web"
+    ? { boxShadow: "0 6px 12px rgba(0, 0, 0, 0.35)" }
+    : {
+        shadowColor: "#000",
+        shadowOpacity: 0.35,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 6 },
+        elevation: 12,
+      };
 
 // ============================================================
-// Tela
+// Tela — Cadastro rápido de cliente (mobile + web)
+// Usado em fluxos de pré-venda (Pedidos/O.S.) e cadastro simples.
+// Para o cadastro completo (web-only), ver app/cliente-completo.tsx.
 // ============================================================
 export default function ClienteFormScreen() {
   const router = useRouter();
   const { can } = usePermissions();
+  const isWeb = Platform.OS === "web";
   const params = useLocalSearchParams<{ codigo?: string; initial_nome?: string }>();
   const editing = !!params.codigo;
   const codigo = params.codigo ? parseInt(String(params.codigo), 10) : null;
 
-  const [conn, setConn] = useState<Connection | null>(null);
-  const [vendedor, setVendedor] = useState<number | null>(null);
-  const [loadingInit, setLoadingInit] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const { show: showToast, node: toastNode } = useToast();
-
-  // Dados principais
-  const [cgcCpf, setCgcCpf] = useState("");
-  const [nome, setNome] = useState(params.initial_nome ? String(params.initial_nome) : "");
-  const [email, setEmail] = useState("");
-  const [inscre, setInscre] = useState("");
-  const [tipo, setTipo] = useState<string>(""); // codigo string FK
-  const [aceitaEmail, setAceitaEmail] = useState(false);
-
-  // Tipos disponíveis
-  const [tiposCliente, setTiposCliente] = useState<TipoCliente[]>([]);
   const [tipoModalVisible, setTipoModalVisible] = useState(false);
 
-  // Telefones (até 3)
-  const [telefones, setTelefones] = useState<Telefone[]>([
-    { ddd: "", tel: "", descricao: "" },
-  ]);
-
-  // Endereço (1)
-  const [endereco, setEndereco] = useState<Endereco>({
-    tipo: 0,
-    cep: "",
-    endereco: "",
-    numero: "",
-    complemento: "",
-    bairro: "",
-    cidade: "",
-    uf: "",
+  const f = useClienteForm({
+    editing,
+    codigo,
+    initialNome: params.initial_nome ? String(params.initial_nome) : undefined,
+    selfRoute: "/cliente-form",
   });
-  const [cepLoading, setCepLoading] = useState(false);
 
-  // -------- Init: carrega conexão, vendedor, tipos, e (se editando) cliente
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const session = await getSession();
-      const conns = await listConnections();
-      const c = conns.find((x) => x.empresa === session?.empresa) || null;
-      if (cancelled) return;
-      if (!c) {
-        showToast("Conexão não encontrada.", "error");
-        setLoadingInit(false);
-        return;
-      }
-      setConn(c);
+  // Cadastro rápido edita apenas o primeiro endereço (cadastro completo, web-only,
+  // expõe a lista inteira com incluir/excluir).
+  const endereco = f.enderecos[0];
+  const setEndereco = (updater: (prev: typeof endereco) => typeof endereco) =>
+    f.updateEndereco(0, updater(endereco));
 
-      const codInt = session?.funcionario?.codigo_int;
-      if (typeof codInt === "number") setVendedor(codInt);
-      else if (typeof codInt === "string" && /^\d+$/.test(codInt)) setVendedor(parseInt(codInt, 10));
-
-      // Carrega dropdown tipo_cliente
-      try {
-        const url = `${c.api.replace(/\/+$/, "")}/api/tipo-cliente?servidor=${encodeURIComponent(
-          c.servidor
-        )}&banco=${encodeURIComponent(c.banco)}`;
-        const r = await fetch(url);
-        const j = await r.json();
-        if (!cancelled && j?.success && Array.isArray(j.items)) {
-          setTiposCliente(j.items as TipoCliente[]);
-        } else if (!cancelled) {
-          showToast(j?.message || "Falha ao carregar tipos de cliente.", "error");
-        }
-      } catch (e) {
-        if (!cancelled)
-          showToast(`Erro ao carregar tipos: ${e instanceof Error ? e.message : e}`, "error");
-      }
-
-      // Se editando, carrega cliente
-      if (editing && codigo) {
-        try {
-          const url = `${c.api.replace(/\/+$/, "")}/api/clientes/${codigo}?servidor=${encodeURIComponent(
-            c.servidor
-          )}&banco=${encodeURIComponent(c.banco)}`;
-          const r = await fetch(url);
-          const j = await r.json();
-          if (cancelled) return;
-          if (!j?.success) {
-            showToast(j?.message || "Erro ao carregar cliente.", "error");
-          } else {
-            const cli = j.cliente || {};
-            setCgcCpf(maskCgcCpf(cli.cgc_cpf || ""));
-            setNome(cli.nome || "");
-            setEmail(cli.e_mail || "");
-            setInscre(cli.inscre || "");
-            setTipo(cli.tipo ? String(cli.tipo).trim() : "");
-            setAceitaEmail(!!cli.aceita_email);
-
-            // Endereço
-            if (j.endereco) {
-              setEndereco({
-                tipo: typeof j.endereco.tipo === "number" ? j.endereco.tipo : 0,
-                cep: j.endereco.cep || "",
-                endereco: j.endereco.endereco || "",
-                numero: j.endereco.numero != null ? String(j.endereco.numero) : "",
-                complemento: j.endereco.complemento || "",
-                bairro: j.endereco.bairro || "",
-                cidade: j.endereco.cidade || "",
-                uf: j.endereco.uf || "",
-              });
-            }
-
-            // Telefones (puxa de cliente_tel; se vazio mas cliente tem ddd_cli/telefone_cli, usa esses)
-            const tels: Telefone[] = Array.isArray(j.telefones)
-              ? j.telefones.map((t: { ddd?: string; tel?: string; descricao?: string }) => ({
-                  ddd: t.ddd || "",
-                  tel: t.tel || "",
-                  descricao: t.descricao || "",
-                }))
-              : [];
-            if (tels.length === 0 && (cli.ddd_cli || cli.telefone_cli)) {
-              tels.push({
-                ddd: cli.ddd_cli || "",
-                tel: cli.telefone_cli || "",
-                descricao: "Principal",
-              });
-            }
-            if (tels.length === 0) tels.push({ ddd: "", tel: "", descricao: "" });
-            setTelefones(tels);
-          }
-        } catch (e) {
-          if (!cancelled)
-            showToast(`Erro ao carregar: ${e instanceof Error ? e.message : e}`, "error");
-        }
-      }
-
-      if (!cancelled) setLoadingInit(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // -------- Label dinâmico do campo "inscre"
-  const docType = useMemo(() => detectDocType(cgcCpf), [cgcCpf]);
-  const labelInscre = docType === "CPF" ? "Identidade" : "Insc. Estadual";
-
-  // -------- Tipo cliente selecionado (descrição para exibir)
-  const tipoSelecionadoLabel = useMemo(() => {
-    if (!tipo) return "";
-    const t = tiposCliente.find((x) => String(x.codigo) === tipo);
-    return t ? t.descricao : `Código ${tipo}`;
-  }, [tipo, tiposCliente]);
-
-  // -------- ViaCEP
-  const buscarCEP = useCallback(
-    async (cepRaw: string) => {
-      const cep = cepRaw.replace(/\D/g, "").slice(0, 8);
-      if (cep.length !== 8) return;
-      setCepLoading(true);
-      try {
-        const r = await fetch(`https://viacep.com.br/ws/${cep}/json/`);
-        const j = await r.json();
-        if (j?.erro) {
-          showToast("CEP não encontrado.", "error");
-        } else {
-          setEndereco((prev) => ({
-            ...prev,
-            cep,
-            endereco: j.logradouro || prev.endereco,
-            bairro: j.bairro || prev.bairro,
-            cidade: j.localidade || prev.cidade,
-            uf: (j.uf || prev.uf || "").toUpperCase().slice(0, 2),
-          }));
-        }
-      } catch (e) {
-        showToast(`Falha ViaCEP: ${e instanceof Error ? e.message : e}`, "error");
-      } finally {
-        setCepLoading(false);
-      }
-    },
-    [showToast]
-  );
-
-  // -------- Handlers
-  const handleCgcCpfChange = (txt: string) => {
-    setCgcCpf(maskCgcCpf(txt));
-  };
-
-  // -------- Busca cliente existente por CGC/CPF (ao perder foco / blur).
-  // Se encontrado e ainda estamos em novo cadastro, oferece carregar para edição.
-  const buscarPorCgc = useCallback(async () => {
-    if (editing) return; // já editando, nada a fazer
-    const raw = onlyAlnumUpper(cgcCpf);
-    if (!raw) return;
-    // Só busca se passou pela validação (CPF 11 ou CNPJ 14)
-    const isValid =
-      (raw.length === 11 && validCPF(raw)) ||
-      (raw.length === 14 && validCNPJ(raw));
-    if (!isValid) return;
-    if (!conn) return;
-    try {
-      const base = conn.api.replace(/\/+$/, "");
-      const url =
-        `${base}/api/clientes/find/by-cgc` +
-        `?servidor=${encodeURIComponent(conn.servidor)}` +
-        `&banco=${encodeURIComponent(conn.banco)}` +
-        `&cgc=${encodeURIComponent(raw)}`;
-      const r = await fetch(url);
-      const j = await r.json();
-      if (j?.success && j?.found && j?.codigo) {
-        // Recarrega a tela em modo edição (substitui rota — assim o useEffect inicial roda)
-        showToast(`Cliente já cadastrado: #${j.codigo}. Carregando...`, "info");
-        setTimeout(() => {
-          router.replace({
-            pathname: "/cliente-form",
-            params: { codigo: String(j.codigo) },
-          });
-        }, 600);
-      }
-    } catch {
-      /* silencioso — busca é opcional */
-    }
-  }, [cgcCpf, conn, editing, router, showToast]);
-
-  // Dispara a busca por CGC/CPF AUTOMATICAMENTE quando o número fica válido
-  // (debounce 350ms para evitar muitas chamadas durante a digitação).
-  useEffect(() => {
-    if (editing) return;
-    const raw = onlyAlnumUpper(cgcCpf);
-    const isValid =
-      (raw.length === 11 && validCPF(raw)) ||
-      (raw.length === 14 && validCNPJ(raw));
-    if (!isValid) return;
-    const t = setTimeout(() => {
-      buscarPorCgc();
-    }, 350);
-    return () => clearTimeout(t);
-    // buscarPorCgc é estável (useCallback) — deps são cgcCpf e editing
-  }, [cgcCpf, editing, buscarPorCgc]);
-
-  const handleCepChange = (txt: string) => {
-    const d = txt.replace(/\D/g, "").slice(0, 8);
-    setEndereco((prev) => ({ ...prev, cep: d }));
-    if (d.length === 8) buscarCEP(d);
-  };
-
-  const addTelefone = () => {
-    if (telefones.length >= 3) {
-      showToast("Máximo de 3 telefones.", "info");
-      return;
-    }
-    setTelefones((prev) => [...prev, { ddd: "", tel: "", descricao: "" }]);
-  };
-
-  const removeTelefone = (idx: number) => {
-    setTelefones((prev) => {
-      const next = prev.filter((_, i) => i !== idx);
-      return next.length === 0 ? [{ ddd: "", tel: "", descricao: "" }] : next;
-    });
-  };
-
-  const updateTelefone = (idx: number, patch: Partial<Telefone>) => {
-    setTelefones((prev) => prev.map((t, i) => (i === idx ? { ...t, ...patch } : t)));
-  };
-
-  // -------- Validações pré-save
-  const validateAll = (): string | null => {
-    if (!nome.trim()) return "Nome é obrigatório.";
-    if (nome.trim().length > 60) return "Nome excede 60 caracteres.";
-    const raw = onlyAlnumUpper(cgcCpf);
-    if (raw) {
-      if (raw.length === 11) {
-        if (!validCPF(raw)) return "CPF inválido.";
-      } else if (raw.length === 14) {
-        if (!validCNPJ(raw)) return "CNPJ inválido.";
-      } else {
-        return "CGC/CPF deve ter 11 (CPF) ou 14 (CNPJ) caracteres.";
-      }
-    }
-    if (!emailValido(email)) return "E-mail inválido.";
-    if (endereco.uf && endereco.uf.trim().length !== 2)
-      return "UF deve ter 2 caracteres.";
-    if (endereco.cep && endereco.cep.replace(/\D/g, "").length !== 8)
-      return "CEP deve ter 8 dígitos.";
-    const telsValidos = telefones.filter((t) => (t.tel || "").trim().length > 0);
-    for (const t of telsValidos) {
-      if (!/^\d{0,4}$/.test((t.ddd || "").trim())) return "DDD inválido (até 4 dígitos).";
-    }
-    return null;
-  };
-
-  // -------- Gravar
-  const handleSave = async () => {
-    const err = validateAll();
-    if (err) {
-      showToast(err, "error");
-      return;
-    }
-    if (!conn) {
-      showToast("Conexão indisponível.", "error");
-      return;
-    }
-    setSaving(true);
-    try {
-      const telsToSend = telefones
-        .filter((t) => (t.tel || "").trim().length > 0)
-        .slice(0, 3)
-        .map((t) => ({
-          ddd: (t.ddd || "").trim(),
-          tel: (t.tel || "").trim(),
-          descricao: (t.descricao || "").trim(),
-        }));
-
-      const enderecoToSend =
-        endereco.cep || endereco.endereco || endereco.cidade
-          ? {
-              tipo: endereco.tipo,
-              cep: endereco.cep.replace(/\D/g, ""),
-              endereco: endereco.endereco.trim(),
-              numero: endereco.numero ? parseInt(endereco.numero, 10) || null : null,
-              complemento: endereco.complemento.trim(),
-              bairro: endereco.bairro.trim(),
-              cidade: endereco.cidade.trim(),
-              uf: endereco.uf.trim().toUpperCase(),
-            }
-          : null;
-
-      const body = {
-        servidor: conn.servidor,
-        banco: conn.banco,
-        cgc_cpf: onlyAlnumUpper(cgcCpf),
-        nome: nome.trim(),
-        e_mail: email.trim(),
-        inscre: inscre.trim(),
-        tipo: tipo,
-        aceita_email: aceitaEmail,
-        vendedor: vendedor,
-        usuario_cadastro: vendedor,
-        usuario_alteracao: vendedor,
-        endereco: enderecoToSend,
-        telefones: telsToSend,
-      };
-
-      const base = conn.api.replace(/\/+$/, "");
-      const url = editing && codigo ? `${base}/api/clientes/${codigo}` : `${base}/api/clientes/create`;
-      const method = editing && codigo ? "PUT" : "POST";
-
-      const r = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const j = await r.json();
-      if (!j?.success) {
-        showToast(j?.message || "Falha ao gravar.", "error");
-      } else {
-        showToast(editing ? "Cliente atualizado." : "Cliente cadastrado.", "success");
-        setTimeout(() => router.back(), 700);
-      }
-    } catch (e) {
-      showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (loadingInit) {
+  if (f.loadingInit) {
     return (
       <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
         <View style={styles.center}>
@@ -543,21 +82,22 @@ export default function ClienteFormScreen() {
         >
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
+        <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
         <Text style={styles.headerTitle} numberOfLines={1}>
           {editing ? `Cliente #${codigo}` : "Novo Cliente"}
         </Text>
         {can("CLIENTE.GRAVAR") ? (
           <Pressable
-            onPress={handleSave}
-            disabled={saving}
+            onPress={() => f.handleSave(() => router.back())}
+            disabled={f.saving}
             style={({ pressed }) => [
               styles.saveBtn,
-              (pressed || saving) && { opacity: 0.7 },
+              (pressed || f.saving) && { opacity: 0.7 },
             ]}
             hitSlop={8}
             testID="cliente-form-save-button"
           >
-            {saving ? (
+            {f.saving ? (
               <ActivityIndicator color={colors.onBrandPrimary} size="small" />
             ) : (
               <>
@@ -577,42 +117,43 @@ export default function ClienteFormScreen() {
         keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
       >
         <ScrollView
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
           {/* ============ Dados Principais ============ */}
           <Text style={styles.sectionTitle}>Dados Principais</Text>
-          <View style={styles.card}>
-            <Field label={`CGC/CPF ${docType === "UNKNOWN" ? "" : `(${docType})`}`}>
+          <View style={[styles.card, isWeb && styles.cardWeb]}>
+            <View style={isWeb ? styles.formGridWeb : undefined}>
+              <Field label={`CGC/CPF ${f.docType === "UNKNOWN" ? "" : `(${f.docType})`}`} style={isWeb ? styles.colHalf : undefined}>
               <TextInput
-                value={cgcCpf}
-                onChangeText={handleCgcCpfChange}
-                onBlur={buscarPorCgc}
+                value={f.cgcCpf}
+                onChangeText={f.handleCgcCpfChange}
+                onBlur={f.buscarPorCgc}
                 placeholder="CPF (11) ou CNPJ (14, aceita letras)"
                 placeholderTextColor={colors.muted}
                 style={styles.input}
                 autoCapitalize="characters"
                 testID="cliente-form-cgc-cpf-input"
               />
-            </Field>
+              </Field>
 
-            <Field label="Nome / Razão Social *">
+              <Field label="Nome / Razão Social *" style={isWeb ? styles.colHalf : undefined}>
               <TextInput
-                value={nome}
-                onChangeText={setNome}
+                value={f.nome}
+                onChangeText={f.setNome}
                 placeholder="Nome do cliente"
                 placeholderTextColor={colors.muted}
                 style={styles.input}
                 maxLength={60}
                 testID="cliente-form-nome-input"
               />
-            </Field>
+              </Field>
 
-            <Field label="E-mail">
+              <Field label="E-mail" style={isWeb ? styles.colHalf : undefined}>
               <TextInput
-                value={email}
-                onChangeText={setEmail}
+                value={f.email}
+                onChangeText={f.setEmail}
                 placeholder="email@dominio.com"
                 placeholderTextColor={colors.muted}
                 style={styles.input}
@@ -620,21 +161,21 @@ export default function ClienteFormScreen() {
                 autoCapitalize="none"
                 testID="cliente-form-email-input"
               />
-            </Field>
+              </Field>
 
-            <Field label={labelInscre}>
+              <Field label={f.labelInscre} style={isWeb ? styles.colHalf : undefined}>
               <TextInput
-                value={inscre}
-                onChangeText={setInscre}
-                placeholder={labelInscre}
+                value={f.inscre}
+                onChangeText={f.setInscre}
+                placeholder={f.labelInscre}
                 placeholderTextColor={colors.muted}
                 style={styles.input}
                 maxLength={18}
                 testID="cliente-form-inscre-input"
               />
-            </Field>
+              </Field>
 
-            <Field label="Tipo Cliente">
+              <Field label="Tipo Cliente" style={isWeb ? styles.colHalf : undefined}>
               <Pressable
                 onPress={() => setTipoModalVisible(true)}
                 style={({ pressed }) => [styles.input, styles.dropdown, pressed && { opacity: 0.7 }]}
@@ -643,47 +184,50 @@ export default function ClienteFormScreen() {
                 <Text
                   style={[
                     styles.dropdownText,
-                    !tipoSelecionadoLabel && { color: colors.muted },
+                    !f.tipoSelecionadoLabel && { color: colors.muted },
                   ]}
                   numberOfLines={1}
                 >
-                  {tipoSelecionadoLabel || "Selecione…"}
+                  {f.tipoSelecionadoLabel || "Selecione…"}
                 </Text>
                 <Ionicons name="chevron-down" size={16} color={colors.muted} />
               </Pressable>
-            </Field>
+              </Field>
 
-            <View style={styles.switchRow}>
-              <Text style={styles.switchLabel}>Aceita receber e-mail</Text>
-              <Switch
-                value={aceitaEmail}
-                onValueChange={setAceitaEmail}
-                trackColor={{ false: colors.border, true: colors.brandSecondary }}
-                thumbColor={aceitaEmail ? colors.brandPrimary : "#f4f3f4"}
-                testID="cliente-form-aceita-email-switch"
-              />
+              <View style={isWeb ? styles.fullWidth : undefined}>
+                <View style={[styles.switchRow, isWeb && styles.switchRowWeb]}>
+                  <Text style={styles.switchLabel}>Aceita receber e-mail</Text>
+                  <Switch
+                    value={f.aceitaEmail}
+                    onValueChange={f.setAceitaEmail}
+                    trackColor={{ false: colors.border, true: colors.brandSecondary }}
+                    thumbColor={f.aceitaEmail ? colors.brandPrimary : "#f4f3f4"}
+                    testID="cliente-form-aceita-email-switch"
+                  />
+                </View>
+
+                {f.vendedor != null ? (
+                  <Text style={styles.hint} testID="cliente-form-vendedor-hint">
+                    Vendedor: #{f.vendedor}
+                  </Text>
+                ) : (
+                  <Text style={[styles.hint, { color: colors.warning }]}>
+                    Aviso: vendedor não identificado na sessão.
+                  </Text>
+                )}
+              </View>
             </View>
-
-            {vendedor != null ? (
-              <Text style={styles.hint} testID="cliente-form-vendedor-hint">
-                Vendedor: #{vendedor}
-              </Text>
-            ) : (
-              <Text style={[styles.hint, { color: colors.warning }]}>
-                Aviso: vendedor não identificado na sessão.
-              </Text>
-            )}
           </View>
 
           {/* ============ Telefones ============ */}
-          <View style={styles.sectionHeader}>
+          <View style={[styles.sectionHeader, isWeb && styles.sectionHeaderCompactWeb]}>
             <Text style={styles.sectionTitle}>Telefones</Text>
             <Pressable
-              onPress={addTelefone}
-              disabled={telefones.length >= 3}
+              onPress={f.addTelefone}
+              disabled={f.telefones.length >= 3}
               style={({ pressed }) => [
                 styles.addBtn,
-                (pressed || telefones.length >= 3) && { opacity: 0.5 },
+                (pressed || f.telefones.length >= 3) && { opacity: 0.5 },
               ]}
               testID="cliente-form-add-telefone-button"
             >
@@ -691,15 +235,15 @@ export default function ClienteFormScreen() {
               <Text style={styles.addBtnText}>Adicionar</Text>
             </Pressable>
           </View>
-          <View style={styles.card}>
-            {telefones.map((t, idx) => (
+          <View style={[styles.card, isWeb && styles.cardCompactWeb]}>
+            {f.telefones.map((t, idx) => (
               <View key={idx} style={styles.telRow} testID={`cliente-form-telefone-${idx}`}>
                 <View style={{ width: 64 }}>
                   <Text style={styles.fieldLabel}>DDD</Text>
                   <TextInput
                     value={t.ddd}
                     onChangeText={(v) =>
-                      updateTelefone(idx, { ddd: v.replace(/\D/g, "").slice(0, 4) })
+                      f.updateTelefone(idx, { ddd: v.replace(/\D/g, "").slice(0, 4) })
                     }
                     style={styles.input}
                     keyboardType="number-pad"
@@ -714,7 +258,7 @@ export default function ClienteFormScreen() {
                   <TextInput
                     value={t.tel}
                     onChangeText={(v) =>
-                      updateTelefone(idx, { tel: v.replace(/\D/g, "").slice(0, 10) })
+                      f.updateTelefone(idx, { tel: v.replace(/\D/g, "").slice(0, 10) })
                     }
                     style={styles.input}
                     keyboardType="phone-pad"
@@ -728,16 +272,16 @@ export default function ClienteFormScreen() {
                   <Text style={styles.fieldLabel}>Descrição</Text>
                   <TextInput
                     value={t.descricao}
-                    onChangeText={(v) => updateTelefone(idx, { descricao: v })}
+                    onChangeText={(v) => f.updateTelefone(idx, { descricao: v })}
                     style={styles.input}
                     placeholder="Comercial"
                     placeholderTextColor={colors.muted}
                     testID={`cliente-form-telefone-${idx}-desc`}
                   />
                 </View>
-                {telefones.length > 1 ? (
+                {f.telefones.length > 1 ? (
                   <Pressable
-                    onPress={() => removeTelefone(idx)}
+                    onPress={() => f.removeTelefone(idx)}
                     style={({ pressed }) => [styles.delBtn, pressed && { opacity: 0.7 }]}
                     testID={`cliente-form-telefone-${idx}-remove`}
                     hitSlop={8}
@@ -750,8 +294,8 @@ export default function ClienteFormScreen() {
           </View>
 
           {/* ============ Endereço ============ */}
-          <Text style={styles.sectionTitle}>Endereço</Text>
-          <View style={styles.card}>
+          <Text style={[styles.sectionTitle, isWeb && styles.sectionTitleCompactWeb]}>Endereço</Text>
+          <View style={[styles.card, isWeb && styles.cardCompactWeb]}>
             <Text style={styles.fieldLabel}>Tipo</Text>
             <View style={styles.radioRow}>
               {ENDERECO_TIPOS.map((opt) => {
@@ -778,126 +322,263 @@ export default function ClienteFormScreen() {
               })}
             </View>
 
-            <Field label="CEP">
-              <View style={styles.inputWithBtn}>
-                <TextInput
-                  value={endereco.cep}
-                  onChangeText={handleCepChange}
-                  style={[styles.input, { flex: 1 }]}
-                  keyboardType="number-pad"
-                  maxLength={8}
-                  placeholder="00000000"
-                  placeholderTextColor={colors.muted}
-                  testID="cliente-form-endereco-cep"
-                />
-                {cepLoading ? (
-                  <ActivityIndicator
-                    color={colors.brandPrimary}
-                    style={{ marginLeft: 8 }}
-                  />
-                ) : (
-                  <Pressable
-                    onPress={() => buscarCEP(endereco.cep)}
-                    style={({ pressed }) => [
-                      styles.cepBtn,
-                      pressed && { opacity: 0.7 },
-                    ]}
-                    testID="cliente-form-endereco-buscar-cep"
-                  >
-                    <Ionicons name="search" size={16} color={colors.onBrandPrimary} />
-                  </Pressable>
-                )}
+            {isWeb ? (
+              <View style={styles.enderecoRowWeb}>
+                <View style={styles.enderecoCepColWeb}>
+                  <Field label="CEP">
+                    <View style={styles.inputWithBtn}>
+                      <TextInput
+                        value={endereco.cep}
+                        onChangeText={(txt) => f.handleCepChange(0, txt)}
+                        style={[styles.input, { flex: 1, minWidth: 0 }]}
+                        keyboardType="number-pad"
+                        maxLength={8}
+                        placeholder="00000000"
+                        placeholderTextColor={colors.muted}
+                        testID="cliente-form-endereco-cep"
+                      />
+                      {(f.cepLoadingIdx === 0) ? (
+                        <ActivityIndicator
+                          color={colors.brandPrimary}
+                          style={{ marginLeft: 8 }}
+                        />
+                      ) : (
+                        <Pressable
+                          onPress={() => f.buscarCEP(0, endereco.cep)}
+                          style={({ pressed }) => [
+                            styles.cepBtn,
+                            pressed && { opacity: 0.7 },
+                          ]}
+                          testID="cliente-form-endereco-buscar-cep"
+                        >
+                          <Ionicons name="search" size={16} color={colors.onBrandPrimary} />
+                        </Pressable>
+                      )}
+                    </View>
+                  </Field>
+                </View>
+                <View style={styles.enderecoMainColWeb}>
+                  <Field label="Endereço">
+                    <TextInput
+                      value={endereco.endereco}
+                      onChangeText={(v) => setEndereco((p) => ({ ...p, endereco: v }))}
+                      style={styles.input}
+                      placeholder="Rua/Av..."
+                      placeholderTextColor={colors.muted}
+                      maxLength={64}
+                      testID="cliente-form-endereco-logradouro"
+                    />
+                  </Field>
+                </View>
               </View>
-            </Field>
+            ) : (
+              <>
+                <Field label="CEP">
+                  <View style={styles.inputWithBtn}>
+                    <TextInput
+                      value={endereco.cep}
+                      onChangeText={(txt) => f.handleCepChange(0, txt)}
+                      style={[styles.input, { flex: 1, minWidth: 0 }]}
+                      keyboardType="number-pad"
+                      maxLength={8}
+                      placeholder="00000000"
+                      placeholderTextColor={colors.muted}
+                      testID="cliente-form-endereco-cep"
+                    />
+                    {(f.cepLoadingIdx === 0) ? (
+                      <ActivityIndicator
+                        color={colors.brandPrimary}
+                        style={{ marginLeft: 8 }}
+                      />
+                    ) : (
+                      <Pressable
+                        onPress={() => f.buscarCEP(0, endereco.cep)}
+                        style={({ pressed }) => [
+                          styles.cepBtn,
+                          pressed && { opacity: 0.7 },
+                        ]}
+                        testID="cliente-form-endereco-buscar-cep"
+                      >
+                        <Ionicons name="search" size={16} color={colors.onBrandPrimary} />
+                      </Pressable>
+                    )}
+                  </View>
+                </Field>
 
-            <Field label="Endereço">
-              <TextInput
-                value={endereco.endereco}
-                onChangeText={(v) => setEndereco((p) => ({ ...p, endereco: v }))}
-                style={styles.input}
-                placeholder="Rua/Av..."
-                placeholderTextColor={colors.muted}
-                maxLength={64}
-                testID="cliente-form-endereco-logradouro"
-              />
-            </Field>
-
-            <View style={styles.row2}>
-              <View style={{ width: 110 }}>
-                <Field label="Número">
+                <Field label="Endereço">
                   <TextInput
-                    value={endereco.numero}
-                    onChangeText={(v) =>
-                      setEndereco((p) => ({ ...p, numero: v.replace(/\D/g, "") }))
-                    }
+                    value={endereco.endereco}
+                    onChangeText={(v) => setEndereco((p) => ({ ...p, endereco: v }))}
                     style={styles.input}
-                    keyboardType="number-pad"
-                    placeholder="0"
+                    placeholder="Rua/Av..."
                     placeholderTextColor={colors.muted}
-                    testID="cliente-form-endereco-numero"
+                    maxLength={64}
+                    testID="cliente-form-endereco-logradouro"
                   />
                 </Field>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Field label="Complemento">
-                  <TextInput
-                    value={endereco.complemento}
-                    onChangeText={(v) => setEndereco((p) => ({ ...p, complemento: v }))}
-                    style={styles.input}
-                    placeholder="apto, sala…"
-                    placeholderTextColor={colors.muted}
-                    testID="cliente-form-endereco-complemento"
-                  />
-                </Field>
-              </View>
-            </View>
+              </>
+            )}
 
-            <Field label="Bairro">
-              <TextInput
-                value={endereco.bairro}
-                onChangeText={(v) => setEndereco((p) => ({ ...p, bairro: v }))}
-                style={styles.input}
-                maxLength={35}
-                placeholder="Bairro"
-                placeholderTextColor={colors.muted}
-                testID="cliente-form-endereco-bairro"
-              />
-            </Field>
+            {isWeb ? (
+              <View style={styles.row2}>
+                <View style={{ width: 110 }}>
+                  <Field label="Número">
+                    <TextInput
+                      value={endereco.numero}
+                      onChangeText={(v) =>
+                        setEndereco((p) => ({ ...p, numero: v.replace(/\D/g, "") }))
+                      }
+                      style={styles.input}
+                      keyboardType="number-pad"
+                      placeholder="0"
+                      placeholderTextColor={colors.muted}
+                      testID="cliente-form-endereco-numero"
+                    />
+                  </Field>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.row2}>
+                <View style={{ width: 110 }}>
+                  <Field label="Número">
+                    <TextInput
+                      value={endereco.numero}
+                      onChangeText={(v) =>
+                        setEndereco((p) => ({ ...p, numero: v.replace(/\D/g, "") }))
+                      }
+                      style={styles.input}
+                      keyboardType="number-pad"
+                      placeholder="0"
+                      placeholderTextColor={colors.muted}
+                      testID="cliente-form-endereco-numero"
+                    />
+                  </Field>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Field label="Complemento">
+                    <TextInput
+                      value={endereco.complemento}
+                      onChangeText={(v) => setEndereco((p) => ({ ...p, complemento: v }))}
+                      style={styles.input}
+                      placeholder="apto, sala…"
+                      placeholderTextColor={colors.muted}
+                      testID="cliente-form-endereco-complemento"
+                    />
+                  </Field>
+                </View>
+              </View>
+            )}
 
-            <View style={styles.row2}>
-              <View style={{ flex: 1 }}>
-                <Field label="Cidade">
+            {isWeb ? (
+              <View style={styles.enderecoRowWeb}>
+                <View style={styles.enderecoCompColWeb}>
+                  <Field label="Complemento">
+                    <TextInput
+                      value={endereco.complemento}
+                      onChangeText={(v) => setEndereco((p) => ({ ...p, complemento: v }))}
+                      style={styles.input}
+                      placeholder="apto, sala…"
+                      placeholderTextColor={colors.muted}
+                      testID="cliente-form-endereco-complemento"
+                    />
+                  </Field>
+                </View>
+                <View style={styles.enderecoBairroColWeb}>
+                  <Field label="Bairro">
+                    <TextInput
+                      value={endereco.bairro}
+                      onChangeText={(v) => setEndereco((p) => ({ ...p, bairro: v }))}
+                      style={styles.input}
+                      maxLength={35}
+                      placeholder="Bairro"
+                      placeholderTextColor={colors.muted}
+                      testID="cliente-form-endereco-bairro"
+                    />
+                  </Field>
+                </View>
+                <View style={styles.enderecoCidadeColWeb}>
+                  <Field label="Cidade">
+                    <TextInput
+                      value={endereco.cidade}
+                      onChangeText={(v) => setEndereco((p) => ({ ...p, cidade: v }))}
+                      style={styles.input}
+                      maxLength={35}
+                      placeholder="Cidade"
+                      placeholderTextColor={colors.muted}
+                      testID="cliente-form-endereco-cidade"
+                    />
+                  </Field>
+                </View>
+                <View style={styles.enderecoUfColWeb}>
+                  <Field label="UF">
+                    <TextInput
+                      value={endereco.uf}
+                      onChangeText={(v) =>
+                        setEndereco((p) => ({
+                          ...p,
+                          uf: v.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2),
+                        }))
+                      }
+                      style={styles.input}
+                      autoCapitalize="characters"
+                      maxLength={2}
+                      placeholder="RJ"
+                      placeholderTextColor={colors.muted}
+                      testID="cliente-form-endereco-uf"
+                    />
+                  </Field>
+                </View>
+              </View>
+            ) : (
+              <>
+                <Field label="Bairro">
                   <TextInput
-                    value={endereco.cidade}
-                    onChangeText={(v) => setEndereco((p) => ({ ...p, cidade: v }))}
+                    value={endereco.bairro}
+                    onChangeText={(v) => setEndereco((p) => ({ ...p, bairro: v }))}
                     style={styles.input}
                     maxLength={35}
-                    placeholder="Cidade"
+                    placeholder="Bairro"
                     placeholderTextColor={colors.muted}
-                    testID="cliente-form-endereco-cidade"
+                    testID="cliente-form-endereco-bairro"
                   />
                 </Field>
-              </View>
-              <View style={{ width: 90 }}>
-                <Field label="UF">
-                  <TextInput
-                    value={endereco.uf}
-                    onChangeText={(v) =>
-                      setEndereco((p) => ({
-                        ...p,
-                        uf: v.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2),
-                      }))
-                    }
-                    style={styles.input}
-                    autoCapitalize="characters"
-                    maxLength={2}
-                    placeholder="RJ"
-                    placeholderTextColor={colors.muted}
-                    testID="cliente-form-endereco-uf"
-                  />
-                </Field>
-              </View>
-            </View>
+
+                <View style={styles.row2}>
+                  <View style={{ flex: 1 }}>
+                    <Field label="Cidade">
+                      <TextInput
+                        value={endereco.cidade}
+                        onChangeText={(v) => setEndereco((p) => ({ ...p, cidade: v }))}
+                        style={styles.input}
+                        maxLength={35}
+                        placeholder="Cidade"
+                        placeholderTextColor={colors.muted}
+                        testID="cliente-form-endereco-cidade"
+                      />
+                    </Field>
+                  </View>
+                  <View style={{ width: 90 }}>
+                    <Field label="UF">
+                      <TextInput
+                        value={endereco.uf}
+                        onChangeText={(v) =>
+                          setEndereco((p) => ({
+                            ...p,
+                            uf: v.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 2),
+                          }))
+                        }
+                        style={styles.input}
+                        autoCapitalize="characters"
+                        maxLength={2}
+                        placeholder="RJ"
+                        placeholderTextColor={colors.muted}
+                        testID="cliente-form-endereco-uf"
+                      />
+                    </Field>
+                  </View>
+                </View>
+              </>
+            )}
           </View>
 
           <View style={{ height: spacing.xxl }} />
@@ -924,7 +605,7 @@ export default function ClienteFormScreen() {
             <ScrollView style={{ maxHeight: 360 }}>
               <Pressable
                 onPress={() => {
-                  setTipo("");
+                  f.setTipo("");
                   setTipoModalVisible(false);
                 }}
                 style={({ pressed }) => [styles.modalOpt, pressed && { opacity: 0.7 }]}
@@ -933,13 +614,13 @@ export default function ClienteFormScreen() {
                   (Nenhum)
                 </Text>
               </Pressable>
-              {tiposCliente.map((t) => {
-                const sel = String(t.codigo) === tipo;
+              {f.tiposCliente.map((t) => {
+                const sel = String(t.codigo) === f.tipo;
                 return (
                   <Pressable
                     key={t.codigo}
                     onPress={() => {
-                      setTipo(String(t.codigo));
+                      f.setTipo(String(t.codigo));
                       setTipoModalVisible(false);
                     }}
                     style={({ pressed }) => [
@@ -963,7 +644,7 @@ export default function ClienteFormScreen() {
                   </Pressable>
                 );
               })}
-              {tiposCliente.length === 0 ? (
+              {f.tiposCliente.length === 0 ? (
                 <Text style={[styles.modalOptText, { padding: spacing.lg, color: colors.muted }]}>
                   Nenhum tipo cadastrado.
                 </Text>
@@ -973,15 +654,34 @@ export default function ClienteFormScreen() {
         </Pressable>
       </Modal>
 
-      {toastNode}
+      {f.toastMsg ? (
+        <View
+          style={[
+            styles.toast,
+            TOAST_SHADOW_STYLE,
+            { backgroundColor: toastBackgroundColor(f.toastTone) },
+          ]}
+          testID="cliente-form-toast"
+        >
+          <Text style={styles.toastText}>{f.toastMsg}</Text>
+        </View>
+      ) : null}
     </SafeAreaView>
   );
 }
 
 // ---------- Componente auxiliar Field ----------
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+  style,
+}: {
+  label: string;
+  children: React.ReactNode;
+  style?: object;
+}) {
   return (
-    <View style={{ marginBottom: spacing.md }}>
+    <View style={[{ marginBottom: spacing.md }, style]}>
       <Text style={styles.fieldLabel}>{label}</Text>
       {children}
     </View>
@@ -1003,6 +703,11 @@ const styles = StyleSheet.create({
   iconBtn: {
     width: 40, height: 40, alignItems: "center", justifyContent: "center",
   },
+  headerLogo: {
+    width: 56,
+    height: 16,
+    marginRight: 8,
+  },
   headerTitle: {
     flex: 1, color: colors.onBrandPrimary,
     fontSize: 17, fontWeight: "500",
@@ -1023,6 +728,9 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     paddingBottom: spacing.xxxl,
   },
+  scrollWeb: {
+    alignItems: "center",
+  },
   sectionTitle: {
     fontSize: 14, fontWeight: "500", color: colors.onSurface,
     marginTop: spacing.md, marginBottom: spacing.sm,
@@ -1032,11 +740,47 @@ const styles = StyleSheet.create({
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     marginTop: spacing.md, marginBottom: spacing.sm,
   },
+  sectionHeaderWeb: {
+    width: "100%",
+    maxWidth: 1080,
+    alignSelf: "center",
+  },
+  sectionHeaderCompactWeb: {
+    width: "100%",
+    maxWidth: 920,
+    alignSelf: "center",
+  },
+  sectionTitleCompactWeb: {
+    width: "100%",
+    maxWidth: 920,
+    alignSelf: "center",
+  },
   card: {
     backgroundColor: colors.surfaceSecondary,
     borderRadius: radius.md,
     borderWidth: 1, borderColor: colors.border,
     padding: spacing.md,
+  },
+  cardWeb: {
+    width: "100%",
+    maxWidth: 1080,
+    alignSelf: "center",
+  },
+  cardCompactWeb: {
+    width: "100%",
+    maxWidth: 920,
+    alignSelf: "center",
+  },
+  formGridWeb: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    columnGap: spacing.md,
+  },
+  colHalf: {
+    width: "49%",
+  },
+  fullWidth: {
+    width: "100%",
   },
   fieldLabel: {
     fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "500",
@@ -1055,6 +799,10 @@ const styles = StyleSheet.create({
   switchRow: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingVertical: 6, marginTop: 4,
+  },
+  switchRowWeb: {
+    justifyContent: "flex-start",
+    gap: 12,
   },
   switchLabel: { fontSize: 13, color: colors.onSurface },
   hint: {
@@ -1099,7 +847,32 @@ const styles = StyleSheet.create({
     width: 8, height: 8, borderRadius: 4, backgroundColor: colors.brandPrimary,
   },
   radioLabel: { fontSize: 13, color: colors.onSurface },
-  inputWithBtn: { flexDirection: "row", alignItems: "center" },
+  inputWithBtn: { flexDirection: "row", alignItems: "center", minWidth: 0 },
+  enderecoRowWeb: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+  },
+  enderecoCepColWeb: {
+    width: 230,
+    minWidth: 0,
+  },
+  enderecoMainColWeb: {
+    flex: 1,
+    minWidth: 0,
+  },
+  enderecoCompColWeb: {
+    flex: 1.2,
+  },
+  enderecoBairroColWeb: {
+    flex: 1.1,
+  },
+  enderecoCidadeColWeb: {
+    flex: 1,
+  },
+  enderecoUfColWeb: {
+    width: 86,
+  },
   cepBtn: {
     width: 40, height: 40, alignItems: "center", justifyContent: "center",
     borderRadius: radius.sm, backgroundColor: colors.brandPrimary,
@@ -1133,8 +906,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brandSecondary,
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
     borderRadius: radius.md,
-    shadowColor: "#000", shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 6 },
-    elevation: 12,
     alignItems: "center",
   },
   toastText: { color: colors.onBrandPrimary, fontSize: 14, fontWeight: "500", textAlign: "center" },

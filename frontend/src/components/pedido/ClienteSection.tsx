@@ -1,6 +1,6 @@
 // Seção "Cliente": seletor (abre busca) + resumo (telefone, endereço, e-mail).
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors } from "@/src/theme/colors";
 import { styles } from "./styles";

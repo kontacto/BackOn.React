@@ -1,6 +1,6 @@
 // Bloco de filtros do Relatório de Pedidos (período, vendedor, situação, botão).
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import DateField from "@/src/components/DateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";

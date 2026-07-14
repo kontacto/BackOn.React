@@ -6,3 +6,4 @@ uvicorn[standard]>=0.30.0
 python-dotenv>=1.0.0
 pydantic>=2.7.0
 pymssql>=2.3.0
+azure-storage-blob>=12.19.0

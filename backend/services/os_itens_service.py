@@ -14,7 +14,7 @@ import asyncio
 from db.connection import _open_conn
 from models.schemas import OSItemSaveRequest
 from services.constants import SITUACAO_LABEL
-from services.pedido_common import _resolve_produto, _mover_estoque
+from services.pedido_common import _resolve_produto, _mover_estoque, _modulo_servicos_ativo
 
 
 def _check_os_aberta(cur, codigo: int) -> tuple[bool, str]:
@@ -136,6 +136,9 @@ def _add_item_sync(req: OSItemSaveRequest, codigo: int) -> dict:
         if not prod:
             conn.close()
             return {"success": False, "message": f"Produto/serviço '{prod_cod}' não encontrado."}
+        if prod["tipo"] == "S" and not _modulo_servicos_ativo(cur):
+            conn.close()
+            return {"success": False, "message": "Módulo Serviço está desativado — não é possível incluir serviços na O.S."}
 
         qtd = float(req.qtd or 0)
         if qtd <= 0:

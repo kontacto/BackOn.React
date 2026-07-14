@@ -44,7 +44,7 @@ def _get_empresa_sync(servidor: str, banco: str) -> dict:
         return {"success": False, "message": f"Falha conexão: {e}"}
     try:
         cur = conn.cursor(as_dict=True)
-        cur.execute("SELECT TOP 1 empresa, fantasia, rz_social FROM controle")
+        cur.execute("SELECT TOP 1 empresa, fantasia, rz_social, uf FROM controle")
         r = cur.fetchone() or {}
         cur.close(); conn.close()
         return {
@@ -52,6 +52,7 @@ def _get_empresa_sync(servidor: str, banco: str) -> dict:
             "empresa": (r.get("empresa") or "").strip() or None,
             "fantasia": (r.get("fantasia") or "").strip() or None,
             "rz_social": (r.get("rz_social") or "").strip() or None,
+            "uf": (r.get("uf") or "").strip() or None,
         }
     except Exception as e:
         try:

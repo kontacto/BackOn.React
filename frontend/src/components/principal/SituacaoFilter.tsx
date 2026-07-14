@@ -1,5 +1,5 @@
 // Filtro de situação do pedido (chips).
-import { Pressable, Text, View } from "react-native";
+import { Platform, Pressable, Text, View } from "react-native";
 import { styles } from "./styles";
 
 const SITUACOES: { value: string; label: string }[] = [
@@ -14,7 +14,7 @@ type Props = { value: string; onChange: (v: string) => void };
 
 export default function SituacaoFilter({ value, onChange }: Props) {
   return (
-    <View style={styles.sitFilterRow} testID="principal-situacao-filter">
+    <View style={[styles.sitFilterRow, Platform.OS === "web" && styles.sitFilterRowWeb]} testID="principal-situacao-filter">
       {SITUACOES.map((s) => {
         const sel = value === s.value;
         return (

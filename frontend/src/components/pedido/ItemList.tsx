@@ -1,6 +1,6 @@
 // Seção "Itens do Pedido": lista de itens + botões de desconto geral/concedidos + subtotal.
 import { ActivityIndicator, Pressable, Text, TouchableOpacity, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors } from "@/src/theme/colors";
 import { formatBRL } from "@/src/utils/format";

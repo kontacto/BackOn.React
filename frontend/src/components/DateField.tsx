@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import DateTimePicker, { DateTimePickerEvent } from "@react-native-community/datetimepicker";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Props = {
@@ -43,6 +43,50 @@ export default function DateField({
   maximumDate,
 }: Props) {
   const [open, setOpen] = useState(false);
+
+  // `@react-native-community/datetimepicker` não tem implementação para web (retorna
+  // null e só emite um warning) — por isso usamos um <input type="date"> nativo do
+  // navegador aqui, em vez do fluxo de abrir modal/spinner usado no mobile.
+  if (Platform.OS === "web") {
+    return (
+      <View style={{ flex: 1 }}>
+        {label ? <Text style={styles.label}>{label}</Text> : null}
+        <View style={styles.row}>
+          <View style={styles.box} testID={testID}>
+            <Ionicons name="calendar-outline" size={16} color={colors.muted} />
+            {/* eslint-disable-next-line react/no-unknown-property -- input HTML nativo (build web) */}
+            <input
+              type="date"
+              value={value || ""}
+              onChange={(e) => onChange(e.target.value || null)}
+              min={minimumDate ? dateToISO(minimumDate) : undefined}
+              max={maximumDate ? dateToISO(maximumDate) : undefined}
+              style={{
+                flex: 1,
+                marginLeft: 8,
+                border: "none",
+                outline: "none",
+                background: "transparent",
+                fontSize: 14,
+                color: colors.onSurface,
+                fontFamily: "inherit",
+              }}
+            />
+          </View>
+          {allowClear && value ? (
+            <Pressable
+              onPress={() => onChange(null)}
+              hitSlop={8}
+              style={({ pressed }) => [styles.clearBtn, pressed && { opacity: 0.7 }]}
+              testID={testID ? `${testID}-clear` : undefined}
+            >
+              <Ionicons name="close-circle" size={20} color={colors.muted} />
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
 
   const handleChange = (event: DateTimePickerEvent, selected?: Date) => {
     // Android fires once and we close. iOS keeps open (spinner) until OK pressed.
@@ -112,16 +156,6 @@ export default function DateField({
         />
       ) : null}
 
-      {open && Platform.OS === "web" ? (
-        <DateTimePicker
-          value={parseISO(value)}
-          mode="date"
-          onChange={(e, d) => {
-            setOpen(false);
-            if (d) onChange(dateToISO(d));
-          }}
-        />
-      ) : null}
     </View>
   );
 }

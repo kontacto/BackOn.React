@@ -29,8 +29,12 @@ from starlette.middleware.cors import CORSMiddleware  # noqa: E402
 
 from db import mongo  # noqa: E402
 from routes import (  # noqa: E402
-    auth, clientes, controle, controle_config, descontos, lookups, margem_lucro, misc, os, pedidos,
-    permissoes, produtos, relatorios, tabelas_aux, whatsapp,
+    afericao_abastecimento, auth, bomba, clientes, combustivel, combustivel_meta, contatos, controle,
+    controle_config, controle_sistema, custo_combustivel, descontos, entrada_saida_caixa, equipamentos,
+    estoque_combustivel, fechamento_turno, financeiro, fornecedores, funcionarios, gestor_documentos, ilha,
+    impressao, log_auditoria, lookups, margem_lucro, misc, mov_encerrante, notas_fiscais, os, pedidos,
+    permissoes, produtos, produtos_compostos, produtos_niveis, reabertura_turno, relatorios, servicos,
+    tabelas_aux, tanque, tanque_estoque, tanque_nf, telemarketing, usuarios, veiculos, whatsapp,
 )
 
 app = FastAPI()
@@ -42,6 +46,8 @@ api_router.include_router(misc.router)
 api_router.include_router(auth.router)
 api_router.include_router(clientes.router)
 api_router.include_router(produtos.router)
+api_router.include_router(produtos_niveis.router)
+api_router.include_router(log_auditoria.router)
 api_router.include_router(pedidos.router)
 api_router.include_router(os.router)
 api_router.include_router(whatsapp.router)
@@ -52,7 +58,35 @@ api_router.include_router(margem_lucro.router)
 api_router.include_router(lookups.router)
 api_router.include_router(permissoes.router)
 api_router.include_router(controle_config.router)
+api_router.include_router(controle_sistema.router)
+api_router.include_router(impressao.router)
+api_router.include_router(gestor_documentos.router)
 api_router.include_router(tabelas_aux.router)
+api_router.include_router(financeiro.router)
+api_router.include_router(entrada_saida_caixa.router)
+api_router.include_router(contatos.router)
+api_router.include_router(equipamentos.router)
+api_router.include_router(telemarketing.router)
+api_router.include_router(notas_fiscais.router)
+api_router.include_router(usuarios.router)
+api_router.include_router(veiculos.router)
+api_router.include_router(funcionarios.router)
+api_router.include_router(servicos.router)
+api_router.include_router(produtos_compostos.router)
+api_router.include_router(fornecedores.router)
+api_router.include_router(combustivel_meta.router)
+api_router.include_router(ilha.router)
+api_router.include_router(combustivel.router)
+api_router.include_router(tanque.router)
+api_router.include_router(estoque_combustivel.router)
+api_router.include_router(custo_combustivel.router)
+api_router.include_router(bomba.router)
+api_router.include_router(tanque_estoque.router)
+api_router.include_router(tanque_nf.router)
+api_router.include_router(mov_encerrante.router)
+api_router.include_router(fechamento_turno.router)
+api_router.include_router(reabertura_turno.router)
+api_router.include_router(afericao_abastecimento.router)
 
 app.include_router(api_router)
 

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Image,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,7 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
@@ -21,6 +23,17 @@ import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import DateField from "@/src/components/DateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
+
+const FAB_SHADOW_STYLE =
+  Platform.OS === "web"
+    ? { boxShadow: "0 4px 8px rgba(0, 0, 0, 0.25)" }
+    : {
+        shadowColor: "#000",
+        shadowOpacity: 0.25,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 8,
+      };
 
 type Pedido = {
   pedido: number;
@@ -275,7 +288,7 @@ export default function PedidosScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="pedidos-screen">
-      {!can("PEDIDO.ABRIR") ? (
+      {!(can("PEDIDO.ABRIR") || can("PEDIDO_COMP.ABRIR")) ? (
         <LockedView testID="pedidos-locked" />
       ) : (
       <>
@@ -288,6 +301,7 @@ export default function PedidosScreen() {
         >
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
+        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Pedidos ({total})</Text>
         <Pressable
           onPress={() => setShowFilters((v) => !v)}
@@ -318,7 +332,15 @@ export default function PedidosScreen() {
         ListFooterComponent={loading ? <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 16 }} /> : null}
         renderItem={({ item }) => (
           <Pressable
-            onPress={() => router.push({ pathname: "/pedido-form", params: { pedido: String(item.pedido) } })}
+            onPress={() => {
+              // Enquanto "Pedido Completo" não existe, abrir um item só
+              // funciona pra quem tem a pré-venda rápida (PEDIDO) — pra
+              // quem só tem PEDIDO_COMP, o clique ainda não tem efeito.
+              // Ver CLAUDE.md > "Transações Screens Strategy".
+              if (can("PEDIDO.ABRIR")) {
+                router.push({ pathname: "/pedido-form", params: { pedido: String(item.pedido) } });
+              }
+            }}
             style={({ pressed }) => [styles.card, pressed && { opacity: 0.7 }]}
             testID={`pedido-${item.pedido}`}
           >
@@ -342,7 +364,7 @@ export default function PedidosScreen() {
       {can("PEDIDO.GRAVAR") ? (
         <Pressable
           onPress={() => router.push("/pedido-form")}
-          style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85 }]}
+          style={({ pressed }) => [styles.fab, FAB_SHADOW_STYLE, pressed && { opacity: 0.85 }]}
           hitSlop={8}
           testID="pedidos-fab-new"
         >
@@ -424,8 +446,6 @@ const styles = StyleSheet.create({
     position: "absolute", right: spacing.lg, bottom: spacing.xl,
     width: 56, height: 56, borderRadius: 28, backgroundColor: colors.brandPrimary,
     alignItems: "center", justifyContent: "center",
-    shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
   },
   empty: { textAlign: "center", color: colors.muted, fontSize: 14, marginTop: 40 },
 });

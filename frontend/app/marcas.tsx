@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
+  ActivityIndicator, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import { usePermissions } from "@/src/permissions";
+import { useAuditContext } from "@/src/hooks/useAuditContext";
+import LockedView from "@/src/components/LockedView";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import { WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 
 type Conn = { servidor: string; banco: string; api: string };
 type Marca = { codigo: string; descricao: string; marca_produto: boolean };
@@ -23,9 +26,21 @@ const FIPE_TIPOS: SelectOption[] = [
 
 export default function MarcasScreen() {
   const router = useRouter();
-  const { can, isMaster } = usePermissions();
+  const { can, isMaster, isManagerFuncao, moduleOn } = usePermissions();
+  const auditCtx = useAuditContext();
+  const isWeb = Platform.OS === "web";
+
+  if (!isWeb) {
+    return (
+      <LockedView
+        title="Disponível somente na versão web"
+        message="Marcas está disponível apenas no web."
+        testID="marcas-web-only"
+      />
+    );
+  }
+
   const [conn, setConn] = useState<Conn | null>(null);
-  const [userFuncao, setUserFuncao] = useState<number | null>(null);
   const [items, setItems] = useState<Marca[]>([]);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -61,8 +76,6 @@ export default function MarcasScreen() {
     (async () => {
       const s = await getSession();
       if (!s) { router.replace("/login"); return; }
-      const fnc = (s as { funcionario?: { funcao?: number | string } })?.funcionario?.funcao;
-      setUserFuncao(fnc != null ? parseInt(String(fnc), 10) : null);
       const c = (await listConnections()).find((x) => x.empresa === s.empresa);
       if (!c) return;
       const cc = { servidor: c.servidor, banco: c.banco, api: c.api };
@@ -81,7 +94,7 @@ export default function MarcasScreen() {
       const base = conn.api.replace(/\/+$/, "");
       const r = await fetch(`${base}/api/tabelas/marcas`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, codigo: editCod, descricao: descricao.trim(), marca_produto: marcaProduto }),
+        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...auditCtx, codigo: editCod, descricao: descricao.trim(), marca_produto: marcaProduto }),
       });
       const j = await r.json();
       if (j?.success) { showToast(j.message || "Marca gravada."); setFormOpen(false); load(conn); }
@@ -95,7 +108,7 @@ export default function MarcasScreen() {
       const base = conn.api.replace(/\/+$/, "");
       const r = await fetch(`${base}/api/tabelas/marcas/${encodeURIComponent(m.codigo)}/excluir`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco }),
+        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...auditCtx }),
       });
       const j = await r.json();
       showToast(j?.message || (j?.success ? "Excluída." : "Falha."));
@@ -126,7 +139,7 @@ export default function MarcasScreen() {
       const base = conn.api.replace(/\/+$/, "");
       const r = await fetch(`${base}/api/tabelas/marcas/importar-fipe`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, tipo: String(fipeTipo), fipe_marca_id: String(fipeMarca), descricao: sel?.nome || "" }),
+        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...auditCtx, tipo: String(fipeTipo), fipe_marca_id: String(fipeMarca), descricao: sel?.nome || "" }),
       });
       const j = await r.json();
       showToast(j?.message || (j?.success ? "Importado." : "Falha."));
@@ -136,8 +149,8 @@ export default function MarcasScreen() {
 
   const canSave = can("MARCAS.GRAVAR") || isMaster;
   const canDel = can("MARCAS.EXCLUIR") || isMaster;
-  // Importar da FIPE: KONTACTO (master) ou funcionários função 1/2.
-  const canFipe = isMaster || userFuncao === 1 || userFuncao === 2;
+  // Importar da FIPE: master/gerencial e somente quando módulo Oficina está ativo.
+  const canFipe = (isMaster || isManagerFuncao) && moduleOn("Oficina");
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="marcas-screen">
@@ -145,6 +158,7 @@ export default function MarcasScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
+        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Marcas</Text>
         {canFipe ? (
           <Pressable onPress={openFipe} hitSlop={12} style={styles.back} testID="marcas-fipe-btn">
@@ -153,22 +167,24 @@ export default function MarcasScreen() {
         ) : <View style={{ width: 40 }} />}
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
-        {loading ? <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 24 }} /> : null}
-        {!loading && items.length === 0 ? <Text style={styles.empty}>Nenhuma marca cadastrada.</Text> : null}
-        {items.map((m) => (
-          <View key={m.codigo} style={styles.row} testID={`marca-${m.codigo}`}>
-            <Pressable style={{ flex: 1 }} onPress={() => canSave && openEdit(m)}>
-              <Text style={styles.rowTitle}>{m.codigo} · {m.descricao}</Text>
-              <Text style={styles.rowSub}>{m.marca_produto ? "Produto" : "Veículo (O.S.)"}</Text>
-            </Pressable>
-            {canDel ? (
-              <Pressable onPress={() => remove(m)} hitSlop={8} testID={`marca-del-${m.codigo}`}>
-                <Ionicons name="trash-outline" size={20} color={colors.error} />
+      <ScrollView contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]}>
+        <View style={isWeb ? styles.webShell : undefined}>
+          {loading ? <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 24 }} /> : null}
+          {!loading && items.length === 0 ? <Text style={styles.empty}>Nenhuma marca cadastrada.</Text> : null}
+          {items.map((m) => (
+            <View key={m.codigo} style={styles.row} testID={`marca-${m.codigo}`}>
+              <Pressable style={{ flex: 1 }} onPress={() => canSave && openEdit(m)}>
+                <Text style={styles.rowTitle}>{m.codigo} · {m.descricao}</Text>
+                <Text style={styles.rowSub}>{m.marca_produto ? "Produto" : "Veículo (O.S.)"}</Text>
               </Pressable>
-            ) : null}
-          </View>
-        ))}
+              {canDel ? (
+                <Pressable onPress={() => remove(m)} hitSlop={8} testID={`marca-del-${m.codigo}`}>
+                  <Ionicons name="trash-outline" size={20} color={colors.error} />
+                </Pressable>
+              ) : null}
+            </View>
+          ))}
+        </View>
       </ScrollView>
 
       {canSave ? (
@@ -201,10 +217,10 @@ export default function MarcasScreen() {
           <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
             <Text style={styles.modalTitle}>Importar da FIPE</Text>
             <Text style={styles.label}>Tipo</Text>
-            <SelectField value={fipeTipo} onChange={(v) => { setFipeTipo(v); setFipeMarca(null); loadFipeMarcas(String(v)); }} options={FIPE_TIPOS} placeholder="Tipo" searchable={false} testID="fipe-tipo" />
+            <SelectField value={fipeTipo} onChange={(v) => { setFipeTipo(v); setFipeMarca(null); loadFipeMarcas(String(v)); }} options={FIPE_TIPOS} placeholder="Tipo" searchable={false} compactWeb testID="fipe-tipo" />
             <Text style={styles.label}>Marca (FIPE)</Text>
             {fipeLoading ? <ActivityIndicator color={colors.brandPrimary} /> : (
-              <SelectField value={fipeMarca} onChange={setFipeMarca} options={fipeMarcas.map((m) => ({ value: m.id, label: m.nome }))} placeholder="Selecione a marca" modalTitle="Marca FIPE" testID="fipe-marca" />
+              <SelectField value={fipeMarca} onChange={setFipeMarca} options={fipeMarcas.map((m) => ({ value: m.id, label: m.nome }))} placeholder="Selecione a marca" modalTitle="Marca FIPE" compactWeb testID="fipe-marca" />
             )}
             <Text style={styles.hint}>Importa a marca (como veículo) e todos os modelos dela.</Text>
             <Pressable onPress={importFipe} disabled={importing} style={[styles.primaryBtn, importing && { opacity: 0.6 }]} testID="fipe-importar">
@@ -225,13 +241,33 @@ const styles = StyleSheet.create({
   back: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   headerTitle: { flex: 1, textAlign: "center", fontSize: 17, fontWeight: "500", color: colors.onBrandPrimary },
   scroll: { padding: spacing.lg, gap: spacing.sm, paddingBottom: 90 },
+  scrollWeb: WEB_SCROLL_CENTER,
+  webShell: { width: "100%", maxWidth: 560, alignSelf: "center", gap: spacing.sm },
   row: { flexDirection: "row", alignItems: "center", gap: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md },
   rowTitle: { fontSize: 14, fontWeight: "600", color: colors.onSurface },
   rowSub: { fontSize: 11, color: colors.muted, marginTop: 2 },
   empty: { textAlign: "center", color: colors.muted, marginTop: 24 },
   fab: { position: "absolute", right: 20, bottom: 28, width: 56, height: 56, borderRadius: 28, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center", elevation: 4 },
-  modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
-  modalCard: { backgroundColor: colors.surface, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: spacing.lg, gap: spacing.sm },
+  modalBg: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: Platform.OS === "web" ? "center" : "flex-end",
+    paddingHorizontal: Platform.OS === "web" ? spacing.xl : 0,
+  },
+  modalCard: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: Platform.OS === "web" ? radius.lg : 18,
+    borderTopRightRadius: Platform.OS === "web" ? radius.lg : 18,
+    borderBottomLeftRadius: Platform.OS === "web" ? radius.lg : 0,
+    borderBottomRightRadius: Platform.OS === "web" ? radius.lg : 0,
+    borderWidth: Platform.OS === "web" ? 1 : 0,
+    borderColor: colors.border,
+    width: "100%",
+    maxWidth: Platform.OS === "web" ? 560 : undefined,
+    alignSelf: Platform.OS === "web" ? "center" : undefined,
+    padding: Platform.OS === "web" ? spacing.md : spacing.lg,
+    gap: spacing.sm,
+  },
   modalTitle: { fontSize: 16, fontWeight: "700", color: colors.onSurface, marginBottom: spacing.sm },
   label: { fontSize: 12, color: colors.muted, fontWeight: "500" },
   input: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: 11, fontSize: 14, color: colors.onSurface },

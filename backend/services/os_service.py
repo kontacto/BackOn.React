@@ -12,6 +12,7 @@ from typing import Optional
 from db.connection import _open_conn, _get_col_sizes, _trunc
 from models.schemas import OSListRequest, OSSaveRequest, FecharRequest
 from services.constants import SITUACAO_LABEL
+from services.pedido_common import _check_cliente_ativo
 from services.permissoes_service import tem_permissao
 
 
@@ -166,6 +167,16 @@ def _save_os_sync(req: OSSaveRequest, codigo: Optional[int]) -> dict:
                 conn.close()
                 label = SITUACAO_LABEL.get(sit_atual, sit_atual)
                 return {"success": False, "message": f"OS com situação '{label}' não pode ser alterada."}
+        else:
+            # Nova O.S. — cliente com STATUS_CLIENTE diferente de Ativo não pode
+            # gerar movimentação (venda/pré-venda).
+            ok, label = _check_cliente_ativo(cur, req.cliente)
+            if not ok:
+                conn.close()
+                return {
+                    "success": False,
+                    "message": f"Cliente com situação '{label}' não pode gerar nova O.S.",
+                }
 
         sizes = _get_col_sizes(conn, req.banco, "os")
         descricao_cliente = req.descricao_cliente or ""

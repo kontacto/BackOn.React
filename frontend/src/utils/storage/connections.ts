@@ -1,4 +1,4 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import AsyncStorage from "./asyncStorageCompat";
 
 const CONNECTIONS_KEY = "@back_on/connections";
 

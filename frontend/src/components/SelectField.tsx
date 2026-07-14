@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import {
-  Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,7 +8,8 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
+import { AppModal } from "@/src/components/AppModal";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 export type SelectOption = {
@@ -28,6 +29,7 @@ type Props = {
   testID?: string;
   modalTitle?: string;
   allowClear?: boolean;
+  compactWeb?: boolean;
 };
 
 export default function SelectField({
@@ -41,9 +43,11 @@ export default function SelectField({
   testID,
   modalTitle,
   allowClear = false,
+  compactWeb = false,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [term, setTerm] = useState("");
+  const isCompactWeb = Platform.OS === "web" && compactWeb;
 
   const selected = useMemo(
     () => options.find((o) => String(o.value) === String(value)) || null,
@@ -111,9 +115,9 @@ export default function SelectField({
         />
       </Pressable>
 
-      <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
-        <Pressable style={styles.modalBg} onPress={() => setOpen(false)}>
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+      <AppModal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
+        <Pressable style={[styles.modalBg, isCompactWeb && styles.modalBgWebCompact]} onPress={() => setOpen(false)}>
+          <Pressable style={[styles.modalCard, isCompactWeb && styles.modalCardWebCompact]} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>{modalTitle || label || "Selecione"}</Text>
               <Pressable onPress={() => setOpen(false)} hitSlop={8}>
@@ -135,7 +139,7 @@ export default function SelectField({
               </View>
             ) : null}
 
-            <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ maxHeight: isCompactWeb ? 360 : 420 }} keyboardShouldPersistTaps="handled">
               {allowClear && !term.trim() ? (
                 <Pressable
                   onPress={() => {
@@ -186,7 +190,7 @@ export default function SelectField({
             </ScrollView>
           </Pressable>
         </Pressable>
-      </Modal>
+      </AppModal>
     </View>
   );
 }
@@ -217,6 +221,7 @@ const styles = StyleSheet.create({
   sub: { fontSize: 11, color: colors.muted, marginTop: 2 },
   clearBtn: { padding: 2 },
   modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
+  modalBgWebCompact: { justifyContent: "center", paddingHorizontal: spacing.xl },
   modalCard: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: radius.lg,
@@ -225,6 +230,17 @@ const styles = StyleSheet.create({
     paddingTop: spacing.lg,
     paddingBottom: spacing.xxl,
     minHeight: 460,
+  },
+  modalCardWebCompact: {
+    width: "100%",
+    maxWidth: 560,
+    alignSelf: "center",
+    borderBottomLeftRadius: radius.lg,
+    borderBottomRightRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingBottom: spacing.lg,
+    minHeight: 320,
   },
   modalHeader: {
     flexDirection: "row",

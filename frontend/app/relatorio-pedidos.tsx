@@ -1,6 +1,6 @@
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Image, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors } from "@/src/theme/colors";
 import { styles } from "@/src/components/relatorio/styles";
@@ -10,6 +10,7 @@ import TotaisBox from "@/src/components/relatorio/TotaisBox";
 import PedidoCard from "@/src/components/relatorio/PedidoCard";
 
 export default function RelatorioPedidosScreen() {
+  const isWeb = Platform.OS === "web";
   const r = useRelatorioPedidos();
 
   return (
@@ -18,11 +19,14 @@ export default function RelatorioPedidosScreen() {
         <Pressable onPress={() => r.router.back()} hitSlop={12} style={styles.backBtn} testID="relpedidos-back">
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
+        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Relatório de Pedidos</Text>
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]} keyboardShouldPersistTaps="handled">
+        <View style={isWeb ? styles.webShell : undefined}>
+        <View style={isWeb ? styles.filtersWeb : undefined}>
         <Filtros
           dataIni={r.dataIni} setDataIni={r.setDataIni}
           dataFim={r.dataFim} setDataFim={r.setDataFim}
@@ -30,6 +34,7 @@ export default function RelatorioPedidosScreen() {
           situacao={r.situacao} setSituacao={r.setSituacao}
           loading={r.loading} onBuscar={r.buscar}
         />
+        </View>
 
         {r.error ? (
           <View style={styles.errorBox} testID="relpedidos-error">
@@ -55,6 +60,7 @@ export default function RelatorioPedidosScreen() {
             onToggle={r.toggleExpand}
           />
         ))}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );

@@ -1,6 +1,6 @@
 // Cartão de um pedido no relatório, com cabeçalho clicável e detalhe (margem + descontos).
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors, spacing } from "@/src/theme/colors";
 import { formatBRL, formatDateBR } from "@/src/utils/format";

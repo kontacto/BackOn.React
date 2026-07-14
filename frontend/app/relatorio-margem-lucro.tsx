@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import DateField from "@/src/components/DateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
@@ -19,6 +19,7 @@ import { useMargemLucro, MargemLucroFiltros } from "@/src/hooks/useMargemLucro";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { exportMargemLucroPdf, MLDav, MLEmpresa } from "@/src/utils/export-margem-lucro";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import { WEB_CONTENT_MAX_WIDTH, WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 
 function brl(v?: number): string {
   return (v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -52,6 +53,7 @@ function Chip({ label, active, onPress, testID }: {
 
 export default function RelatorioMargemLucroScreen() {
   const router = useRouter();
+  const isWeb = Platform.OS === "web";
   const ml = useMargemLucro();
   const feedback = useFeedback();
 
@@ -272,30 +274,44 @@ export default function RelatorioMargemLucroScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="margem-lucro-screen">
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={8} testID="ml-back">
-          <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
-        </Pressable>
-        <Text style={styles.headerTitle}>Margem de Lucro</Text>
-        <Pressable onPress={exportar} hitSlop={8} disabled={!data} testID="ml-export">
-          <Ionicons name="share-outline" size={22} color={data ? colors.brandPrimary : colors.border} />
-        </Pressable>
+      <View style={[styles.header, isWeb && styles.headerWeb]}>
+        <View style={styles.headerLeft}>
+          <Pressable onPress={() => router.back()} hitSlop={8} style={styles.headerIconBtn} testID="ml-back">
+            <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
+          </Pressable>
+          <Image
+            source={require("../assets/images/kontacto-logo.png")}
+            style={[styles.headerLogo, isWeb && styles.headerLogoWeb]}
+            resizeMode="contain"
+          />
+        </View>
+        <Text style={[styles.headerTitle, isWeb && styles.headerTitleWeb]}>Margem de Lucro</Text>
+        <View style={styles.headerRight}>
+          <Pressable onPress={exportar} hitSlop={8} style={styles.headerIconBtn} disabled={!data} testID="ml-export">
+            <Ionicons name="share-outline" size={22} color={data ? colors.brandPrimary : colors.border} />
+          </Pressable>
+        </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        {semConexoes ? (
-          <Text style={styles.aviso}>Nenhuma conexão configurada. Cadastre uma conexão primeiro.</Text>
-        ) : null}
+      <ScrollView contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]} keyboardShouldPersistTaps="handled">
+        <View style={isWeb ? styles.webShell : undefined}>
+          {semConexoes ? (
+            <Text style={styles.aviso}>Nenhuma conexão configurada. Cadastre uma conexão primeiro.</Text>
+          ) : null}
 
-        {/* ---------------- FILTROS ---------------- */}
-        <Pressable style={styles.sectionToggle} onPress={() => setFiltrosOpen((v) => !v)} testID="ml-toggle-filtros">
-          <Ionicons name="options-outline" size={18} color={colors.brandPrimary} />
-          <Text style={styles.sectionToggleText}>Filtros</Text>
-          <Ionicons name={filtrosOpen ? "chevron-up" : "chevron-down"} size={18} color={colors.muted} />
-        </Pressable>
+          {/* ---------------- FILTROS ---------------- */}
+          <Pressable
+            style={[styles.sectionToggle, isWeb && styles.sectionToggleWeb]}
+            onPress={() => setFiltrosOpen((v) => !v)}
+            testID="ml-toggle-filtros"
+          >
+            <Ionicons name="options-outline" size={18} color={colors.brandPrimary} />
+            <Text style={styles.sectionToggleText}>Filtros</Text>
+            <Ionicons name={filtrosOpen ? "chevron-up" : "chevron-down"} size={18} color={colors.muted} />
+          </Pressable>
 
-        {filtrosOpen ? (
-          <View style={styles.filtros}>
+          {filtrosOpen ? (
+            <View style={[styles.filtros, isWeb && styles.filtrosWeb]}>
             <Text style={styles.label}>Empresas</Text>
             <View style={styles.chipWrap}>
               {conns.map((c) => (
@@ -384,20 +400,20 @@ export default function RelatorioMargemLucroScreen() {
               {ml.isPending ? <ActivityIndicator color={colors.onBrandPrimary} />
                 : <Text style={styles.btnGerarText}>Gerar Relatório</Text>}
             </Pressable>
-          </View>
-        ) : null}
+            </View>
+          ) : null}
 
         {/* Erros agora são exibidos no centro da tela (feedback global). */}
 
         {/* ---------------- RESUMO ---------------- */}
-        {consolidado ? (
-          <>
+          {consolidado ? (
+            <>
             <View style={styles.cardsRow}>
               <View style={styles.card}><Text style={styles.cardLbl}>Total Vendas</Text><Text style={styles.cardVal}>{brl(consolidado.total_venda)}</Text></View>
               <View style={styles.card}><Text style={styles.cardLbl}>Total Custos</Text><Text style={styles.cardVal}>{brl(consolidado.total_custo)}</Text></View>
             </View>
             <View style={styles.cardsRow}>
-              <View style={styles.card}><Text style={styles.cardLbl}>Descontos</Text><Text style={[styles.cardVal, { color: colors.danger }]}>{brl(consolidado.desconto)}</Text></View>
+              <View style={styles.card}><Text style={styles.cardLbl}>Descontos</Text><Text style={[styles.cardVal, { color: colors.error }]}>{brl(consolidado.desconto)}</Text></View>
               <View style={styles.card}><Text style={styles.cardLbl}>Lucro</Text><Text style={[styles.cardVal, { color: colors.brandPrimary }]}>{brl(consolidado.lucro)}</Text></View>
             </View>
             <View style={styles.cardsRow}>
@@ -473,8 +489,9 @@ export default function RelatorioMargemLucroScreen() {
                 </View>
               );
             })}
-          </>
-        ) : null}
+            </>
+          ) : null}
+        </View>
       </ScrollView>
 
       <ClientSearchModal
@@ -504,16 +521,52 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
     borderBottomWidth: 1, borderBottomColor: colors.border,
   },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: colors.onSurface },
+  headerWeb: {
+    paddingHorizontal: spacing.xl,
+  },
+  headerLeft: {
+    width: 160,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  headerRight: {
+    width: 160,
+    alignItems: "flex-end",
+  },
+  headerIconBtn: {
+    width: 36,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerLogo: {
+    width: 64,
+    height: 18,
+  },
+  headerLogoWeb: {
+    width: 72,
+    height: 20,
+  },
+  headerTitle: { flex: 1, textAlign: "center", fontSize: 18, fontWeight: "700", color: colors.onSurface },
+  headerTitleWeb: { fontSize: 20 },
   scroll: { padding: spacing.lg, paddingBottom: spacing.xxl, gap: spacing.sm },
+  scrollWeb: WEB_SCROLL_CENTER,
+  webShell: WEB_CONTENT_SHELL,
   aviso: { color: colors.muted, fontSize: 13, marginBottom: spacing.sm },
 
   sectionToggle: {
     flexDirection: "row", alignItems: "center", gap: spacing.sm,
     paddingVertical: spacing.sm,
   },
+  sectionToggleWeb: {
+    width: "100%",
+    maxWidth: WEB_CONTENT_MAX_WIDTH,
+    alignSelf: "center",
+  },
   sectionToggleText: { flex: 1, fontSize: 15, fontWeight: "700", color: colors.onSurface },
   filtros: { gap: spacing.sm, marginBottom: spacing.md },
+  filtrosWeb: WEB_FILTER_CARD,
   label: { fontSize: 12, color: colors.muted, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.5, marginTop: spacing.xs },
   chipWrap: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
   chip: {
@@ -544,7 +597,7 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center", paddingVertical: 14, marginTop: spacing.md,
   },
   btnGerarText: { color: colors.onBrandPrimary, fontWeight: "700", fontSize: 15 },
-  erro: { color: colors.danger, fontSize: 13, marginVertical: spacing.sm },
+  erro: { color: colors.error, fontSize: 13, marginVertical: spacing.sm },
 
   cardsRow: { flexDirection: "row", gap: spacing.sm },
   card: {

@@ -14,7 +14,7 @@ import { usePermissions } from "@/src/permissions";
 export type DashboardTotals = {
   pedidos: number; os: number; produtos: number; servicos: number; descontos: number; margem: number; margem_pct: number;
 };
-export type MovimentoItem = { tipo: "PED" | "OS"; doc: number; cliente: string; valor: number };
+export type MovimentoItem = { tipo: "PED" | "OS"; doc: number; cliente: string; vendedor: string; valor: number };
 
 const ZERO: DashboardTotals = { pedidos: 0, os: 0, produtos: 0, servicos: 0, descontos: 0, margem: 0, margem_pct: 0 };
 
@@ -101,7 +101,24 @@ export function useDashboard() {
         const j = await apiGet(conn, "/api/dashboard/me", { vendedor: vendedorParam, situacao: sit || undefined });
         if (!j?.success) setDashError(j?.message || "Não foi possível obter os totais.");
         setTotais(j?.totais || ZERO);
-        setMovimento(Array.isArray(j?.movimento) ? j.movimento : (Array.isArray(j?.pedidos) ? j.pedidos : []));
+        const rawMov = Array.isArray(j?.movimento) ? j.movimento : (Array.isArray(j?.pedidos) ? j.pedidos : []);
+        const normalizedMov: MovimentoItem[] = rawMov.map((m: any) => {
+          const tipoRaw = String(m?.tipo ?? "PED").toUpperCase();
+          const tipo = tipoRaw === "OS" ? "OS" : "PED";
+          const doc = Number(m?.doc ?? m?.documento ?? m?.pedido ?? m?.os ?? 0);
+          const cliente = String(m?.cliente ?? m?.nome_cliente ?? "").trim();
+          const vendedor = String(
+            m?.funcionario?.nome_guerra ??
+            m?.funcionario_nome_guerra ??
+            m?.vendedor ??
+            m?.nome_guerra ??
+            m?.funcionario?.nome ??
+            ""
+          ).trim();
+          const valor = Number(m?.valor ?? m?.total ?? 0);
+          return { tipo, doc, cliente, vendedor, valor };
+        });
+        setMovimento(normalizedMov);
       } catch (e) {
         setDashError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
       } finally {

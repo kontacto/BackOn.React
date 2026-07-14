@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Image,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,7 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
@@ -20,6 +22,17 @@ import LockedView from "@/src/components/LockedView";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import DateField from "@/src/components/DateField";
+
+const FAB_SHADOW_STYLE =
+  Platform.OS === "web"
+    ? { boxShadow: "0 4px 8px rgba(0, 0, 0, 0.25)" }
+    : {
+        shadowColor: "#000",
+        shadowOpacity: 0.25,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 8,
+      };
 
 type OS = {
   codigo: number;
@@ -226,7 +239,7 @@ export default function OSScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="os-screen">
-      {!can("OS.ABRIR") ? (
+      {!(can("OS.ABRIR") || can("OS_COMP.ABRIR")) ? (
         <LockedView testID="os-locked" />
       ) : (
       <>
@@ -239,6 +252,7 @@ export default function OSScreen() {
         >
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
+        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Ordem de Serviço ({total})</Text>
         <Pressable
           onPress={() => setShowFilters((v) => !v)}
@@ -269,7 +283,15 @@ export default function OSScreen() {
         ListFooterComponent={loading ? <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 16 }} /> : null}
         renderItem={({ item }) => (
           <Pressable
-            onPress={() => router.push({ pathname: "/os-form", params: { os: String(item.codigo) } })}
+            onPress={() => {
+              // Enquanto "O.S. Completa" não existe, abrir um item só
+              // funciona pra quem tem a pré-venda rápida (OS) — pra quem
+              // só tem OS_COMP, o clique ainda não tem efeito. Ver
+              // CLAUDE.md > "Transações Screens Strategy".
+              if (can("OS.ABRIR")) {
+                router.push({ pathname: "/os-form", params: { os: String(item.codigo) } });
+              }
+            }}
             style={({ pressed }) => [styles.card, pressed && { opacity: 0.7 }]}
             testID={`os-${item.codigo}`}
           >
@@ -291,7 +313,7 @@ export default function OSScreen() {
       {can("OS.GRAVAR") ? (
         <Pressable
           onPress={() => router.push("/os-form")}
-          style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85 }]}
+          style={({ pressed }) => [styles.fab, FAB_SHADOW_STYLE, pressed && { opacity: 0.85 }]}
           hitSlop={8}
           testID="os-fab-new"
         >
@@ -369,8 +391,6 @@ const styles = StyleSheet.create({
     position: "absolute", right: spacing.lg, bottom: spacing.xl,
     width: 56, height: 56, borderRadius: 28, backgroundColor: colors.brandPrimary,
     alignItems: "center", justifyContent: "center",
-    shadowColor: "#000", shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
   },
   empty: { textAlign: "center", color: colors.muted, fontSize: 14, marginTop: 40 },
 });

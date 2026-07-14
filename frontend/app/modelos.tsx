@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import SelectField from "@/src/components/SelectField";
 import { usePermissions } from "@/src/permissions";
+import { useAuditContext } from "@/src/hooks/useAuditContext";
+import LockedView from "@/src/components/LockedView";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import { WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 
 type Conn = { servidor: string; banco: string; api: string };
 type Modelo = { codigo: string; cod_marca: string; descricao: string };
@@ -19,6 +22,19 @@ type Marca = { codigo: string; descricao: string };
 export default function ModelosScreen() {
   const router = useRouter();
   const { can, isMaster } = usePermissions();
+  const auditCtx = useAuditContext();
+  const isWeb = Platform.OS === "web";
+
+  if (!isWeb) {
+    return (
+      <LockedView
+        title="Disponível somente na versão web"
+        message="Modelos está disponível apenas no web."
+        testID="modelos-web-only"
+      />
+    );
+  }
+
   const [conn, setConn] = useState<Conn | null>(null);
   const [marcas, setMarcas] = useState<Marca[]>([]);
   const [filtroMarca, setFiltroMarca] = useState<string | number | null>(null);
@@ -78,7 +94,7 @@ export default function ModelosScreen() {
       const base = conn.api.replace(/\/+$/, "");
       const r = await fetch(`${base}/api/tabelas/modelos`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, codigo: editCod, cod_marca: String(codMarca), descricao: descricao.trim() }),
+        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...auditCtx, codigo: editCod, cod_marca: String(codMarca), descricao: descricao.trim() }),
       });
       const j = await r.json();
       if (j?.success) { showToast(j.message || "Modelo gravado."); setFormOpen(false); loadModelos(conn, filtroMarca); }
@@ -92,7 +108,7 @@ export default function ModelosScreen() {
       const base = conn.api.replace(/\/+$/, "");
       const r = await fetch(`${base}/api/tabelas/modelos/${encodeURIComponent(m.codigo)}/excluir`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco }),
+        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...auditCtx }),
       });
       const j = await r.json();
       showToast(j?.message || (j?.success ? "Excluído." : "Falha."));
@@ -110,32 +126,35 @@ export default function ModelosScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
+        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Modelos</Text>
         <View style={{ width: 40 }} />
       </View>
 
-      <View style={styles.filterBox}>
-        <Text style={styles.label}>Filtrar por marca</Text>
-        <SelectField value={filtroMarca} onChange={(v) => { setFiltroMarca(v); if (conn) loadModelos(conn, v); }} options={marcaOpts} placeholder="Todas as marcas" modalTitle="Marca" allowClear testID="modelos-filtro-marca" />
-      </View>
+      <View style={isWeb ? styles.webShell : undefined}>
+        <View style={styles.filterBox}>
+          <Text style={styles.label}>Filtrar por marca</Text>
+          <SelectField value={filtroMarca} onChange={(v) => { setFiltroMarca(v); if (conn) loadModelos(conn, v); }} options={marcaOpts} placeholder="Todas as marcas" modalTitle="Marca" allowClear testID="modelos-filtro-marca" />
+        </View>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
-        {loading ? <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 24 }} /> : null}
-        {!loading && items.length === 0 ? <Text style={styles.empty}>Nenhum modelo.</Text> : null}
-        {items.map((m) => (
-          <View key={m.codigo} style={styles.row} testID={`modelo-${m.codigo}`}>
-            <Pressable style={{ flex: 1 }} onPress={() => canSave && openEdit(m)}>
-              <Text style={styles.rowTitle}>{m.codigo} · {m.descricao}</Text>
-              <Text style={styles.rowSub}>Marca: {marcaLabel(m.cod_marca)}</Text>
-            </Pressable>
-            {canDel ? (
-              <Pressable onPress={() => remove(m)} hitSlop={8} testID={`modelo-del-${m.codigo}`}>
-                <Ionicons name="trash-outline" size={20} color={colors.error} />
+        <ScrollView contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]}>
+          {loading ? <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 24 }} /> : null}
+          {!loading && items.length === 0 ? <Text style={styles.empty}>Nenhum modelo.</Text> : null}
+          {items.map((m) => (
+            <View key={m.codigo} style={styles.row} testID={`modelo-${m.codigo}`}>
+              <Pressable style={{ flex: 1 }} onPress={() => canSave && openEdit(m)}>
+                <Text style={styles.rowTitle}>{m.codigo} · {m.descricao}</Text>
+                <Text style={styles.rowSub}>Marca: {marcaLabel(m.cod_marca)}</Text>
               </Pressable>
-            ) : null}
-          </View>
-        ))}
-      </ScrollView>
+              {canDel ? (
+                <Pressable onPress={() => remove(m)} hitSlop={8} testID={`modelo-del-${m.codigo}`}>
+                  <Ionicons name="trash-outline" size={20} color={colors.error} />
+                </Pressable>
+              ) : null}
+            </View>
+          ))}
+        </ScrollView>
+      </View>
 
       {canSave ? (
         <Pressable onPress={openNew} style={styles.fab} testID="modelos-novo">
@@ -168,15 +187,35 @@ const styles = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: spacing.md, paddingVertical: spacing.md, backgroundColor: colors.brandPrimary },
   back: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   headerTitle: { flex: 1, textAlign: "center", fontSize: 17, fontWeight: "500", color: colors.onBrandPrimary },
+  webShell: { width: "100%", maxWidth: 560, alignSelf: "center", flex: 1 },
   filterBox: { padding: spacing.lg, paddingBottom: 0, gap: 4 },
   scroll: { padding: spacing.lg, gap: spacing.sm, paddingBottom: 90 },
+  scrollWeb: WEB_SCROLL_CENTER,
   row: { flexDirection: "row", alignItems: "center", gap: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md },
   rowTitle: { fontSize: 14, fontWeight: "600", color: colors.onSurface },
   rowSub: { fontSize: 11, color: colors.muted, marginTop: 2 },
   empty: { textAlign: "center", color: colors.muted, marginTop: 24 },
   fab: { position: "absolute", right: 20, bottom: 28, width: 56, height: 56, borderRadius: 28, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center", elevation: 4 },
-  modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
-  modalCard: { backgroundColor: colors.surface, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: spacing.lg, gap: spacing.sm },
+  modalBg: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: Platform.OS === "web" ? "center" : "flex-end",
+    paddingHorizontal: Platform.OS === "web" ? spacing.xl : 0,
+  },
+  modalCard: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: Platform.OS === "web" ? radius.lg : 18,
+    borderTopRightRadius: Platform.OS === "web" ? radius.lg : 18,
+    borderBottomLeftRadius: Platform.OS === "web" ? radius.lg : 0,
+    borderBottomRightRadius: Platform.OS === "web" ? radius.lg : 0,
+    borderWidth: Platform.OS === "web" ? 1 : 0,
+    borderColor: colors.border,
+    width: "100%",
+    maxWidth: Platform.OS === "web" ? 560 : undefined,
+    alignSelf: Platform.OS === "web" ? "center" : undefined,
+    padding: Platform.OS === "web" ? spacing.md : spacing.lg,
+    gap: spacing.sm,
+  },
   modalTitle: { fontSize: 16, fontWeight: "700", color: colors.onSurface, marginBottom: spacing.sm },
   label: { fontSize: 12, color: colors.muted, fontWeight: "500" },
   input: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: 11, fontSize: 14, color: colors.onSurface },

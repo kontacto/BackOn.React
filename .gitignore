@@ -86,3 +86,29 @@ android-sdk/
 credentials.json
 *.key
 .credentials
+
+# IDE / tooling folders
+.vs/
+.claude/
+
+# Runtime logs and local test-run output (not source)
+*.log
+logs/
+backend/logs/
+test_reports/
+
+# Stray local backup copies found sitting inside the repo tree (Windows
+# "copy folder" duplicates from 2026-06-19/06-24, not meant to be tracked —
+# ver feedback memory sobre isso se aparecerem de novo).
+/ - Copia.gitconfig
+/ - Copia.gitignore
+/.emergent - Copia/
+/.git - Copia/
+/.venv - Copia/
+/.vs - Copia/
+/BACKEND_DEPLOY_WINDOWS - Copia.md
+/CLIENTES_SPEC - Copia.md
+/frontend - Copia/
+/memory - Copia/
+/test_reports - Copia/
+/tests - Copia/

@@ -1,13 +1,14 @@
 import { useCallback, useState } from "react";
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { Session, clearSession, getSession } from "@/src/utils/storage/session";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { secureStorageService } from "@/src/services/SecureStorageService";
 import { connId } from "@/src/services/types";
+import { usePermissions } from "@/src/permissions";
 
 function pickFirst(obj: Record<string, unknown> | undefined | null, keys: string[]): string | null {
   if (!obj) return null;
@@ -20,6 +21,8 @@ function pickFirst(obj: Record<string, unknown> | undefined | null, keys: string
 
 export default function ConfiguracoesScreen() {
   const router = useRouter();
+  const isWeb = Platform.OS === "web";
+  const { can, isMaster } = usePermissions();
   const [session, setSession] = useState<Session | null>(null);
   const [hasBio, setHasBio] = useState(false);
 
@@ -118,103 +121,156 @@ export default function ConfiguracoesScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="configuracoes-screen">
       <View style={styles.header}>
+        <Image source={require("../../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
         <Text style={styles.headerTitle}>Configurações</Text>
+        <View style={styles.headerLogoSpacer} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
-        {/* Perfil */}
-        <View style={styles.profile} testID="config-profile">
-          {session?.logo ? (
-            <Image source={{ uri: session.logo }} style={styles.avatar} resizeMode="cover" />
-          ) : (
-            <View style={styles.avatar}>
-              <Ionicons name="person" size={28} color={colors.onBrandPrimary} />
-            </View>
-          )}
-          <View style={{ flex: 1 }}>
-            <Text style={styles.profileName} numberOfLines={1}>
-              {displayName}
-            </Text>
-            {session?.empresa ? (
-              <Text style={styles.profileSub} numberOfLines={1}>
-                {session.empresa}
+      <ScrollView contentContainerStyle={[styles.scroll, Platform.OS === "web" && styles.scrollWeb]}>
+        <View style={Platform.OS === "web" ? styles.webFrame : undefined}>
+          <View style={Platform.OS === "web" ? styles.webShell : undefined}>
+          {/* Perfil */}
+          <View style={[styles.profile, Platform.OS === "web" && styles.profileWeb]} testID="config-profile">
+            {session?.logo ? (
+              <Image source={{ uri: session.logo }} style={styles.avatar} resizeMode="cover" />
+            ) : (
+              <View style={styles.avatar}>
+                <Ionicons name="person" size={28} color={colors.onBrandPrimary} />
+              </View>
+            )}
+            <View style={{ flex: 1 }}>
+              <Text style={styles.profileName} numberOfLines={1}>
+                {displayName}
               </Text>
-            ) : null}
+              {session?.empresa ? (
+                <Text style={styles.profileSub} numberOfLines={1}>
+                  {session.empresa}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+
+          <View style={Platform.OS === "web" ? styles.gridWeb : undefined}>
+            <View style={Platform.OS === "web" ? styles.columnWeb : undefined}>
+              <Text style={styles.sectionTitle}>Geral</Text>
+              <View style={[styles.group, Platform.OS === "web" && styles.groupWeb]}>
+                <Item
+                  icon="server-outline"
+                  label="Conexões"
+                  hint="Gerenciar empresas e bancos"
+                  onPress={() => router.push("/connections")}
+                  testID="config-conexoes"
+                />
+                {isWeb && (can("CTRL_SISTEMA.ABRIR") || isMaster) ? (
+                  <Item
+                    icon="options-outline"
+                    label="Controle do Sistema"
+                    hint="Configurações gerais da empresa (fiscal, financeiro, movimentação)"
+                    onPress={() => router.push("/controle-sistema")}
+                    testID="config-controle-sistema"
+                  />
+                ) : null}
+              </View>
+
+              {hasBio ? (
+                <>
+                  <Text style={styles.sectionTitle}>Segurança</Text>
+                  <View style={[styles.group, Platform.OS === "web" && styles.groupWeb]}>
+                    <Item
+                      icon="finger-print-outline"
+                      label="Desativar Login por Biometria"
+                      hint="Remover digital/Face ID deste dispositivo"
+                      onPress={handleDisableBio}
+                      testID="config-disable-biometria"
+                    />
+                  </View>
+                </>
+              ) : null}
+            </View>
+
+            {canManagePermissoes ? (
+              <View style={Platform.OS === "web" ? styles.columnWeb : undefined}>
+                {isWeb && isKontacto ? (
+                  <>
+                    <Text style={styles.sectionTitle}>Administração</Text>
+                    <View style={[styles.group, Platform.OS === "web" && styles.groupWeb]}>
+                      <Item
+                        icon="cube-outline"
+                        label="Módulos e Recursos"
+                        hint="Liberar módulos do sistema para a empresa"
+                        onPress={() => router.push("/modulos-recursos")}
+                        testID="config-modulos"
+                      />
+                      <Item
+                        icon="logo-whatsapp"
+                        label="WhatsApp"
+                        hint="Configurar envio de Pedidos e OS por WhatsApp"
+                        onPress={() => router.push("/whatsapp-config")}
+                        testID="config-whatsapp"
+                      />
+                    </View>
+                  </>
+                ) : null}
+
+                <Text style={styles.sectionTitle}>Conta</Text>
+                <View style={[styles.group, Platform.OS === "web" && styles.groupWeb]}>
+                  {isWeb ? (
+                    <Item
+                      icon="document-text-outline"
+                      label="Log de Auditoria"
+                      hint="Histórico de alterações do sistema"
+                      onPress={() => router.push("/log-auditoria")}
+                      testID="config-log-auditoria"
+                    />
+                  ) : null}
+                  {isWeb ? (
+                    <Item
+                      icon="person-circle-outline"
+                      label="Perfil do Usuário"
+                      hint="Cadastro e manutenção de usuários"
+                      onPress={() => router.push("/perfil-usuario")}
+                      testID="config-perfil-usuario"
+                    />
+                  ) : null}
+                  {isWeb ? (
+                    <Item
+                      icon="shield-checkmark-outline"
+                      label="Permissões"
+                      hint="Definir acessos por grupo de usuário"
+                      onPress={() => router.push("/permissoes")}
+                      testID="config-permissoes"
+                    />
+                  ) : null}
+                  <Item
+                    icon="log-out-outline"
+                    label="Sair"
+                    hint="Encerrar a sessão atual"
+                    onPress={handleLogout}
+                    danger
+                    testID="config-logout"
+                  />
+                </View>
+              </View>
+            ) : (
+              <View style={Platform.OS === "web" ? styles.columnWeb : undefined}>
+                <Text style={styles.sectionTitle}>Conta</Text>
+                <View style={[styles.group, Platform.OS === "web" && styles.groupWeb]}>
+                  <Item
+                    icon="log-out-outline"
+                    label="Sair"
+                    hint="Encerrar a sessão atual"
+                    onPress={handleLogout}
+                    danger
+                    testID="config-logout"
+                  />
+                </View>
+              </View>
+            )}
+          </View>
+
+          <Text style={styles.version}>Back-On · v1.0</Text>
           </View>
         </View>
-
-        <Text style={styles.sectionTitle}>Geral</Text>
-        <View style={styles.group}>
-          <Item
-            icon="server-outline"
-            label="Conexões"
-            hint="Gerenciar empresas e bancos"
-            onPress={() => router.push("/connections")}
-            testID="config-conexoes"
-          />
-        </View>
-
-        {canManagePermissoes ? (
-          <>
-            <Text style={styles.sectionTitle}>Administração</Text>
-            <View style={styles.group}>
-              <Item
-                icon="shield-checkmark-outline"
-                label="Permissões"
-                hint="Definir acessos por grupo de usuário"
-                onPress={() => router.push("/permissoes")}
-                testID="config-permissoes"
-              />
-              {isKontacto ? (
-                <Item
-                  icon="cube-outline"
-                  label="Módulos e Recursos"
-                  hint="Liberar módulos do sistema para a empresa"
-                  onPress={() => router.push("/modulos-recursos")}
-                  testID="config-modulos"
-                />
-              ) : null}
-              {isKontacto ? (
-                <Item
-                  icon="logo-whatsapp"
-                  label="WhatsApp"
-                  hint="Configurar envio de Pedidos e OS por WhatsApp"
-                  onPress={() => router.push("/whatsapp-config")}
-                  testID="config-whatsapp"
-                />
-              ) : null}
-            </View>
-          </>
-        ) : null}
-
-        {hasBio ? (
-          <>
-            <Text style={styles.sectionTitle}>Segurança</Text>
-            <View style={styles.group}>
-              <Item
-                icon="finger-print-outline"
-                label="Desativar Login por Biometria"
-                hint="Remover digital/Face ID deste dispositivo"
-                onPress={handleDisableBio}
-                testID="config-disable-biometria"
-              />
-            </View>
-          </>
-        ) : null}
-
-        <Text style={styles.sectionTitle}>Conta</Text>
-        <View style={styles.group}>
-          <Item
-            icon="log-out-outline"
-            label="Sair"
-            hint="Encerrar a sessão atual"
-            onPress={handleLogout}
-            danger
-            testID="config-logout"
-          />
-        </View>
-
-        <Text style={styles.version}>Back-On · v1.0</Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -223,13 +279,24 @@ export default function ConfiguracoesScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   header: {
+    flexDirection: "row", alignItems: "center",
     backgroundColor: colors.brandPrimary,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
-    alignItems: "center",
   },
-  headerTitle: { color: colors.onBrandPrimary, fontSize: 17, fontWeight: "600" },
+  headerLogo: { width: 72, height: 20 },
+  headerLogoSpacer: { width: 72, height: 20 },
+  headerTitle: { flex: 1, textAlign: "center", color: colors.onBrandPrimary, fontSize: 17, fontWeight: "600" },
   scroll: { padding: spacing.lg, gap: spacing.sm },
+  scrollWeb: { alignItems: "center", paddingHorizontal: spacing.xl, paddingVertical: spacing.xl },
+  webFrame: { width: "100%", maxWidth: 1240 },
+  webShell: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.xl,
+  },
   profile: {
     flexDirection: "row",
     alignItems: "center",
@@ -238,6 +305,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     padding: spacing.md,
   },
+  profileWeb: { borderWidth: 1, borderColor: colors.border, marginBottom: spacing.md },
   avatar: {
     width: 52,
     height: 52,
@@ -258,6 +326,9 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   group: { backgroundColor: colors.surface, borderRadius: radius.md, overflow: "hidden" },
+  groupWeb: { borderWidth: 1, borderColor: colors.border, boxShadow: "0 4px 14px rgba(0,0,0,0.06)" },
+  gridWeb: { flexDirection: "row", gap: spacing.xl, alignItems: "flex-start" },
+  columnWeb: { flex: 1, minWidth: 0 },
   item: {
     flexDirection: "row",
     alignItems: "center",

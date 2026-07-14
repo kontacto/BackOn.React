@@ -1,6 +1,6 @@
 // Botão reutilizável "Entrar com Biometria".
 import { ActivityIndicator, Pressable, StyleSheet, Text } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors, radius, spacing } from "@/src/theme/colors";
 

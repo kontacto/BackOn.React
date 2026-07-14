@@ -10,8 +10,27 @@ export const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl, paddingTop: spacing.md, paddingBottom: spacing.md,
     backgroundColor: colors.brandPrimary, gap: spacing.md,
   },
+  headerLeft: {
+    width: 150,
+    justifyContent: "center",
+  },
+  headerLogo: {
+    width: 170,
+    height: 38,
+  },
+  headerCenter: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerRight: {
+    width: 150,
+    alignItems: "flex-end",
+    justifyContent: "center",
+  },
   headerTitle: { fontSize: 20, fontWeight: "500", color: colors.onBrandPrimary, letterSpacing: -0.3 },
-  headerSub: { fontSize: 12, color: "rgba(255,255,255,0.75)", marginTop: 2 },
+  headerSub: { fontSize: 16, color: colors.onBrandPrimary, fontWeight: "600", textAlign: "center" },
+  headerSubWeb: { fontSize: 18 },
   logoutBtn: {
     flexDirection: "row", alignItems: "center", gap: 6,
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
@@ -21,10 +40,40 @@ export const styles = StyleSheet.create({
   },
   logoutLabel: { color: colors.onBrandPrimary, fontWeight: "500", fontSize: 13 },
   scroll: { paddingHorizontal: spacing.lg, paddingTop: spacing.lg, paddingBottom: spacing.xxl },
+  scrollWeb: {
+    alignItems: "center",
+    flexGrow: 1,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.xl,
+  },
+  webFrame: {
+    width: "100%",
+    maxWidth: 1000,
+  },
+  webGrid: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.xl,
+  },
+  webColLeft: {
+    flex: 1.05,
+    minWidth: 0,
+  },
+  webColRight: {
+    flex: 0.95,
+    minWidth: 0,
+    gap: spacing.md,
+  },
   hero: {
     flexDirection: "row", alignItems: "center", gap: spacing.md,
     backgroundColor: colors.surfaceSecondary, borderRadius: radius.lg,
     padding: spacing.lg, borderWidth: 1, borderColor: colors.border,
+  },
+  heroWeb: {
+    width: "100%",
+    maxWidth: 920,
+    alignSelf: "center",
   },
   avatar: {
     width: 56, height: 56, borderRadius: 28,
@@ -40,7 +89,10 @@ export const styles = StyleSheet.create({
     textTransform: "uppercase", letterSpacing: 0.5,
   },
   sectionSub: { fontSize: 13, color: colors.muted, marginBottom: spacing.md },
+  sectionTitleWeb: { width: "100%", maxWidth: 920, alignSelf: "center" },
+  sectionSubWeb: { width: "100%", maxWidth: 920, alignSelf: "center" },
   tilesGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md },
+  tilesGridWeb: { gap: spacing.lg, marginBottom: spacing.sm, width: "100%", maxWidth: 920, alignSelf: "center" },
   tile: {
     width: "47%", backgroundColor: colors.surfaceSecondary,
     borderRadius: radius.md, padding: spacing.md,
@@ -55,8 +107,10 @@ export const styles = StyleSheet.create({
   tileLabel: { fontSize: 14, fontWeight: "500", color: colors.onSurface },
   tileHint: { fontSize: 11, color: colors.muted, marginTop: 2 },
   totalsRow: { flexDirection: "row", gap: spacing.sm },
+  totalsRowWeb: { flexDirection: "row", gap: 12, width: "100%", maxWidth: 920, alignSelf: "center" },
   filterRow: { flexDirection: "row", marginTop: spacing.md },
   sitFilterRow: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: spacing.sm, marginBottom: spacing.xs },
+  sitFilterRowWeb: { width: "100%", maxWidth: 920, alignSelf: "center" },
   sitChip: {
     paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14,
     borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface,
@@ -69,6 +123,7 @@ export const styles = StyleSheet.create({
     backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md,
     marginTop: spacing.sm, borderLeftWidth: 4, borderLeftColor: colors.brandPrimary,
   },
+  margemCardWeb: { width: "100%", maxWidth: 920, alignSelf: "center", marginTop: 16, padding: 18 },
   margemIcon: {
     width: 38, height: 38, borderRadius: 19, backgroundColor: colors.brandPrimary,
     alignItems: "center", justifyContent: "center",
@@ -84,13 +139,21 @@ export const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
     borderLeftWidth: 4,
   },
+  totalCardWeb: { minHeight: 92 },
   totalLabel: { fontSize: 11, color: colors.muted, textTransform: "uppercase", letterSpacing: 0.5 },
   totalValue: { fontSize: 22, fontWeight: "600", color: colors.onSurface, marginTop: 4 },
   pedidosHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  pedidosHeaderWeb: { width: "100%", maxWidth: 920, alignSelf: "center" },
   pedidosCard: {
     backgroundColor: colors.surfaceSecondary,
     borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
     overflow: "hidden",
+  },
+  pedidosCardWeb: {
+    borderRadius: radius.lg,
+    width: "100%",
+    maxWidth: 920,
+    alignSelf: "center",
   },
   pedidosHead: {
     flexDirection: "row", paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
@@ -115,5 +178,6 @@ export const styles = StyleSheet.create({
     backgroundColor: "#fdecea", padding: spacing.sm, borderRadius: radius.sm,
     marginBottom: spacing.sm,
   },
+  errorBoxWeb: { width: "100%", maxWidth: 920, alignSelf: "center" },
   errorText: { color: colors.error, fontSize: 12, flex: 1 },
 });

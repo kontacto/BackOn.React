@@ -123,3 +123,10 @@ watchfiles==1.2.0
 websockets==16.0
 yarl==1.24.2
 zipp==4.1.0
+azure-core==1.41.0
+azure-storage-blob==12.30.0
+certifi==2026.6.17
+charset-normalizer==3.4.9
+isodate==0.7.2
+requests==2.34.2
+urllib3==2.7.0

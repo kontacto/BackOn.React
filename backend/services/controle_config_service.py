@@ -60,6 +60,12 @@ _CAMPOS_SET = {c for c, _ in CAMPOS}
 MODULE_TELAS = {
     "Pedido_venda": ["PEDIDO"],
     "Clientes": ["CLIENTE"],
+    "servicos": ["SERVICO", "TIPO_SERVICO"],
+    "Posto": [
+        "POSTO_BOMBA", "POSTO_ENCERR", "POSTO_AFERICAO", "POSTO_FEC_TURNO",
+        "POSTO_REA_TURNO", "POSTO_META", "POSTO_COMBUST", "POSTO_ESTOQUE",
+        "POSTO_CUSTO", "POSTO_ILHA", "POSTO_TANQUE", "POSTO_TQ_EST", "POSTO_TQ_NF",
+    ],
 }
 
 

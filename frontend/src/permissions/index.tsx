@@ -15,6 +15,7 @@ type PermState = {
   isManagerFuncao: boolean;
   keys: Set<string>;
   classe: number | null;
+  usuarioCodigo: number | null;
   disabledTelas: Set<string>;
   modules: Record<string, boolean>;
 };
@@ -24,6 +25,7 @@ type PermState = {
 const MODULE_TELAS: Record<string, string[]> = {
   Pedido_venda: ["PEDIDO"],
   Clientes: ["CLIENTE"],
+  servicos: ["SERVICO", "TIPO_SERVICO"],
 };
 
 type PermContextValue = PermState & {
@@ -47,6 +49,7 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
     isManagerFuncao: false,
     keys: new Set(),
     classe: null,
+    usuarioCodigo: null,
     disabledTelas: new Set(),
     modules: {},
   });
@@ -55,7 +58,7 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
     setState((s) => ({ ...s, loading: true }));
     const session = await getSession();
     if (!session) {
-      setState({ loading: false, isMaster: false, isManagerFuncao: false, keys: new Set(), classe: null, disabledTelas: new Set(), modules: {} });
+      setState({ loading: false, isMaster: false, isManagerFuncao: false, keys: new Set(), classe: null, usuarioCodigo: null, disabledTelas: new Set(), modules: {} });
       return;
     }
     const usuario = (session.usuario ?? {}) as Record<string, unknown>;
@@ -71,6 +74,12 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
       classeRaw === undefined || classeRaw === null || classeRaw === ""
         ? null
         : Number(classeRaw);
+    // codigo_int do funcionário logado — usado pra atribuir autoria no log de auditoria.
+    const usuarioCodigoRaw = funcionario?.codigo_int ?? funcionario?.codigo;
+    const usuarioCodigo =
+      usuarioCodigoRaw === undefined || usuarioCodigoRaw === null || usuarioCodigoRaw === ""
+        ? null
+        : Number(usuarioCodigoRaw);
 
     const conns = await listConnections();
     const conn = conns.find((c) => c.empresa === session.empresa);
@@ -110,7 +119,7 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
       }
     }
 
-    setState({ loading: false, isMaster, isManagerFuncao, keys, classe, disabledTelas, modules });
+    setState({ loading: false, isMaster, isManagerFuncao, keys, classe, usuarioCodigo, disabledTelas, modules });
   }, []);
 
   useEffect(() => {
@@ -156,6 +165,7 @@ export function usePermissions(): PermContextValue {
       isManagerFuncao: false,
       keys: new Set(),
       classe: null,
+      usuarioCodigo: null,
       disabledTelas: new Set(),
       modules: {},
       can: () => false,

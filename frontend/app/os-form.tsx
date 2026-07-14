@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable,
+  ActivityIndicator, Image, KeyboardAvoidingView, Modal, Platform, Pressable,
   ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
@@ -59,7 +59,8 @@ type Toast = { msg: string; tone: "info" | "error" | "success" } | null;
 export default function OSFormScreen() {
   const router = useRouter();
   const { can, moduleOn, isMaster, classe } = usePermissions();
-  const params = useLocalSearchParams<{ os?: string }>();
+  const servicosOn = moduleOn("servicos");
+  const params = useLocalSearchParams<{ os?: string; cliente?: string; cliente_nome?: string }>();
   const editing = !!params.os;
   const osId = params.os ? parseInt(String(params.os), 10) : null;
 
@@ -160,6 +161,15 @@ export default function OSFormScreen() {
       setUserFuncao(fnc != null ? parseInt(String(fnc), 10) : null);
       if (!editing && fid != null) setAtendente(parseInt(String(fid), 10));
       setWaCompany(s?.empresa ?? null);
+      // Pré-seleciona cliente vindo da rota (ex.: botão "O.S." da tela
+      // Telemarketing) — mesmo padrão de pedido-form.tsx.
+      if (!editing && params.cliente && params.cliente_nome) {
+        setCliente({
+          codigo: parseInt(String(params.cliente), 10),
+          nome: String(params.cliente_nome),
+          cgc_cpf: "", telefone: "",
+        });
+      }
       if (c) {
         try {
           const [ra, rf, rm] = await Promise.all([
@@ -263,7 +273,7 @@ export default function OSFormScreen() {
     const t = setTimeout(async () => {
       setProdLoading(true);
       try {
-        const j = await apiGet(conn, `/api/produtos-servicos`, { search: prodTerm, page: 1, size: 30, tipo: "all" });
+        const j = await apiGet(conn, `/api/produtos-servicos`, { search: prodTerm, page: 1, size: 30, tipo: servicosOn ? "all" : "P" });
         setProdResults(j?.items || []);
       } catch {
         setProdResults([]);
@@ -272,7 +282,7 @@ export default function OSFormScreen() {
       }
     }, 300);
     return () => clearTimeout(t);
-  }, [prodTerm, itemModal, selProd, conn]);
+  }, [prodTerm, itemModal, selProd, conn, servicosOn]);
 
   const handleSaveHeader = async () => {
     if (!conn) return;
@@ -298,6 +308,9 @@ export default function OSFormScreen() {
         // Campo de descrição dupla: Oficina grava em chassi, Assistência em nº de série.
         chassi: isOficina ? serie : "",
         numero_de_serie: isOficina ? "" : serie,
+        usuario_alteracao: waUserId,
+        classe,
+        plataforma: Platform.OS,
       };
       const j = editing && osId
         ? await apiSend(conn, `/api/os/${osId}`, "PUT", body)
@@ -369,6 +382,11 @@ export default function OSFormScreen() {
         complemento: fCompl,
         vendedor: fVendedor,
         executor: fExecutor,
+        // usuario_codigo/funcao ficam de fora de propósito (comportamento já existente:
+        // sem eles, o backend usa o default -2/None, que ignora o limite de desconto por
+        // função — mudar isso agora seria alterar uma regra de negócio, não só o log).
+        classe,
+        plataforma: Platform.OS,
       };
       const j = editItem
         ? await apiSend(conn, `/api/os/${osId}/itens/${editItem.cod_os_prod}`, "PUT", body)
@@ -388,7 +406,9 @@ export default function OSFormScreen() {
     if (!conn || !osId || !editItem) return;
     setItemSaving(true);
     try {
-      const j = await apiDelete(conn, `/api/os/${osId}/itens/${editItem.cod_os_prod}`);
+      const j = await apiDelete(conn, `/api/os/${osId}/itens/${editItem.cod_os_prod}`, {
+        usuario_alteracao: waUserId ?? undefined, classe: classe ?? undefined, plataforma: Platform.OS,
+      });
       if (!j?.success) { showToast(j?.message || "Falha ao remover.", "error"); }
       else {
         setItemModal(false);
@@ -433,6 +453,7 @@ export default function OSFormScreen() {
       const j = await apiSend(conn, `/api/os/${osId}/desconto-geral`, "POST", {
         servidor: conn.servidor, banco: conn.banco,
         valor, usuario_codigo: waUserId ?? -2, funcao: 1,
+        classe, plataforma: Platform.OS,
       });
       if (j?.success) {
         setDescGeralModal(false);
@@ -452,7 +473,9 @@ export default function OSFormScreen() {
     if (itens.length === 0) { showToast("Inclua pelo menos um produto ou serviço.", "error"); return; }
     setFechandoOS(true);
     try {
-      const j = await apiSend(conn, `/api/os/${osId}/fechar`, "POST", { classe, master: isMaster });
+      const j = await apiSend(conn, `/api/os/${osId}/fechar`, "POST", {
+        classe, master: isMaster, usuario_alteracao: waUserId, plataforma: Platform.OS,
+      });
       if (j?.success) {
         showToast(j.message || "Pré-venda Fechada.", "success");
         setOs((o) => (o ? { ...o, situacao: "F" } : o));
@@ -506,6 +529,7 @@ export default function OSFormScreen() {
         <Pressable onPress={() => router.back()} style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]} hitSlop={12} testID="os-form-back">
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
+        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>{editing ? `OS #${osId}` : "Nova OS"}</Text>
         {can("OS.GRAVAR") ? (
           <Pressable onPress={handleSaveHeader} disabled={saving} style={({ pressed }) => [styles.saveBtn, (pressed || saving) && { opacity: 0.7 }]} testID="os-form-save">

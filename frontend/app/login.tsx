@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -13,7 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { Connection, listConnections } from "@/src/utils/storage/connections";
 import { setSession } from "@/src/utils/storage/session";
@@ -28,6 +29,17 @@ const GENERIC_AUTH_ERROR = "Usuário ou senha inválidos.";
 function normalizeApiUrl(url: string): string {
   return url.trim().replace(/\/+$/, "");
 }
+
+const LOGIN_CARD_SHADOW_STYLE =
+  Platform.OS === "web"
+    ? { boxShadow: "0 10px 24px rgba(11, 27, 51, 0.08)" }
+    : {
+        shadowColor: "#0B1B33",
+        shadowOpacity: 0.08,
+        shadowRadius: 24,
+        shadowOffset: { width: 0, height: 10 },
+        elevation: 2,
+      };
 
 type LoginResult = {
   success: boolean;
@@ -51,8 +63,15 @@ type LoginResult = {
   } | null;
 };
 
+function isMasterKontactoUser(user: Record<string, unknown> | null | undefined): boolean {
+  if (!user) return false;
+  if (user.master === true) return true;
+  return String(user.usuario ?? "").trim().toUpperCase() === "KONTACTO";
+}
+
 export default function LoginScreen() {
   const router = useRouter();
+  const isWeb = Platform.OS === "web";
   const { reload: reloadPermissions } = usePermissions();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [selected, setSelected] = useState<Connection | null>(null);
@@ -71,6 +90,7 @@ export default function LoginScreen() {
     shouldOfferEnable,
     loginWithBiometrics,
     enableBiometrics,
+    disableBiometrics,
   } = useBiometricLogin(selected);
 
   // Centraliza a persistência da sessão (reaproveitada pelo login por senha e por biometria).
@@ -172,7 +192,13 @@ export default function LoginScreen() {
       }
       if (data.success) {
         await applySession(data, selected);
-        if (shouldOfferEnable) {
+        if (isMasterKontactoUser(data.usuario)) {
+          // Regra de segurança: conta master (KONTACTO) não pode persistir senha no dispositivo.
+          await disableBiometrics();
+          pendingCredsRef.current = null;
+          setSenha("");
+          router.replace("/principal");
+        } else if (shouldOfferEnable) {
           // Oferece ativar a biometria para os próximos logins neste dispositivo.
           pendingCredsRef.current = { usuario: usuario.trim(), senha };
           setShowEnable(true);
@@ -256,6 +282,7 @@ export default function LoginScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="login-screen">
       <View style={styles.header}>
+        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.brand}>Back-On</Text>
         <Pressable
           onPress={() => router.push("/connections")}
@@ -273,168 +300,172 @@ export default function LoginScreen() {
         style={{ flex: 1 }}
       >
         <ScrollView
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]}
           keyboardShouldPersistTaps="handled"
         >
-          <Text style={styles.title}>Bem-vindo</Text>
-          <Text style={styles.subtitle}>
-            Selecione a empresa e informe suas credenciais para conectar ao banco.
-          </Text>
+          <View
+            style={[styles.webCard, LOGIN_CARD_SHADOW_STYLE]}
+          >
+            <Text style={styles.title}>Bem-vindo</Text>
+            <Text style={styles.subtitle}>
+              Selecione a empresa e informe suas credenciais para conectar ao banco.
+            </Text>
 
-          <View style={styles.field}>
-            <Text style={styles.label}>Empresa</Text>
-            <Pressable
-              onPress={() => setShowPicker(true)}
-              style={({ pressed }) => [styles.input, styles.inputRow, pressed && styles.pressed]}
-              testID="login-empresa-picker"
-            >
-              <Text
-                style={[styles.inputText, !selected && { color: colors.muted }]}
-                numberOfLines={1}
+            <View style={styles.field}>
+              <Text style={styles.label}>Empresa</Text>
+              <Pressable
+                onPress={() => setShowPicker(true)}
+                style={({ pressed }) => [styles.input, styles.inputRow, pressed && styles.pressed]}
+                testID="login-empresa-picker"
               >
-                {selected ? selected.empresa : "Selecione uma empresa"}
-              </Text>
-              <Ionicons name="chevron-down" size={18} color={colors.onSurfaceTertiary} />
-            </Pressable>
-            {selected ? (
-              <View style={styles.metaRow}>
-                <View style={styles.metaItem}>
-                  <Ionicons name="server-outline" size={12} color={colors.muted} />
-                  <Text style={styles.metaText} numberOfLines={1} testID="login-empresa-servidor">
-                    {selected.servidor}
-                  </Text>
+                <Text
+                  style={[styles.inputText, !selected && { color: colors.muted }]}
+                  numberOfLines={1}
+                >
+                  {selected ? selected.empresa : "Selecione uma empresa"}
+                </Text>
+                <Ionicons name="chevron-down" size={18} color={colors.onSurfaceTertiary} />
+              </Pressable>
+              {selected ? (
+                <View style={styles.metaRow}>
+                  <View style={styles.metaItem}>
+                    <Ionicons name="server-outline" size={12} color={colors.muted} />
+                    <Text style={styles.metaText} numberOfLines={1} testID="login-empresa-servidor">
+                      {selected.servidor}
+                    </Text>
+                  </View>
+                  <View style={styles.metaItem}>
+                    <Ionicons name="cube-outline" size={12} color={colors.muted} />
+                    <Text style={styles.metaText} numberOfLines={1} testID="login-empresa-banco">
+                      {selected.banco || "Banco não definido"}
+                    </Text>
+                  </View>
+                  <View style={styles.metaItem}>
+                    <Ionicons name="cloud-outline" size={12} color={colors.muted} />
+                    <Text style={styles.metaText} numberOfLines={1} testID="login-empresa-api">
+                      {selected.api || "API não definida"}
+                    </Text>
+                  </View>
                 </View>
-                <View style={styles.metaItem}>
-                  <Ionicons name="cube-outline" size={12} color={colors.muted} />
-                  <Text style={styles.metaText} numberOfLines={1} testID="login-empresa-banco">
-                    {selected.banco || "Banco não definido"}
+              ) : null}
+            </View>
+
+            <View style={styles.field}>
+              <Text style={styles.label}>Usuário</Text>
+              <TextInput
+                value={usuario}
+                onChangeText={setUsuario}
+                placeholder="Digite seu usuário"
+                placeholderTextColor={colors.muted}
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={styles.input}
+                testID="login-usuario-input"
+              />
+            </View>
+
+            <View style={styles.field}>
+              <Text style={styles.label}>Senha</Text>
+              <TextInput
+                value={senha}
+                onChangeText={setSenha}
+                placeholder="Digite sua senha"
+                placeholderTextColor={colors.muted}
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={styles.input}
+                testID="login-senha-input"
+              />
+            </View>
+
+            {error ? (
+              <View style={[styles.banner, styles.bannerError]} testID="login-error">
+                <Ionicons name="alert-circle" size={16} color={colors.error} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.bannerText, { color: colors.error, fontWeight: "500" }]}>
+                    {error}
                   </Text>
-                </View>
-                <View style={styles.metaItem}>
-                  <Ionicons name="cloud-outline" size={12} color={colors.muted} />
-                  <Text style={styles.metaText} numberOfLines={1} testID="login-empresa-api">
-                    {selected.api || "API não definida"}
-                  </Text>
+                  {errorDetails?.attempted ? (
+                    <View style={styles.errorMeta} testID="login-error-attempted">
+                      <Text style={styles.errorMetaTitle}>Conexão tentada</Text>
+                      <Text style={styles.errorMetaLine}>
+                        Empresa: {errorDetails.attempted.empresa}
+                      </Text>
+                      <Text style={styles.errorMetaLine}>
+                        Servidor: {errorDetails.attempted.server}
+                      </Text>
+                      <Text style={styles.errorMetaLine}>
+                        Banco: {errorDetails.attempted.database}
+                      </Text>
+                      <Text style={styles.errorMetaLine}>
+                        Usuário SQL: {errorDetails.attempted.sql_user}
+                      </Text>
+                      <Text style={styles.errorMetaLine}>
+                        Usuário login: {errorDetails.attempted.login_user}
+                      </Text>
+                      {errorDetails.attempted.login_timeout ? (
+                        <Text style={styles.errorMetaLine}>
+                          Timeout: {errorDetails.attempted.login_timeout}s
+                        </Text>
+                      ) : null}
+                    </View>
+                  ) : null}
+                  {errorDetails?.error_step || errorDetails?.error_line ? (
+                    <View style={styles.errorMeta} testID="login-error-origin">
+                      <Text style={styles.errorMetaTitle}>Origem do erro</Text>
+                      {errorDetails.error_step ? (
+                        <Text style={styles.errorMetaLine}>
+                          Etapa: {errorDetails.error_step}
+                        </Text>
+                      ) : null}
+                      {errorDetails.error_line ? (
+                        <Text style={styles.errorMetaLine}>
+                          Linha: {errorDetails.error_line}
+                        </Text>
+                      ) : null}
+                      {errorDetails.error_code_line ? (
+                        <Text style={styles.errorMetaCode}>
+                          {errorDetails.error_code_line}
+                        </Text>
+                      ) : null}
+                      {errorDetails.error_query ? (
+                        <>
+                          <Text style={[styles.errorMetaLine, { marginTop: 4 }]}>Query:</Text>
+                          <Text style={styles.errorMetaCode}>
+                            {errorDetails.error_query}
+                          </Text>
+                        </>
+                      ) : null}
+                    </View>
+                  ) : null}
                 </View>
               </View>
             ) : null}
           </View>
-
-          <View style={styles.field}>
-            <Text style={styles.label}>Usuário</Text>
-            <TextInput
-              value={usuario}
-              onChangeText={setUsuario}
-              placeholder="Digite seu usuário"
-              placeholderTextColor={colors.muted}
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={styles.input}
-              testID="login-usuario-input"
-            />
-          </View>
-
-          <View style={styles.field}>
-            <Text style={styles.label}>Senha</Text>
-            <TextInput
-              value={senha}
-              onChangeText={setSenha}
-              placeholder="Digite sua senha"
-              placeholderTextColor={colors.muted}
-              secureTextEntry
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={styles.input}
-              testID="login-senha-input"
-            />
-          </View>
-
-          {error ? (
-            <View style={[styles.banner, styles.bannerError]} testID="login-error">
-              <Ionicons name="alert-circle" size={16} color={colors.error} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.bannerText, { color: colors.error, fontWeight: "500" }]}>
-                  {error}
-                </Text>
-                {errorDetails?.attempted ? (
-                  <View style={styles.errorMeta} testID="login-error-attempted">
-                    <Text style={styles.errorMetaTitle}>Conexão tentada</Text>
-                    <Text style={styles.errorMetaLine}>
-                      Empresa: {errorDetails.attempted.empresa}
-                    </Text>
-                    <Text style={styles.errorMetaLine}>
-                      Servidor: {errorDetails.attempted.server}
-                    </Text>
-                    <Text style={styles.errorMetaLine}>
-                      Banco: {errorDetails.attempted.database}
-                    </Text>
-                    <Text style={styles.errorMetaLine}>
-                      Usuário SQL: {errorDetails.attempted.sql_user}
-                    </Text>
-                    <Text style={styles.errorMetaLine}>
-                      Usuário login: {errorDetails.attempted.login_user}
-                    </Text>
-                    {errorDetails.attempted.login_timeout ? (
-                      <Text style={styles.errorMetaLine}>
-                        Timeout: {errorDetails.attempted.login_timeout}s
-                      </Text>
-                    ) : null}
-                  </View>
-                ) : null}
-                {errorDetails?.error_step || errorDetails?.error_line ? (
-                  <View style={styles.errorMeta} testID="login-error-origin">
-                    <Text style={styles.errorMetaTitle}>Origem do erro</Text>
-                    {errorDetails.error_step ? (
-                      <Text style={styles.errorMetaLine}>
-                        Etapa: {errorDetails.error_step}
-                      </Text>
-                    ) : null}
-                    {errorDetails.error_line ? (
-                      <Text style={styles.errorMetaLine}>
-                        Linha: {errorDetails.error_line}
-                      </Text>
-                    ) : null}
-                    {errorDetails.error_code_line ? (
-                      <Text style={styles.errorMetaCode}>
-                        {errorDetails.error_code_line}
-                      </Text>
-                    ) : null}
-                    {errorDetails.error_query ? (
-                      <>
-                        <Text style={[styles.errorMetaLine, { marginTop: 4 }]}>
-                          Query:
-                        </Text>
-                        <Text style={styles.errorMetaCode}>
-                          {errorDetails.error_query}
-                        </Text>
-                      </>
-                    ) : null}
-                  </View>
-                ) : null}
-              </View>
-            </View>
-          ) : null}
         </ScrollView>
 
-        <View style={styles.footer}>
-          <Pressable
-            onPress={handleSubmit}
-            disabled={submitting}
-            style={({ pressed }) => [
-              styles.primaryBtn,
-              (pressed || submitting) && styles.primaryBtnPressed,
-            ]}
-            testID="login-submit-button"
-          >
-            {submitting ? (
-              <ActivityIndicator color={colors.onBrandPrimary} />
-            ) : (
-              <Text style={styles.primaryBtnText}>Entrar</Text>
-            )}
-          </Pressable>
-          {canBiometricLogin ? (
-            <BiometricButton onPress={handleBiometricLogin} busy={submitting} />
-          ) : null}
+        <View style={[styles.footer, isWeb && styles.footerWeb]}>
+          <View style={isWeb ? styles.footerInner : undefined}>
+            <Pressable
+              onPress={handleSubmit}
+              disabled={submitting}
+              style={({ pressed }) => [
+                styles.primaryBtn,
+                (pressed || submitting) && styles.primaryBtnPressed,
+              ]}
+              testID="login-submit-button"
+            >
+              {submitting ? (
+                <ActivityIndicator color={colors.onBrandPrimary} />
+              ) : (
+                <Text style={styles.primaryBtnText}>Entrar</Text>
+              )}
+            </Pressable>
+            {canBiometricLogin ? (
+              <BiometricButton onPress={handleBiometricLogin} busy={submitting} />
+            ) : null}
+          </View>
         </View>
       </KeyboardAvoidingView>
 
@@ -537,6 +568,22 @@ const styles = StyleSheet.create({
     paddingTop: spacing.xl,
     paddingBottom: spacing.xxxl,
   },
+  scrollWeb: {
+    alignItems: "center",
+    flexGrow: 1,
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.xl,
+    paddingBottom: spacing.xl,
+  },
+  webCard: {
+    width: "100%",
+    maxWidth: 760,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.lg,
+    padding: spacing.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   title: {
     fontSize: 28,
     fontWeight: "500",
@@ -627,6 +674,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopWidth: 1,
     borderTopColor: colors.divider,
+  },
+  footerWeb: {
+    paddingHorizontal: spacing.xl,
+    paddingTop: 0,
+    paddingBottom: spacing.xl,
+    backgroundColor: "transparent",
+    borderTopWidth: 0,
+    alignItems: "center",
+  },
+  footerInner: {
+    width: "100%",
+    maxWidth: 760,
+    gap: spacing.sm,
   },
   primaryBtn: {
     backgroundColor: colors.brandPrimary,

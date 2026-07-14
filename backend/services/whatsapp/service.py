@@ -125,6 +125,20 @@ def build_message(summary: dict, signature: str, template: Optional[str] = "", i
         return render_template(template, variables)
 
     primeiro = variables["primeiro_nome"]
+
+    if summary.get("doc_type") == "CLI":
+        # Mensagem avulsa (Telemarketing) — não referencia Pedido/OS,
+        # nem itens/valor/situação (não existem pra esse tipo).
+        return "\n".join([
+            f"Olá {primeiro},",
+            "",
+            "Entramos em contato pra saber se está tudo bem e se podemos ajudar em algo.",
+            "",
+            "Qualquer dúvida estamos à disposição.",
+            "",
+            signature or "Equipe",
+        ])
+
     linhas = [
         f"Olá {primeiro},",
         "",
@@ -249,6 +263,8 @@ def _send_sync(servidor: str, banco: str, doc_type: str, doc_id: int,
     })
 
     if status == "SUCCESS":
+        if doc_type == "CLI" and summary.get("cliente_id"):
+            repo.registrar_envio_whatsapp_no_historico(servidor, banco, summary["cliente_id"], phone, user_id)
         return {"success": True, "log_id": log_id, "phone": phone, "duration_ms": duration_ms}
     return {"success": False, "message": last_error or "Falha no envio.", "log_id": log_id}
 

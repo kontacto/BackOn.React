@@ -1,5 +1,5 @@
 // Persiste as seleções do relatório de Margem de Lucro por usuário + conexão.
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import AsyncStorage from "./asyncStorageCompat";
 
 const PREFIX = "ml_filtros::";
 

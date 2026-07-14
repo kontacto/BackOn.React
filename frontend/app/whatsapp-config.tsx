@@ -5,12 +5,13 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { apiGet, apiSend } from "@/src/utils/api";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 
 type Provider = "twilio" | "meta" | "evolution";
 
@@ -54,6 +55,7 @@ const SECRET = "__SECRET_KEPT__"; // valor sentinela: mantém segredo já salvo
 
 export default function WhatsappConfigScreen() {
   const router = useRouter();
+  const isWeb = Platform.OS === "web";
   const [conn, setConn] = useState<Connection | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -188,92 +190,101 @@ export default function WhatsappConfigScreen() {
       </View>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-          <View style={styles.rowBetween}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.switchLabel}>Ativar envio por WhatsApp</Text>
-              <Text style={styles.switchHint}>Habilita o botão nas telas de Pedido e OS</Text>
-            </View>
-            <Switch value={enabled} onValueChange={setEnabled} testID="wa-config-enabled" />
-          </View>
-
-          <Text style={styles.sectionTitle}>Provedor</Text>
-          <View style={styles.providerRow}>
-            {PROVIDERS.map((p) => {
-              const sel = provider === p.value;
-              return (
-                <Pressable
-                  key={p.value}
-                  onPress={() => setProvider(p.value)}
-                  style={[styles.providerChip, sel && styles.providerChipSel]}
-                  testID={`wa-provider-${p.value}`}
-                >
-                  <Ionicons name={p.icon} size={18} color={sel ? colors.onBrandPrimary : colors.brandPrimary} />
-                  <Text style={[styles.providerText, sel && { color: colors.onBrandPrimary }]}>{p.label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {/* Documentação embutida */}
-          <View style={styles.docCard} testID="wa-config-docs">
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 }}>
-              <Ionicons name="information-circle-outline" size={18} color={colors.brandPrimary} />
-              <Text style={styles.docTitle}>Como configurar</Text>
-            </View>
-            <Text style={styles.docIntro}>{doc.intro}</Text>
-            {doc.steps.map((s, i) => (
-              <View key={i} style={styles.docStep}>
-                <Text style={styles.docNum}>{i + 1}.</Text>
-                <Text style={styles.docStepText}>{s}</Text>
+        <ScrollView contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]} keyboardShouldPersistTaps="handled">
+          <View style={isWeb ? styles.webShell : undefined}>
+          <View style={[styles.sectionCard, isWeb && styles.sectionCardWeb]}>
+            <View style={styles.rowBetween}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.switchLabel}>Ativar envio por WhatsApp</Text>
+                <Text style={styles.switchHint}>Habilita o botão nas telas de Pedido e OS</Text>
               </View>
-            ))}
+              <Switch value={enabled} onValueChange={setEnabled} testID="wa-config-enabled" />
+            </View>
           </View>
 
-          <Text style={styles.sectionTitle}>Credenciais</Text>
-          {provider === "twilio" ? (
-            <>
-              <Field label="Account SID" value={twilioSid} onChange={setTwilioSid} placeholder="ACxxxxxxxx" secure />
-              <Field label="Auth Token" value={twilioToken} onChange={setTwilioToken} placeholder="token" secure />
-              <Field label="Número de origem (From)" value={fromNumber} onChange={setFromNumber} placeholder="+14155238886" keyboardType="phone-pad" />
-            </>
-          ) : provider === "meta" ? (
-            <>
-              <Field label="Phone Number ID" value={metaPhone} onChange={setMetaPhone} placeholder="1234567890" secure />
-              <Field label="Access Token" value={metaToken} onChange={setMetaToken} placeholder="EAAB..." secure />
-            </>
-          ) : (
-            <>
-              <Field label="URL da API" value={evoUrl} onChange={setEvoUrl} placeholder="https://seu-servidor:8080" keyboardType="url" />
-              <Field label="Instância" value={evoInstance} onChange={setEvoInstance} placeholder="instancia1" />
-              <Field label="API Key" value={evoKey} onChange={setEvoKey} placeholder="apikey" secure />
-            </>
-          )}
+          <View style={[styles.sectionCard, isWeb && styles.sectionCardWeb]}>
+            <Text style={styles.sectionTitle}>Provedor</Text>
+            <View style={styles.providerRow}>
+              {PROVIDERS.map((p) => {
+                const sel = provider === p.value;
+                return (
+                  <Pressable
+                    key={p.value}
+                    onPress={() => setProvider(p.value)}
+                    style={[styles.providerChip, sel && styles.providerChipSel]}
+                    testID={`wa-provider-${p.value}`}
+                  >
+                    <Ionicons name={p.icon} size={18} color={sel ? colors.onBrandPrimary : colors.brandPrimary} />
+                    <Text style={[styles.providerText, sel && { color: colors.onBrandPrimary }]}>{p.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
 
-          <Text style={styles.sectionTitle}>Mensagem</Text>
-          <Field label="Assinatura (rodapé da mensagem)" value={signature} onChange={setSignature} placeholder="Ex.: Equipe KONTACTO" />
+            {/* Documentação embutida */}
+            <View style={styles.docCard} testID="wa-config-docs">
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                <Ionicons name="information-circle-outline" size={18} color={colors.brandPrimary} />
+                <Text style={styles.docTitle}>Como configurar</Text>
+              </View>
+              <Text style={styles.docIntro}>{doc.intro}</Text>
+              {doc.steps.map((s, i) => (
+                <View key={i} style={styles.docStep}>
+                  <Text style={styles.docNum}>{i + 1}.</Text>
+                  <Text style={styles.docStepText}>{s}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
 
-          <Text style={styles.fieldLabel}>Modelo de mensagem (opcional)</Text>
-          <TextInput
-            value={template}
-            onChangeText={setTemplate}
-            placeholder={"Deixe vazio para usar o modelo padrão.\nEx.: Olá {primeiro_nome}! Segue seu {tipo} nº {numero}. Valor: {valor}. {assinatura}"}
-            placeholderTextColor={colors.muted}
-            style={[styles.input, { minHeight: 120, textAlignVertical: "top", paddingTop: 12 }]}
-            multiline
-            testID="wa-config-template"
-          />
-          <View style={styles.varsCard}>
-            <Text style={styles.varsTitle}>Variáveis disponíveis:</Text>
-            <Text style={styles.varsText}>
-              {"{cliente}, {primeiro_nome}, {numero}, {tipo}, {data}, {valor}, {status}, {assinatura}"}
-            </Text>
-            <Text style={styles.varsText}>
-              {"Itens/descontos: {itens}, {descontos}"}
-            </Text>
-            <Text style={styles.varsText}>
-              {"OS: {veiculo}, {serie}, {relato}, {servico_executado}, {obs}"}
-            </Text>
+          <View style={[styles.sectionCard, isWeb && styles.sectionCardWeb]}>
+            <Text style={styles.sectionTitle}>Credenciais</Text>
+            {provider === "twilio" ? (
+              <>
+                <Field label="Account SID" value={twilioSid} onChange={setTwilioSid} placeholder="ACxxxxxxxx" secure />
+                <Field label="Auth Token" value={twilioToken} onChange={setTwilioToken} placeholder="token" secure />
+                <Field label="Número de origem (From)" value={fromNumber} onChange={setFromNumber} placeholder="+14155238886" keyboardType="phone-pad" />
+              </>
+            ) : provider === "meta" ? (
+              <>
+                <Field label="Phone Number ID" value={metaPhone} onChange={setMetaPhone} placeholder="1234567890" secure />
+                <Field label="Access Token" value={metaToken} onChange={setMetaToken} placeholder="EAAB..." secure />
+              </>
+            ) : (
+              <>
+                <Field label="URL da API" value={evoUrl} onChange={setEvoUrl} placeholder="https://seu-servidor:8080" keyboardType="url" />
+                <Field label="Instância" value={evoInstance} onChange={setEvoInstance} placeholder="instancia1" />
+                <Field label="API Key" value={evoKey} onChange={setEvoKey} placeholder="apikey" secure />
+              </>
+            )}
+          </View>
+
+          <View style={[styles.sectionCard, isWeb && styles.sectionCardWeb]}>
+            <Text style={styles.sectionTitle}>Mensagem</Text>
+            <Field label="Assinatura (rodapé da mensagem)" value={signature} onChange={setSignature} placeholder="Ex.: Equipe KONTACTO" />
+
+            <Text style={styles.fieldLabel}>Modelo de mensagem (opcional)</Text>
+            <TextInput
+              value={template}
+              onChangeText={setTemplate}
+              placeholder={"Deixe vazio para usar o modelo padrão.\nEx.: Olá {primeiro_nome}! Segue seu {tipo} nº {numero}. Valor: {valor}. {assinatura}"}
+              placeholderTextColor={colors.muted}
+              style={[styles.input, { minHeight: 120, textAlignVertical: "top", paddingTop: 12 }]}
+              multiline
+              testID="wa-config-template"
+            />
+            <View style={styles.varsCard}>
+              <Text style={styles.varsTitle}>Variáveis disponíveis:</Text>
+              <Text style={styles.varsText}>
+                {"{cliente}, {primeiro_nome}, {numero}, {tipo}, {data}, {valor}, {status}, {assinatura}"}
+              </Text>
+              <Text style={styles.varsText}>
+                {"Itens/descontos: {itens}, {descontos}"}
+              </Text>
+              <Text style={styles.varsText}>
+                {"OS: {veiculo}, {serie}, {relato}, {servico_executado}, {obs}"}
+              </Text>
+            </View>
           </View>
 
           {msg ? (
@@ -284,6 +295,7 @@ export default function WhatsappConfigScreen() {
           ) : null}
 
           <View style={{ height: 40 }} />
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -302,10 +314,21 @@ const styles = StyleSheet.create({
   saveBtn: { paddingHorizontal: spacing.md, height: 40, alignItems: "center", justifyContent: "center", borderRadius: radius.md, backgroundColor: "rgba(255,255,255,0.2)" },
   saveLabel: { color: colors.onBrandPrimary, fontSize: 14, fontWeight: "600" },
   scroll: { padding: spacing.lg },
+  scrollWeb: WEB_SCROLL_CENTER,
+  webShell: WEB_CONTENT_SHELL,
+  sectionCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  sectionCardWeb: WEB_FILTER_CARD,
   rowBetween: { flexDirection: "row", alignItems: "center", backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, gap: spacing.md },
   switchLabel: { fontSize: 15, fontWeight: "600", color: colors.onSurface },
   switchHint: { fontSize: 12, color: colors.muted, marginTop: 2 },
-  sectionTitle: { fontSize: 12, fontWeight: "600", color: colors.muted, textTransform: "uppercase", letterSpacing: 0.4, marginTop: spacing.lg, marginBottom: spacing.xs },
+  sectionTitle: { fontSize: 12, fontWeight: "600", color: colors.muted, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: spacing.xs },
   providerRow: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
   providerChip: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
   providerChipSel: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },

@@ -207,7 +207,10 @@ def get_document_items(servidor: str, banco: str, doc_type: str, doc_id: int) ->
     """Itens do documento (Pedido ou OS) p/ compor a mensagem.
     Retorna lista de dicts: {descricao, qtd, valor_unitario, desconto, total}.
     `desconto` aqui é o desconto TOTAL do item (unitário * quantidade).
+    "CLI" (Cliente/Telemarketing) não tem itens — retorna lista vazia.
     """
+    if doc_type == "CLI":
+        return []
     conn = _open_conn(servidor, banco)
     try:
         cur = conn.cursor(as_dict=True)
@@ -257,10 +260,36 @@ def get_document_items(servidor: str, banco: str, doc_type: str, doc_id: int) ->
 
 
 def get_document_summary(servidor: str, banco: str, doc_type: str, doc_id: int) -> Optional[dict]:
-    """Resumo do documento (Pedido ou OS) para montar a mensagem."""
+    """Resumo do documento (Pedido, OS ou Cliente/Telemarketing) para montar
+    a mensagem. "CLI" não é um documento de verdade (não tem itens/total/
+    situação) — `doc_id` é `cliente.codigo`, usado pela tela de
+    Telemarketing pra mandar uma mensagem avulsa (não ligada a um Pedido/OS
+    específico) e registrar o envio no histórico do cliente."""
     conn = _open_conn(servidor, banco)
     try:
         cur = conn.cursor(as_dict=True)
+        if doc_type == "CLI":
+            cur.execute(
+                "SELECT c.codigo AS doc, c.codigo AS cliente, c.nome AS cliente_nome, "
+                "LTRIM(RTRIM(ISNULL(CAST(c.ddd_cli AS NVARCHAR(4)),'') + ISNULL(c.telefone_cli,''))) AS telefone "
+                "FROM cliente c WHERE c.codigo = %s",
+                (doc_id,),
+            )
+            r = cur.fetchone()
+            cur.close()
+            if not r:
+                return None
+            return {
+                "doc_type": "CLI", "doc_label": "Cliente",
+                "doc": int(r["doc"]),
+                "cliente_id": int(r["cliente"]),
+                "cliente_nome": (r.get("cliente_nome") or "").strip(),
+                "telefone": (r.get("telefone") or "").strip(),
+                "data": None,
+                "total": 0.0,
+                "situacao_label": "",
+                "obs": "",
+            }
         if doc_type == "PED":
             cur.execute(
                 "SELECT p.pedido AS doc, p.cliente, p.data, p.total, p.situacao, p.obs, "
@@ -317,5 +346,51 @@ def get_document_summary(servidor: str, banco: str, doc_type: str, doc_id: int) 
                 "veiculo": veic,
                 "serie": serie,
             }
+    finally:
+        conn.close()
+
+
+def registrar_envio_whatsapp_no_historico(
+    servidor: str, banco: str, cliente_id: int, telefone: str, usuario_id: Optional[int],
+) -> None:
+    """Acrescenta uma linha no topo de `cliente.historico` — mesmo mecanismo
+    de texto corrido que `FrmManTMa.frm` (Telemarketing) já usa pra registrar
+    contatos manuais (Command2_Click) e que a produção real já usa também
+    pra logs automáticos de e-mail/boleto (confirmado por print do usuário —
+    mesmo formato de frase, "enviado com sucesso por <usuário> em <data> às
+    <hora>. Para o destinatário: <contato>."). Usado aqui pro envio de
+    WhatsApp "avulso" (document_type=CLI) também virar uma linha no
+    histórico do cliente — "versão completa com histórico" pedida pelo
+    usuário, sem precisar de tabela nova. Best-effort: falha aqui nunca
+    derruba o envio (mesma filosofia do log_auditoria_service)."""
+    from datetime import datetime
+
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        nome_usuario = "Sistema"
+        if usuario_id:
+            cur.execute("SELECT nome_guerra FROM funcionarios WHERE codigo_int=%s", (usuario_id,))
+            row = cur.fetchone()
+            if row and row.get("nome_guerra"):
+                nome_usuario = row["nome_guerra"].strip()
+        agora = datetime.now()
+        linha = (
+            f"Mensagem de WhatsApp enviada com sucesso por {nome_usuario} em "
+            f"{agora.strftime('%d/%m/%Y')} às {agora.strftime('%H:%M')}. "
+            f"Para o destinatário: {telefone}."
+        )
+        cur.execute("SELECT historico FROM cliente WHERE codigo=%s", (cliente_id,))
+        row = cur.fetchone()
+        antigo = (row.get("historico") if row else None) or ""
+        novo = f"{linha}\r\n\r\n{antigo}" if antigo.strip() else linha
+        cur.execute("UPDATE cliente SET historico=%s WHERE codigo=%s", (novo, cliente_id))
+        conn.commit()
+        cur.close()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     finally:
         conn.close()

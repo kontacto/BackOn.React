@@ -1,6 +1,7 @@
 // StyleSheet do Relatório de Pedidos. Mantido idêntico ao original.
 import { StyleSheet } from "react-native";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 
 export const SIT_COLOR: Record<string, string> = { A: "#1e88e5", F: "#43a047", PG: "#8e24aa", C: "#e53935" };
 
@@ -13,6 +14,9 @@ export const styles = StyleSheet.create({
   backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   headerTitle: { flex: 1, textAlign: "center", fontSize: 17, fontWeight: "600", color: colors.onBrandPrimary },
   scroll: { padding: spacing.lg, gap: spacing.sm },
+  scrollWeb: WEB_SCROLL_CENTER,
+  webShell: WEB_CONTENT_SHELL,
+  filtersWeb: WEB_FILTER_CARD,
   filters: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, gap: spacing.sm },
   dateRow: { flexDirection: "row", gap: spacing.sm },
   fieldLabel: { fontSize: 12, color: colors.muted, fontWeight: "500", textTransform: "uppercase", letterSpacing: 0.4, marginTop: 4 },

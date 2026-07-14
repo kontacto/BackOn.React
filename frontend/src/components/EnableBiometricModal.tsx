@@ -1,6 +1,6 @@
 // Modal de ativação pós-login: "Deseja habilitar login por biometria neste dispositivo?"
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors, radius, spacing } from "@/src/theme/colors";
 

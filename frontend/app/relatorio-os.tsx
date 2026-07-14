@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View,
+  ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import DateField from "@/src/components/DateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
@@ -12,6 +12,7 @@ import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 
 type Conn = { servidor: string; banco: string; api: string };
 type OSItem = {
@@ -47,6 +48,7 @@ function brDate(iso: string | null): string {
 
 export default function RelatorioOSScreen() {
   const router = useRouter();
+  const isWeb = Platform.OS === "web";
   const feedback = useFeedback();
   const [conn, setConn] = useState<Conn | null>(null);
   const [dataIni, setDataIni] = useState<string | null>(firstOfMonthISO());
@@ -111,12 +113,14 @@ export default function RelatorioOSScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backBtn} testID="relos-back">
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
+        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Relatório de OS</Text>
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-        <View style={styles.filters}>
+      <ScrollView contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]} keyboardShouldPersistTaps="handled">
+        <View style={isWeb ? styles.webShell : undefined}>
+        <View style={[styles.filters, isWeb && styles.filtersWeb]}>
           <View style={styles.dateRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.fieldLabel}>De</Text>
@@ -200,6 +204,7 @@ export default function RelatorioOSScreen() {
             <Text style={styles.osTotal}>{formatBRL(o.total)}</Text>
           </Pressable>
         ))}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -214,7 +219,10 @@ const styles = StyleSheet.create({
   backBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   headerTitle: { flex: 1, textAlign: "center", fontSize: 17, fontWeight: "500", color: colors.onBrandPrimary },
   scroll: { padding: spacing.lg, gap: spacing.md, paddingBottom: spacing.xxl },
+  scrollWeb: WEB_SCROLL_CENTER,
+  webShell: WEB_CONTENT_SHELL,
   filters: { gap: spacing.sm },
+  filtersWeb: WEB_FILTER_CARD,
   dateRow: { flexDirection: "row", gap: spacing.sm },
   fieldLabel: { fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "500" },
   searchBtn: {

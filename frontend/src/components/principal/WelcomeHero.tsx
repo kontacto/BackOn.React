@@ -1,6 +1,6 @@
 // Cartão de boas-vindas (avatar/logo, nome, grupo) da tela principal.
-import { Image, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Image, Platform, Text, View } from "react-native";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors } from "@/src/theme/colors";
 import { styles } from "./styles";
@@ -15,7 +15,7 @@ type Props = {
 
 export default function WelcomeHero({ empresa, logo, displayName, nomeGuerra, classe }: Props) {
   return (
-    <View style={styles.hero} testID="principal-welcome">
+    <View style={[styles.hero, Platform.OS === "web" && styles.heroWeb]} testID="principal-welcome">
       {logo ? (
         <Image source={{ uri: logo }} style={styles.avatar} resizeMode="cover" testID="principal-logo" />
       ) : (

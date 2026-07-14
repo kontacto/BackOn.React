@@ -2,7 +2,7 @@
 import {
   ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors, spacing } from "@/src/theme/colors";
 import { formatBRL, parseNum, fmtNum, calcDescUnit } from "@/src/utils/format";

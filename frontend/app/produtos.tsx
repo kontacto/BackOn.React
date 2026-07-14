@@ -4,6 +4,7 @@ import {
   FlatList,
   Image,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,7 +15,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
@@ -22,6 +23,20 @@ import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
+import { WEB_CONTENT_SHELL } from "@/src/theme/webLayout";
+
+const isWeb = Platform.OS === "web";
+
+const TOAST_SHADOW_STYLE =
+  Platform.OS === "web"
+    ? { boxShadow: "0 4px 10px rgba(0, 0, 0, 0.3)" }
+    : {
+        shadowColor: "#000",
+        shadowOpacity: 0.3,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 10,
+      };
 
 type Tipo = "all" | "P" | "S";
 type Item = {
@@ -55,6 +70,7 @@ export default function ProdutosScreen() {
   const selectPedido = params.pedido ? parseInt(String(params.pedido), 10) : null;
   const selecting = !!selectPedido;
 
+  const [niveisTooltip, setNiveisTooltip] = useState(false);
   const [selItem, setSelItem] = useState<Item | null>(null);
   const [selQtd, setSelQtd] = useState("1");
   const [selValor, setSelValor] = useState("0,00");
@@ -297,20 +313,41 @@ export default function ProdutosScreen() {
         >
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
+        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>
           {selecting ? `Adicionar ao Pedido #${selectPedido}` : `Produtos & Serviços (${total})`}
         </Text>
-        <View style={{ width: 40 }} />
+        {Platform.OS === "web" && !selecting && can("PRODUTO_NIVEIS.ABRIR") ? (
+          <View style={{ position: "relative" }}>
+            <Pressable
+              onPress={() => router.push("/produtos-niveis")}
+              onHoverIn={() => setNiveisTooltip(true)}
+              onHoverOut={() => setNiveisTooltip(false)}
+              style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]}
+              hitSlop={12}
+              testID="produtos-niveis-open-button"
+            >
+              <Ionicons name="layers-outline" size={22} color={colors.onBrandPrimary} />
+            </Pressable>
+            {niveisTooltip ? (
+              <View style={styles.niveisTooltip} pointerEvents="none">
+                <Text style={styles.niveisTooltipText}>Alterações Cadastro de Produtos/Serviços Níveis</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : (
+          <View style={{ width: 40 }} />
+        )}
       </View>
 
       {selecting ? (
-        <View style={styles.selectBanner}>
+        <View style={[styles.selectBanner, isWeb && styles.webShell]}>
           <Ionicons name="cart-outline" size={16} color={colors.brandPrimary} />
           <Text style={styles.selectBannerText}>Toque em um item para adicioná-lo ao pedido.</Text>
         </View>
       ) : null}
 
-      <View style={styles.searchWrap}>
+      <View style={[styles.searchWrap, isWeb && styles.webShell]}>
         <Ionicons name="search" size={16} color={colors.muted} />
         <TextInput
           value={search}
@@ -324,7 +361,7 @@ export default function ProdutosScreen() {
 
       {/* Chips de tipo — ocultos quando o módulo Serviços está desligado */}
       {servicosOn ? (
-      <View style={styles.chips}>
+      <View style={[styles.chips, isWeb && styles.webShell]}>
         {([
           { key: "all" as const, label: "Tudo", count: counts.p + counts.s },
           { key: "P" as const, label: "Produtos", count: counts.p },
@@ -354,6 +391,7 @@ export default function ProdutosScreen() {
       <FlatList
         data={items}
         keyExtractor={(i) => `${i.tipo}-${i.codigo}`}
+        style={isWeb ? styles.webShell : undefined}
         contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: spacing.xxl }}
         ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
         onEndReached={loadMore}
@@ -593,7 +631,7 @@ export default function ProdutosScreen() {
       </Modal>
 
       {toast ? (
-        <View style={styles.toast} testID="produtos-toast">
+        <View style={[styles.toast, TOAST_SHADOW_STYLE]} testID="produtos-toast">
           <Text style={styles.toastText}>{toast}</Text>
         </View>
       ) : null}
@@ -631,6 +669,7 @@ function ProdutoFoto({ urls }: { urls: string[] }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.surface },
+  webShell: WEB_CONTENT_SHELL,
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -639,10 +678,18 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
     paddingBottom: spacing.md,
     gap: spacing.sm,
+    zIndex: 20,
+    elevation: 20,
   },
   backBtn: {
     width: 40, height: 40, alignItems: "center", justifyContent: "center",
   },
+  niveisTooltip: {
+    position: "absolute", top: 46, right: 0, backgroundColor: colors.onSurface,
+    paddingHorizontal: spacing.sm, paddingVertical: 6, borderRadius: radius.sm,
+    maxWidth: 220, zIndex: 10,
+  },
+  niveisTooltipText: { color: colors.surface, fontSize: 11, textAlign: "center" },
   headerTitle: {
     flex: 1, color: colors.onBrandPrimary,
     fontSize: 17, fontWeight: "500",
@@ -769,7 +816,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brandSecondary,
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.md,
     alignItems: "center",
-    shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 10,
   },
   toastText: { color: colors.onBrandPrimary, fontSize: 14, fontWeight: "500", textAlign: "center" },
 });

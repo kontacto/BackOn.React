@@ -2,8 +2,8 @@
 // Padrão do projeto: toda mensagem de erro/aviso deve usar useFeedback() em vez de
 // renderizar texto inline (que pode ficar fora da área visível ao rolar).
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors, radius, spacing } from "@/src/theme/colors";
 
@@ -20,7 +20,7 @@ type FeedbackApi = {
 const FeedbackContext = createContext<FeedbackApi | null>(null);
 
 const META: Record<FeedbackType, { icon: keyof typeof Ionicons.glyphMap; color: string; title: string }> = {
-  error: { icon: "alert-circle", color: colors.danger, title: "Erro" },
+  error: { icon: "alert-circle", color: colors.error, title: "Erro" },
   warning: { icon: "warning", color: "#E6A23C", title: "Atenção" },
   success: { icon: "checkmark-circle", color: "#2E9E5B", title: "Sucesso" },
   info: { icon: "information-circle", color: colors.brandPrimary, title: "Aviso" },
@@ -72,22 +72,36 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
   return (
     <FeedbackContext.Provider value={api}>
       {children}
-      <Modal visible={visible} transparent animationType="fade" onRequestClose={hide}>
-        <Pressable style={styles.backdrop} onPress={hide}>
-          <Pressable style={styles.card} onPress={(e) => e.stopPropagation()} testID="feedback-card">
-            <Ionicons name={meta.icon} size={44} color={meta.color} />
-            <Text style={styles.title}>{title || meta.title}</Text>
-            <Text style={styles.message}>{message}</Text>
-            <Pressable
-              onPress={hide}
-              style={({ pressed }) => [styles.btn, { backgroundColor: meta.color }, pressed && { opacity: 0.85 }]}
-              testID="feedback-ok"
-            >
-              <Text style={styles.btnText}>OK</Text>
+      {visible ? (
+        // Renderizado condicionalmente (não `<Modal visible={visible}>` sempre
+        // montado) de propósito: no react-native-web, o Modal cria seu <div>
+        // de portal (anexado a document.body) assim que o COMPONENTE MONTA,
+        // não quando `visible` vira true — e não tem z-index próprio, então
+        // quem manda é a ordem de inserção no DOM. Como o FeedbackProvider
+        // fica montado desde o boot do app (bem antes de qualquer Modal local
+        // de tela), seu portal sempre nascia primeiro no <body> e ficava por
+        // baixo de modais de tela abertos depois (ex.: "Editar Taxa" em
+        // taxas.tsx, `EspecialidadesCadastroModal` em funcionario-completo).
+        // Só montando o <Modal> aqui quando `visible` é true, o portal nasce
+        // na hora do alerta — sempre depois de qualquer modal de tela já
+        // aberta — e por isso sempre por cima. Bug sistêmico, não só de Taxas.
+        <Modal visible transparent animationType="fade" onRequestClose={hide}>
+          <Pressable style={styles.backdrop} onPress={hide}>
+            <Pressable style={styles.card} onPress={(e) => e.stopPropagation()} testID="feedback-card">
+              <Ionicons name={meta.icon} size={44} color={meta.color} />
+              <Text style={styles.title}>{title || meta.title}</Text>
+              <Text style={styles.message}>{message}</Text>
+              <Pressable
+                onPress={hide}
+                style={({ pressed }) => [styles.btn, { backgroundColor: meta.color }, pressed && { opacity: 0.85 }]}
+                testID="feedback-ok"
+              >
+                <Text style={styles.btnText}>OK</Text>
+              </Pressable>
             </Pressable>
           </Pressable>
-        </Pressable>
-      </Modal>
+        </Modal>
+      ) : null}
     </FeedbackContext.Provider>
   );
 }
@@ -116,11 +130,16 @@ const styles = StyleSheet.create({
     padding: spacing.xl,
     alignItems: "center",
     gap: spacing.sm,
-    shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 8,
+    ...Platform.select({
+      web: { boxShadow: "0 6px 16px rgba(0, 0, 0, 0.2)" },
+      default: {
+        shadowColor: "#000",
+        shadowOpacity: 0.2,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 6 },
+        elevation: 8,
+      },
+    }),
   },
   title: { fontSize: 18, fontWeight: "700", color: colors.onSurface, marginTop: spacing.xs },
   message: { fontSize: 15, color: colors.onSurface, textAlign: "center", lineHeight: 21 },

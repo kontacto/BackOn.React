@@ -1,6 +1,6 @@
 // Tabela de movimento do dia (Pedidos + OS) + erro de dashboard + linha de total.
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { ActivityIndicator, Platform, Pressable, Text, View } from "react-native";
+import { Ionicons } from "@/src/components/Ionicons";
 import { useRouter } from "expo-router";
 
 import { colors } from "@/src/theme/colors";
@@ -23,22 +23,23 @@ export default function PedidosTable({ movimento, dashLoading, dashError, totalM
   };
   return (
     <>
-      <View style={styles.pedidosHeader}>
-        <Text style={styles.sectionTitle}>Movimento de Hoje</Text>
+      <View style={[styles.pedidosHeader, Platform.OS === "web" && styles.pedidosHeaderWeb]}>
+        <Text style={[styles.sectionTitle, Platform.OS === "web" && styles.sectionTitleWeb]}>Movimento de Hoje</Text>
         {dashLoading ? <ActivityIndicator size="small" color={colors.brandPrimary} /> : null}
       </View>
 
       {dashError ? (
-        <View style={styles.errorBox} testID="principal-dash-error">
+        <View style={[styles.errorBox, Platform.OS === "web" && styles.errorBoxWeb]} testID="principal-dash-error">
           <Ionicons name="alert-circle-outline" size={16} color={colors.error} />
           <Text style={styles.errorText}>{dashError}</Text>
         </View>
       ) : null}
 
-      <View style={styles.pedidosCard} testID="principal-pedidos-list">
+      <View style={[styles.pedidosCard, Platform.OS === "web" && styles.pedidosCardWeb]} testID="principal-pedidos-list">
         <View style={styles.pedidosHead}>
           <Text style={[styles.pedidoCell, { flex: 1.1 }]}>Documento</Text>
-          <Text style={[styles.pedidoCell, { flex: 2 }]}>Cliente</Text>
+          <Text style={[styles.pedidoCell, Platform.OS === "web" && { flex: 2.1 }]}>Cliente</Text>
+          <Text style={[styles.pedidoCell, { flex: 1.5 }]}>Vendedor</Text>
           <Text style={[styles.pedidoCell, { flex: 1.2, textAlign: "right" }]}>Valor</Text>
         </View>
         {movimento.length === 0 && !dashLoading ? (
@@ -66,14 +67,15 @@ export default function PedidosTable({ movimento, dashLoading, dashError, totalM
                 </View>
                 <Text style={styles.pedidoCellValue}>#{m.doc}</Text>
               </View>
-              <Text style={[styles.pedidoCellValue, { flex: 2 }]} numberOfLines={1}>{m.cliente || "—"}</Text>
+              <Text style={[styles.pedidoCellValue, Platform.OS === "web" && { flex: 2.1 }]} numberOfLines={1}>{m.cliente || "—"}</Text>
+              <Text style={[styles.pedidoCellValue, { flex: 1.5 }]} numberOfLines={1}>{m.vendedor || "—"}</Text>
               <Text style={[styles.pedidoCellValue, { flex: 1.2, textAlign: "right", fontWeight: "500" }]}>{formatBRL(m.valor)}</Text>
             </Pressable>
           ))
         )}
         {movimento.length > 0 ? (
           <View style={styles.pedidoTotalRow} testID="principal-pedidos-total">
-            <Text style={[styles.pedidoTotalLabel, { flex: 3.1 }]}>Total ({movimento.length})</Text>
+            <Text style={[styles.pedidoTotalLabel, { flex: 4.7 }]}>Total ({movimento.length})</Text>
             <Text style={[styles.pedidoTotalValue, { flex: 1.2, textAlign: "right" }]}>{formatBRL(totalMovimento)}</Text>
           </View>
         ) : null}

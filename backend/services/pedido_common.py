@@ -6,6 +6,20 @@ descontos_service.
 """
 from typing import Optional
 
+from services.constants import STATUS_CLIENTE_LABEL
+
+
+def _check_cliente_ativo(cur, cliente_codigo: int) -> tuple[bool, str]:
+    """Bloqueia nova movimentação (Pedido/O.S.) para cliente com STATUS_CLIENTE
+    diferente de 'A' (Ativo). Cliente sem status definido (NULL/'') é tratado
+    como Ativo (dado legado, coluna sem valor). Retorna (permitido, label)."""
+    cur.execute("SELECT STATUS_CLIENTE FROM cliente WHERE codigo=%s", (cliente_codigo,))
+    row = cur.fetchone()
+    status = ((row.get("STATUS_CLIENTE") if row else None) or "").strip().upper()
+    if not status or status == "A":
+        return True, ""
+    return False, STATUS_CLIENTE_LABEL.get(status, status)
+
 
 def _item_total(qtd, pv) -> float:
     # p_venda já é o preço líquido unitário (= p_normal - desconto + acrescimo)
@@ -32,6 +46,17 @@ def _check_pedido_aberto(cur, pedido: int) -> tuple[bool, str]:
     if not row:
         return (False, "")
     return (True, (row.get("situacao") or "").strip().upper())
+
+
+def _modulo_servicos_ativo(cur) -> bool:
+    """True se o módulo "Serviço" está ligado em Configurações de Módulo do
+    Sistema (controle_configuracao.servicos). Cadastro/consulta/movimentação
+    de Serviço só é permitido com o módulo ativo — usado para bloquear a
+    inclusão de item do tipo Serviço em Pedido/O.S. quando desligado."""
+    cur.execute("SELECT TOP 1 servicos FROM controle_configuracao")
+    row = cur.fetchone()
+    val = row.get("servicos") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
 
 
 def _resolve_produto(cur, codigo: str) -> Optional[dict]:

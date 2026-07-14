@@ -1,6 +1,6 @@
 // Modal "Descontos Concedidos": lista os descontos do pedido com total.
 import { ActivityIndicator, Modal, Pressable, ScrollView, Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors } from "@/src/theme/colors";
 import { formatBRL, fmtNum } from "@/src/utils/format";

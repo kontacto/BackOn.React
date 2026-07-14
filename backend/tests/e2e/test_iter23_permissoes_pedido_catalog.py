@@ -47,16 +47,16 @@ def api():
 
 
 def _find_pedido_node(catalog):
-    movimento = next(
-        (m for m in catalog if m.get("tela") == "MOVIMENTO" and m.get("tipo") == "MENU"),
+    transacoes = next(
+        (m for m in catalog if m.get("tela") == "TRANSACOES" and m.get("tipo") == "MENU"),
         None,
     )
-    assert movimento is not None, "Menu MOVIMENTO não encontrado no catálogo"
+    assert transacoes is not None, "Menu TRANSACOES não encontrado no catálogo"
     pedido = next(
-        (t for t in movimento.get("children", []) if t.get("tela") == "PEDIDO" and t.get("tipo") == "TELA"),
+        (t for t in transacoes.get("children", []) if t.get("tela") == "PEDIDO" and t.get("tipo") == "TELA"),
         None,
     )
-    assert pedido is not None, "TELA PEDIDO não encontrada dentro de MOVIMENTO"
+    assert pedido is not None, "TELA PEDIDO não encontrada dentro de TRANSACOES"
     return pedido
 
 
@@ -70,7 +70,7 @@ class TestCatalogoPedido:
         assert j.get("sistema") == 50
         cat = j.get("catalogo") or []
         pedido = _find_pedido_node(cat)
-        assert pedido.get("nome") == "Pedidos"
+        assert pedido.get("nome") == "Pedidos Mobile"
 
     def test_pedido_has_exact_commands(self, api):
         r = api.get(f"{BASE_URL}/api/permissoes/catalogo?servidor={SERVIDOR}&banco={BANCO}", timeout=30)

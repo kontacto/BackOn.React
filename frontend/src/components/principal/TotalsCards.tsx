@@ -1,6 +1,6 @@
 // Cartões de totais do dia (pedidos/produtos/serviços) + margem média.
-import { Text, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Platform, Text, View } from "react-native";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors } from "@/src/theme/colors";
 import { formatBRL } from "@/src/utils/format";
@@ -27,23 +27,23 @@ export default function TotalsCards({
     <>
       {showTotais ? (
         <>
-          <Text style={styles.sectionTitle}>Totais de Hoje</Text>
-          <View style={styles.totalsRow} testID="principal-totals">
-            <View style={[styles.totalCard, { borderLeftColor: colors.brandPrimary }]}>
+          <Text style={[styles.sectionTitle, Platform.OS === "web" && styles.sectionTitleWeb]}>Totais de Hoje</Text>
+          <View style={[styles.totalsRow, Platform.OS === "web" && styles.totalsRowWeb]} testID="principal-totals">
+            <View style={[styles.totalCard, Platform.OS === "web" && styles.totalCardWeb, { borderLeftColor: colors.brandPrimary }]}>
               <Text style={styles.totalLabel}>Pedidos</Text>
               <Text style={styles.totalValue} testID="totals-pedidos">{dashLoading ? "…" : totais.pedidos}</Text>
             </View>
-            <View style={[styles.totalCard, { borderLeftColor: colors.brandSecondary || colors.brandPrimary }]}>
+            <View style={[styles.totalCard, Platform.OS === "web" && styles.totalCardWeb, { borderLeftColor: colors.brandSecondary || colors.brandPrimary }]}>
               <Text style={styles.totalLabel}>OS</Text>
               <Text style={styles.totalValue} testID="totals-os">{dashLoading ? "…" : (totais.os ?? 0)}</Text>
             </View>
           </View>
-          <View style={[styles.totalsRow, { marginTop: 8 }]}>
-            <View style={[styles.totalCard, { borderLeftColor: colors.success }]}>
+          <View style={[styles.totalsRow, { marginTop: 8 }, Platform.OS === "web" && styles.totalsRowWeb]}>
+            <View style={[styles.totalCard, Platform.OS === "web" && styles.totalCardWeb, { borderLeftColor: colors.success }]}>
               <Text style={styles.totalLabel}>Produtos</Text>
               <Text style={[styles.totalValue, { fontSize: 16 }]} testID="totals-produtos">{dashLoading ? "…" : formatBRL(totais.produtos)}</Text>
             </View>
-            <View style={[styles.totalCard, { borderLeftColor: colors.warning }]}>
+            <View style={[styles.totalCard, Platform.OS === "web" && styles.totalCardWeb, { borderLeftColor: colors.warning }]}>
               <Text style={styles.totalLabel}>Serviços</Text>
               <Text style={[styles.totalValue, { fontSize: 16 }]} testID="totals-servicos">{dashLoading ? "…" : formatBRL(totais.servicos)}</Text>
             </View>
@@ -52,7 +52,7 @@ export default function TotalsCards({
       ) : null}
 
       {showMargem ? (
-        <View style={styles.margemCard} testID="principal-margem">
+        <View style={[styles.margemCard, Platform.OS === "web" && styles.margemCardWeb]} testID="principal-margem">
           <View style={styles.margemIcon}>
             <Ionicons name="trending-up" size={20} color={colors.onBrandPrimary} />
           </View>

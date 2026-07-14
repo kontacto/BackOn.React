@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { apiGet, apiSend } from "@/src/utils/api";
 import { Connection } from "@/src/utils/storage/connections";
@@ -10,10 +10,21 @@ import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Props = {
   conn: Connection | null;
-  documentType: "PED" | "OS";
+  // "CLI" = mensagem avulsa (Cliente/Telemarketing) — não referencia um
+  // Pedido/OS específico; envio bem-sucedido também vira uma linha em
+  // cliente.historico (ver services/whatsapp/repository.py).
+  documentType: "PED" | "OS" | "CLI";
   documentId: number;
   userId?: number | null;
   companyId?: string | null;
+  // true = sem marginTop, ocupa o espaço flexível do pai (uso: lado a lado
+  // com outro botão, ex. "Gravar" em Telemarketing). false/omitido = bloco
+  // full-width com marginTop (comportamento original, Pedido/O.S.). Quando
+  // compact, a frase "WhatsApp desativado..." NÃO é renderizada aqui dentro
+  // (ficaria espremida na metade da linha) — o pai deve ler `onStatusChange`
+  // e renderizar a frase onde quiser (ex. largura cheia, abaixo da linha).
+  compact?: boolean;
+  onStatusChange?: (enabled: boolean | null) => void;
 };
 
 type LogItem = {
@@ -21,7 +32,7 @@ type LogItem = {
   provider: string; sent_at: string | null; user_nome: string;
 };
 
-export default function WhatsappButton({ conn, documentType, documentId, userId, companyId }: Props) {
+export default function WhatsappButton({ conn, documentType, documentId, userId, companyId, compact, onStatusChange }: Props) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"send" | "history">("send");
   const [loading, setLoading] = useState(false);
@@ -37,6 +48,11 @@ export default function WhatsappButton({ conn, documentType, documentId, userId,
   // Status global do envio por WhatsApp (flag "enabled" em Configurações).
   // null = carregando; false = desativado → botão fica desabilitado.
   const [globalEnabled, setGlobalEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    onStatusChange?.(globalEnabled);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [globalEnabled]);
 
   useEffect(() => {
     if (!conn) return;
@@ -123,12 +139,13 @@ export default function WhatsappButton({ conn, documentType, documentId, userId,
   };
 
   return (
-    <>
+    <View style={compact ? styles.compactWrap : undefined}>
       <Pressable
         onPress={handleOpen}
         disabled={globalEnabled === false}
         style={({ pressed }) => [
           styles.btn,
+          compact && styles.btnCompact,
           globalEnabled === false && styles.btnDisabled,
           pressed && globalEnabled !== false && { opacity: 0.85 },
         ]}
@@ -139,7 +156,7 @@ export default function WhatsappButton({ conn, documentType, documentId, userId,
           {globalEnabled === false ? "WhatsApp desativado" : "Enviar por WhatsApp"}
         </Text>
       </Pressable>
-      {globalEnabled === false ? (
+      {globalEnabled === false && !compact ? (
         <Text style={styles.disabledHint} testID={`whatsapp-disabled-${documentType}`}>
           O envio por WhatsApp está desativado em Configurações.
         </Text>
@@ -252,12 +269,14 @@ export default function WhatsappButton({ conn, documentType, documentId, userId,
           </Pressable>
         </Pressable>
       </Modal>
-    </>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  compactWrap: { flex: 1 },
   btn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm, backgroundColor: "#25D366", borderRadius: radius.md, paddingVertical: 14, marginTop: spacing.md },
+  btnCompact: { width: "100%", marginTop: 0 },
   btnDisabled: { backgroundColor: colors.muted, opacity: 0.6 },
   disabledHint: { fontSize: 12, color: colors.muted, textAlign: "center", marginTop: spacing.xs },
   btnText: { color: "#fff", fontSize: 15, fontWeight: "700" },

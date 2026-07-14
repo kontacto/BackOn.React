@@ -1,10 +1,12 @@
 // Modal de busca de cliente (por nome, CPF/CNPJ ou telefone) com opção de cadastrar.
-import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors } from "@/src/theme/colors";
 import { styles } from "./styles";
 import { ClienteRow } from "./types";
+
+const isWeb = Platform.OS === "web";
 
 type Props = {
   visible: boolean;
@@ -22,8 +24,8 @@ export default function ClientSearchModal({
 }: Props) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.modalBg} onPress={onClose}>
-        <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+      <Pressable style={[styles.modalBg, isWeb && styles.modalBgWebCompact]} onPress={onClose}>
+        <Pressable style={[styles.modalCard, isWeb && styles.modalCardWebCompact]} onPress={(e) => e.stopPropagation()}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Buscar Cliente</Text>
             <Pressable onPress={onClose} hitSlop={8}>
