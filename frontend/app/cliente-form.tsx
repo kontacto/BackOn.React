@@ -41,7 +41,7 @@ export default function ClienteFormScreen() {
   const router = useRouter();
   const { can } = usePermissions();
   const isWeb = Platform.OS === "web";
-  const params = useLocalSearchParams<{ codigo?: string; initial_nome?: string }>();
+  const params = useLocalSearchParams<{ codigo?: string; initial_nome?: string; initial_cgc_cpf?: string }>();
   const editing = !!params.codigo;
   const codigo = params.codigo ? parseInt(String(params.codigo), 10) : null;
 
@@ -51,6 +51,7 @@ export default function ClienteFormScreen() {
     editing,
     codigo,
     initialNome: params.initial_nome ? String(params.initial_nome) : undefined,
+    initialCgcCpf: params.initial_cgc_cpf ? String(params.initial_cgc_cpf) : undefined,
     selfRoute: "/cliente-form",
   });
 

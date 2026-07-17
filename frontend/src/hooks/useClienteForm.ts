@@ -130,6 +130,30 @@ export function maskCgcCpf(raw: string): string {
   return out;
 }
 
+// Decide se um termo de busca "parece" um CPF/CNPJ (11 dígitos, ou 14
+// alfanumérico no padrão CNPJ) — usado ao encaminhar um termo de busca sem
+// resultado para o formulário de "Novo Cliente", pra saber se ele deve cair
+// no campo CGC/CPF ou no campo Nome (não confiar cegamente que é sempre
+// nome). Não exige dígito verificador válido — um CPF digitado com erro de
+// digitação ainda deve cair no campo certo pra o usuário corrigir, não virar
+// "nome" por acidente.
+export function looksLikeDocument(raw: string): boolean {
+  const v = onlyAlnumUpper(raw);
+  if (v.length === 11) return /^\d{11}$/.test(v);
+  if (v.length === 14) return /^[A-Z0-9]{12}\d{2}$/.test(v);
+  return false;
+}
+
+// Monta os params de navegação pra "Novo Cliente" a partir de um termo de
+// busca sem resultado — usado por todo `ClientSearchModal.onCreate` do app
+// (Pedido, O.S., Contatos, Equipamentos, Telemarketing, ...). Ver
+// `looksLikeDocument` acima.
+export function clienteSearchParams(term: string): { initial_nome?: string; initial_cgc_cpf?: string } {
+  const t = (term || "").trim();
+  if (!t) return {};
+  return looksLikeDocument(t) ? { initial_cgc_cpf: t } : { initial_nome: t };
+}
+
 export function emailValido(s: string): boolean {
   if (!s) return true; // opcional
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.trim());
@@ -171,9 +195,10 @@ export function useClienteForm(opts: {
   editing: boolean;
   codigo: number | null;
   initialNome?: string;
+  initialCgcCpf?: string;
   selfRoute: string; // rota da própria tela, usada ao redirecionar para edição após localizar cliente existente
 }) {
-  const { editing, codigo, initialNome, selfRoute } = opts;
+  const { editing, codigo, initialNome, initialCgcCpf, selfRoute } = opts;
   const router = useRouter();
   const auditCtx = useAuditContext();
 
@@ -184,7 +209,7 @@ export function useClienteForm(opts: {
   const { show: showToast, msg: toastMsg, tone: toastTone } = useToast();
 
   // Dados principais
-  const [cgcCpf, setCgcCpf] = useState("");
+  const [cgcCpf, setCgcCpf] = useState(initialCgcCpf ? maskCgcCpf(initialCgcCpf) : "");
   const [nome, setNome] = useState(initialNome || "");
   const [email, setEmail] = useState("");
   const [inscre, setInscre] = useState("");

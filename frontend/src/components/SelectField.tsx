@@ -30,6 +30,16 @@ type Props = {
   modalTitle?: string;
   allowClear?: boolean;
   compactWeb?: boolean;
+  // Esconde a linha "sub" (ex.: código) pra economizar espaço em contextos
+  // compactos (ex.: dentro da barra de cabeçalho) — o valor completo
+  // (label + sub) aparece num tooltip ao passar o mouse (web) ou tocar
+  // (mobile, sem hover).
+  hideSub?: boolean;
+  // "onDark": mesmo estilo de pill translúcido do botão Gravar do
+  // cabeçalho (fundo branco 18% + borda branca 30%, texto branco) — pra
+  // uso dentro da barra de cabeçalho (fundo brandPrimary), não em cards
+  // claros normais.
+  variant?: "default" | "onDark";
 };
 
 export default function SelectField({
@@ -44,9 +54,12 @@ export default function SelectField({
   modalTitle,
   allowClear = false,
   compactWeb = false,
+  hideSub = false,
+  variant = "default",
 }: Props) {
   const [open, setOpen] = useState(false);
   const [term, setTerm] = useState("");
+  const [hovering, setHovering] = useState(false);
   const isCompactWeb = Platform.OS === "web" && compactWeb;
 
   const selected = useMemo(
@@ -62,9 +75,11 @@ export default function SelectField({
     );
   }, [options, term]);
 
+  const onDark = variant === "onDark";
+
   return (
-    <View style={{ flex: 1 }}>
-      {label ? <Text style={styles.label}>{label}</Text> : null}
+    <View style={{ flex: 1, position: "relative" }}>
+      {label ? <Text style={[styles.label, onDark && styles.labelOnDark]}>{label}</Text> : null}
       <Pressable
         onPress={() => {
           if (!disabled) {
@@ -72,8 +87,11 @@ export default function SelectField({
             setOpen(true);
           }
         }}
+        onHoverIn={() => setHovering(true)}
+        onHoverOut={() => setHovering(false)}
         style={({ pressed }) => [
           styles.box,
+          onDark && styles.boxOnDark,
           disabled && styles.boxDisabled,
           pressed && !disabled && { opacity: 0.75 },
         ]}
@@ -82,15 +100,18 @@ export default function SelectField({
         <View style={{ flex: 1 }}>
           {selected ? (
             <>
-              <Text style={[styles.text, disabled && { color: colors.muted }]} numberOfLines={1}>
+              <Text
+                style={[styles.text, onDark && styles.textOnDark, disabled && { color: colors.muted }]}
+                numberOfLines={1}
+              >
                 {selected.label}
               </Text>
-              {selected.sub ? (
-                <Text style={styles.sub} numberOfLines={1}>{selected.sub}</Text>
+              {selected.sub && !hideSub ? (
+                <Text style={[styles.sub, onDark && styles.subOnDark]} numberOfLines={1}>{selected.sub}</Text>
               ) : null}
             </>
           ) : (
-            <Text style={[styles.text, { color: colors.muted }]} numberOfLines={1}>
+            <Text style={[styles.text, onDark ? styles.textOnDark : { color: colors.muted }]} numberOfLines={1}>
               {placeholder}
             </Text>
           )}
@@ -105,15 +126,22 @@ export default function SelectField({
             style={({ pressed }) => [styles.clearBtn, pressed && { opacity: 0.7 }]}
             testID={testID ? `${testID}-clear` : undefined}
           >
-            <Ionicons name="close-circle" size={18} color={colors.muted} />
+            <Ionicons name="close-circle" size={18} color={onDark ? colors.onBrandPrimary : colors.muted} />
           </Pressable>
         ) : null}
         <Ionicons
           name={disabled ? "lock-closed-outline" : "chevron-down"}
           size={16}
-          color={disabled ? colors.muted : colors.muted}
+          color={onDark ? colors.onBrandPrimary : colors.muted}
         />
       </Pressable>
+      {hideSub && hovering && selected ? (
+        <View style={styles.tooltip} pointerEvents="none">
+          <Text style={styles.tooltipText} numberOfLines={1}>
+            {selected.label}{selected.sub ? ` · ${selected.sub}` : ""}
+          </Text>
+        </View>
+      ) : null}
 
       <AppModal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
         <Pressable style={[styles.modalBg, isCompactWeb && styles.modalBgWebCompact]} onPress={() => setOpen(false)}>
@@ -220,6 +248,21 @@ const styles = StyleSheet.create({
   text: { fontSize: 14, color: colors.onSurface },
   sub: { fontSize: 11, color: colors.muted, marginTop: 2 },
   clearBtn: { padding: 2 },
+  // variant="onDark" — mesmo pill translúcido do botão Gravar do cabeçalho.
+  labelOnDark: { color: "rgba(255,255,255,0.75)" },
+  boxOnDark: {
+    backgroundColor: "rgba(255,255,255,0.18)", borderRadius: radius.pill,
+    borderColor: "rgba(255,255,255,0.3)", paddingVertical: 8, minHeight: 0,
+  },
+  textOnDark: { color: colors.onBrandPrimary },
+  subOnDark: { color: "rgba(255,255,255,0.75)" },
+  tooltip: {
+    position: "absolute", top: "100%", left: 0, marginTop: 4,
+    backgroundColor: "#1a1a1a", borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm, paddingVertical: 4,
+    zIndex: 10, maxWidth: 260,
+  },
+  tooltipText: { color: "#fff", fontSize: 11, fontWeight: "600" },
   modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
   modalBgWebCompact: { justifyContent: "center", paddingHorizontal: spacing.xl },
   modalCard: {

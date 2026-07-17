@@ -24,6 +24,11 @@ import LockedView from "@/src/components/LockedView";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL } from "@/src/theme/webLayout";
+import { usePedidoItens } from "@/src/components/pedido/usePedidoItens";
+import AddItemModal from "@/src/components/pedido/AddItemModal";
+import ReciboPedidoModal from "@/src/components/pedido/ReciboPedidoModal";
+import { apiGet } from "@/src/utils/api";
+import { PedidoData, ClienteRow } from "@/src/components/pedido/types";
 
 const isWeb = Platform.OS === "web";
 
@@ -63,31 +68,32 @@ function parseNum(s: string): number {
 
 export default function ProdutosScreen() {
   const router = useRouter();
-  const { can, moduleOn } = usePermissions();
+  const { can, moduleOn, classe } = usePermissions();
   const feedback = useFeedback();
   const servicosOn = moduleOn("servicos");
-  const params = useLocalSearchParams<{ pedido?: string; tipo?: string }>();
+  const params = useLocalSearchParams<{ pedido?: string; tipo?: string; origem?: string }>();
   const selectPedido = params.pedido ? parseInt(String(params.pedido), 10) : null;
   const selecting = !!selectPedido;
+  // Origem "completo" = aberta a partir do Pedido Completo (web) — grava via
+  // /api/pedido-completo (resolução de produto mais rica + kits), não
+  // /api/pedidos (pré-venda rápida). Mesma tabela, endpoint diferente.
+  const completo = params.origem === "completo";
+  const itensBasePath = completo ? "/api/pedido-completo" : "/api/pedidos";
 
   const [niveisTooltip, setNiveisTooltip] = useState(false);
-  const [selItem, setSelItem] = useState<Item | null>(null);
-  const [selQtd, setSelQtd] = useState("1");
-  const [selValor, setSelValor] = useState("0,00");
-  const [selCompl, setSelCompl] = useState("");
-  const [selDesc, setSelDesc] = useState("");
-  const [selDescMode, setSelDescMode] = useState<"rs" | "pct">("pct");
-  const [selSaving, setSelSaving] = useState(false);
   // Permissão de desconto do usuário logado
   const [funcaoCod, setFuncaoCod] = useState<number>(1); // 1=gerente,2=supervisor,3=vendedor
   const [usuarioCod, setUsuarioCod] = useState<number>(-2);
-  const [descLimite, setDescLimite] = useState<number>(100); // % máximo permitido
   const [toast, setToast] = useState<string | null>(null);
   const [conn, setConn] = useState<Connection | null>(null);
   const [search, setSearch] = useState("");
-  const [tipo, setTipo] = useState<Tipo>(
-    params.tipo === "P" || params.tipo === "S" ? params.tipo : "all"
-  );
+  // Quando a tela é aberta a partir de um cadastro específico (Cadastros >
+  // Produtos ou Cadastros > Serviços, ambos com `?tipo=` fixo na URL), o
+  // tipo fica travado — sem chips pra trocar pra "Tudo"/o outro tipo. Só
+  // quando aberta sem `tipo` (picker de item em Pedido/O.S., que precisa
+  // buscar entre os dois) é que os chips de filtro aparecem.
+  const tipoFixo = params.tipo === "P" || params.tipo === "S";
+  const [tipo, setTipo] = useState<Tipo>(tipoFixo ? (params.tipo as Tipo) : "all");
   const [items, setItems] = useState<Item[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -108,19 +114,6 @@ export default function ProdutosScreen() {
       setFuncaoCod(funcao);
       const vCod = s?.funcionario?.codigo_int;
       setUsuarioCod(isMaster ? -2 : typeof vCod === "number" ? vCod : -2);
-      if (c) {
-        try {
-          const base = c.api.replace(/\/+$/, "");
-          const qs = `servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`;
-          const rl = await fetch(`${base}/api/controle/desconto-limites?${qs}`).then((r) => r.json());
-          if (rl?.success) {
-            const lim = funcao === 2 ? rl.supervisor : funcao === 3 ? rl.vendedor : rl.gerente;
-            setDescLimite(Number(lim) || 100);
-          }
-        } catch {
-          // mantém limite padrão
-        }
-      }
     })();
   }, []);
 
@@ -206,65 +199,39 @@ export default function ProdutosScreen() {
     setTimeout(() => setToast(null), 2500);
   }, []);
 
-  const pickForOrder = (item: Item) => {
-    setSelItem(item);
-    setSelQtd("1");
-    setSelValor(formatBRL(item.valor).replace("R$", "").trim());
-    setSelCompl("");
-    setSelDesc("");
-    setSelDescMode("pct");
-  };
+  // Reaproveita o mesmo modal "Adicionar Item" do Pedido (AddItemModal.tsx +
+  // usePedidoItens) em vez de uma implementação própria — evita duas telas
+  // com campos/limites de desconto divergentes pra confirmar o mesmo item
+  // (ver CLAUDE.md "Padrão Geral de Migração de Telas", seção 5). `isAberto:
+  // true` porque este fluxo só grava (POST item), nunca edita/fecha o
+  // pedido — o backend já valida a situação do pedido nesse endpoint.
+  // Impressão automática de item por Finalidade (ver ReciboPedidoModal/
+  // usePedidoItens) — Pedido Bar somente, mesmo recorte da permissão
+  // IMPRIMIR_ITEM (não existe em ACOES_PEDIDO_COMP).
+  const it = usePedidoItens({
+    conn, editing: true, pedidoId: selectPedido, isAberto: true,
+    usuarioCod, funcaoCod, classe, showToast, servicosOn, basePath: itensBasePath,
+    printPorFinalidade: selecting && !completo,
+  });
 
-  const addToOrder = async () => {
-    if (!conn || !selectPedido || !selItem) return;
-    const qtd = parseNum(selQtd);
-    if (qtd <= 0) { showToast("Quantidade inválida."); return; }
-    const pNormal = parseNum(selValor);
-    // Calcula desconto unitário (R$) e % a partir do modo escolhido
-    let descRs = 0;
-    let descPct = 0;
-    const dVal = parseNum(selDesc);
-    if (dVal > 0 && pNormal > 0) {
-      if (selDescMode === "pct") {
-        descPct = dVal;
-        descRs = Math.round(((pNormal * dVal) / 100) * 100) / 100;
-      } else {
-        descRs = dVal;
-        descPct = Math.round((descRs / pNormal) * 10000) / 100;
-      }
-    }
-    // Valida limite por função
-    if (descPct > descLimite + 0.001) {
-      showToast(`Desconto acima do limite permitido (${descLimite}%).`);
-      return;
-    }
-    setSelSaving(true);
-    try {
-      const base = conn.api.replace(/\/+$/, "");
-      const r = await fetch(`${base}/api/pedidos/${selectPedido}/itens`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          servidor: conn.servidor, banco: conn.banco,
-          produto: selItem.codigo,
-          qtd,
-          valor_unitario: pNormal,
-          desconto: descRs,
-          desconto_pct: descPct,
-          usuario_codigo: usuarioCod,
-          funcao: funcaoCod,
-          complemento: selCompl,
-        }),
-      });
-      const j = await r.json();
-      if (!j?.success) { showToast(j?.message || "Falha ao adicionar."); }
-      else {
-        setSelItem(null);
-        showToast("Adicionado ao pedido!");
-      }
-    } catch (e) {
-      showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`);
-    } finally { setSelSaving(false); }
+  // Dados mínimos do pedido/cliente pro ticket de impressão de item — esta
+  // tela só tem o número do pedido via `?pedido=`, nunca carregou o cabeçalho
+  // completo antes porque só grava itens, nunca exibe/edita dados do pedido.
+  const [pedidoData, setPedidoData] = useState<PedidoData | null>(null);
+  useEffect(() => {
+    if (!conn || !selecting || completo) return;
+    (async () => {
+      const j = await apiGet(conn, `/api/pedidos/${selectPedido}`).catch(() => null);
+      if (j?.success && j.pedido) setPedidoData(j.pedido);
+    })();
+  }, [conn, selecting, completo, selectPedido]);
+  const pedidoCliente: ClienteRow | null = pedidoData?.cliente
+    ? { codigo: pedidoData.cliente, nome: pedidoData.cliente_nome, cgc_cpf: pedidoData.cliente_cgc, telefone: "" }
+    : null;
+
+  const pickForOrder = (item: Item) => {
+    it.setAddOpen(true);
+    it.pickProduto(item);
   };
 
   // --- Reservas do produto (Pedidos Fechados / O.S. Abertas+Fechadas) ---
@@ -301,7 +268,7 @@ export default function ProdutosScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="produtos-screen">
-      {!(selecting ? can("PEDIDO.GRAVAR") : can("PRODUTO.ABRIR")) ? (
+      {!(selecting ? (completo ? can("PEDIDO_COMP.ADD_ITEM") : can("PEDIDO.GRAVAR")) : can("PRODUTO.ABRIR")) ? (
         <LockedView testID="produtos-locked" />
       ) : (
       <>
@@ -315,7 +282,11 @@ export default function ProdutosScreen() {
         </Pressable>
         <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>
-          {selecting ? `Adicionar ao Pedido #${selectPedido}` : `Produtos & Serviços (${total})`}
+          {selecting
+            ? `Adicionar ao Pedido #${selectPedido}`
+            : tipoFixo
+            ? `${tipo === "P" ? "Produtos" : "Serviços"} (${total})`
+            : `Produtos & Serviços (${total})`}
         </Text>
         {Platform.OS === "web" && !selecting && can("PRODUTO_NIVEIS.ABRIR") ? (
           <View style={{ position: "relative" }}>
@@ -359,8 +330,9 @@ export default function ProdutosScreen() {
         />
       </View>
 
-      {/* Chips de tipo — ocultos quando o módulo Serviços está desligado */}
-      {servicosOn ? (
+      {/* Chips de tipo — ocultos quando o módulo Serviços está desligado OU
+          quando o tipo veio fixo na URL (Cadastros > Produtos/Serviços) */}
+      {servicosOn && !tipoFixo ? (
       <View style={[styles.chips, isWeb && styles.webShell]}>
         {([
           { key: "all" as const, label: "Tudo", count: counts.p + counts.s },
@@ -408,9 +380,25 @@ export default function ProdutosScreen() {
         }
         renderItem={({ item }) => (
           <Pressable
-            onPress={() => { if (selecting) pickForOrder(item); }}
-            disabled={!selecting}
-            style={({ pressed }) => [styles.card, selecting && pressed && { opacity: 0.7 }]}
+            onPress={() => {
+              if (selecting) {
+                pickForOrder(item);
+              } else if (isWeb && item.tipo === "P" && can("PRODUTO_COMP.ABRIR")) {
+                // Fora do modo de seleção (aberta a partir de Cadastros), tocar
+                // num produto abre o Cadastro de Produtos completo (web-only).
+                router.push({ pathname: "/produto-completo", params: { codigo: item.codigo } });
+              } else if (isWeb && item.tipo === "S" && can("SERVICO.ABRIR")) {
+                // Mesmo padrão pro lado Serviços — servicos.tsx agora é só o
+                // formulário, aberto com o código pra edição.
+                router.push({ pathname: "/servicos", params: { codigo: item.codigo } });
+              }
+            }}
+            disabled={
+              !selecting &&
+              !(isWeb && item.tipo === "P" && can("PRODUTO_COMP.ABRIR")) &&
+              !(isWeb && item.tipo === "S" && can("SERVICO.ABRIR"))
+            }
+            style={({ pressed }) => [styles.card, (selecting || isWeb) && pressed && { opacity: 0.7 }]}
             testID={`item-${item.tipo}-${item.codigo}`}
           >
             {item.tipo === "P" ? (
@@ -488,104 +476,59 @@ export default function ProdutosScreen() {
         )}
       />
 
-      {/* Modal de quantidade ao adicionar item ao pedido */}
-      <Modal visible={!!selItem} transparent animationType="slide" onRequestClose={() => setSelItem(null)}>
-        <Pressable style={styles.modalBg} onPress={() => setSelItem(null)}>
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Adicionar ao Pedido</Text>
-              <Pressable onPress={() => setSelItem(null)} hitSlop={8}>
-                <Ionicons name="close" size={22} color={colors.muted} />
-              </Pressable>
-            </View>
-            {selItem ? (
-              <View style={{ gap: spacing.sm }}>
-                <View style={styles.selProdBox}>
-                  <Text style={styles.itemDesc} numberOfLines={2}>{selItem.descricao}</Text>
-                  <Text style={styles.cardSub}>#{selItem.codigo}{selItem.cod_fab ? ` · ${selItem.cod_fab}` : ""}</Text>
-                </View>
-                <View style={styles.qtdRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>Quantidade</Text>
-                    <View style={styles.qtdInputRow}>
-                      <TextInput value={selQtd} onChangeText={setSelQtd} keyboardType="decimal-pad" style={[styles.modalInput, { flex: 1 }]} testID="produtos-add-qtd" />
-                      <TouchableOpacity
-                        onPress={() => setSelQtd(String(parseNum(selQtd) + 1).replace(".", ","))}
-                        activeOpacity={0.7}
-                        style={styles.plusBtn}
-                        testID="produtos-add-qtd-plus"
-                      >
-                        <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.fieldLabel}>Valor unitário</Text>
-                    <TextInput value={selValor} onChangeText={setSelValor} keyboardType="decimal-pad" style={styles.modalInput} testID="produtos-add-valor" />
-                  </View>
-                </View>
-                <Text style={styles.fieldLabel}>Complemento (opcional)</Text>
-                <TextInput value={selCompl} onChangeText={setSelCompl} placeholder="Descrição complementar" placeholderTextColor={colors.muted} style={styles.modalInput} testID="produtos-add-compl" />
-
-                {/* Desconto com alternância R$ / % */}
-                <View style={styles.descHeader}>
-                  <Text style={styles.fieldLabel}>Desconto (máx. {descLimite}%)</Text>
-                  <View style={styles.modeToggle}>
-                    <TouchableOpacity
-                      onPress={() => setSelDescMode("pct")}
-                      style={[styles.modeBtn, selDescMode === "pct" && styles.modeBtnSel]}
-                      testID="produtos-add-desc-pct"
-                    >
-                      <Text style={[styles.modeBtnText, selDescMode === "pct" && styles.modeBtnTextSel]}>%</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => setSelDescMode("rs")}
-                      style={[styles.modeBtn, selDescMode === "rs" && styles.modeBtnSel]}
-                      testID="produtos-add-desc-rs"
-                    >
-                      <Text style={[styles.modeBtnText, selDescMode === "rs" && styles.modeBtnTextSel]}>R$</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-                <TextInput
-                  value={selDesc}
-                  onChangeText={setSelDesc}
-                  keyboardType="decimal-pad"
-                  placeholder={selDescMode === "pct" ? "0 %" : "R$ 0,00"}
-                  placeholderTextColor={colors.muted}
-                  style={styles.modalInput}
-                  testID="produtos-add-desc"
-                />
-
-                <View style={styles.previewRow}>
-                  <Text style={styles.fieldLabel}>Total do item</Text>
-                  <Text style={styles.cardValor}>
-                    {(() => {
-                      const pn = parseNum(selValor);
-                      const dv = parseNum(selDesc);
-                      const descRs = dv > 0 && pn > 0 ? (selDescMode === "pct" ? (pn * dv) / 100 : dv) : 0;
-                      return formatBRL(parseNum(selQtd) * Math.max(pn - descRs, 0));
-                    })()}
-                  </Text>
-                </View>
-                <Pressable
-                  onPress={addToOrder}
-                  disabled={selSaving}
-                  style={({ pressed }) => [styles.primaryBtn, (pressed || selSaving) && { opacity: 0.8 }]}
-                  testID="produtos-add-confirm"
-                >
-                  {selSaving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Adicionar ao Pedido</Text>}
-                </Pressable>
-              </View>
-            ) : null}
-          </Pressable>
+      {!selecting && isWeb && tipo === "P" && can("PRODUTO_COMP.GRAVAR") ? (
+        <Pressable
+          onPress={() => router.push("/produto-completo")}
+          style={({ pressed }) => [styles.fabNovoProduto, pressed && { opacity: 0.85 }]}
+          hitSlop={8}
+          testID="produtos-fab-novo"
+        >
+          <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
         </Pressable>
-      </Modal>
+      ) : null}
+      {!selecting && isWeb && tipo === "S" && can("SERVICO.GRAVAR") ? (
+        <Pressable
+          onPress={() => router.push("/servicos")}
+          style={({ pressed }) => [styles.fabNovoProduto, pressed && { opacity: 0.85 }]}
+          hitSlop={8}
+          testID="produtos-fab-novo-servico"
+        >
+          <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
+        </Pressable>
+      ) : null}
+
+      {/* Mesmo modal "Adicionar Item" usado no Pedido — ver comentário
+          acima de `it`/`pickForOrder`. */}
+      {selecting ? (
+        <AddItemModal
+          it={it}
+          onOpenProdutos={() => it.setAddOpen(false)}
+          tela={completo ? "PEDIDO_COMP" : "PEDIDO"}
+        />
+      ) : null}
+
+      {/* Ticket de impressão de item por Finalidade (Pedido Bar) — disparado
+          automaticamente por `checkAutoPrintItem` dentro de `usePedidoItens`
+          (ver `printPorFinalidade` acima); precisava do próprio modal aqui
+          porque esta tela nunca renderizava `ReciboPedidoModal` antes,
+          então o disparo automático ficava sem UI pra exibir o resultado. */}
+      {selecting && !completo ? (
+        <ReciboPedidoModal
+          visible={!!it.printItem}
+          onClose={() => it.setPrintItem(null)}
+          conn={conn}
+          pedido={pedidoData}
+          cliente={pedidoCliente}
+          clienteResumo={null}
+          it={it}
+          item={it.printItem}
+        />
+      ) : null}
 
       {/* Modal: reservas do produto (Pedidos Fechados / O.S. Abertas+Fechadas) */}
       <Modal visible={!!resModal} transparent animationType="slide" onRequestClose={() => setResModal(null)}>
-        <Pressable style={styles.modalBg} onPress={() => setResModal(null)}>
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+        <Pressable style={[styles.modalBg, isWeb && styles.modalBgWebCompact]} onPress={() => setResModal(null)}>
+          <Pressable style={[styles.modalCard, isWeb && styles.modalCardWebCompactList]} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
                 {resModal?.tipo === "OS" ? "Reservado para O.S." : "Reservado para Pedido"}
@@ -670,6 +613,11 @@ function ProdutoFoto({ urls }: { urls: string[] }) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.surface },
   webShell: WEB_CONTENT_SHELL,
+  fabNovoProduto: {
+    position: "absolute", right: spacing.lg, bottom: spacing.xl,
+    width: 56, height: 56, borderRadius: 28, backgroundColor: colors.brandPrimary,
+    alignItems: "center", justifyContent: "center",
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -777,6 +725,24 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
     paddingHorizontal: spacing.lg, paddingTop: spacing.lg, paddingBottom: spacing.xxl,
+  },
+  // "Redução forte" (Modal/Selector Standard, CLAUDE.md) no web — card
+  // centralizado com raio completo nas 4 pontas + borda, mesmo padrão
+  // canônico de SelectField.tsx. Usado pelo modal de reservas abaixo — o
+  // modal de "Adicionar Item" em si agora é o `AddItemModal` compartilhado
+  // (`src/components/pedido/AddItemModal.tsx`), que já tem seu próprio
+  // tratamento web (`pedido/styles.ts`).
+  modalBgWebCompact: { justifyContent: "center", paddingHorizontal: spacing.xl },
+  // Modal de reservas (lista de Pedidos/O.S.) — tier de seleção/busca
+  // normal (560px), por navegar uma lista em vez de confirmar 1 registro.
+  modalCardWebCompactList: {
+    width: "100%",
+    maxWidth: 560,
+    alignSelf: "center",
+    borderBottomLeftRadius: radius.lg,
+    borderBottomRightRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
   modalTitle: { fontSize: 17, fontWeight: "600", color: colors.onSurface },

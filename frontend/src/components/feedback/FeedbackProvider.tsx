@@ -9,12 +9,33 @@ import { colors, radius, spacing } from "@/src/theme/colors";
 
 type FeedbackType = "error" | "warning" | "success" | "info";
 
+type ConfirmOptions = {
+  title?: string;
+  confirmText?: string;
+  cancelText?: string;
+  destructive?: boolean;
+};
+
+type ConfirmState = {
+  message: string;
+  title?: string;
+  confirmText: string;
+  cancelText: string;
+  destructive: boolean;
+  onConfirm: () => void;
+};
+
 type FeedbackApi = {
   showError: (message: string, title?: string) => void;
   showWarning: (message: string, title?: string) => void;
   showSuccess: (message: string, title?: string) => void;
   showInfo: (message: string, title?: string) => void;
   hide: () => void;
+  // Diálogo de confirmação (Sim/Não) centralizado, funciona igual em web e
+  // mobile — NUNCA usar `Alert.alert` do react-native pra confirmação:
+  // no react-native-web ele é um no-op silencioso (Alert.alert = função
+  // vazia), então o botão simplesmente parece não fazer nada no browser.
+  showConfirm: (message: string, onConfirm: () => void, options?: ConfirmOptions) => void;
 };
 
 const FeedbackContext = createContext<FeedbackApi | null>(null);
@@ -32,6 +53,7 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
   const [message, setMessage] = useState("");
   const [title, setTitle] = useState<string | undefined>(undefined);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null);
 
   const clearTimer = () => {
     if (timerRef.current) {
@@ -59,12 +81,26 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => () => clearTimer(), []);
 
+  const showConfirm = useCallback((msg: string, onConfirm: () => void, options?: ConfirmOptions) => {
+    setConfirm({
+      message: msg,
+      title: options?.title,
+      confirmText: options?.confirmText || "Confirmar",
+      cancelText: options?.cancelText || "Cancelar",
+      destructive: options?.destructive || false,
+      onConfirm,
+    });
+  }, []);
+
+  const hideConfirm = useCallback(() => setConfirm(null), []);
+
   const api: FeedbackApi = {
     showError: useCallback((m, t) => notify("error", m, t), [notify]),
     showWarning: useCallback((m, t) => notify("warning", m, t), [notify]),
     showSuccess: useCallback((m, t) => notify("success", m, t), [notify]),
     showInfo: useCallback((m, t) => notify("info", m, t), [notify]),
     hide,
+    showConfirm,
   };
 
   const meta = META[type];
@@ -98,6 +134,46 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
               >
                 <Text style={styles.btnText}>OK</Text>
               </Pressable>
+            </Pressable>
+          </Pressable>
+        </Modal>
+      ) : null}
+      {confirm ? (
+        // Mesmo padrão de montagem condicional do alerta acima (z-index).
+        <Modal visible transparent animationType="fade" onRequestClose={hideConfirm}>
+          <Pressable style={styles.backdrop} onPress={hideConfirm}>
+            <Pressable style={styles.card} onPress={(e) => e.stopPropagation()} testID="feedback-confirm-card">
+              <Ionicons
+                name={confirm.destructive ? "alert-circle" : "help-circle"}
+                size={44}
+                color={confirm.destructive ? colors.error : colors.brandPrimary}
+              />
+              {confirm.title ? <Text style={styles.title}>{confirm.title}</Text> : null}
+              <Text style={styles.message}>{confirm.message}</Text>
+              <View style={styles.confirmBtnRow}>
+                <Pressable
+                  onPress={hideConfirm}
+                  style={({ pressed }) => [styles.confirmBtn, styles.confirmBtnCancel, pressed && { opacity: 0.85 }]}
+                  testID="feedback-confirm-cancel"
+                >
+                  <Text style={styles.confirmBtnCancelText}>{confirm.cancelText}</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    const onConfirm = confirm.onConfirm;
+                    setConfirm(null);
+                    onConfirm();
+                  }}
+                  style={({ pressed }) => [
+                    styles.confirmBtn,
+                    { backgroundColor: confirm.destructive ? colors.error : colors.brandPrimary },
+                    pressed && { opacity: 0.85 },
+                  ]}
+                  testID="feedback-confirm-ok"
+                >
+                  <Text style={styles.btnText}>{confirm.confirmText}</Text>
+                </Pressable>
+              </View>
             </Pressable>
           </Pressable>
         </Modal>
@@ -151,4 +227,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   btnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  confirmBtnRow: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md, width: "100%" },
+  confirmBtn: {
+    flex: 1,
+    borderRadius: radius.pill,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  confirmBtnCancel: { backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border },
+  confirmBtnCancelText: { color: colors.onSurface, fontWeight: "600", fontSize: 15 },
 });

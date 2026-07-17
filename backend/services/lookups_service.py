@@ -102,6 +102,39 @@ async def list_forma_pagamento(servidor: str, banco: str) -> dict:
     return await asyncio.to_thread(_list_codigo_descricao_sync, servidor, banco, "forma_pagamento")
 
 
+def _list_forma_pagamento_completo_sync(servidor: str, banco: str) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": []}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT codigo, descricao, tipo FROM forma_pagamento WHERE situacao='A' ORDER BY descricao"
+        )
+        items = [
+            {
+                "codigo": (r.get("codigo") or "").strip(),
+                "descricao": (r.get("descricao") or "").strip(),
+                "tipo": (r.get("tipo") or "").strip().upper(),
+            }
+            for r in cur.fetchall()
+        ]
+        cur.close()
+        conn.close()
+        return {"success": True, "items": items}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": []}
+
+
+async def list_forma_pagamento_completo(servidor: str, banco: str) -> dict:
+    return await asyncio.to_thread(_list_forma_pagamento_completo_sync, servidor, banco)
+
+
 async def list_canal_aquisicao_cliente(servidor: str, banco: str) -> dict:
     return await asyncio.to_thread(_list_codigo_descricao_sync, servidor, banco, "canal_aquisicao_cliente")
 
@@ -253,3 +286,16 @@ async def list_cargos(servidor: str, banco: str) -> dict:
 
 async def list_especialidades(servidor: str, banco: str) -> dict:
     return await asyncio.to_thread(_list_codigo_descricao_sync, servidor, banco, "especialidades", "codigo_especialidade")
+
+
+async def list_cilindro_fabricante(servidor: str, banco: str) -> dict:
+    # Cilindro_Fabricante(fabricante nvarchar PK, descricao) — combo "Padrão"
+    # do Cadastro de Cilindros (FrmManCil.frm). PK é `fabricante`, não `codigo`.
+    return await asyncio.to_thread(_list_codigo_descricao_sync, servidor, banco, "Cilindro_Fabricante", "fabricante")
+
+
+async def list_cilindro_situacao(servidor: str, banco: str) -> dict:
+    # Cilindro_Situacao(codigo, descricao, tipo) — status de item de viagem
+    # (LT/AP/APT/DP/DPT/DT/RT/CA). Módulo Manutenção de Viagens
+    # (FrmManViagens.frm) — não confundir com a `Situacao` genérica.
+    return await asyncio.to_thread(_list_codigo_descricao_sync, servidor, banco, "Cilindro_Situacao")

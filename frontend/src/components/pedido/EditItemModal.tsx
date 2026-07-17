@@ -1,6 +1,6 @@
 // Modal "Editar Item": ajusta qtd, valor, desconto, acréscimo e complemento; permite excluir.
 import {
-  ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View,
+  ActivityIndicator, Modal, Platform, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 import { Ionicons } from "@/src/components/Ionicons";
 
@@ -10,16 +10,18 @@ import { usePermissions } from "@/src/permissions";
 import { styles } from "./styles";
 import { UsePedidoItens } from "./usePedidoItens";
 
-export default function EditItemModal({ it }: { it: UsePedidoItens }) {
+const isWeb = Platform.OS === "web";
+
+export default function EditItemModal({ it, tela = "PEDIDO" }: { it: UsePedidoItens; tela?: string }) {
   const { editItem } = it;
   const { can } = usePermissions();
-  const canDesc = can("PEDIDO.DESC_ITEM");
-  const canSave = can("PEDIDO.EDIT_ITEM");
-  const canDelete = can("PEDIDO.DEL_ITEM");
+  const canDesc = can(`${tela}.DESC_ITEM`);
+  const canSave = can(`${tela}.EDIT_ITEM`);
+  const canDelete = can(`${tela}.DEL_ITEM`);
   return (
     <Modal visible={!!editItem} transparent animationType="slide" onRequestClose={() => it.setEditItem(null)}>
-      <Pressable style={styles.modalBg} onPress={() => it.setEditItem(null)}>
-        <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+      <Pressable style={[styles.modalBg, isWeb && styles.modalBgWebCompact]} onPress={() => it.setEditItem(null)}>
+        <Pressable style={[styles.modalCard, isWeb && styles.modalCardWebCompactNarrow]} onPress={(e) => e.stopPropagation()}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Editar Item</Text>
             <Pressable onPress={() => it.setEditItem(null)} hitSlop={8}>
@@ -37,7 +39,7 @@ export default function EditItemModal({ it }: { it: UsePedidoItens }) {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.fieldLabel}>Quantidade</Text>
                     <View style={styles.qtdInputRow}>
-                      <TextInput value={it.editQtd} onChangeText={it.setEditQtd} keyboardType="decimal-pad" style={[styles.input, { flex: 1 }]} testID="pedido-form-edit-qtd" />
+                      <TextInput value={it.editQtd} onChangeText={it.setEditQtd} keyboardType="decimal-pad" style={[styles.input, { flex: 1, minWidth: 0 }]} testID="pedido-form-edit-qtd" />
                       <TouchableOpacity
                         onPress={() => it.setEditQtd(fmtNum(parseNum(it.editQtd) + 1))}
                         activeOpacity={0.7}

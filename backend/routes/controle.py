@@ -14,3 +14,8 @@ async def desconto_limites(servidor: str, banco: str):
 @router.get("/controle/empresa")
 async def controle_empresa(servidor: str, banco: str):
     return await controle_service.get_empresa(servidor, banco)
+
+
+@router.get("/controle/mensagens-pdv")
+async def controle_mensagens_pdv(servidor: str, banco: str):
+    return await controle_service.get_mensagens_pdv(servidor, banco)

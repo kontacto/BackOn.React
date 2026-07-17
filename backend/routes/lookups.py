@@ -36,6 +36,14 @@ async def list_forma_pagamento(servidor: str, banco: str):
     return await lookups_service.list_forma_pagamento(servidor, banco)
 
 
+@router.get("/forma-pagamento-completo")
+async def list_forma_pagamento_completo(servidor: str, banco: str):
+    """Como /forma-pagamento, mas inclui `tipo` (DI/CH/CC/CD/DU/TI/VA/FI) —
+    usado pelo modal "Forma de Pagamento" (FrmForPag.frm) pra decidir quais
+    campos extras mostrar por forma escolhida."""
+    return await lookups_service.list_forma_pagamento_completo(servidor, banco)
+
+
 @router.get("/canal-aquisicao-cliente")
 async def list_canal_aquisicao_cliente(servidor: str, banco: str):
     return await lookups_service.list_canal_aquisicao_cliente(servidor, banco)
@@ -144,3 +152,13 @@ async def list_cargos(servidor: str, banco: str):
 @router.get("/especialidades")
 async def list_especialidades(servidor: str, banco: str):
     return await lookups_service.list_especialidades(servidor, banco)
+
+
+@router.get("/cilindro-fabricante")
+async def list_cilindro_fabricante(servidor: str, banco: str):
+    return await lookups_service.list_cilindro_fabricante(servidor, banco)
+
+
+@router.get("/cilindro-situacao")
+async def list_cilindro_situacao(servidor: str, banco: str):
+    return await lookups_service.list_cilindro_situacao(servidor, banco)

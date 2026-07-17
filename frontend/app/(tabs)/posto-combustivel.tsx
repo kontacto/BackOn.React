@@ -1,8 +1,10 @@
 // Painel Posto de Combustível — dashboard do módulo, mesmo padrão
 // estrutural de app/(tabs)/cadastros.tsx (lista de `entries` filtrada por
-// permissão via `can`, cada uma vira um card clicável, ordenado
-// alfabeticamente por label — decisão do usuário 2026-07-13: este painel
-// NÃO é exceção à regra geral de "Card List Ordering" do CLAUDE.md).
+// permissão via `can`, cada uma vira um card clicável). Ordenação: os
+// cards Combustível/Bomba/Ilha/Tanque ficam agrupados nessa ordem fixa
+// (pedido explícito do usuário, 2026-07-14) — os demais continuam em
+// ordem alfabética por label, como o resto do app ("Card List Ordering"
+// no CLAUDE.md). Ver a montagem de `visible` mais abaixo.
 //
 // As 13 telas abaixo vêm da pasta VB6 legada "Posto"
 // (C:\Desenv\VB6\...\SQLSERVER\Posto), que TEM telas exclusivas do
@@ -147,7 +149,16 @@ export default function PostoCombustivelScreen() {
     [can]
   );
 
-  const visible = entries.filter((e) => e.visible).sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+  // Combustível/Bomba/Ilha/Tanque ficam agrupados nesta ordem fixa, por
+  // pedido explícito do usuário (2026-07-14) — única exceção à ordenação
+  // alfabética deste painel (ver CLAUDE.md > "Card List Ordering").
+  const GRUPO_ORDEM = ["combustiveis", "bombas", "ilhas", "tanques"];
+  const grupo = GRUPO_ORDEM.map((k) => entries.find((e) => e.key === k))
+    .filter((e): e is Entry => !!e && e.visible);
+  const resto = entries
+    .filter((e) => e.visible && !GRUPO_ORDEM.includes(e.key))
+    .sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+  const visible = [...grupo, ...resto];
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="posto-combustivel-screen">

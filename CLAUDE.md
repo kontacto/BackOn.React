@@ -41,7 +41,28 @@ This project now follows explicit platform separation:
 
 - Group/permission administration screens and controls.
 - Auxiliary tables (Tabelas Auxiliares, Marcas, Modelos).
-- Cadastro completo de cliente (see Cliente Screens Strategy below).
+- **Every "cadastro completo" (full entity) screen — `[GLOBAL]`, reaffirmed
+  2026-07-14, user-directed.** Cliente Completo, Fornecedores, Serviços,
+  Produto Completo, and any future full-entity screen of this shape are
+  **web-only, no exceptions** — this applies to every current and future
+  screen built to the "Full CRUD Form Screen Standard" below, not just the
+  ones named here. Two layers of guard are required, matching the already-
+  implemented screens:
+  1. **The screen itself** self-guards at the top of the component
+     (`if (Platform.OS !== "web") return <LockedView .../>`) — never rely
+     solely on navigation gating, since a screen can be reached directly by
+     URL.
+  2. **Every entry point** into it (Cadastros hub tile, a shared list's
+     row-tap, a "Novo" FAB) is *also* gated by `Platform.OS === "web"` —
+     don't show a tappable row/button on mobile that would just bounce to
+     a LockedView; hide it outright. See `produtos.tsx`'s tap-forward to
+     `produto-completo.tsx`/`servicos.tsx` for the reference pattern (both
+     checks — `isWeb` AND the relevant `can(...)` — gate the same
+     condition).
+  Mobile keeps the lean/quick equivalent instead (`cliente-form.tsx`, the
+  plain `produtos.tsx`/`servicos` catalog browse, etc.) — see "Cliente
+  Screens Strategy" and "Full CRUD Form Screen Standard" below for the
+  full rápido/completo split.
 
 ### Windows-only areas (native desktop, must degrade gracefully on web/mobile)
 
@@ -683,6 +704,61 @@ don't invent a new variant per screen:
   style on web should get the same treatment — this is a standing
   project-wide requirement, not a one-off fix per screen.
 
+## Padrão de Campo Cliente (Pedido/O.S.)
+
+**Added 2026-07-16, user-directed `[GLOBAL]`** ("a regra para a busca no
+campo cliente no Pedido de Bar, se aplica para o Pedido Geral" +
+"aplicar tb para Comanda"). Rastreado do `Campo(6)` do `FrmManPedBar.frm`
+(Pedido Bar), mas o padrão vale pra **qualquer** tela com campo de seleção
+de Cliente estilo Pedido/O.S. — Pedido Bar (`pedido-form.tsx`) e Pedido
+Completo/Pedido Geral (`pedido-completo.tsx`) hoje, **Comanda quando for
+implementada** (ainda bloqueada, ver "Pedido Bar" em PENDENCIAS.md —
+Faturar/Comanda/NFC-e), e qualquer tela futura desse formato. Já é
+compartilhado via `frontend/src/components/pedido/ClienteSection.tsx` — não
+duplicar essa lógica por tela; a tela de Comanda, quando construída, deve
+reaproveitar esse componente em vez de reimplementar a busca do zero.
+
+- **Campo sempre editável**, mesmo com um cliente já selecionado — nunca
+  vira um "chip" travado que exige abrir outra coisa pra trocar. Digitar
+  por cima sempre reabre a busca (mesmo comportamento do `Campo(6)`
+  legado: sempre um texto editável, nunca um valor fixo). Usa
+  `selectTextOnFocus` (RN) pra replicar o "seleciona tudo ao focar" do VB6
+  (`Campo_GotFocus`), assim a primeira tecla digitada já substitui o
+  conteúdo inteiro.
+- **Enter é o único gatilho de busca** — digitar sozinho (sem apertar
+  Enter) não dispara nada, só atualiza o texto do campo e limpa o cliente
+  atualmente selecionado (se houver). Nada de debounce automático a cada
+  tecla — foi tentado e removido a pedido do usuário (ficava buscando/
+  abrindo modal cedo demais, atrapalhando quem ainda estava digitando).
+- **Resolução ao apertar Enter**:
+  - **1 resultado** → carrega o cliente direto na tela, sem modal.
+  - **0 ou 2+ resultados** → abre o modal de busca completo
+    (`ClientSearchModal`), que já cobre tanto a lista pra selecionar
+    quanto o "Cadastrar novo cliente" quando não encontra nada.
+- **Botão dedicado** (ícone de filtros) ao lado do campo sempre abre o
+  modal de busca completo diretamente, independente do que foi digitado —
+  alternativa pra quem prefere navegar a lista em vez de digitar.
+- Termo puramente numérico = busca por **código exato** (`c.codigo = N`),
+  nunca substring — digitar "1" não pode trazer os códigos 10, 11, 21 etc.
+  Termo com letras (nome ou CNPJ alfanumérico) mantém busca parcial
+  (`LIKE '%termo%'`) normalmente. Implementado em
+  `_find_clientes_for_pedido_sync` (`backend/services/clientes_service.py`).
+- **Autofill nativo do navegador desabilitado** no campo
+  (`autoComplete="new-password"` — `"off"` sozinho é ignorado pelo Chrome
+  pra campos que ele credencia como endereço/telefone —, `autoCorrect=
+  {false}`, `textContentType="none"`, `importantForAutofill="no"`) — o
+  placeholder menciona "telefone", o que fazia o Chrome sobrepor um card
+  de autofill de endereço/telefone salvo por cima do campo.
+- **Nome fantasia para cliente Mesa/Comanda reservado** (módulo Bar): as
+  respostas de busca e resumo (`find/search`, `/clientes/{codigo}/resumo`)
+  já trocam `nome` pelo `fantasia` quando o cliente bate no padrão
+  `_cliente_mesa_ou_comanda` (nome `^[MC]\d+$` ou fantasia contendo
+  "MESA") — ver "Guarda de cliente Mesa/Comanda reservado" em
+  PENDENCIAS.md > "Pedido Bar". Efeito: o campo mostra "MESA 15" em vez de
+  "M15". Não é opcional por tela — é a mesma função reaproveitada
+  (`_nome_exibicao_mesa_comanda`), então qualquer consumidor desses
+  endpoints já herda o comportamento automaticamente.
+
 ## Padrão de Campo de Data (Web)
 
 **Added 2026-07-13, user-directed** ("os filtros de datas também
@@ -732,6 +808,158 @@ into an otherwise polished, custom-themed UI.
   the same treatment when touched next — same standing project-wide
   requirement precedent as the Modal/Selector Standard above.
 
+## Padrões de UI — Modais, Mensagens e Formulários (Web) `[GLOBAL]`
+
+**Added 2026-07-15, user-directed** (pasted as a standalone checklist to stop
+these rules from getting lost between sessions — this section is that
+checklist, kept in sync going forward per "Notas de manutenção" below).
+Applies to **every** modal, system message and form on the web app, not just
+the screen being touched when a rule below was written down.
+
+### 1. Modais
+
+Two width tiers exist — don't conflate them:
+
+- **Modal de seleção/busca** (picker de cliente/produto/grupo, etc.):
+  `maxWidth: 560`, o padrão `compactWeb` já documentado em "Modal/Selector
+  Standard (Web)" acima (`modalCardWebCompact` em `pedido/styles.ts`,
+  mesmo padrão em `SelectField.tsx`/`NiveisModal.tsx`). Não mudar essa
+  largura — é usada em ~10 telas já construídas.
+- **Modal de confirmação/ação pontual sobre um único registro** (ex.:
+  "Confirmar Item" do Adicionar/Editar Item em Pedido): mais estreito,
+  **`maxWidth` entre 360–480px** — usa `modalCardWebCompactNarrow`
+  (`pedido/styles.ts`, `maxWidth: 420`). **Aplicado 2026-07-16** em
+  `EditItemModal.tsx` (sempre, tela única) e `AddItemModal.tsx` (só no
+  estado "Confirmar Item" — o estado "Adicionar Item"/busca de produto
+  continua no tier de seleção normal, 560px, porque precisa de espaço pra
+  lista de resultados; a troca é condicional em `selProd` no próprio JSX).
+  `frontend/app/produtos.tsx` tinha o mesmo problema no modal "Adicionar ao
+  Pedido" (nem sequer tinha tratamento web — renderizava full-bleed) — tem
+  seus próprios estilos locais (não importa `pedido/styles.ts`), corrigido
+  com `modalCardWebCompact` local (420px) nesse arquivo; o modal de
+  "Reservado para Pedido/O.S." no mesmo arquivo usa `modalCardWebCompactList`
+  (560px, é lista/relatório, não confirmação de 1 registro).
+
+Para os dois tiers:
+
+- Sempre **centralizado** na tela (horizontal e vertical), com overlay
+  escurecido atrás (`rgba(0,0,0,0.45)`, já o padrão em
+  `modalBgWebCompact`/`FeedbackProvider`'s `backdrop`).
+- Padding interno reduzido: `spacing.md`–`spacing.lg` (12–16px), nunca
+  `spacing.xl`+ (24px+) em modal de confirmação.
+- Título compacto (14–16px, bold) + botão de fechar (X) no canto superior
+  direito (`modalHeader`/`modalTitle` em `pedido/styles.ts` já seguem isso).
+- Botões de ação na base do modal, altura reduzida (~36–40px), botão
+  primário em destaque à direita/full-width, secundário ("Voltar"/"Fechar")
+  à esquerda ou abaixo — mesmo padrão de `modalBtns`/`primaryBtn`/
+  `secondaryBtn` já usado em `AddItemModal.tsx`/`EditItemModal.tsx`.
+- Evitar espaçamento vertical excessivo entre seções internas do modal.
+
+### 2. Mensagens de sistema (alertas, toasts, confirmações)
+
+- Sempre **centralizadas na tela** (nunca ancoradas em canto — nada de
+  toast no canto superior/inferior direito).
+- Nunca renderizar como `<View>` comum fora de um `Modal` — react-native-web
+  não dá `z-index` próprio ao `Modal`, quem decide o empilhamento é a
+  **ordem de inserção no DOM** (portal anexado a `document.body` na hora
+  em que o componente monta). Um toast/alerta como `View` simples sempre
+  desenha atrás de qualquer `Modal` de tela já aberto. Ver
+  `FeedbackProvider.tsx` (alerta global, bloqueante) e
+  `frontend/src/components/pedido/ScreenToast.tsx` (toast leve,
+  não-bloqueante, usado por `pedido-form.tsx`/`pedido-completo.tsx`) — os
+  dois só montam o `<Modal>` quando há mensagem visível, garantindo que o
+  portal nasce **depois** de qualquer modal de tela já aberto e desenha
+  por cima. Qualquer tela nova com mensagem local própria deve usar
+  `ScreenToast` (ou `useFeedback()` se for um alerta bloqueante) em vez de
+  reinventar um `View` posicionado — mesmo padrão "não duplicar o fix por
+  tela" já usado no resto deste arquivo.
+- Tamanho reduzido: texto compacto, sem grandes blocos de espaço em branco.
+- Somem sozinhas (toast) ou têm botão único de confirmação (alerta
+  bloqueante) — sem elementos extras.
+
+### 3. Campos de formulário
+
+Extensão de "Field Width Standard (Form Rows)" acima (mesma regra geral —
+não empilhar campos curtos que caberiam lado a lado), com faixas
+numéricas explícitas:
+
+- **Nunca empilhar campos curtos verticalmente** quando cabem lado a lado
+  na mesma linha (`rowFields`/`formGrid` já são o padrão de layout usado
+  pra isso). Exemplos reais já corretos no sistema: `Quantidade` + `Valor
+  unitário` na mesma linha (`AddItemModal.tsx`); `Desc. %` + `Desc. R$
+  (unit.)` + `Acréscimo R$ (unit.)` juntos, 3 colunas numa linha só.
+- Campos numéricos curtos (quantidade, percentual, valores unitários,
+  código, DDD, CEP) → largura estreita, **80–120px** quando isolados
+  (`colTiny`/`colNarrow` já documentados acima) — nunca `width: "100%"`/
+  `flex: 1` num campo numérico curto.
+- Campo de texto livre (observação, descrição complementar) → pode ocupar
+  mais largura (`colFlex`/`fullWidth`), mas dividindo linha com outro
+  campo sempre que o layout permitir em vez de virar sua própria linha
+  isolada por padrão.
+- Labels compactos, acima do campo, fonte pequena (11–12px), sem
+  espaçamento excessivo entre label e input — já o padrão de
+  `fieldLabel`/`sectionTitle` em `pedido/styles.ts` e nas telas
+  "Completo".
+
+### 4. Checklist rápido antes de entregar qualquer tela/modal novo
+
+1. Modal está centralizado e na largura certa pro seu tier (560 seleção /
+   360–480 confirmação pontual), não full-width?
+2. Mensagens de sistema estão centralizadas e usando `ScreenToast`/
+   `useFeedback()` (nunca um `View` solto), pra não ficar atrás de outro
+   modal aberto?
+3. Existe algum par de campos curtos empilhados que poderiam estar lado a
+   lado na mesma linha?
+4. Os campos numéricos estão com largura reduzida (80–120px), não
+   esticados?
+
+### 5. Notas de manutenção
+
+- Sempre que o usuário pedir pra ajustar formatação de tela/modal/campo,
+  refletir a mudança **nesta seção**, não só no código — é assim que essas
+  regras deixam de se perder entre sessões (pedido explícito do usuário,
+  2026-07-15).
+- Este projeto **não usa Tailwind/Bootstrap/nenhum framework CSS de
+  classes utilitárias** — é React Native + react-native-web, estilizado
+  via `StyleSheet.create` e os tokens compartilhados já documentados neste
+  arquivo (`webLayout.ts` — `WEB_CONTENT_SHELL`/`WEB_FILTER_CARD`/
+  `WEB_SCROLL_CENTER`; `pedido/styles.ts` — `modalCardWebCompact`,
+  `itensHeader`, `fieldLabel`, etc.). Ao aplicar as regras acima numa tela
+  nova, mapear pros tokens/estilos já existentes em vez de inventar
+  classes ou valores soltos.
+
+## Padrão de Impressão de Relatórios `[GLOBAL]`
+
+**Added 2026-07-16, user-directed** ("na impressão de qualquer relatório
+não deve sair o filtro da tela. e no cabeçalho, deve sair os dados da
+empresa do cadastro de controle e o nome do relatório logo abaixo").
+Aplica-se a toda tela de relatório que tenha impressão/exportação em PDF —
+não só as já existentes, qualquer relatório novo também.
+
+- **Nunca mostrar o resumo do filtro selecionado na tela** (Atendente,
+  Área de Atuação, Vendedor, Situação, checkboxes, etc.) no PDF impresso —
+  isso é estado da tela, não conteúdo do relatório. O **período**
+  (intervalo de datas) é a exceção — não é "filtro da tela" no sentido
+  desta regra, é a própria identidade/escopo do relatório (todo relatório
+  já impresso antes desta regra mostrava período, isso continua).
+- **Cabeçalho sempre**: dados da empresa (`controle` — nome/fantasia,
+  endereço, telefone, CNPJ/IE), **com o nome do relatório logo abaixo**
+  (não acima) — nessa ordem, sempre.
+- Implementação compartilhada em `frontend/src/utils/print-report-header.ts`
+  — `fetchEmpresaHeader(apiBase, servidor, banco)` (mesma rota
+  `/api/controle/empresa` já usada por `ReciboPedidoModal.tsx`) +
+  `buildReportHeaderHtml(empresa, tituloRelatorio)` + `REPORT_HEADER_CSS`.
+  Usado por `export-report.ts` (Descontos & Margem, Pedido e O.S.) e
+  `export-fechamento-caixa.ts`. Toda tela de relatório nova com impressão
+  deve reaproveitar este módulo — não duplicar a busca/HTML de cabeçalho
+  por tela.
+- **Exceção documentada**: `export-margem-lucro.ts` (relatório
+  multiempresa, consolida várias conexões de uma vez) não usa este
+  cabeçalho de UMA empresa — não faria sentido mostrar os dados de Controle
+  de uma única empresa no topo de um relatório que já quebra o conteúdo
+  por empresa internamente. Não generalizar o cabeçalho de empresa única
+  pra esse caso.
+
 ## Full CRUD Form Screen Standard (Web)
 
 **Added 2026-07-10, user-directed** ("telas tem que seguir um padrão de
@@ -741,15 +969,36 @@ form (Cliente, Serviços, and future screens of this shape) must follow the
 **same** layout as `app/cliente-completo.tsx` — the reference
 implementation — not a modal/dialog popup:
 
-- The form is a **full-page view**, not a centered `AppModal` dialog. If
-  the screen doesn't need a separate quick-form route (unlike Cliente,
-  which has `cliente-form.tsx` for the mobile/quick path), it's fine to
-  swap between "list" and "form" as two render branches of the same
-  screen component instead of adding a second route — see
-  `app/servicos.tsx` for that pattern. Don't wrap the form in a popup
-  card just because that was faster to build; the Gestor de Documentos
-  (Anexos) tab in particular needs the full page width to render its
-  list+preview panel side by side — a narrow modal visibly cramps it.
+- The form is a **full-page view**, not a centered `AppModal` dialog. Don't
+  wrap the form in a popup card just because that was faster to build; the
+  Gestor de Documentos (Anexos) tab in particular needs the full page
+  width to render its list+preview panel side by side — a narrow modal
+  visibly cramps it.
+- **Update 2026-07-14, user-directed**: the list of records lives in a
+  **separate, shared screen** — never embedded as a second render branch
+  inside the form screen itself (superseded: `servicos.tsx` used to toggle
+  between an embedded list and the form in one file; it's now form-only).
+  Concretely: `frontend/app/produtos.tsx` (search/picker, originally built
+  for mobile item-add in Pedido/O.S. — don't change its established mobile
+  behavior) is the shared list for **both** Produtos and Serviços, opened
+  with `?tipo=P` or `?tipo=S` from the Cadastros tile. On web, tapping a
+  row (or a "Novo" FAB, gated per-tipo) opens the dedicated form screen
+  with `?codigo=...` (`produto-completo.tsx`/`servicos.tsx`) — same
+  relationship as `clientes.tsx` (list) → `cliente-completo.tsx` (form).
+  The form screen owns its own boot effect that reads `?codigo=` and
+  either loads that record or starts blank (`openNew`/`carregarDetalhe`
+  pattern) — it does not fetch or render a list of its own.
+- **Identity fields stay visible above the tab bar, not inside a tab**
+  (added 2026-07-14, user-directed — VB6 reference: `FrmManPec.frm`'s
+  Produtos form keeps código/descrição/aplicação in a fixed block above
+  `TabProdutos`, so switching tabs never hides them). Whatever fields
+  uniquely identify the record — for Produto: Código Interno, Código de
+  Fábrica, Código de Barras, Situação, Descrição, Aplicação/Observações;
+  for Cliente: CPF/CNPJ + Nome/Razão Social — render in their own card
+  **above** the tab bar, unconditionally. Everything else stays inside its
+  respective tab's content, switching normally. Don't move more than the
+  identity fields up there — the rest of "Dados Principais" (prices,
+  classification, etc.) still belongs inside its own tab.
 - **Header**: back chevron (left) → logo → title (flex, truncates) →
   **"Gravar" button in the top-right corner of the header**, pill-shaped,
   translucent-white on the brand-primary background
@@ -795,6 +1044,250 @@ implementation — not a modal/dialog popup:
   Don't inline everything into one giant scroll just because it's less
   code — check whether the legacy form itself already separated it out
   before deciding.
+
+## Produto Completo (Cadastro de Produtos)
+
+**Added 2026-07-14, user-directed.** Full CRUD for `pecas` (~150 columns),
+web-only — mirrors the Cliente/Fornecedor/Serviços "cadastro completo"
+pattern. Legacy source: `C:\Desenv\VB6\SQLSERVER\Kontacto\FrmManPec.frm`
+(12.838 lines — **the only copy of this form with all 7 tabs**; other
+copies across business-line folders have fewer tabs, don't use them as
+reference for this screen). Photo form: `Geral\FrmAsoFot.frm`. Full
+field-by-field trace is in PENDENCIAS.md > "Produtos (Cadastro Completo)" —
+read that before touching this screen again, don't re-derive from scratch.
+
+- **Routing**: `frontend/app/produtos.tsx` (existing search/picker screen,
+  shared with the Pedido/O.S. item-add flow) is unchanged and still serves
+  browsing on mobile. On web, tapping a product row now opens
+  `frontend/app/produto-completo.tsx` (`?codigo=...`), and there's a "Novo"
+  FAB there too — same relationship as `clientes.tsx` → `cliente-completo.tsx`.
+  The Cadastros hub tile "Produtos" routes to `produto-completo` on web,
+  `produtos?tipo=P` on mobile.
+- **Backend**: `backend/services/produto_completo_service.py` (CRUD +
+  fornecedores/similares/secundarios/xml/protocolo_st sub-resources + Grade
+  child-SKU generation) and `backend/services/tray_service.py` (Tray API
+  client + Azure Blob image upload for the "Enviar ao Site" feature).
+  Permission tela `PRODUTO_COMP` (CADASTROS menu) — distinct from the
+  existing `PRODUTO` tela, which stays as-is (picker/browse, shared with
+  Serviços search).
+- **Grade do Produto and Livro tabs are company-wide module flags**, not
+  per-product state — confirmed straight from the VB6 source
+  (`Dados_Controle_Configuracao.Grade`/`.livraria`, checked in `Form_Load`).
+  These map directly to the already-existing `controle_configuracao.grade`/
+  `.Livraria` boolean columns — gate tab visibility with
+  `moduleOn("grade")`/`moduleOn("Livraria")` in the frontend, and the
+  backend re-checks the same flags before writing Grade/Livro-specific data
+  (`_modulo_grade_ativo`/`_modulo_livraria_ativo` in
+  `produto_completo_service.py`) — same "Regra de Módulo Ativo" pattern as
+  Serviços, just gating a *tab within an already-open screen* instead of
+  the whole screen.
+- **Grade generates real child products**: each cor×tamanho combination
+  becomes a genuine new `pecas` row (own `codigo_int`), linked via
+  `pecas_grade(codigo, equivalente, cor, tamanho)` — not a lightweight
+  variant record. Matches the legacy exactly (`Command10_Click`).
+- **The color-per-photo link lives in `gestor_documentos.cor`, written from
+  the Fotografia flow, not from Incluir/Alterar** — confirmed directly in
+  the VB6 source (`FrmAsoFot.Command2_Click`), not assumed from the
+  column's existence alone. Don't move this write into the main
+  save handler — it's a deliberate separate step in the legacy too.
+- **Tray integration is real, not a stub** — user chose this explicitly
+  (2026-07-14) over a simpler "just attach a photo" option. Uses the
+  `TRAY_*` credentials already scaffolded in Controle do Sistema
+  (`integracao_tray`, `TRAY_url_api`, `TRAY_Consumer_Key/Secret`,
+  `TRAY_code`) and reuses the **same Azure Blob connection string** the
+  Gestor de Documentos already uses (`controle_aux.Azure_ConnectionString`)
+  for image hosting — deliberately **does not** replicate the legacy's
+  Amazon S3 option (`TRAY_TIPO_BLOB`), since no S3 credentials/config
+  exist anywhere in this app and inventing a second cloud-storage config
+  just for this felt like unnecessary scope. **This client has never been
+  exercised against the real Tray API** (no sandbox credentials available)
+  — the request/response shape follows the VB.NET DLL source
+  (`Controller_Tray.vb`) and Tray's publicly documented REST conventions,
+  but must be validated against a real store before relying on it in
+  production.
+- **Anexos button intentionally diverges from the legacy**: the VB6 form
+  opens the generic Gestor de Documentos with `Grupo=3` (Funcionários, per
+  this app's already-live-validated group mapping) — almost certainly a
+  copy-paste bug in the original form, not a real rule. This migration
+  uses `Grupo=4` (Produtos) instead, matching every other entity's Anexos
+  tab. See "Não replicar truques VB6" above — same principle.
+- Not built (explicitly out of scope, not just deferred): multiple
+  barcodes per product (`codbarra_auxiliar`), the "PAF-ECF" fiscal-printer
+  hooks referenced in the legacy delete flow, and NCM/CEST dedicated lookup
+  screens (`FrmCesNCM`) — NCM/CEST are plain text fields here for now.
+
+## Cilindros
+
+**Added 2026-07-14, user-directed.** New segment module (industrial/rental
+gas cylinders) — web-only tab "Cilindros", gated by the already-existing
+`controle_configuracao.Cilindro` column (same mechanism as Posto/Serviços,
+see `MODULE_TELAS` in `controle_config_service.py`). Legacy source:
+`FrmManCil.frm`, pasted in full by the user this session — full field trace
+and phased plan are in PENDENCIAS.md > "Cilindros"; read that before
+resuming this module, don't re-derive from scratch.
+
+The user asked for one menu with several functions living together: Cadastro
+de Cilindros + Consulta (same screen), Clientes x Cilindro, Cilindro/Nº
+Série, and Borderô de Cilindros — the last one called out explicitly as
+"the most important" (a cross-table query/report engine, not a simple CRUD).
+
+- **Phase 1 (done)**: Cadastro/Consulta de Cilindros only. Backend
+  `backend/services/cilindro_service.py` + `backend/routes/cilindro.py`.
+  Real business rule (not a VB6-era workaround): the duplicate-key check is
+  the COMBINATION `(codigo, capacidade, pressao, padrao)`, not a single
+  code — traced from `Command1_Click`. `grupo_gas` is auto-derived from
+  `codigo` (everything before the first `.`) and auto-inserted into
+  `Cilindro_Grupo` if missing, mirroring `Campo_LostFocus(78)`. Delete is
+  blocked by dependent rows in `Cilindro_Cliente`/`Cilindro_Serie`/
+  `Viagem_Cilindro`/open-or-closed pedido de venda, mirroring
+  `Command3_Click`. Frontend: `frontend/app/(tabs)/cilindros.tsx` (hub —
+  only the Cadastro/Consulta card is shown for now, the rest are added as
+  their phases land) and `frontend/app/cilindro-cadastro.tsx` — a compact
+  single-view list+form screen (no tabs), same precedent as
+  `fornecedores.tsx` under "Exception — compact single-view screens" above,
+  since the legacy form itself has no tab control here either.
+- **Not replicated** (VB6-era workaround, not a business rule — see "Não
+  replicar truques VB6" below): the per-machine `temp_cilindros_<hostname>`
+  temp table the legacy uses purely for aggregation (a real `GROUP BY` does
+  the same job in Phase 3's Borderô), and the `AtualizaCilindros`/
+  `Lista_Cilindros` bulk-import utility (out of scope for this migration).
+- **Phase 2/3 (not started)**: Clientes x Cilindro, Cilindro/Nº Série, and
+  Borderô de Cilindros — the latter confirmed via direct question to output
+  **on-screen query + Excel export**, not the legacy's formatted print.
+
+### Pedido de Cilindro — Unificação com Pedido de Venda Geral
+
+**Adicionado 2026-07-14, user-directed.** O sistema legado tem 3 telas de
+Pré-Venda/Pedido sobre a **mesma tabela** (`pedido_venda`/`pedido_venda_prod`
+— "3 pedidos, 1 tabela, 3 forms", nas palavras do usuário), uma por
+segmento de negócio:
+
+- `frmmanpedfor.frm` (`FrmManPed`) — Pedido de Venda **geral/completo**:
+  Tray, m² (módulo vidro), IPI/ICMS-ST, garantia, promoções, controle de
+  número de série, grade. É a referência mais completa das três e o form
+  de origem para a futura tela "Pedido Completo" web (ver "Transações
+  Screens Strategy" acima).
+- `FrmManPedBar.frm` — Pedido para Bar/Restaurante: Mesa/Balcão/Comanda/
+  Entrega, localização de mesa, troco, horários de abertura/fechamento —
+  fluxo de PDV simplificado. **Fora do escopo desta unificação** — o
+  usuário não pediu para trazer Bar para dentro do Pedido geral, só
+  Cilindro.
+- `FrmPedCil.frm` — Pedido de Cilindro (gás industrial/locação): a mesma
+  base do pedido geral, mais campos de capacidade/pressão/padrão/fator de
+  cilindro. **Intenção do usuário desde o início do projeto**: trazer essa
+  funcionalidade para dentro do Pedido de Venda geral e eliminar
+  `FrmPedCil` como tela separada.
+
+**O que `FrmPedCil` faz de diferente** (rastreado campo-a-campo): quando
+`ModPedido` (código de modelo de impressão vindo de `Controle`) é 28 ou 40,
+a tela habilita 5 campos extras no grid de itens — Capacidade, Padrão,
+Pressão, Qtd. Casco, e Status (`LT`/`AP`/`APT`/`DT`) — mais um campo oculto
+com o `Cilindro.Cod` do item.
+
+- **Seleção do cilindro**: ao informar o código do produto, busca
+  correspondência em `Cilindro` pelo `codigo_fab`; se achar, cruza com
+  `Cilindro_Cliente` (vínculo cliente↔combinação específica já usada
+  antes) para auto-sugerir capacidade/pressão/padrão — 1 resultado
+  preenche automático, mais de um mostra lista de escolha, zero limpa os
+  campos.
+- **Confirmação manual**: se o usuário edita os campos à mão, refaz a
+  busca em `Cilindro` pela mesma combinação de chave já usada no Cadastro
+  de Cilindros (`codigo, capacidade, pressao, padrao` — ver "Phase 1"
+  acima); não achando, bloqueia com "Cilindro não cadastrado!".
+- **Cálculo de quantidade**: `Fator` (do registro do Cilindro) relaciona
+  quantidade de cascos com a quantidade de venda do item
+  (`qtd = qtd_casco × Fator`).
+- **Gravação do item**: grava a combinação inteira **reaproveitando
+  colunas genéricas de `pedido_venda_prod`** que no módulo vidro guardam
+  dimensão física — `comprimento` vira status codificado, `largura` vira
+  quantidade de cascos, `area_venda` vira FK para `Cilindro.Cod`. Também
+  insere em `Cilindro_Cliente` (se ainda não existir) o vínculo definitivo
+  cliente↔combinação.
+- **Validação no fechamento**: bloqueia fechar o pedido se algum item
+  tiver `largura=0` ou `area_venda=0`, e valida que
+  `qtd_pedida = Fator × qtd_casco` para cada item de cilindro — divergente
+  bloqueia com mensagem detalhada.
+
+**Regra real vs. gambiarra VB6** (ver "Não replicar truques VB6" abaixo):
+capturar capacidade+pressão+padrão (chave que identifica um `Cilindro.Cod`
+único), quantidade de cascos e status, mais a validação
+`qtd_pedida = Fator × qtd_casco` no fechamento e o vínculo automático
+cliente↔cilindro em `Cilindro_Cliente`, são **regras de negócio reais** a
+portar. Reaproveitar `comprimento`/`largura`/`area_venda` (colunas
+pensadas para dimensão física de vidro) para guardar status/qtd-casco/FK do
+cilindro é de fato **workaround** de limitação de schema do VB6 (evitar
+`ALTER TABLE`) — a identificação da gambiarra em si está correta.
+
+**Correção 2026-07-15, user-directed — decisão consciente de MANTER o
+reaproveitamento, não criar colunas novas.** A recomendação anterior desta
+seção (criar `cod_cilindro`/`qtd_casco`/`status_cilindro` como colunas
+próprias e nomeadas) foi revertida. A decisão do usuário é reaproveitar
+`comprimento` (status)/`largura` (qtd. casco)/`area_venda` (FK
+`Cilindro.Cod`) também na migração, exatamente como o legado faz — **não
+recriar essas colunas, não sugerir esse refatoramento de schema de novo**
+em análises futuras desta unificação. A gambiarra de schema foi
+identificada e avaliada conscientemente, e a escolha deliberada foi
+preservá-la. As regras de negócio reais (validação de fechamento
+`qtd_pedida = Fator × qtd_casco` e o vínculo automático em
+`Cilindro_Cliente`) continuam sendo portadas normalmente — só o *nome/local
+de armazenamento* dos dados é que fica igual ao legado, não a regra em si.
+
+Da mesma forma, `ModPedido` (28/40) — um "modelo de impressão" numérico
+decidindo monoliticamente qual UI mostrar — não deve ser portado como está;
+o gating correto na arquitetura nova é por módulo da empresa
+(`controle_configuracao.Cilindro`, mesmo mecanismo já usado no Cadastro de
+Cilindros acima), não por modelo de pedido. Essa parte da recomendação
+original continua valendo sem mudança — a correção de 2026-07-15 acima é só
+sobre as colunas de armazenamento do item, não sobre o gating de UI/módulo.
+
+**Viabilidade: unificação é viável e recomendada.** A tela geral
+(`frmmanpedfor`) já tem o padrão estrutural necessário para "atributo extra
+condicional por item, escolhido em modal": o controle de **número de série**
+(`tb("controla_num_serie")`, seletor `CmbNDS`/`FrmNDS`) resolve exatamente
+esse formato de problema — produto pede uma escolha adicional antes de
+poder ser lançado no pedido. O mesmo padrão (modal equivalente, listando as
+variantes de Cilindro daquele `codigo_fab`, com a combinação já vinculada
+ao cliente aparecendo primeiro) resolve Capacidade/Pressão/Padrão sem
+precisar de tela paralela. O restante da tela (cliente, vendedor, forma de
+pagamento, fechamento/faturamento, Tray, Anexos) já é 100% compartilhável —
+nenhuma necessidade identificada de fluxo diferente aí para pedido de
+cilindro.
+
+**Status atualizado 2026-07-14: bloqueio original removido.** O módulo
+Cilindro está com todas as fases concluídas (Cadastro, Clientes x Cilindro,
+Cilindro/Nº Série, Manutenção de Viagens, Borderô — ver PENDENCIAS.md >
+"Cilindros") — `Cilindro_Cliente` já está mapeada e servida via
+`GET/POST /api/cilindro-cliente` (`cilindro_cliente_service.py`), então o
+cruzamento automático cliente↔cilindro que essa unificação precisa já tem
+onde se apoiar.
+
+O bloqueio real agora é outro: a tela "Pedido Completo" (o equivalente
+moderno de `frmmanpedfor`, ver "Transações Screens Strategy" acima) **ainda
+não existe** — está em "scaffolding pronto, telas reais bloqueadas"
+(PENDENCIAS.md > "Transações"). Como a unificação descrita nesta seção
+pressupõe editar/estender essa tela, a sequência correta é: (1) construir
+"Pedido Completo" primeiro, já incorporando o suporte a Cilindro como um
+dos módulos condicionais desde o desenho inicial (evita retrabalho de
+voltar depois pra encaixar o modal de Capacidade/Pressão/Padrão numa tela
+já pronta); (2) só então portar as regras reais desta seção (validação
+`qtd_pedida = Fator × qtd_casco` no fechamento, vínculo automático
+`Cilindro_Cliente`).
+
+**Atualização 2026-07-14 — rastreio de `frmmanpedfor.frm` concluído**
+(ver PENDENCIAS.md > "Transações" > "Pedido Completo — rastreio
+campo-a-campo" pro relatório completo). Confirma exatamente o padrão que
+esta seção já previa: o controle de número de série (`PECAS.
+controla_num_serie` → busca `pecas_num_serie` disponíveis → bloqueia a
+inclusão do item até o usuário escolher um → grava o FK escolhido em
+`pedido_venda_prod.cod_num_serie` → relabela a coluna da grade) é
+exatamente o formato "atributo extra condicional por item, resolvido em
+modal, bloqueando a inclusão até resolver" — a unificação do Cilindro deve
+clonar esse mesmo fluxo (produto flag → busca variantes em `Cilindro`/
+`Cilindro_Cliente` → modal bloqueante → grava FK na linha), não inventar um
+mecanismo novo. Plano de implementação faseado da tela "Pedido Completo"
+(com Cilindro entrando na Fase B, junto com o módulo m² e Clínica) já está
+registrado em PENDENCIAS.md — aguardando confirmação do usuário antes de
+iniciar a implementação.
 
 ## Global Entity Rules
 
@@ -905,6 +1398,27 @@ Padrão de implementação (referência: módulo `servicos`, 2026-07-13):
   gating do backend acima é defesa em profundidade, não substitui corrigir
   esses pontos.
 
+## Permissions + Audit Log Coverage — Every Screen
+
+**Added 2026-07-14, user-directed `[GLOBAL]`** ("Todas as telas do sistema
+devem está incluído na regra de logs e permissões"). This is not scoped to
+screens built going forward only — it's a standing invariant for **every
+screen in the system**: each one needs both (1) a matching entry in the
+permissions catalog (`backend/services/permissoes_service.py` `CATALOGO`)
+gating its actions, and (2) its write actions (gravar/excluir/etc.) logged
+via `log_auditoria_service.registrar_log` using that same `tela`/`comando`
+vocabulary — see "Card List Ordering" area below and the Cliente/Fornecedor/
+Produto Completo/Cilindros sections above for reference implementations.
+
+If an existing screen is touched/modified for any reason and turns out to
+be missing either piece, fix it as part of that work — don't leave the gap.
+**Asked the user directly (2026-07-14) whether this should trigger a full
+retroactive audit of every existing screen right now — they chose not to.**
+Don't proactively spawn a full-codebase sweep for this on your own; the
+obligation applies opportunistically (new screens, and any existing screen
+you happen to be working in), not as a standing to-do to go hunt down on
+its own initiative.
+
 ## Card List Ordering
 
 **Update (2026-07-10, user-directed, supersedes the old exception below)**:
@@ -923,6 +1437,31 @@ primary navigation menus as staying in curated/usage-priority order.
 ~~Does not apply to primary navigation menus (Cadastros, Configurações,
 Relatórios tabs, etc.) — those keep their curated/usage-priority order
 unless explicitly asked.~~ — superseded, see above.
+
+**Exception, added 2026-07-14, user-directed**: on the Painel Posto de
+Combustível (`frontend/app/(tabs)/posto-combustivel.tsx`), the Combustível/
+Bomba/Ilha/Tanque cards are pulled out of the alphabetical sort and shown
+first, grouped together in that fixed order — everything else on that
+screen still sorts alphabetically as usual. This is a one-off, explicit
+per-screen request, not a reversal of the alphabetical-by-default rule
+above — don't generalize this grouping pattern to other hub screens unless
+asked.
+
+**Relatórios groups, added 2026-07-16, user-directed `[GLOBAL]`.**
+`frontend/app/(tabs)/relatorios.tsx` organizes its cards into named groups
+(`Caixa`, `Margens`, `Pré Vendas`, `Vendas` today — more can be added
+later) instead of one flat alphabetical list. Both the groups themselves
+and the cards inside each group are **always alphabetical, computed at
+render time** (`REPORT_GROUPS.map(...).filter(...).sort(...)` in the
+component) — never hand-ordered in the source arrays. A group with zero
+cards (permission-filtered down to none, or simply not populated yet,
+like `Caixa` today) doesn't render its section at all. Adding a new
+report: put its `ReportTile` entry in the right group's array (any
+position — order doesn't matter there) and it lands in the correct
+alphabetical slot automatically; adding a new group: add an entry to
+`REPORT_GROUPS` the same way. This is the reference implementation if
+another hub screen needs the same "named groups, each independently
+alphabetical" shape in the future — don't invent a different pattern.
 
 ## Permissions Tree Ordering
 
@@ -946,22 +1485,62 @@ alphabetical position by hand.
 
 ### Master User Has Full Permission
 
-**Added 2026-07-13, user-directed `[GLOBAL]`.** The master user always has every
-permission in the system, overriding group grants. Already implemented at the
-single source of truth — `can(key)` in `frontend/src/permissions/index.tsx`
-returns `true` unconditionally when `state.isMaster` is set (checked *before*
-consulting granted keys). The only thing that overrides master is module
-gating (`disabledTelas` — a module switched off in Configurações > Módulos e
-Recursos hides/blocks the screen for master too, checked *before* the master
-bypass — see "Regra de Módulo Ativo" above).
+**Added 2026-07-13, user-directed `[GLOBAL]`. Widened 2026-07-14, then
+narrowed back 2026-07-15 — read the whole section, don't stop at the
+"Widened" paragraph.**
 
+**Correction 2026-07-15, user-directed `[GLOBAL]`** ("só aparece os
+módulos selecionados, independente do usuário. Usuário master continua
+ser o único usuário a acessar a configuração de módulos"): the
+2026-07-14 widening (below) turned out to be wrong for **modules**.
+Module on/off (`controle_configuracao` flags — Posto/Cilindro/Serviços/
+etc.) now applies identically to **every** user, master included —
+`moduleOn(name)` in `frontend/src/permissions/index.tsx` no longer
+bypasses for master, full stop:
+```ts
+const moduleOn = useCallback((name: string) => state.modules[name] === true, [state.modules]);
+```
+Master seeing a Sidebar tab (Posto, Cilindros, ...) or a whole-module
+screen (`if (!moduleOn("Posto")) return <LockedView/>`) now depends
+purely on whether that module is switched on for the company — same as
+any other user. Master remains the **only** user who can *open* the
+"Módulos e Recursos" config screen itself (`app/modulos-recursos.tsx`,
+reached from Configurações) to flip those flags — but that access is
+gated by `isKontacto` at the tile level in `app/(tabs)/configuracoes.tsx`,
+a completely separate mechanism from `moduleOn()`, so it's unaffected by
+this correction.
+
+**Group permissions (`can()`) are unchanged by this correction** — master
+still has access to every **action/screen permission** regardless of
+group (classe) grants:
+- `can(key)` returns `true` unconditionally when `state.isMaster` is set,
+  checked *before* `disabledTelas`.
 - Screen code should call plain `can("TELA.ACAO")` — do **not** add a
-  redundant `|| isMaster` at each call site; `can()` already covers it. (Some
-  screens in this codebase still have the redundant `|| isMaster` from before
-  this was written down explicitly — harmless, but don't copy the pattern
-  into new screens.)
-- This applies to every current and future screen, including the new
-  "Transações" area below — no per-screen master carve-out needed.
+  redundant `|| isMaster` at each call site; the helper already covers it.
+  (Some screens in this codebase still have the redundant `|| isMaster`
+  from before this was written down explicitly — harmless, but don't copy
+  the pattern into new screens.)
+- **Backend module-active checks were already unaffected either way** —
+  e.g. `_modulo_servicos_ativo`/`_modulo_grade_ativo` (see "Regra de Módulo
+  Ativo — Gating por Entidade (Backend)" below) always blocked a write
+  when the module is genuinely off, even for requests made by master.
+  Those checks are data-integrity guards (the company isn't using that
+  segment, so no row should be written against it), never a visibility/
+  permission concern.
+
+<details>
+<summary>2026-07-14 wording (superseded by the 2026-07-15 correction above — kept for history, do not follow)</summary>
+
+("O Usuário Master = Kontacto, tem acesso a todos os módulos e opções
+liberado no sistema independentemente das permissões"). The master user
+(`KONTACTO`) always has access to every module, screen, and action in the
+system, overriding **both** group permission grants **and** module gating.
+`moduleOn(name)` returned `true` unconditionally when `state.isMaster` was
+set — this made whole-module screens/tabs visible to master even when the
+module itself was switched off. **This is exactly the part reversed on
+2026-07-15 above** — do not re-apply it.
+
+</details>
 
 ## Do Not
 

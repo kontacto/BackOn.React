@@ -17,16 +17,20 @@ def _req(**over):
 
 # ---- Cursor / conexão falsos ----
 class FakeCursor:
-    def __init__(self, one=None, rowcount=1):
+    def __init__(self, one=None, rowcount=1, many=None):
         self._one = list(one or [])
         self.rowcount = rowcount
         self.queries = []
+        self._many = list(many or [])
 
     def execute(self, q, p=None):
         self.queries.append((q, p))
 
     def fetchone(self):
         return self._one.pop(0) if self._one else None
+
+    def fetchall(self):
+        return self._many.pop(0) if self._many else []
 
     def close(self):
         pass
@@ -188,3 +192,87 @@ class TestInsertComMock:
         assert r["success"] is True
         joined = " ".join(q[0].upper() for q in cur.queries)
         assert "DELETE FROM CLIENTE_CONTATO WHERE CODIGO=%S" in joined
+
+
+class TestClienteMesaOuComandaHelper:
+    def test_detecta_mesa_por_nome(self):
+        assert cs._cliente_mesa_ou_comanda("M15", None) is True
+
+    def test_detecta_comanda_por_nome(self):
+        assert cs._cliente_mesa_ou_comanda("c1", None) is True
+
+    def test_detecta_mesa_por_fantasia(self):
+        assert cs._cliente_mesa_ou_comanda("Qualquer Nome", "MESA 15") is True
+
+    def test_nome_parecido_mas_nao_e_mesa(self):
+        # "Maria15" não é só letra+dígitos — não deve casar com o padrão.
+        assert cs._cliente_mesa_ou_comanda("Maria15", None) is False
+
+    def test_cliente_comum_nao_e_detectado(self):
+        assert cs._cliente_mesa_ou_comanda("Cliente Teste", "Fantasia LTDA") is False
+
+
+class TestClienteMesaComandaBarBloqueiaRenomeio:
+    """Cliente Mesa/Comanda (módulo Bar) — nome/fantasia não podem ser
+    alterados via UPDATE (CLAUDE.md, seção "Pedido Bar")."""
+
+    def test_bloqueia_renomear_mesa_por_nome(self, monkeypatch):
+        cur = FakeCursor(one=[["M15", None]], rowcount=1)
+        conn = _patch(monkeypatch, cur)
+        r = cs._save_cliente_sync(_req(nome="Mesa Renomeada"), [], [], codigo=50)
+        assert r["success"] is False and "Mesa/Comanda" in r["message"]
+        assert conn.rolled is True
+
+    def test_bloqueia_renomear_fantasia_de_mesa(self, monkeypatch):
+        cur = FakeCursor(one=[["M15", "MESA 15"]], rowcount=1)
+        conn = _patch(monkeypatch, cur)
+        r = cs._save_cliente_sync(_req(nome="M15", nome_fantasia="Outra Coisa"), [], [], codigo=50)
+        assert r["success"] is False and "Mesa/Comanda" in r["message"]
+
+    def test_bloqueia_renomear_comanda(self, monkeypatch):
+        cur = FakeCursor(one=[["C1", None]], rowcount=1)
+        conn = _patch(monkeypatch, cur)
+        r = cs._save_cliente_sync(_req(nome="Comanda Nova"), [], [], codigo=51)
+        assert r["success"] is False and "Mesa/Comanda" in r["message"]
+
+    def test_permite_gravar_mesa_sem_alterar_nome_fantasia(self, monkeypatch):
+        cur = FakeCursor(one=[["M15", None]], rowcount=1)
+        conn = _patch(monkeypatch, cur)
+        r = cs._save_cliente_sync(_req(nome="M15"), [], [], codigo=50)
+        assert r["success"] is True
+
+    def test_cliente_normal_pode_ser_renomeado(self, monkeypatch):
+        cur = FakeCursor(one=[["Cliente Antigo", None]], rowcount=1)
+        conn = _patch(monkeypatch, cur)
+        r = cs._save_cliente_sync(_req(nome="Cliente Novo Nome"), [], [], codigo=52)
+        assert r["success"] is True
+
+
+class TestBuscaClientePorCodigo:
+    """Busca de cliente por código — lista de Pedidos e modal de busca do
+    cadastro de Pedido devem achar cliente digitando o código, não só
+    nome/CPF/telefone."""
+
+    def test_find_clientes_for_pedido_aceita_codigo(self, monkeypatch):
+        cur = FakeCursor(many=[[{"codigo": 42, "nome": "Fulano", "cgc_cpf": "", "telefone": ""}]])
+        _patch(monkeypatch, cur)
+        r = cs._find_clientes_for_pedido_sync("srv", "bd", "42")
+        assert r["success"] is True
+        select_q, params = cur.queries[-1]
+        assert "c.codigo = %s" in select_q
+        assert 42 in params
+        assert r["items"][0]["codigo"] == 42
+
+    def test_list_clientes_aceita_codigo(self, monkeypatch):
+        cur = FakeCursor(one=[{"total": 1}], many=[[{
+            "codigo": 42, "nome": "Fulano", "cgc_cpf": "", "ddd_cli": "", "telefone_cli": "",
+            "e_mail": "", "situacao": "A", "tipo_descricao": "", "lista_negra": 0, "lista_negra_motivo": None,
+        }]])
+        _patch(monkeypatch, cur)
+        from models.schemas import ClientesRequest
+        req = ClientesRequest(servidor="srv", banco="bd", search="42", page=1, size=20)
+        r = cs._list_clientes_sync(req)
+        assert r["success"] is True
+        select_q, params = cur.queries[-1]
+        assert "CAST(c.codigo AS NVARCHAR(20)) LIKE %s" in select_q
+        assert "%42%" in params

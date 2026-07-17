@@ -9,6 +9,7 @@
 // CLAUDE.md.
 import { useEffect, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
+import { Ionicons } from "@/src/components/Ionicons";
 import { colors, radius } from "@/src/theme/colors";
 
 let cssInjetado = false;
@@ -37,9 +38,17 @@ type Props = {
   testID?: string;
   min?: string;
   max?: string;
+  // Ícone opcional à esquerda (mesmo padrão visual de DateField/SelectField)
+  // — não é padrão (opt-in) pra não alterar o visual já validado das telas
+  // que já usam este campo sem ícone.
+  icon?: keyof typeof Ionicons.glyphMap;
+  // Disparado ao apertar Enter no campo — mesma convenção de "Enter avança
+  // pro próximo campo" já usada em outras telas (ex. ClienteSection).
+  // Opcional, não muda o comportamento de quem não passar.
+  onSubmitEditing?: () => void;
 };
 
-export default function WebDateField({ value, onChange, type = "date", disabled, testID, min, max }: Props) {
+export default function WebDateField({ value, onChange, type = "date", disabled, testID, min, max, icon, onSubmitEditing }: Props) {
   const [focused, setFocused] = useState(false);
 
   useEffect(() => { injetarCssDoCampoData(); }, []);
@@ -48,6 +57,7 @@ export default function WebDateField({ value, onChange, type = "date", disabled,
 
   return (
     <View style={[styles.wrap, focused && styles.wrapFocused, disabled && styles.wrapDisabled]}>
+      {icon ? <Ionicons name={icon} size={16} color={colors.muted} /> : null}
       {/* eslint-disable-next-line react/no-unknown-property -- input HTML nativo (build web) */}
       <input
         type={type}
@@ -56,6 +66,12 @@ export default function WebDateField({ value, onChange, type = "date", disabled,
         onChange={(e: any) => onChange(e.target.value)}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
+        onKeyDown={(e: any) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            onSubmitEditing?.();
+          }
+        }}
         disabled={disabled}
         min={min}
         max={max}
@@ -67,12 +83,13 @@ export default function WebDateField({ value, onChange, type = "date", disabled,
 }
 
 const nativeStyle: any = {
-  border: "none", outline: "none", background: "transparent", width: "100%",
+  border: "none", outline: "none", background: "transparent", flex: 1, minWidth: 0,
   fontFamily: "inherit", fontSize: 14, color: colors.onSurface, boxSizing: "border-box", padding: 0,
 };
 
 const styles = StyleSheet.create({
   wrap: {
+    flexDirection: "row", alignItems: "center", gap: 8, minHeight: 42,
     borderWidth: 1, borderColor: colors.border, borderRadius: radius.md,
     backgroundColor: colors.surfaceSecondary, paddingVertical: 10, paddingHorizontal: 10,
   },

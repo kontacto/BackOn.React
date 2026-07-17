@@ -96,7 +96,7 @@ function ClienteCompletoWebScreen({
   router: ReturnType<typeof useRouter>;
   can: (perm: string) => boolean;
 }) {
-  const params = useLocalSearchParams<{ codigo?: string; initial_nome?: string }>();
+  const params = useLocalSearchParams<{ codigo?: string; initial_nome?: string; initial_cgc_cpf?: string }>();
   const editing = !!params.codigo;
   const codigo = params.codigo ? parseInt(String(params.codigo), 10) : null;
   const [tab, setTab] = useState<TabKey>("principais");
@@ -105,6 +105,7 @@ function ClienteCompletoWebScreen({
     editing,
     codigo,
     initialNome: params.initial_nome ? String(params.initial_nome) : undefined,
+    initialCgcCpf: params.initial_cgc_cpf ? String(params.initial_cgc_cpf) : undefined,
     selfRoute: "/cliente-completo",
   });
 
@@ -201,6 +202,45 @@ function ClienteCompletoWebScreen({
 
       <ScrollView contentContainerStyle={[styles.scroll, styles.scrollWeb]} showsVerticalScrollIndicator={false}>
         <View style={styles.webShell}>
+          {/* ============ Identidade — sempre visível, qualquer aba ============
+              Mesmo padrão do Cadastro de Produtos (FrmManPec.frm legado):
+              os campos que identificam QUEM é o registro ficam ACIMA da
+              barra de abas, nunca escondidos ao trocar de aba. Ver
+              CLAUDE.md > "Produto Completo" / decisão do usuário 2026-07-14. */}
+          <View style={styles.card} testID="cliente-completo-identidade">
+            <View style={styles.formGrid}>
+              <Field label={`CGC/CPF ${f.docType === "UNKNOWN" ? "" : `(${f.docType})`}`} style={styles.colHalf}>
+                <TextInput
+                  value={f.cgcCpf}
+                  onChangeText={f.handleCgcCpfChange}
+                  onBlur={f.buscarPorCgc}
+                  placeholder="CPF (11) ou CNPJ (14, aceita letras)"
+                  placeholderTextColor={colors.muted}
+                  style={[styles.input, f.cgcCpfError && styles.inputError]}
+                  autoCapitalize="characters"
+                  testID="cliente-completo-cgc-cpf-input"
+                />
+                {f.cgcCpfError ? (
+                  <Text style={styles.errorText} testID="cliente-completo-cgc-cpf-error">
+                    {f.cgcCpfError}
+                  </Text>
+                ) : null}
+              </Field>
+
+              <Field label="Nome / Razão Social *" style={styles.colHalf}>
+                <TextInput
+                  value={f.nome}
+                  onChangeText={f.setNome}
+                  placeholder="Nome do cliente"
+                  placeholderTextColor={colors.muted}
+                  style={styles.input}
+                  maxLength={60}
+                  testID="cliente-completo-nome-input"
+                />
+              </Field>
+            </View>
+          </View>
+
           {/* ============ Abas ============ */}
           <View style={styles.tabBar}>
             {TABS.filter((t) => (t.key !== "anexos" && t.key !== "contatos") || codigo != null).map((t) => {
@@ -224,36 +264,6 @@ function ClienteCompletoWebScreen({
             <>
               <View style={styles.card} testID="cliente-completo-tab-content-principais">
                 <View style={styles.formGrid}>
-                  <Field label={`CGC/CPF ${f.docType === "UNKNOWN" ? "" : `(${f.docType})`}`} style={styles.colHalf}>
-                    <TextInput
-                      value={f.cgcCpf}
-                      onChangeText={f.handleCgcCpfChange}
-                      onBlur={f.buscarPorCgc}
-                      placeholder="CPF (11) ou CNPJ (14, aceita letras)"
-                      placeholderTextColor={colors.muted}
-                      style={[styles.input, f.cgcCpfError && styles.inputError]}
-                      autoCapitalize="characters"
-                      testID="cliente-completo-cgc-cpf-input"
-                    />
-                    {f.cgcCpfError ? (
-                      <Text style={styles.errorText} testID="cliente-completo-cgc-cpf-error">
-                        {f.cgcCpfError}
-                      </Text>
-                    ) : null}
-                  </Field>
-
-                  <Field label="Nome / Razão Social *" style={styles.colHalf}>
-                    <TextInput
-                      value={f.nome}
-                      onChangeText={f.setNome}
-                      placeholder="Nome do cliente"
-                      placeholderTextColor={colors.muted}
-                      style={styles.input}
-                      maxLength={60}
-                      testID="cliente-completo-nome-input"
-                    />
-                  </Field>
-
                   <Field label="Nome Fantasia" style={styles.colHalf}>
                     <TextInput
                       value={f.nomeFantasia}

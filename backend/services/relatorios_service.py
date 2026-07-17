@@ -234,7 +234,25 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
                     situacao: Optional[str] = None) -> dict:
     """Totais e pedidos do dia (pedido_venda/pedido_venda_prod).
     vendedor None/'' = todos; situacao None/'' = todas; produtos/servicos = soma p_venda*qtd
-    por tipo (pecas/servicos). Inclui margem média do dia (venda líquida - custo)."""
+    por tipo (pecas/servicos). Inclui margem média do dia (venda líquida - custo).
+
+    Data de referência do filtro "hoje": normalmente `pedido_venda.data`
+    (dia em que o pedido foi criado). **Exceção, 2026-07-16, user-directed**
+    ("pedidos faturados (somente) hoje entra na tela principal como hoje"):
+    quando `situacao='PG'` (Faturado), usa `comanda.data` (dia em que o
+    Faturar foi clicado — mesma coluna já usada pelo Fechamento de Caixa,
+    ver `fechamento_caixa_service.py`), não a data de criação do pedido —
+    senão um pedido criado ontem e faturado hoje nunca aparecia no "hoje"
+    com o filtro Faturado, mesmo o dinheiro tendo entrado hoje.
+
+    **"Todos" (sem filtro de situação) — corrigido no mesmo dia**: usa uma
+    condição de UNIÃO (Faturado pela data do Faturar, os demais pela data
+    de criação), não mais só `pedido_venda.data` sozinho — senão "Todos"
+    podia ficar MENOR que "Faturado" isolado (reportado pelo usuário com
+    print comparando os dois: Faturado R$886,70 vs. Todos R$371,70,
+    "não faz sentido"). Confirmado que Aberto/Fechado/Cancelado
+    continuam só por `pedido_venda.data`, sem união — o usuário confirmou
+    explicitamente que esses três não devem mudar."""
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
@@ -251,6 +269,22 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
             vfilter += " AND pv.situacao = %s"
             vparams.append(situacao)
 
+        if situacao == "PG":
+            date_join = "JOIN COMANDA_PED cp ON cp.ped = pv.pedido JOIN comanda cm ON cm.comanda = cp.comanda "
+            date_where = "CAST(cm.data AS DATE) = %s"
+            date_params = [data_iso]
+        elif situacao in (None, "", "all"):
+            date_join = "LEFT JOIN COMANDA_PED cp ON cp.ped = pv.pedido LEFT JOIN comanda cm ON cm.comanda = cp.comanda "
+            date_where = (
+                "((pv.situacao = 'PG' AND CAST(cm.data AS DATE) = %s) "
+                "OR (pv.situacao <> 'PG' AND CAST(pv.data AS DATE) = %s))"
+            )
+            date_params = [data_iso, data_iso]
+        else:
+            date_join = ""
+            date_where = "CAST(pv.data AS DATE) = %s"
+            date_params = [data_iso]
+
         # Totais por pedido (rateando produtos/serviços pelo pedido.total → bate com a lista)
         cur.execute(
             "SELECT ISNULL(pv.total,0) AS total, "
@@ -259,6 +293,7 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
             "  ISNULL(ag.custo_sum,0) AS custo_sum, "
             "  ISNULL(ag.desc_sum,0) AS desc_sum "
             "FROM pedido_venda pv "
+            f"{date_join}"
             "OUTER APPLY (SELECT "
             "    SUM(i.p_venda*i.qtd_pedida) AS item_sum, "
             "    SUM(CASE WHEN sv.codigo IS NOT NULL THEN i.p_venda*i.qtd_pedida ELSE 0 END) AS serv_sum, "
@@ -268,8 +303,8 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
             "  LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
             "  LEFT JOIN servicos sv ON sv.codigo = i.produto "
             "  WHERE i.pedido = pv.pedido AND ISNULL(i.item_cancelado,0)=0) ag "
-            f"WHERE CAST(pv.data AS DATE) = %s{vfilter}",
-            tuple([data_iso] + vparams),
+            f"WHERE {date_where}{vfilter}",
+            tuple(date_params + vparams),
         )
         agg = _ratear_totais_por_pedido(cur.fetchall())
 
@@ -317,28 +352,38 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
             "margem_pct": round((margem_total / venda_total * 100), 2) if venda_total > 0 else 0.0,
         }
 
-        # Lista de movimento do dia (Pedidos + OS) com etiqueta de tipo
+        # Lista de movimento do dia (Pedidos + OS) com etiqueta de tipo.
+        # `situacao`/`situacao_label` sempre incluídos — [user-directed
+        # 2026-07-16] "na tela principal quando for selecionado 'Todos'
+        # cada registro de Pré venda tem que mostrar a sua situação", já
+        # que "Todos" mistura Aberto/Fechado/Faturado/Cancelado na mesma
+        # lista (a tela decide se mostra o rótulo ou não conforme o filtro
+        # ativo, mas o dado já vem sempre pronto).
         movimento = []
         cur.execute(
-            "SELECT TOP 50 pv.pedido, c.nome AS cliente, ISNULL(pv.total,0) AS valor, "
+            "SELECT TOP 50 pv.pedido, pv.situacao, c.nome AS cliente, ISNULL(pv.total,0) AS valor, "
             "       f.nome AS vendedor_nome "
             "FROM pedido_venda pv "
+            f"{date_join}"
             "LEFT JOIN cliente c ON c.codigo = pv.cliente "
             "LEFT JOIN funcionarios f ON f.codigo_int = pv.vendedor "
-            f"WHERE CAST(pv.data AS DATE) = %s{vfilter} "
+            f"WHERE {date_where}{vfilter} "
             "ORDER BY pv.pedido DESC",
-            tuple([data_iso] + vparams),
+            tuple(date_params + vparams),
         )
         for r in cur.fetchall():
+            sit = (r.get("situacao") or "").strip().upper()
             movimento.append({
                 "tipo": "PED",
                 "doc": int(r.get("pedido") or 0),
                 "cliente": (r.get("cliente") or "").strip(),
                 "vendedor_nome": (r.get("vendedor_nome") or "").strip(),
                 "valor": float(r.get("valor") or 0),
+                "situacao": sit,
+                "situacao_label": SIT_LABELS.get(sit, sit),
             })
         cur.execute(
-            "SELECT TOP 50 i.os AS doc, MAX(c.nome) AS cliente, SUM(i.p_venda*i.quant) AS valor "
+            "SELECT TOP 50 i.os AS doc, MAX(o.situacao) AS situacao, MAX(c.nome) AS cliente, SUM(i.p_venda*i.quant) AS valor "
             "FROM os_produto i "
             "JOIN os o ON o.codigo = i.os "
             "LEFT JOIN cliente c ON c.codigo = o.cliente "
@@ -347,12 +392,15 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
             tuple([data_iso] + osparams),
         )
         for r in cur.fetchall():
+            sit = (r.get("situacao") or "").strip().upper()
             movimento.append({
                 "tipo": "OS",
                 "doc": int(r.get("doc") or 0),
                 "cliente": (r.get("cliente") or "").strip(),
                 "vendedor_nome": "",
                 "valor": float(r.get("valor") or 0),
+                "situacao": sit,
+                "situacao_label": SIT_LABELS.get(sit, sit),
             })
         cur.close()
         conn.close()

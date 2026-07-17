@@ -1,6 +1,6 @@
 // Modal "Desconto Geral": informa valor em R$, distribui proporcionalmente entre itens.
 import {
-  ActivityIndicator, Modal, Pressable, Text, TextInput, TouchableOpacity, View,
+  ActivityIndicator, Modal, Platform, Pressable, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 import { Ionicons } from "@/src/components/Ionicons";
 
@@ -9,11 +9,13 @@ import { formatBRL, parseNum, fmtNum } from "@/src/utils/format";
 import { styles } from "./styles";
 import { UsePedidoItens } from "./usePedidoItens";
 
+const isWeb = Platform.OS === "web";
+
 export default function GeneralDiscountModal({ it }: { it: UsePedidoItens }) {
   return (
     <Modal visible={it.geralModalOpen} transparent animationType="slide" onRequestClose={() => it.setGeralModalOpen(false)}>
-      <Pressable style={styles.modalBg} onPress={() => it.setGeralModalOpen(false)}>
-        <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+      <Pressable style={[styles.modalBg, isWeb && styles.modalBgWebCompact]} onPress={() => it.setGeralModalOpen(false)}>
+        <Pressable style={[styles.modalCard, isWeb && styles.modalCardWebCompact]} onPress={(e) => e.stopPropagation()}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Desconto Geral</Text>
             <Pressable onPress={() => it.setGeralModalOpen(false)} hitSlop={8}>

@@ -76,6 +76,35 @@ def _to_json_safe(row: Optional[dict]) -> Optional[dict]:
     return out
 
 
+def friendly_db_error(e: Exception) -> str:
+    """Traduz uma exceção de conexão/consulta ao SQL Server (pymssql/FreeTDS/
+    DB-Lib) numa mensagem em português sem jargão técnico, pra mostrar direto
+    ao usuário final (ex.: tela de login) em vez do texto cru do driver
+    ("DB-Lib error message 20003, severity 6:\\nAdaptive Server connection
+    timed out..."). O texto técnico original continua disponível pra quem
+    precisa depurar via os campos error_line/error_code_line/error_query
+    (ver auth_service.py) — esta função só troca a mensagem PRINCIPAL."""
+    raw = str(e)
+    low = raw.lower()
+    # Nota: pymssql/FreeTDS embrulha vários tipos de falha de conexão sob o
+    # mesmo código numérico (18456) — não dá pra confiar só no número, só no
+    # texto da mensagem (ex.: um timeout de conexão também chega com "18456"
+    # no início, sem ter nada a ver com usuário/senha errados).
+    if "login failed" in low:
+        return "Usuário ou senha do banco de dados incorretos."
+    if "cannot open database" in low:
+        return "O banco de dados configurado não foi encontrado no servidor."
+    if "timed out" in low or "timeout" in low:
+        return ("Não foi possível conectar ao servidor — o tempo de conexão "
+                "esgotou. Verifique se o servidor está ligado e acessível pela rede.")
+    if ("unable to connect" in low or "getaddrinfo" in low or "no such host" in low
+            or "name or service not known" in low or "could not open a connection" in low):
+        return "Não foi possível encontrar o servidor. Verifique o endereço configurado na conexão."
+    if "adaptive server connection failed" in low or "net-lib error" in low:
+        return "Não foi possível conectar ao servidor de banco de dados. Verifique se ele está ligado e acessível."
+    return "Não foi possível conectar ao banco de dados no momento. Tente novamente em instantes."
+
+
 def _err_origin() -> tuple[Optional[str], Optional[str]]:
     """Retorna (arquivo:linha, código_fonte_da_linha) do frame onde a exceção atual ocorreu."""
     import sys

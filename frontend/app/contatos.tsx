@@ -19,6 +19,7 @@ import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
+import { clienteSearchParams } from "@/src/hooks/useClienteForm";
 
 type Conn = Connection;
 
@@ -583,7 +584,7 @@ export default function ContatosScreen() {
         }}
         onCreate={() => {
           setSearchOpen(false);
-          router.push({ pathname: "/cliente-form", params: { initial_nome: searchTerm } });
+          router.push({ pathname: "/cliente-form", params: clienteSearchParams(searchTerm) });
         }}
       />
     </SafeAreaView>

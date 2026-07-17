@@ -1,12 +1,46 @@
 """Clientes — listagem, busca, CRUD (cliente + cliente_end + cliente_tel) e
 validação de CPF/CNPJ (incluindo CNPJ alfanumérico — RFB 2026)."""
 import asyncio
+import re
 from typing import List, Optional
 
 from db.connection import _open_conn, _to_json_safe, _get_col_sizes, _trunc
 from models.schemas import (
     ClientesRequest, ClienteSaveRequest, EnderecoInput, TelefoneInput, ContatoInput,
 )
+
+
+# =====================================================================
+# Cliente Mesa/Comanda (módulo Bar) — registros reservados, não renomeáveis
+# =====================================================================
+_CLIENTE_MESA_COMANDA_RE = re.compile(r"^[MC]\d+$")
+
+
+def _cliente_mesa_ou_comanda(nome: Optional[str], fantasia: Optional[str]) -> bool:
+    """Detecta um cliente reservado do módulo Bar — Mesa (nome no padrão
+    M<numero>, ex. M15) ou Comanda (nome no padrão C<numero>, ex. C1), ou
+    fantasia contendo "MESA". Esses registros são criados na implantação do
+    sistema para representar mesas/comandas físicas do estabelecimento
+    (como uma reserva) — CLAUDE.md, seção "Pedido Bar"."""
+    n = (nome or "").strip().upper()
+    f = (fantasia or "").strip().upper()
+    if _CLIENTE_MESA_COMANDA_RE.match(n):
+        return True
+    if "MESA" in f:
+        return True
+    return False
+
+
+def _nome_exibicao_mesa_comanda(nome: Optional[str], fantasia: Optional[str]) -> str:
+    """Nome pra exibição: cliente Mesa/Comanda reservado mostra o nome
+    fantasia (ex. "MESA 15") em vez do nome bruto ("M15") — pedido do
+    usuário 2026-07-16. Fora desse caso, ou sem fantasia cadastrada,
+    mantém o nome normal."""
+    n = (nome or "").strip()
+    f = (fantasia or "").strip()
+    if f and _cliente_mesa_ou_comanda(nome, fantasia):
+        return f
+    return n
 
 
 # =====================================================================
@@ -102,9 +136,12 @@ def _list_clientes_sync(req: ClientesRequest) -> dict:
         where = ""
         params: tuple = ()
         if search:
-            where = "WHERE c.nome LIKE %s OR c.cgc_cpf LIKE %s OR c.telefone_cli LIKE %s"
+            where = (
+                "WHERE c.nome LIKE %s OR c.cgc_cpf LIKE %s OR c.telefone_cli LIKE %s "
+                "OR CAST(c.codigo AS NVARCHAR(20)) LIKE %s"
+            )
             like = f"%{search}%"
-            params = (like, like, like)
+            params = (like, like, like, like)
 
         cur = conn.cursor(as_dict=True)
         cur.execute(f"SELECT COUNT(*) AS total FROM cliente c {where}", params)
@@ -289,19 +326,49 @@ def _find_clientes_for_pedido_sync(servidor: str, banco: str, term: str, limit: 
         return {"success": False, "message": f"Falha conexão: {e}", "items": []}
     try:
         cur = conn.cursor(as_dict=True)
-        like = f"%{(term or '').strip()}%"
-        cur.execute(
-            f"SELECT TOP {int(limit)} c.codigo, c.nome, c.cgc_cpf, "
-            f"       COALESCE(ct.tel, c.telefone_cli) AS telefone "
-            f"FROM cliente c "
-            f"OUTER APPLY (SELECT TOP 1 tel FROM cliente_tel WHERE codigo=c.codigo ORDER BY sequencia) ct "
-            f"WHERE c.nome LIKE %s OR c.cgc_cpf LIKE %s OR c.telefone_cli LIKE %s OR ct.tel LIKE %s "
-            f"ORDER BY c.nome",
-            (like, like, like, like),
-        )
+        term_stripped = (term or "").strip()
+        # Termo puramente numérico = busca por código exato (não substring) —
+        # digitar "1" não pode trazer os códigos 10, 11, 21 etc. Termo no
+        # padrão Mesa/Comanda (M15, C1 — mesmo regex de
+        # `_cliente_mesa_ou_comanda`) = busca por nome exato, pelo mesmo
+        # motivo: "C1" em LIKE '%C1%' também bate em "C10", "C11" etc.,
+        # trazendo múltiplos resultados e abrindo o modal à toa quando só
+        # existe uma comanda C1. Termo com outras letras (nome comum ou CNPJ
+        # alfanumérico) mantém a busca parcial de sempre.
+        if term_stripped.isdigit():
+            cur.execute(
+                f"SELECT TOP {int(limit)} c.codigo, c.nome, c.fantasia, c.cgc_cpf, "
+                f"       COALESCE(ct.tel, c.telefone_cli) AS telefone "
+                f"FROM cliente c "
+                f"OUTER APPLY (SELECT TOP 1 tel FROM cliente_tel WHERE codigo=c.codigo ORDER BY sequencia) ct "
+                f"WHERE c.codigo = %s "
+                f"ORDER BY c.nome",
+                (int(term_stripped),),
+            )
+        elif _CLIENTE_MESA_COMANDA_RE.match(term_stripped.upper()):
+            cur.execute(
+                f"SELECT TOP {int(limit)} c.codigo, c.nome, c.fantasia, c.cgc_cpf, "
+                f"       COALESCE(ct.tel, c.telefone_cli) AS telefone "
+                f"FROM cliente c "
+                f"OUTER APPLY (SELECT TOP 1 tel FROM cliente_tel WHERE codigo=c.codigo ORDER BY sequencia) ct "
+                f"WHERE UPPER(c.nome) = %s "
+                f"ORDER BY c.nome",
+                (term_stripped.upper(),),
+            )
+        else:
+            like = f"%{term_stripped}%"
+            cur.execute(
+                f"SELECT TOP {int(limit)} c.codigo, c.nome, c.fantasia, c.cgc_cpf, "
+                f"       COALESCE(ct.tel, c.telefone_cli) AS telefone "
+                f"FROM cliente c "
+                f"OUTER APPLY (SELECT TOP 1 tel FROM cliente_tel WHERE codigo=c.codigo ORDER BY sequencia) ct "
+                f"WHERE c.nome LIKE %s OR c.cgc_cpf LIKE %s OR c.telefone_cli LIKE %s OR ct.tel LIKE %s "
+                f"ORDER BY c.nome",
+                (like, like, like, like),
+            )
         items = [{
             "codigo": int(r["codigo"]),
-            "nome": (r.get("nome") or "").strip(),
+            "nome": _nome_exibicao_mesa_comanda(r.get("nome"), r.get("fantasia")),
             "cgc_cpf": (r.get("cgc_cpf") or "").strip(),
             "telefone": (r.get("telefone") or "").strip(),
         } for r in cur.fetchall()]
@@ -325,7 +392,7 @@ def _cliente_resumo_sync(servidor: str, banco: str, codigo: int) -> dict:
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            "SELECT c.codigo, c.nome, c.cgc_cpf, c.e_mail, "
+            "SELECT c.codigo, c.nome, c.fantasia, c.cgc_cpf, c.e_mail, "
             "  COALESCE((SELECT TOP 1 LTRIM(RTRIM(CAST(ddd AS NVARCHAR(4))) + ' ' + tel) FROM cliente_tel WHERE codigo=c.codigo ORDER BY sequencia), '') AS telefone, "
             "  (SELECT TOP 1 LTRIM(RTRIM(ISNULL(endereco,'')+', '+ISNULL(CAST(numero AS NVARCHAR(10)),'') + ' - ' + ISNULL(bairro,'') + ' - ' + ISNULL(cidade,'') + '/' + ISNULL(uf,''))) "
             "    FROM cliente_end WHERE codigo=c.codigo ORDER BY sequencia) AS endereco "
@@ -341,7 +408,7 @@ def _cliente_resumo_sync(servidor: str, banco: str, codigo: int) -> dict:
             "success": True,
             "cliente": {
                 "codigo": int(row["codigo"]),
-                "nome": (row.get("nome") or "").strip(),
+                "nome": _nome_exibicao_mesa_comanda(row.get("nome"), row.get("fantasia")),
                 "cgc_cpf": (row.get("cgc_cpf") or "").strip(),
                 "e_mail": (row.get("e_mail") or "").strip(),
                 "telefone": (row.get("telefone") or "").strip(),
@@ -492,6 +559,20 @@ def _save_cliente_sync(
                 return {"success": False, "message": "Falha ao obter código do novo cliente."}
             cliente_codigo = int(new_id_row[0])
         else:
+            cur.execute("SELECT nome, fantasia FROM cliente WHERE codigo=%s", (codigo,))
+            existing = cur.fetchone()
+            if existing and _cliente_mesa_ou_comanda(existing[0], existing[1]):
+                nome_mudou = (campos["nome"] or "").strip().upper() != (existing[0] or "").strip().upper()
+                fantasia_mudou = (campos["fantasia"] or "").strip().upper() != (existing[1] or "").strip().upper()
+                if nome_mudou or fantasia_mudou:
+                    conn.rollback()
+                    conn.close()
+                    return {
+                        "success": False,
+                        "message": "Este cliente é uma Mesa/Comanda reservada do "
+                                    "estabelecimento — nome e nome fantasia não podem ser alterados.",
+                    }
+
             set_clause = ", ".join(f"{col}=%s" for col in campos.keys())
             cur.execute(
                 f"UPDATE cliente SET {set_clause}, "

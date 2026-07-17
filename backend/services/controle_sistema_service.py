@@ -757,3 +757,43 @@ async def save_direcionamento_impressora(servidor, banco, computador, tipo, impr
 
 async def delete_direcionamento_impressora(servidor, banco, codigo):
     return await asyncio.to_thread(_delete_direcionamento_impressora_sync, servidor, banco, codigo)
+
+
+# =====================================================================
+# Impressão automática de item por Finalidade (Pedido Bar) — ver
+# project_impressao_automatica_finalidade / PENDENCIAS.md > "Pedido Bar" >
+# "Impressão de item". Réplica de `CarregaImpressorasDirecionadas`/
+# `Command1_Click` (FrmManPedBar.frm): no VB6 o cadastro é filtrado também
+# por `computador` (o terminal físico rodando o cliente, que sabia seu
+# próprio hostname) — decisão explícita do usuário (2026-07-16): no
+# navegador não existe um jeito confiável de saber "qual computador é
+# este", então aqui o campo Computador é IGNORADO — qualquer registro
+# cadastrado pra aquela Finalidade vale, não importa o texto salvo em
+# Computador. Quem efetivamente escolhe a impressora física é o próprio
+# usuário no diálogo de impressão do navegador (ver ReciboPedidoModal.tsx)
+# — este lookup só decide SE e QUANDO abrir esse preview automaticamente.
+def _get_direcionamento_por_finalidade_sync(servidor: str, banco: str, tipo: int) -> dict:
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT TOP 1 impressora, automatica FROM direcionamento_impressora "
+            "WHERE tipo=%s ORDER BY automatica DESC",
+            (tipo,),
+        )
+        r = cur.fetchone()
+        cur.close()
+        if not r:
+            return {"success": True, "configurado": False, "automatica": False, "impressora": None}
+        return {
+            "success": True,
+            "configurado": True,
+            "automatica": bool(r.get("automatica")),
+            "impressora": (r.get("impressora") or "").strip(),
+        }
+    finally:
+        conn.close()
+
+
+async def get_direcionamento_por_finalidade(servidor, banco, tipo):
+    return await asyncio.to_thread(_get_direcionamento_por_finalidade_sync, servidor, banco, tipo)

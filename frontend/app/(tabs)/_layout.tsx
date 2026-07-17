@@ -13,6 +13,10 @@ export default function TabsLayout() {
   // Posto) — mesmo mecanismo que já liga/desliga Serviços, Veículos etc.
   // em Cadastros. Ver "Posto de Combustível" na memória de projeto.
   const postoVisivel = isWeb && moduleOn("Posto");
+  // Mesmo mecanismo de Posto — módulo de segmento (indústria/locação de
+  // gás), controle_configuracao.Cilindro. Ver "Cilindros" na memória de
+  // projeto e PENDENCIAS.md.
+  const cilindrosVisivel = isWeb && moduleOn("Cilindro");
 
   return (
     <Tabs
@@ -87,6 +91,14 @@ export default function TabsLayout() {
           title: "Posto",
           href: postoVisivel ? undefined : null,
           tabBarIcon: ({ color, size }) => <Ionicons name="water-outline" size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="cilindros"
+        options={{
+          title: "Cilindros",
+          href: cilindrosVisivel ? undefined : null,
+          tabBarIcon: ({ color, size }) => <Ionicons name="flame-outline" size={size} color={color} />,
         }}
       />
       <Tabs.Screen

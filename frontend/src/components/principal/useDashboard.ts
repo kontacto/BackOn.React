@@ -14,7 +14,14 @@ import { usePermissions } from "@/src/permissions";
 export type DashboardTotals = {
   pedidos: number; os: number; produtos: number; servicos: number; descontos: number; margem: number; margem_pct: number;
 };
-export type MovimentoItem = { tipo: "PED" | "OS"; doc: number; cliente: string; vendedor: string; valor: number };
+export type MovimentoItem = {
+  tipo: "PED" | "OS"; doc: number; cliente: string; vendedor: string; valor: number;
+  // Situação do registro (A/F/PG/C + rótulo já traduzido) — usado pra
+  // mostrar um selo por linha quando o filtro "Todos" está ativo (sem
+  // filtro nenhum, os registros da lista têm situações diferentes entre
+  // si). Pedido explícito do usuário, 2026-07-16.
+  situacao: string; situacaoLabel: string;
+};
 
 const ZERO: DashboardTotals = { pedidos: 0, os: 0, produtos: 0, servicos: 0, descontos: 0, margem: 0, margem_pct: 0 };
 
@@ -108,6 +115,12 @@ export function useDashboard() {
           const doc = Number(m?.doc ?? m?.documento ?? m?.pedido ?? m?.os ?? 0);
           const cliente = String(m?.cliente ?? m?.nome_cliente ?? "").trim();
           const vendedor = String(
+            // `vendedor_nome` é o campo real mandado por
+            // `relatorios_service._dashboard_sync` — faltava aqui, por
+            // isso a coluna Vendedor sempre aparecia vazia (bug achado
+            // 2026-07-16, a pedido do usuário: "apresentar o vendedor de
+            // cada pré-venda").
+            m?.vendedor_nome ??
             m?.funcionario?.nome_guerra ??
             m?.funcionario_nome_guerra ??
             m?.vendedor ??
@@ -116,7 +129,9 @@ export function useDashboard() {
             ""
           ).trim();
           const valor = Number(m?.valor ?? m?.total ?? 0);
-          return { tipo, doc, cliente, vendedor, valor };
+          const situacao = String(m?.situacao ?? "").trim().toUpperCase();
+          const situacaoLabel = String(m?.situacao_label ?? situacao).trim();
+          return { tipo, doc, cliente, vendedor, valor, situacao, situacaoLabel };
         });
         setMovimento(normalizedMov);
       } catch (e) {

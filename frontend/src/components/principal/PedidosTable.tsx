@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 
 import { colors } from "@/src/theme/colors";
 import { formatBRL } from "@/src/utils/format";
+import { SIT_COLOR } from "@/src/components/relatorio/styles";
 import { styles } from "./styles";
 import { MovimentoItem } from "./useDashboard";
 
@@ -13,9 +14,14 @@ type Props = {
   dashLoading: boolean;
   dashError: string | null;
   totalMovimento: number;
+  // Filtro de situação ativo na tela ("" = Todos). Selo de situação por
+  // linha só aparece com "Todos" — com um filtro específico já selecionado
+  // (ex. só "Faturado"), todas as linhas teriam o mesmo selo, redundante.
+  situacaoFiltro: string;
 };
 
-export default function PedidosTable({ movimento, dashLoading, dashError, totalMovimento }: Props) {
+export default function PedidosTable({ movimento, dashLoading, dashError, totalMovimento, situacaoFiltro }: Props) {
+  const mostrarSituacao = !situacaoFiltro;
   const router = useRouter();
   const openItem = (m: MovimentoItem) => {
     if (m.tipo === "OS") router.push({ pathname: "/os-form", params: { codigo: String(m.doc) } });
@@ -67,7 +73,22 @@ export default function PedidosTable({ movimento, dashLoading, dashError, totalM
                 </View>
                 <Text style={styles.pedidoCellValue}>#{m.doc}</Text>
               </View>
-              <Text style={[styles.pedidoCellValue, Platform.OS === "web" && { flex: 2.1 }]} numberOfLines={1}>{m.cliente || "—"}</Text>
+              <View style={[{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 }, Platform.OS === "web" && { flex: 2.1 }]}>
+                <Text style={styles.pedidoCellValue} numberOfLines={1}>{m.cliente || "—"}</Text>
+                {mostrarSituacao && m.situacaoLabel ? (
+                  <View
+                    style={{
+                      backgroundColor: (SIT_COLOR[m.situacao] || colors.muted) + "22",
+                      borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1,
+                    }}
+                    testID={`mov-situacao-${m.tipo}-${m.doc}`}
+                  >
+                    <Text style={{ fontSize: 10, fontWeight: "700", color: SIT_COLOR[m.situacao] || colors.muted }}>
+                      {m.situacaoLabel}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
               <Text style={[styles.pedidoCellValue, { flex: 1.5 }]} numberOfLines={1}>{m.vendedor || "—"}</Text>
               <Text style={[styles.pedidoCellValue, { flex: 1.2, textAlign: "right", fontWeight: "500" }]}>{formatBRL(m.valor)}</Text>
             </Pressable>

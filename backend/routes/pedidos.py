@@ -3,12 +3,16 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 
-from models.schemas import PedidosListRequest, PedidoSaveRequest, ItemSaveRequest, FecharRequest
-from services import pedidos_service, itens_service, log_auditoria_service
+from models.schemas import (
+    PedidosListRequest, PedidoSaveRequest, ItemSaveRequest, FecharRequest,
+    TaxaServicoRequest, PedidoEntregueRequest, FormaPagSimplesRequest,
+    FormaPagamentoAddRequest, FormaPagamentoUpdateRequest, FormaPagamentoDeleteRequest,
+)
+from services import pedidos_service, itens_service, log_auditoria_service, forma_pagamento_service
 
 router = APIRouter()
 
-CAMPOS_PEDIDO = ["cliente", "vendedor", "validade", "obs", "area_atuacao"]
+CAMPOS_PEDIDO = ["cliente", "vendedor", "validade", "obs", "area_atuacao", "previsao_entrega", "hora_entrega", "forma_pag"]
 CAMPOS_ITEM = ["qtd_pedida", "p_normal", "desconto", "acrescimo", "descricao_produto"]
 
 
@@ -36,6 +40,14 @@ def _depois_item_update(req: ItemSaveRequest) -> dict:
 @router.post("/pedidos")
 async def list_pedidos(req: PedidosListRequest):
     return await pedidos_service.list_pedidos(req)
+
+
+@router.get("/pedidos/aberto-por-cliente")
+async def pedido_aberto_por_cliente(cliente: int, servidor: str, banco: str):
+    # Precisa vir ANTES de /pedidos/{pedido} — mesmo formato de path
+    # (um segmento), "aberto-por-cliente" cairia no {pedido}:int e daria
+    # 422 se essa rota viesse depois (ordem de registro importa no FastAPI).
+    return await pedidos_service.pedido_aberto_por_cliente(servidor, banco, cliente)
 
 
 @router.get("/pedidos/{pedido}")
@@ -82,6 +94,138 @@ async def fechar_pedido(pedido: int, req: FecharRequest, request: Request):
             usuario=req.usuario_alteracao, classe=req.classe,
             referencia=str(pedido), descricao=f"Pedido {pedido} fechado",
             campos_alterados=[{"campo": "situacao", "antes": "A", "depois": "F"}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/pedidos/{pedido}/faturar")
+async def faturar_pedido(pedido: int, req: FecharRequest, request: Request):
+    result = await pedidos_service.faturar_pedido(req, pedido)
+    if result.get("success"):
+        situacao_antes = result.get("situacao_antes") or "F"
+        descricao = f"Pedido {pedido} faturado (comanda {result.get('comanda')})"
+        if situacao_antes == "A":
+            descricao += " — fechado automaticamente antes de faturar"
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO", comando="SITUACAO",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido), descricao=descricao,
+            campos_alterados=[{"campo": "situacao", "antes": situacao_antes, "depois": "PG"}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/pedidos/{pedido}/reabrir")
+async def reabrir_pedido(pedido: int, req: FecharRequest, request: Request):
+    result = await pedidos_service.reabrir_pedido(req, pedido)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO", comando="SITUACAO",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido), descricao=f"Pedido {pedido} reaberto",
+            campos_alterados=[{"campo": "situacao", "antes": "F", "depois": "A"}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/pedidos/{pedido}/cancelar")
+async def cancelar_pedido(pedido: int, req: FecharRequest, request: Request):
+    result = await pedidos_service.cancelar_pedido(req, pedido)
+    if result.get("success"):
+        situacao_antes = result.get("situacao_antes") or "A"
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO", comando="SITUACAO",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido), descricao=f"Pedido {pedido} cancelado",
+            campos_alterados=[{"campo": "situacao", "antes": situacao_antes, "depois": "C"}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/pedidos/{pedido}/entregue")
+async def toggle_entregue(pedido: int, req: PedidoEntregueRequest, request: Request):
+    """Checkbox 'Pedido Entregue' — grava direto no clique, fora do fluxo
+    normal de Gravar (FrmManPedBar.frm, Check88_Click)."""
+    result = await pedidos_service.toggle_entregue(req, pedido)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO", comando="ENTREGUE",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido),
+            descricao=f"Pedido {pedido} marcado como {'entregue' if req.entregue else 'não entregue'}",
+            campos_alterados=[{"campo": "pedido_entregue", "depois": req.entregue}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/pedidos/{pedido}/forma-pag-simples")
+async def set_forma_pag_simples(pedido: int, req: FormaPagSimplesRequest, request: Request):
+    """Combobox simples 'Forma de Pagamento' do cabeçalho — grava direto ao
+    trocar, fora do fluxo normal de Gravar (ver
+    `pedidos_service._set_forma_pag_simples_sync` pro porquê)."""
+    result = await pedidos_service.set_forma_pag_simples(req, pedido)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO", comando="FORMA_PAG",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido), descricao=f"Pedido {pedido}: forma de pagamento definida como '{req.forma_pag}'",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+# ---------- forma de pagamento (FrmForPag.frm) ----------
+@router.get("/pedidos/{pedido}/formas-pagamento")
+async def list_formas_pagamento(pedido: int, servidor: str, banco: str):
+    return await forma_pagamento_service.list_formas_pagamento(servidor, banco, "PED", pedido)
+
+
+@router.post("/pedidos/{pedido}/formas-pagamento")
+async def add_forma_pagamento(pedido: int, req: FormaPagamentoAddRequest, request: Request):
+    req.tipo_dav = "PED"
+    result = await forma_pagamento_service.add_forma_pagamento(req, pedido)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO", comando="FORMA_PAG",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido),
+            descricao=f"Pedido {pedido}: forma de pagamento {req.tipo}/{req.forma_pag} lançada (R$ {req.valor})",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.put("/pedidos/{pedido}/formas-pagamento/{sequencia}")
+async def update_forma_pagamento(pedido: int, sequencia: int, req: FormaPagamentoUpdateRequest, request: Request):
+    req.sequencia = sequencia
+    req.tipo_dav = "PED"
+    result = await forma_pagamento_service.update_forma_pagamento(req, pedido)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO", comando="FORMA_PAG",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido),
+            descricao=f"Pedido {pedido}: forma de pagamento {req.tipo}#{sequencia} atualizada (R$ {req.valor})",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.delete("/pedidos/{pedido}/formas-pagamento/{sequencia}")
+async def delete_forma_pagamento(pedido: int, sequencia: int, req: FormaPagamentoDeleteRequest, request: Request):
+    req.sequencia = sequencia
+    req.tipo_dav = "PED"
+    result = await forma_pagamento_service.delete_forma_pagamento(req, pedido)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO", comando="FORMA_PAG",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido), descricao=f"Pedido {pedido}: forma de pagamento {req.tipo}#{sequencia} excluída",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result
@@ -137,5 +281,22 @@ async def delete_item(
             usuario=usuario_alteracao, classe=classe,
             referencia=str(pedido), descricao=f"Item {codauto} excluído do pedido {pedido}",
             campos_alterados=campos or None, ip_origem=_ip(request), plataforma=plataforma,
+        )
+    return result
+
+
+@router.post("/pedidos/{pedido}/taxa-servico")
+async def add_taxa_servico(pedido: int, req: TaxaServicoRequest, request: Request):
+    """Botão 'Incluir Tx Serviço [F10]' do Pedido Bar — 10% do subtotal
+    atual, código de serviço reservado 'S002' (ver itens_service.py)."""
+    result = await itens_service.add_taxa_servico(req, pedido)
+    if result.get("success"):
+        codauto = result.get("codauto")
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO", comando="TX_SERVICO",
+            usuario=req.usuario_codigo, classe=req.classe,
+            referencia=str(pedido),
+            descricao=f"Taxa de serviço incluída no pedido {pedido} (cod {codauto}, R$ {result.get('valor')})",
+            ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

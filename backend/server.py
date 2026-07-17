@@ -29,12 +29,12 @@ from starlette.middleware.cors import CORSMiddleware  # noqa: E402
 
 from db import mongo  # noqa: E402
 from routes import (  # noqa: E402
-    afericao_abastecimento, auth, bomba, clientes, combustivel, combustivel_meta, contatos, controle,
-    controle_config, controle_sistema, custo_combustivel, descontos, entrada_saida_caixa, equipamentos,
+    afericao_abastecimento, auth, bomba, bordero, cilindro, clientes, combustivel, combustivel_meta, contatos,
+    controle, controle_config, controle_sistema, custo_combustivel, descontos, entrada_saida_caixa, equipamentos,
     estoque_combustivel, fechamento_turno, financeiro, fornecedores, funcionarios, gestor_documentos, ilha,
-    impressao, log_auditoria, lookups, margem_lucro, misc, mov_encerrante, notas_fiscais, os, pedidos,
-    permissoes, produtos, produtos_compostos, produtos_niveis, reabertura_turno, relatorios, servicos,
-    tabelas_aux, tanque, tanque_estoque, tanque_nf, telemarketing, usuarios, veiculos, whatsapp,
+    impressao, log_auditoria, lookups, margem_lucro, misc, mov_encerrante, notas_fiscais, os, pedido_completo, pedidos,
+    permissoes, produto_completo, produtos, produtos_compostos, produtos_niveis, reabertura_turno, relatorios,
+    servicos, tabelas_aux, tanque, tanque_estoque, tanque_nf, telemarketing, usuarios, veiculos, viagem, whatsapp,
 )
 
 app = FastAPI()
@@ -46,9 +46,11 @@ api_router.include_router(misc.router)
 api_router.include_router(auth.router)
 api_router.include_router(clientes.router)
 api_router.include_router(produtos.router)
+api_router.include_router(produto_completo.router)
 api_router.include_router(produtos_niveis.router)
 api_router.include_router(log_auditoria.router)
 api_router.include_router(pedidos.router)
+api_router.include_router(pedido_completo.router)
 api_router.include_router(os.router)
 api_router.include_router(whatsapp.router)
 api_router.include_router(descontos.router)
@@ -66,6 +68,9 @@ api_router.include_router(financeiro.router)
 api_router.include_router(entrada_saida_caixa.router)
 api_router.include_router(contatos.router)
 api_router.include_router(equipamentos.router)
+api_router.include_router(cilindro.router)
+api_router.include_router(viagem.router)
+api_router.include_router(bordero.router)
 api_router.include_router(telemarketing.router)
 api_router.include_router(notas_fiscais.router)
 api_router.include_router(usuarios.router)

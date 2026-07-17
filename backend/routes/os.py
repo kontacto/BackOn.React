@@ -3,14 +3,17 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 
-from models.schemas import OSListRequest, OSSaveRequest, OSItemSaveRequest, DescontoGeralRequest, FecharRequest
-from services import os_service, os_itens_service, log_auditoria_service
+from models.schemas import (
+    OSListRequest, OSSaveRequest, OSItemSaveRequest, DescontoGeralRequest, FecharRequest, FormaPagSimplesRequest,
+    FormaPagamentoAddRequest, FormaPagamentoUpdateRequest, FormaPagamentoDeleteRequest,
+)
+from services import os_service, os_itens_service, log_auditoria_service, forma_pagamento_service
 
 router = APIRouter()
 
 CAMPOS_OS = [
     "cliente", "area_atuacao", "descricao_cliente", "obs", "resumo", "status_os", "atendente", "situacao",
-    "placa", "marca", "modelo", "km", "ano", "chassi", "numero_de_serie",
+    "placa", "marca", "modelo", "km", "ano", "chassi", "numero_de_serie", "forma_pagamento",
 ]
 CAMPOS_ITEM_OS = ["quant", "preco_unitario", "desconto", "acrescimo", "descricao_produto_os", "vendedor", "executor"]
 
@@ -98,6 +101,74 @@ async def fechar_os(codigo: int, req: FecharRequest, request: Request):
             usuario=req.usuario_alteracao, classe=req.classe,
             referencia=str(codigo), descricao=f"O.S. {codigo} fechada",
             campos_alterados=[{"campo": "situacao", "antes": "A", "depois": "F"}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/os/{codigo}/forma-pag-simples")
+async def set_forma_pag_simples(codigo: int, req: FormaPagSimplesRequest, request: Request):
+    """Combobox simples 'Forma de Pagamento' do cabeçalho — grava direto ao
+    trocar, fora do fluxo normal de Gravar (ver
+    `os_service._set_forma_pag_simples_sync` pro porquê)."""
+    result = await os_service.set_forma_pag_simples(req, codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS", comando="FORMA_PAG",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo), descricao=f"OS {codigo}: forma de pagamento definida como '{req.forma_pag}'",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+# ---------- forma de pagamento (FrmForPag.frm) ----------
+@router.get("/os/{codigo}/formas-pagamento")
+async def list_formas_pagamento(codigo: int, servidor: str, banco: str):
+    return await forma_pagamento_service.list_formas_pagamento(servidor, banco, "OS", codigo)
+
+
+@router.post("/os/{codigo}/formas-pagamento")
+async def add_forma_pagamento(codigo: int, req: FormaPagamentoAddRequest, request: Request):
+    req.tipo_dav = "OS"
+    result = await forma_pagamento_service.add_forma_pagamento(req, codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS", comando="FORMA_PAG",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo),
+            descricao=f"OS {codigo}: forma de pagamento {req.tipo}/{req.forma_pag} lançada (R$ {req.valor})",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.put("/os/{codigo}/formas-pagamento/{sequencia}")
+async def update_forma_pagamento(codigo: int, sequencia: int, req: FormaPagamentoUpdateRequest, request: Request):
+    req.sequencia = sequencia
+    req.tipo_dav = "OS"
+    result = await forma_pagamento_service.update_forma_pagamento(req, codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS", comando="FORMA_PAG",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo),
+            descricao=f"OS {codigo}: forma de pagamento {req.tipo}#{sequencia} atualizada (R$ {req.valor})",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.delete("/os/{codigo}/formas-pagamento/{sequencia}")
+async def delete_forma_pagamento(codigo: int, sequencia: int, req: FormaPagamentoDeleteRequest, request: Request):
+    req.sequencia = sequencia
+    req.tipo_dav = "OS"
+    result = await forma_pagamento_service.delete_forma_pagamento(req, codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS", comando="FORMA_PAG",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo), descricao=f"OS {codigo}: forma de pagamento {req.tipo}#{sequencia} excluída",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

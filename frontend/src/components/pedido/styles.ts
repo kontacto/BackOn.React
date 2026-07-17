@@ -47,6 +47,10 @@ export const styles = StyleSheet.create({
   },
   resumoRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   resumoText: { fontSize: 13, color: colors.onSurface, flex: 1 },
+  // Versão compacta do resumoBox — botão ao lado do card de nome do
+  // cliente (em vez de abaixo, ocupando a largura toda); toque abre modal
+  // "Dados Principais" com o conteúdo completo.
+  resumoBoxCompact: { width: 340, marginTop: 0, justifyContent: "center" },
   readonlyBox: {
     flexDirection: "row", alignItems: "center", gap: 8,
     backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
@@ -80,6 +84,19 @@ export const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  // Tier "confirmação pontual sobre um único registro" (360–480px, CLAUDE.md
+  // "Padrões de UI — Modais") — mais estreito que modalCardWebCompact
+  // (560px, tier de seleção/busca) porque confirma 1 item (quantidade/
+  // valor/desconto), não navega lista. Usado por AddItemModal/EditItemModal.
+  modalCardWebCompactNarrow: {
+    width: "100%",
+    maxWidth: 420,
+    alignSelf: "center",
+    borderBottomLeftRadius: radius.lg,
+    borderBottomRightRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.md },
   modalTitle: { fontSize: 17, fontWeight: "600", color: colors.onSurface },
   searchWrap: {
@@ -96,6 +113,10 @@ export const styles = StyleSheet.create({
   },
   resultNome: { fontSize: 14, fontWeight: "500", color: colors.onSurface },
   resultSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
+  quickAddBtn: {
+    width: 32, height: 32, borderRadius: radius.pill, backgroundColor: colors.brandPrimary,
+    alignItems: "center", justifyContent: "center", marginLeft: 4,
+  },
   emptyBox: { alignItems: "center", padding: spacing.xl, gap: spacing.md },
   emptyText: { color: colors.muted, fontSize: 13 },
   createBtn: {
@@ -105,8 +126,12 @@ export const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   createBtnText: { color: colors.onBrandPrimary, fontWeight: "500" },
+  // Wrapper que centraliza o toast na tela inteira (nunca ancorado em canto,
+  // nunca esticado de borda a borda) — ver CLAUDE.md > "Padrões de UI —
+  // Modais, Mensagens e Formulários (Web)".
+  toastWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },
   toast: {
-    position: "absolute", left: spacing.lg, right: spacing.lg, top: "45%",
+    maxWidth: 420,
     backgroundColor: colors.brandSecondary,
     paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.md,
     ...Platform.select({
@@ -122,10 +147,19 @@ export const styles = StyleSheet.create({
     alignItems: "center",
   },
   toastText: { color: colors.onBrandPrimary, fontSize: 14, fontWeight: "500", textAlign: "center" },
-  itensHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.lg, marginBottom: spacing.sm },
+  // Botão de abrir/fechar "Dados Principais" — cartão de largura total
+  // (antes era só texto+chevron, sem fundo/borda).
+  itensHeader: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    marginTop: spacing.lg, marginBottom: spacing.sm,
+    width: "100%", alignSelf: "stretch",
+    backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.md,
+  },
   addItemBtn: {
-    flexDirection: "row", alignItems: "center", gap: 4,
-    backgroundColor: colors.brandPrimary, paddingHorizontal: spacing.md, paddingVertical: 7,
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4, height: 36,
+    backgroundColor: colors.brandPrimary, paddingHorizontal: spacing.md,
     borderRadius: radius.pill,
   },
   addItemBtnText: { color: colors.onBrandPrimary, fontWeight: "500", fontSize: 13 },
@@ -143,10 +177,45 @@ export const styles = StyleSheet.create({
   itemTipo: { width: 36, height: 36, borderRadius: radius.sm, alignItems: "center", justifyContent: "center" },
   tagProd: { backgroundColor: colors.brandTertiary },
   tagServ: { backgroundColor: "#fff4e0" },
+  tagTaxaServico: { backgroundColor: "#e6f4ea" },
   itemDesc: { fontSize: 14, fontWeight: "500", color: colors.onSurface },
-  itemCompl: { fontSize: 12, color: colors.brandPrimary, marginTop: 1, fontStyle: "italic" },
   itemSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
   itemTotal: { fontSize: 15, fontWeight: "600", color: colors.brandPrimary },
+  // Card do item do Pedido — tudo em UMA linha (nome, código/qtd/valor,
+  // inclusão, total), pra reduzir a altura de cada card na lista.
+  itemRowCompact: {
+    flexDirection: "row", alignItems: "center", gap: spacing.md,
+    backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
+    paddingVertical: spacing.sm, paddingHorizontal: spacing.md,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  itemDescCompact: { fontSize: 14, fontWeight: "500", color: colors.onSurface, flexShrink: 1, minWidth: 0 },
+  itemSubCompact: { fontSize: 12, color: colors.muted, flexShrink: 1, minWidth: 0 },
+  itemIncluidoEmCompact: { fontSize: 11, color: colors.muted, fontStyle: "italic", flexShrink: 1, minWidth: 0 },
+  itemTotalCompact: { marginLeft: "auto", flexShrink: 0 },
+  // Etiqueta vermelha (só ícone) marcando item com desconto aplicado, na
+  // linha compacta da lista de itens — valor do desconto vai no tooltip
+  // (hover no web, toque no mobile), não no rótulo.
+  descTagCompact: {
+    alignItems: "center", justifyContent: "center", flexShrink: 0,
+    width: 20, height: 20,
+    backgroundColor: colors.error, borderRadius: radius.pill,
+  },
+  descTooltip: {
+    position: "absolute", bottom: "100%", left: 0, marginBottom: 4,
+    backgroundColor: "#1a1a1a", borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm, paddingVertical: 4,
+    zIndex: 10,
+  },
+  descTooltipText: { color: "#fff", fontSize: 11, fontWeight: "600" },
+  // Botão "Imprimir Item" — mesmo formato/tamanho da etiqueta de desconto
+  // acima, cor neutra (não é um alerta, é uma ação disponível sempre).
+  imprimirItemTag: {
+    alignItems: "center", justifyContent: "center", flexShrink: 0,
+    width: 22, height: 22,
+    borderRadius: radius.pill, borderWidth: 1, borderColor: colors.brandPrimary,
+    backgroundColor: colors.brandTertiary,
+  },
   subtotalRow: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
     paddingHorizontal: spacing.md, paddingVertical: spacing.md, marginTop: 4,
@@ -154,31 +223,95 @@ export const styles = StyleSheet.create({
   },
   subtotalLabel: { fontSize: 14, color: colors.onSurface, fontWeight: "500" },
   subtotalValue: { fontSize: 18, fontWeight: "700", color: colors.brandPrimary },
-  descBtn: {
-    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-    paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radius.md,
+  // Toolbar de ações secundárias (Analisar margem/Desconto geral) — pills
+  // compactos acima da lista de itens, ver "Padrões de UI" em CLAUDE.md.
+  itensToolbar: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.lg },
+  toolbarPill: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 36,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill, borderWidth: 1, borderColor: colors.brandPrimary,
+    backgroundColor: colors.brandTertiary,
+  },
+  toolbarPillText: { color: colors.brandPrimary, fontWeight: "600", fontSize: 13 },
+  // Estado "ativo" de um pill do toolbar (ex.: Tx Serviço já incluída) —
+  // mesmo verde já usado no pill de Fechar Pedido.
+  toolbarPillActive: { backgroundColor: colors.success, borderColor: colors.success },
+  toolbarPillActiveText: { color: "#fff" },
+  toolbarPillFechar: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 36,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill, backgroundColor: colors.success,
+  },
+  toolbarPillFecharText: { color: "#fff", fontWeight: "600", fontSize: 13 },
+  toolbarPillFaturar: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 36,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill, backgroundColor: colors.brandPrimary,
+  },
+  toolbarPillFaturarText: { color: "#fff", fontWeight: "600", fontSize: 13 },
+  toolbarPillImprimir: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 36,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill, borderWidth: 1, borderColor: colors.brandPrimary,
+    backgroundColor: colors.brandTertiary,
+  },
+  toolbarPillImprimirText: { color: colors.brandPrimary, fontWeight: "600", fontSize: 13 },
+  // Anexo (Gestor de Documentos) — mesmo estilo outline do Imprimir, entre
+  // Faturar e Imprimir/Cancelar na toolbar.
+  toolbarPillAnexo: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 36,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill, borderWidth: 1, borderColor: colors.brandPrimary,
+    backgroundColor: colors.brandTertiary,
+  },
+  toolbarPillAnexoText: { color: colors.brandPrimary, fontWeight: "600", fontSize: 13 },
+  // Reabrir Pedido — cor amarela (pedido explícito do usuário, 2026-07-16),
+  // usa o par semântico warning/onWarning já existente (mais próximo de
+  // "amarelo" no design system atual — não existe token amarelo puro),
+  // preenchido igual ao Faturar/Cancelar.
+  toolbarPillReabrir: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 36,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill, backgroundColor: colors.warning,
+  },
+  toolbarPillReabrirText: { color: colors.onWarning, fontWeight: "600", fontSize: 13 },
+  // Cancelar Pedido — cor vermelha (pedido explícito do usuário, 2026-07-16),
+  // preenchido igual ao Faturar (ação de destaque, não outline).
+  toolbarPillCancelar: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 36,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.pill, backgroundColor: colors.error,
+  },
+  toolbarPillCancelarText: { color: "#fff", fontWeight: "600", fontSize: 13 },
+  // Cabeçalho "Itens do Pedido (N)" + Subtotal + Descontos concedidos +
+  // Adicionar, tudo em uma faixa acima da lista (flexWrap pra caber em
+  // telas estreitas).
+  itensSummaryRow: {
+    flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between",
+    gap: spacing.sm, marginTop: spacing.sm, marginBottom: spacing.sm,
+  },
+  itensSummaryLeft: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm, flex: 1 },
+  itensSummaryRight: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  subtotalPill: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 36,
+    paddingHorizontal: spacing.md, borderRadius: radius.pill,
+    backgroundColor: colors.brandTertiary,
+  },
+  subtotalPillLabel: { fontSize: 12, color: colors.muted, fontWeight: "500" },
+  subtotalPillValue: { fontSize: 18, color: colors.brandPrimary, fontWeight: "700" },
+  descPill: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, height: 36,
+    paddingHorizontal: spacing.md, borderRadius: radius.pill,
     backgroundColor: "#fdecea", borderWidth: 1, borderColor: "#f5c6cb",
   },
-  descBtnLabel: { fontSize: 13, color: colors.error, fontWeight: "500" },
-  descBtnValue: { fontSize: 14, color: colors.error, fontWeight: "700" },
-  geralBtn: {
-    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
-    paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radius.md,
-    backgroundColor: colors.brandTertiary, borderWidth: 1, borderColor: colors.border,
-  },
-  geralBtnLabel: { fontSize: 13, color: colors.brandPrimary, fontWeight: "500" },
+  descPillLabel: { fontSize: 12, color: colors.error, fontWeight: "500" },
+  descPillValue: { fontSize: 12, color: colors.error, fontWeight: "700" },
   geralEquiv: { fontSize: 12, color: colors.muted, marginTop: -2 },
   deleteBtnWide: {
     paddingHorizontal: spacing.lg, borderRadius: radius.pill, paddingVertical: 13,
     alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: colors.error,
   },
   deleteBtnWideText: { color: colors.error, fontWeight: "600", fontSize: 15 },
-  analiseBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    marginTop: spacing.md, paddingVertical: 13, borderRadius: radius.md,
-    borderWidth: 1, borderColor: colors.brandPrimary, backgroundColor: colors.brandTertiary,
-  },
-  analiseBtnText: { color: colors.brandPrimary, fontWeight: "600", fontSize: 14 },
   fecharBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
     marginTop: spacing.md, paddingVertical: 14, borderRadius: radius.md,

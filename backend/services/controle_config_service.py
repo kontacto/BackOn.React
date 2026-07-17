@@ -55,10 +55,28 @@ CAMPOS = [
 
 _CAMPOS_SET = {c for c, _ in CAMPOS}
 
+# "Bar", "Cilindro" e "Pedido de Venda" são 3 versões diferentes da mesma tela
+# de Pedido de Venda (segmentos de negócio distintos) — mutuamente exclusivos,
+# nunca mais de um ligado ao mesmo tempo. [GLOBAL], 2026-07-15, user-directed.
+# Reforço aqui é defesa em profundidade — a tela já impede isso interativamente
+# (marcar um desmarca os outros dois), ver modulos-recursos.tsx.
+SEGMENTOS_PEDIDO_EXCLUSIVOS = ["Bar", "Cilindro", "Pedido_venda"]
+
 # Mapa: módulo (coluna) -> telas do catálogo de permissões que ele controla.
 # Conforme novos módulos forem desenvolvidos, adicionar aqui.
+#
+# "PEDIDO" (tela "Pedido Bar") e "PEDIDO_COMP" (tela "Pedido Completo") são as
+# duas versões da tela de Pedido de Venda ligadas aos segmentos mutuamente
+# exclusivos acima ([GLOBAL], 2026-07-15, user-directed): com o módulo "Bar"
+# ligado, só "Pedido Bar" aparece no catálogo de permissões; com "Pedido de
+# Venda" ligado, só "Pedido Completo" aparece — nunca os dois ao mesmo tempo,
+# já que Bar/Pedido_venda são exclusivos entre si (SEGMENTOS_PEDIDO_EXCLUSIVOS
+# acima). Cilindro tem sua própria versão de Pedido (ver unificação Pedido de
+# Cilindro em CLAUDE.md) mas ainda não trocou de tela própria — segue sem
+# entrada aqui até essa unificação ser implementada.
 MODULE_TELAS = {
-    "Pedido_venda": ["PEDIDO"],
+    "Pedido_venda": ["PEDIDO_COMP"],
+    "Bar": ["PEDIDO"],
     "Clientes": ["CLIENTE"],
     "servicos": ["SERVICO", "TIPO_SERVICO"],
     "Posto": [
@@ -66,6 +84,7 @@ MODULE_TELAS = {
         "POSTO_REA_TURNO", "POSTO_META", "POSTO_COMBUST", "POSTO_ESTOQUE",
         "POSTO_CUSTO", "POSTO_ILHA", "POSTO_TANQUE", "POSTO_TQ_EST", "POSTO_TQ_NF",
     ],
+    "Cilindro": ["CILINDRO", "CIL_CLIENTE", "CILINDRO_SERIE", "BORDERO_CIL"],
 }
 
 
@@ -94,6 +113,13 @@ def _save_config_sync(servidor: str, banco: str, valores: dict) -> dict:
     campos = [(c, valores[c]) for c in valores if c in _CAMPOS_SET]
     if not campos:
         return {"success": False, "message": "Nenhum campo válido para salvar."}
+    ligados = [c for c, v in campos if v and c in SEGMENTOS_PEDIDO_EXCLUSIVOS]
+    if len(ligados) > 1:
+        return {
+            "success": False,
+            "message": "Bar, Cilindro e Pedido de Venda são segmentos diferentes da mesma "
+                       "tela de Pedido de Venda — só um pode ficar ativo por vez.",
+        }
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:

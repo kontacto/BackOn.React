@@ -85,6 +85,7 @@ export default function PrincipalScreen() {
                 dashLoading={d.dashLoading}
                 dashError={d.dashError}
                 totalMovimento={d.totalMovimento}
+                situacaoFiltro={d.situacaoFiltro}
               />
             </>
           ) : (
@@ -117,6 +118,7 @@ export default function PrincipalScreen() {
                 dashLoading={d.dashLoading}
                 dashError={d.dashError}
                 totalMovimento={d.totalMovimento}
+                situacaoFiltro={d.situacaoFiltro}
               />
             </>
           )}

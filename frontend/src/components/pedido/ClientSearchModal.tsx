@@ -42,6 +42,10 @@ export default function ClientSearchModal({
               style={styles.searchInput}
               autoFocus
               testID="pedido-form-search-input"
+              autoComplete="off"
+              autoCorrect={false}
+              textContentType="none"
+              importantForAutofill="no"
             />
           </View>
           {loading ? <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 12 }} /> : null}

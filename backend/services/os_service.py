@@ -10,9 +10,9 @@ import asyncio
 from typing import Optional
 
 from db.connection import _open_conn, _get_col_sizes, _trunc
-from models.schemas import OSListRequest, OSSaveRequest, FecharRequest
+from models.schemas import OSListRequest, OSSaveRequest, FecharRequest, FormaPagSimplesRequest
 from services.constants import SITUACAO_LABEL
-from services.pedido_common import _check_cliente_ativo
+from services.pedido_common import _check_cliente_ativo, DavPagamento, DAV_OS, _fecha_fpag_dav, _qtd_formas
 from services.permissoes_service import tem_permissao
 
 
@@ -94,6 +94,7 @@ def _get_os_sync(servidor: str, banco: str, codigo: int) -> dict:
             "SELECT o.codigo, o.cliente, o.data_entrada, o.hora_entrada, o.situacao, o.valor, "
             "       o.area_atuacao, o.descricao_cliente, o.obs, o.resumo, o.status_os, o.atendente, "
             "       o.placa, o.marca, o.modelo, o.km, o.ano, o.chassi, o.numero_de_serie, "
+            "       o.forma_pagamento, fp.descricao AS forma_pagamento_descricao, "
             "       c.nome AS cliente_nome, c.cgc_cpf AS cliente_cgc, "
             "       a.descricao AS area_descricao, "
             "       f.nome AS atendente_nome, f.nome_guerra AS atendente_guerra "
@@ -101,6 +102,7 @@ def _get_os_sync(servidor: str, banco: str, codigo: int) -> dict:
             "LEFT JOIN cliente c ON c.codigo = o.cliente "
             "LEFT JOIN area_atuacao a ON a.area = o.area_atuacao "
             "LEFT JOIN funcionarios f ON f.codigo_int = o.atendente "
+            "LEFT JOIN forma_pagamento fp ON fp.codigo = o.forma_pagamento "
             "WHERE o.codigo = %s",
             (codigo,),
         )
@@ -137,6 +139,8 @@ def _get_os_sync(servidor: str, banco: str, codigo: int) -> dict:
                 "ano": (row.get("ano") or "").strip(),
                 "chassi": (row.get("chassi") or "").strip(),
                 "numero_de_serie": (row.get("numero_de_serie") or "").strip(),
+                "forma_pagamento": (row.get("forma_pagamento") or "").strip(),
+                "forma_pagamento_descricao": (row.get("forma_pagamento_descricao") or "").strip(),
             },
         }
     except Exception as e:
@@ -192,6 +196,8 @@ def _save_os_sync(req: OSSaveRequest, codigo: Optional[int]) -> dict:
         status_os = req.status_os if req.status_os is not None else 0
         situacao = (req.situacao or "A").strip().upper() if req.situacao else "A"
 
+        forma_pagamento = (req.forma_pagamento or "")[:3]
+
         if codigo is None:
             # codigo NÃO é identity → gera MAX+1. km e OS_ORIGINAL são NOT NULL.
             cur.execute("SELECT ISNULL(MAX(codigo),0)+1 AS novo FROM os")
@@ -200,21 +206,23 @@ def _save_os_sync(req: OSSaveRequest, codigo: Optional[int]) -> dict:
                 "INSERT INTO os "
                 "(codigo, cliente, data_entrada, hora_entrada, situacao, valor, "
                 " area_atuacao, descricao_cliente, obs, resumo, status_os, atendente, "
-                " placa, marca, modelo, km, ano, chassi, numero_de_serie, OS_ORIGINAL) "
+                " placa, marca, modelo, km, ano, chassi, numero_de_serie, forma_pagamento, OS_ORIGINAL) "
                 "VALUES (%s, %s, CAST(GETDATE() AS DATE), CONVERT(NVARCHAR(8), GETDATE(), 108), "
-                "        %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0)",
+                "        %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0)",
                 (novo, req.cliente, situacao, req.area_atuacao, descricao_cliente, obs, resumo,
-                 status_os, req.atendente, placa, marca, modelo, km, ano, chassi, num_serie),
+                 status_os, req.atendente, placa, marca, modelo, km, ano, chassi, num_serie, forma_pagamento),
             )
             os_id = novo
         else:
             cur.execute(
                 "UPDATE os SET cliente=%s, area_atuacao=%s, descricao_cliente=%s, obs=%s, "
                 " resumo=%s, status_os=%s, atendente=%s, situacao=%s, "
-                " placa=%s, marca=%s, modelo=%s, km=%s, ano=%s, chassi=%s, numero_de_serie=%s "
+                " placa=%s, marca=%s, modelo=%s, km=%s, ano=%s, chassi=%s, numero_de_serie=%s, "
+                " forma_pagamento=%s "
                 "WHERE codigo=%s",
                 (req.cliente, req.area_atuacao, descricao_cliente, obs, resumo, status_os,
-                 req.atendente, situacao, placa, marca, modelo, km, ano, chassi, num_serie, codigo),
+                 req.atendente, situacao, placa, marca, modelo, km, ano, chassi, num_serie,
+                 forma_pagamento, codigo),
             )
             if cur.rowcount == 0:
                 conn.rollback()
@@ -237,6 +245,40 @@ def _save_os_sync(req: OSSaveRequest, codigo: Optional[int]) -> dict:
         return {"success": False, "message": f"Erro ao gravar: {e}"}
 
 
+def _set_forma_pag_simples_sync(req: FormaPagSimplesRequest, codigo: int) -> dict:
+    """Combobox simples 'Forma de Pagamento' do cabeçalho — grava direto ao
+    trocar, fora do fluxo normal de Gravar. Mesmo raciocínio/nome de
+    `pedidos_service._set_forma_pag_simples_sync`, só a tabela/coluna
+    muda (`os.forma_pagamento`, não `pedido_venda.forma_pag`)."""
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT situacao FROM os WHERE codigo=%s", (codigo,))
+        ex = cur.fetchone()
+        if not ex:
+            conn.close()
+            return {"success": False, "message": "OS não encontrada."}
+        sit = (ex.get("situacao") or "").strip().upper()
+        if sit not in ("A", "F"):
+            conn.close()
+            return {"success": False, "message": f"OS '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterada."}
+        forma_pag = (req.forma_pag or "")[:3] or None
+        cur.execute("UPDATE os SET forma_pagamento=%s WHERE codigo=%s", (forma_pag, codigo))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao gravar forma de pagamento: {e}"}
+
+
 async def list_os(req: OSListRequest) -> dict:
     return await asyncio.to_thread(_list_os_sync, req)
 
@@ -249,9 +291,15 @@ async def save_os(req: OSSaveRequest, codigo: Optional[int]) -> dict:
     return await asyncio.to_thread(_save_os_sync, req, codigo)
 
 
+async def set_forma_pag_simples(req: FormaPagSimplesRequest, codigo: int) -> dict:
+    return await asyncio.to_thread(_set_forma_pag_simples_sync, req, codigo)
+
+
 
 def _fechar_os_sync(req: FecharRequest, codigo: int) -> dict:
-    """Fecha a O.S. (situação A -> F). Valida itens e permissão.
+    """Fecha a O.S. (situação A -> F). Valida itens, permissão e forma de
+    pagamento (réplica de `Fecha_FPAG_Dav`, mesmo `Type_FormaPagPedOS`
+    compartilhado com o Pedido — ver `pedido_common.DavPagamento`).
     O estoque das peças já foi movido na INCLUSÃO do item (reservado_os),
     portanto o fechamento NÃO movimenta estoque novamente."""
     try:
@@ -260,7 +308,7 @@ def _fechar_os_sync(req: FecharRequest, codigo: int) -> dict:
         return {"success": False, "message": f"Falha conexão: {e}"}
     try:
         cur = conn.cursor(as_dict=True)
-        cur.execute("SELECT situacao FROM os WHERE codigo=%s", (codigo,))
+        cur.execute("SELECT situacao, valor, forma_pagamento FROM os WHERE codigo=%s", (codigo,))
         ex = cur.fetchone()
         if not ex:
             conn.close()
@@ -279,6 +327,16 @@ def _fechar_os_sync(req: FecharRequest, codigo: int) -> dict:
         if not cur.fetchone():
             conn.close()
             return {"success": False, "message": "Inclua pelo menos um produto ou serviço antes de fechar."}
+        subtotal = float(ex.get("valor") or 0)
+        forma_padrao = (ex.get("forma_pagamento") or "").strip()
+        dav = DavPagamento(tipo=DAV_OS, documento=codigo, situacao="A", valor=subtotal, forma_padrao=forma_padrao)
+        erro = _fecha_fpag_dav(cur, dav)
+        if erro:
+            conn.close()
+            return {"success": False, "message": erro}
+        if _qtd_formas(cur, dav) == 0 and subtotal > 0:
+            conn.close()
+            return {"success": False, "message": "Defina a Forma de Pagamento da O.S.!"}
         cur.execute("UPDATE os SET situacao='F' WHERE codigo=%s", (codigo,))
         conn.commit()
         cur.close()

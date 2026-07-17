@@ -19,6 +19,7 @@ import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
+import { clienteSearchParams } from "@/src/hooks/useClienteForm";
 
 type Conn = Connection;
 
@@ -581,7 +582,7 @@ export default function TelemarketingScreen() {
         loading={searchLoading}
         results={searchResults}
         onPick={(c) => { setSearchOpen(false); carregarCliente(c.codigo); }}
-        onCreate={() => { setSearchOpen(false); router.push({ pathname: "/cliente-form", params: { initial_nome: searchTerm } } as never); }}
+        onCreate={() => { setSearchOpen(false); router.push({ pathname: "/cliente-form", params: clienteSearchParams(searchTerm) } as never); }}
       />
     </SafeAreaView>
   );

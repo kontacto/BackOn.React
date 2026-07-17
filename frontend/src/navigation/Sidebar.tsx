@@ -89,6 +89,8 @@ const POSTO_ROTAS = [
 ];
 for (const rota of POSTO_ROTAS) DETAIL_TO_TAB[rota] = "/posto-combustivel";
 
+DETAIL_TO_TAB["/cilindro-cadastro"] = "/cilindros";
+
 // Rotas pré-autenticação — o menu não faz sentido aqui (usuário ainda não
 // escolheu conexão/logou).
 const HIDDEN_ON: string[] = ["/", "/login", "/connections", "/perfil-usuario"];
@@ -106,6 +108,7 @@ export default function Sidebar() {
     { key: "transacoes", label: "Transações", icon: "swap-horizontal-outline", href: "/transacoes", visible: true },
     { key: "financeiro", label: "Financeiro", icon: "cash-outline", href: "/financeiro", visible: true },
     { key: "posto-combustivel", label: "Posto", icon: "water-outline", href: "/posto-combustivel", visible: moduleOn("Posto") },
+    { key: "cilindros", label: "Cilindros", icon: "flame-outline", href: "/cilindros", visible: moduleOn("Cilindro") },
     { key: "configuracoes", label: "Configurações", icon: "settings-outline", href: "/configuracoes", visible: true },
     { key: "relatorios", label: "Relatórios", icon: "bar-chart-outline", href: "/relatorios", visible: true },
   ];

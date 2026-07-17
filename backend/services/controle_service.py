@@ -37,14 +37,21 @@ def _get_limites_sync(servidor: str, banco: str) -> dict:
 
 
 def _get_empresa_sync(servidor: str, banco: str) -> dict:
-    """Dados da empresa (tabela controle, registro único): fantasia/razão social."""
+    """Dados da empresa (tabela controle, registro único): fantasia/razão
+    social + endereço/documento/telefone (cabeçalho de recibo/impressão,
+    ver `Cabec`/`Pedido_48_COL` no FrmManPedBar.frm) e `cod_rel` (decide se
+    o recibo mostra código interno ou código de fábrica do item)."""
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
         return {"success": False, "message": f"Falha conexão: {e}"}
     try:
         cur = conn.cursor(as_dict=True)
-        cur.execute("SELECT TOP 1 empresa, fantasia, rz_social, uf FROM controle")
+        cur.execute(
+            "SELECT TOP 1 empresa, fantasia, rz_social, uf, endereco, numero, complemento, "
+            "       bairro, cidade, cep, ddd, telefone, CELULAR, cgc, inscr_est, cod_rel "
+            "FROM controle"
+        )
         r = cur.fetchone() or {}
         cur.close(); conn.close()
         return {
@@ -53,6 +60,18 @@ def _get_empresa_sync(servidor: str, banco: str) -> dict:
             "fantasia": (r.get("fantasia") or "").strip() or None,
             "rz_social": (r.get("rz_social") or "").strip() or None,
             "uf": (r.get("uf") or "").strip() or None,
+            "endereco": (r.get("endereco") or "").strip(),
+            "numero": r.get("numero"),
+            "complemento": (r.get("complemento") or "").strip(),
+            "bairro": (r.get("bairro") or "").strip(),
+            "cidade": (r.get("cidade") or "").strip(),
+            "cep": (r.get("cep") or "").strip(),
+            "ddd": (r.get("ddd") or ""),
+            "telefone": (r.get("telefone") or "").strip(),
+            "celular": (r.get("CELULAR") or "").strip(),
+            "cgc": (r.get("cgc") or "").strip(),
+            "inscr_est": (r.get("inscr_est") or "").strip(),
+            "cod_rel": (r.get("cod_rel") or "").strip(),
         }
     except Exception as e:
         try:
@@ -62,9 +81,38 @@ def _get_empresa_sync(servidor: str, banco: str) -> dict:
         return {"success": False, "message": f"Erro: {e}"}
 
 
+def _get_mensagens_pdv_sync(servidor: str, banco: str) -> dict:
+    """Mensagens configuráveis do rodapé do recibo/comanda (tabela
+    `mensagenspdv`, até 5 linhas, centralizadas na impressão)."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "linhas": []}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT TOP 1 linha1, linha2, linha3, linha4, linha5 FROM mensagenspdv")
+        r = cur.fetchone() or {}
+        cur.close(); conn.close()
+        linhas = [
+            (r.get(f"linha{i}") or "").strip()
+            for i in range(1, 6)
+        ]
+        return {"success": True, "linhas": [l for l in linhas if l]}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "linhas": []}
+
+
 async def get_limites(servidor: str, banco: str) -> dict:
     return await asyncio.to_thread(_get_limites_sync, servidor, banco)
 
 
 async def get_empresa(servidor: str, banco: str) -> dict:
     return await asyncio.to_thread(_get_empresa_sync, servidor, banco)
+
+
+async def get_mensagens_pdv(servidor: str, banco: str) -> dict:
+    return await asyncio.to_thread(_get_mensagens_pdv_sync, servidor, banco)

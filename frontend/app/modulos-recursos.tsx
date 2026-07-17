@@ -13,6 +13,15 @@ import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Campo = { campo: string; label: string };
 
+// "Bar", "Cilindro" e "Pedido de Venda" são 3 versões diferentes da mesma
+// tela de Pedido de Venda (segmentos de negócio distintos) — mutuamente
+// exclusivos, nunca mais de um ligado ao mesmo tempo. [GLOBAL],
+// 2026-07-15, user-directed. Ficam agrupados sob "Pedidos" no topo da
+// lista, quebrando a ordem alfabética só nesse caso (mesma exceção já
+// aplicada ao Painel Posto de Combustível — ver CLAUDE.md > "Card List
+// Ordering").
+const SEGMENTOS_PEDIDO_EXCLUSIVOS = ["Bar", "Cilindro", "Pedido_venda"];
+
 export default function ModulosRecursosScreen() {
   const router = useRouter();
   const { reload: reloadPermissions } = usePermissions();
@@ -64,7 +73,17 @@ export default function ModulosRecursosScreen() {
   );
 
   const toggle = (campo: string) => {
-    setValores((v) => ({ ...v, [campo]: !v[campo] }));
+    setValores((v) => {
+      const novo = !v[campo];
+      if (novo && SEGMENTOS_PEDIDO_EXCLUSIVOS.includes(campo)) {
+        // Ligar um dos 3 segmentos de Pedido de Venda desliga os outros
+        // dois automaticamente — mutuamente exclusivos.
+        const next = { ...v };
+        SEGMENTOS_PEDIDO_EXCLUSIVOS.forEach((c) => { next[c] = c === campo; });
+        return next;
+      }
+      return { ...v, [campo]: novo };
+    });
   };
 
   const handleSave = async () => {
@@ -90,6 +109,25 @@ export default function ModulosRecursosScreen() {
     }
   };
 
+  const pedidosCampos = SEGMENTOS_PEDIDO_EXCLUSIVOS
+    .map((c) => campos.find((x) => x.campo === c))
+    .filter((c): c is Campo => !!c);
+  const outrosCampos = campos.filter((c) => !SEGMENTOS_PEDIDO_EXCLUSIVOS.includes(c.campo));
+
+  const renderRow = (item: Campo) => {
+    const on = !!valores[item.campo];
+    return (
+      <Pressable key={item.campo} style={styles.row} onPress={() => toggle(item.campo)} testID={`mod-${item.campo}`}>
+        <Ionicons
+          name={on ? "checkbox" : "square-outline"}
+          size={22}
+          color={on ? colors.brandPrimary : colors.muted}
+        />
+        <Text style={styles.rowLabel}>{item.label}</Text>
+      </Pressable>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="modulos-recursos-screen">
       <View style={styles.header}>
@@ -110,21 +148,21 @@ export default function ModulosRecursosScreen() {
         <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 24 }} />
       ) : (
         <FlatList
-          data={campos}
+          data={outrosCampos}
           keyExtractor={(c) => c.campo}
-          renderItem={({ item }) => {
-            const on = !!valores[item.campo];
-            return (
-              <Pressable style={styles.row} onPress={() => toggle(item.campo)} testID={`mod-${item.campo}`}>
-                <Ionicons
-                  name={on ? "checkbox" : "square-outline"}
-                  size={22}
-                  color={on ? colors.brandPrimary : colors.muted}
-                />
-                <Text style={styles.rowLabel}>{item.label}</Text>
-              </Pressable>
-            );
-          }}
+          renderItem={({ item }) => renderRow(item)}
+          ListHeaderComponent={
+            pedidosCampos.length > 0 ? (
+              <View testID="mod-grupo-pedidos">
+                <Text style={styles.groupTitle}>Pedidos</Text>
+                <Text style={styles.groupHint}>
+                  Bar, Cilindro e Pedido de Venda são versões diferentes da mesma tela — só uma pode ficar ativa.
+                </Text>
+                {pedidosCampos.map((item) => renderRow(item))}
+                <View style={styles.groupDivider} />
+              </View>
+            ) : null
+          }
           contentContainerStyle={{ paddingVertical: spacing.sm, paddingBottom: 110 }}
         />
       )}
@@ -172,6 +210,12 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   rowLabel: { fontSize: 15, color: colors.onSurface, flex: 1 },
+  groupTitle: {
+    fontSize: 12, fontWeight: "700", color: colors.brandPrimary, textTransform: "uppercase",
+    letterSpacing: 0.5, paddingHorizontal: spacing.lg, paddingTop: spacing.sm,
+  },
+  groupHint: { fontSize: 12, color: colors.muted, paddingHorizontal: spacing.lg, marginTop: 2, marginBottom: 4 },
+  groupDivider: { height: 1, backgroundColor: colors.border, marginHorizontal: spacing.lg, marginTop: spacing.sm, marginBottom: spacing.xs },
   saveBtn: {
     position: "absolute",
     left: spacing.lg,

@@ -71,13 +71,27 @@ function formatDate(iso: string | null) {
   return d && m && y ? `${d}/${m}/${y}` : iso;
 }
 
+// Painel "Pedidos Abertos" do Pedido Bar (FrmManPedBar.frm) — filtros por
+// tipo do CLIENTE (cliente.cliente_forn), data-driven: só existem se
+// cadastrados em tipo_cliente com essas descrições exatas.
+const TIPOS_CLIENTE_BAR = ["MESA", "BALCÃO", "BALCAO", "COMANDA", "ENTREGA"];
+function normalizaDescricao(s: string): string {
+  return (s || "").trim().toUpperCase();
+}
+
+const ORDENAR_POR_OPCOES: { value: string; label: string }[] = [
+  { value: "abertura", label: "Abertura" },
+  { value: "tipo", label: "Tipo" },
+  { value: "cliente", label: "Cliente" },
+];
+
 export default function PedidosScreen() {
   const router = useRouter();
-  const { can, isManagerFuncao } = usePermissions();
+  const { can, isManagerFuncao, moduleOn } = usePermissions();
   const feedback = useFeedback();
   const [conn, setConn] = useState<Connection | null>(null);
   const [search, setSearch] = useState("");
-  const [situacao, setSituacao] = useState("");
+  const [situacao, setSituacao] = useState("A");
   const [vendedor, setVendedor] = useState<string | number | null>(null);
   const [vendedorOpts, setVendedorOpts] = useState<SelectOption[]>([]);
   const [ownVendedor, setOwnVendedor] = useState<number | null>(null);
@@ -89,6 +103,12 @@ export default function PedidosScreen() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const aborter = useRef<AbortController | null>(null);
+
+  // Filtros do painel "Pedidos Abertos" (só no segmento Bar)
+  const [tiposClienteOpts, setTiposClienteOpts] = useState<{ codigo: number; label: string }[]>([]);
+  const [tiposClienteSel, setTiposClienteSel] = useState<number[]>([]);
+  const [dataEntrega, setDataEntrega] = useState<string | null>(null);
+  const [ordenarPor, setOrdenarPor] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -116,8 +136,26 @@ export default function PedidosScreen() {
           // silencioso
         }
       }
+      // Painel "Pedidos Abertos" (Bar) — Mesa/Balcão/Comanda/Entrega são
+      // linhas específicas em tipo_cliente; só aparecem se cadastradas
+      // (mesmo comportamento data-driven do legado, CataTipoCliente()).
+      if (c && moduleOn("Bar")) {
+        try {
+          const base = c.api.replace(/\/+$/, "");
+          const qs = `servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`;
+          const j = await fetch(`${base}/api/tipo-cliente?${qs}`).then((r) => r.json());
+          const tipos: { codigo: number; descricao: string }[] = Array.isArray(j?.items) ? j.items : [];
+          setTiposClienteOpts(
+            tipos
+              .filter((t) => TIPOS_CLIENTE_BAR.includes(normalizaDescricao(t.descricao || "")))
+              .map((t) => ({ codigo: t.codigo, label: (t.descricao || "").trim() }))
+          );
+        } catch {
+          // silencioso
+        }
+      }
     })();
-  }, [isManagerFuncao]);
+  }, [isManagerFuncao, moduleOn]);
 
   const effVendedor = isManagerFuncao
     ? vendedor == null
@@ -131,6 +169,7 @@ export default function PedidosScreen() {
     async (
       term: string, sit: string, vend: string, di: string | null, df: string | null,
       pg: number, append: boolean,
+      tiposCliente: number[], dataEntregaFiltro: string | null, ordenar: string | null,
     ) => {
       if (!conn) return;
       if (aborter.current) aborter.current.abort();
@@ -147,6 +186,9 @@ export default function PedidosScreen() {
             search: term, situacao: sit, vendedor: vend,
             data_ini: di, data_fim: df,
             page: pg, size: 20,
+            tipos_cliente: tiposCliente.length ? tiposCliente : null,
+            data_entrega: dataEntregaFiltro,
+            ordenar_por: ordenar,
           }),
           signal: ac.signal,
         });
@@ -176,21 +218,27 @@ export default function PedidosScreen() {
     if (!conn) return;
     const t = setTimeout(() => {
       setPage(1);
-      load(search, situacao, effVendedor, dataIni, dataFim, 1, false);
+      load(search, situacao, effVendedor, dataIni, dataFim, 1, false, tiposClienteSel, dataEntrega, ordenarPor);
     }, 350);
     return () => clearTimeout(t);
-  }, [search, situacao, effVendedor, dataIni, dataFim, conn, load]);
+  }, [search, situacao, effVendedor, dataIni, dataFim, conn, load, tiposClienteSel, dataEntrega, ordenarPor]);
 
   useFocusEffect(useCallback(() => {
-    if (conn) load(search, situacao, effVendedor, dataIni, dataFim, 1, false);
-  }, [conn, search, situacao, effVendedor, dataIni, dataFim, load]));
+    if (conn) load(search, situacao, effVendedor, dataIni, dataFim, 1, false, tiposClienteSel, dataEntrega, ordenarPor);
+  }, [conn, search, situacao, effVendedor, dataIni, dataFim, load, tiposClienteSel, dataEntrega, ordenarPor]));
 
   const loadMore = () => {
     if (loading || items.length >= total) return;
     const next = page + 1;
     setPage(next);
-    load(search, situacao, effVendedor, dataIni, dataFim, next, true);
+    load(search, situacao, effVendedor, dataIni, dataFim, next, true, tiposClienteSel, dataEntrega, ordenarPor);
   };
+
+  const toggleTipoCliente = (codigo: number) => {
+    setTiposClienteSel((prev) => (prev.includes(codigo) ? prev.filter((c) => c !== codigo) : [...prev, codigo]));
+  };
+
+  const hasBarFilter = tiposClienteSel.length > 0 || !!dataEntrega || !!ordenarPor;
 
   const clearDateFilters = () => {
     setDataIni(null);
@@ -281,6 +329,73 @@ export default function PedidosScreen() {
               />
             </View>
           ) : null}
+
+          {/* Painel "Pedidos Abertos" (FrmManPedBar.frm) — só no segmento
+              Bar. Mesa/Balcão/Comanda/Entrega filtram pelo TIPO DO CLIENTE
+              (cliente.cliente_forn), não por um tipo de pedido próprio. */}
+          {moduleOn("Bar") ? (
+            <View style={{ marginTop: spacing.md }} testID="pedidos-bar-filters">
+              <View style={styles.filterHeader}>
+                <Text style={styles.filterTitle}>Pedidos Abertos</Text>
+                {hasBarFilter ? (
+                  <Pressable
+                    onPress={() => { setTiposClienteSel([]); setDataEntrega(null); setOrdenarPor(null); }}
+                    style={({ pressed }) => [styles.clearBtn, pressed && { opacity: 0.7 }]}
+                    testID="pedidos-clear-bar-filters"
+                    hitSlop={6}
+                  >
+                    <Ionicons name="close-circle-outline" size={14} color={colors.brandPrimary} />
+                    <Text style={styles.clearBtnText}>Limpar</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+
+              {tiposClienteOpts.length > 0 ? (
+                <View style={styles.barTiposRow}>
+                  {tiposClienteOpts.map((t) => {
+                    const sel = tiposClienteSel.includes(t.codigo);
+                    return (
+                      <Pressable
+                        key={t.codigo}
+                        onPress={() => toggleTipoCliente(t.codigo)}
+                        style={styles.barCheckRow}
+                        testID={`pedidos-tipo-cliente-${t.codigo}`}
+                      >
+                        <Ionicons name={sel ? "checkbox" : "square-outline"} size={18} color={colors.brandPrimary} />
+                        <Text style={styles.barCheckLabel}>{t.label}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ) : null}
+
+              <Text style={[styles.filterTitle, { marginTop: spacing.sm, marginBottom: 4 }]}>Ordenar por</Text>
+              <View style={styles.chipsRowWrap}>
+                {ORDENAR_POR_OPCOES.map((o) => {
+                  const sel = ordenarPor === o.value;
+                  return (
+                    <Pressable
+                      key={o.value}
+                      onPress={() => setOrdenarPor(sel ? null : o.value)}
+                      style={({ pressed }) => [styles.chip, sel && styles.chipSel, pressed && { opacity: 0.7 }]}
+                      testID={`pedidos-ordenar-${o.value}`}
+                    >
+                      <Text style={[styles.chipText, sel && { color: colors.brandPrimary }]}>{o.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <View style={{ marginTop: spacing.sm }}>
+                <DateField
+                  label="Data de Entrega em"
+                  value={dataEntrega}
+                  onChange={setDataEntrega}
+                  testID="pedidos-data-entrega"
+                />
+              </View>
+            </View>
+          ) : null}
         </View>
       ) : null}
     </View>
@@ -314,7 +429,7 @@ export default function PedidosScreen() {
             size={22}
             color={colors.onBrandPrimary}
           />
-          {hasDateFilter ? <View style={styles.filterDot} /> : null}
+          {hasDateFilter || hasBarFilter ? <View style={styles.filterDot} /> : null}
         </Pressable>
       </View>
 
@@ -333,12 +448,14 @@ export default function PedidosScreen() {
         renderItem={({ item }) => (
           <Pressable
             onPress={() => {
-              // Enquanto "Pedido Completo" não existe, abrir um item só
-              // funciona pra quem tem a pré-venda rápida (PEDIDO) — pra
-              // quem só tem PEDIDO_COMP, o clique ainda não tem efeito.
-              // Ver CLAUDE.md > "Transações Screens Strategy".
+              // Quem tem a pré-venda rápida (PEDIDO) continua indo pro
+              // formulário rápido, sem mudança de comportamento — quem só
+              // tem PEDIDO_COMP abre o Pedido Completo (web). Ver CLAUDE.md
+              // > "Transações Screens Strategy".
               if (can("PEDIDO.ABRIR")) {
                 router.push({ pathname: "/pedido-form", params: { pedido: String(item.pedido) } });
+              } else if (can("PEDIDO_COMP.ABRIR")) {
+                router.push({ pathname: "/pedido-completo", params: { pedido: String(item.pedido) } });
               }
             }}
             style={({ pressed }) => [styles.card, pressed && { opacity: 0.7 }]}
@@ -361,9 +478,9 @@ export default function PedidosScreen() {
         )}
       />
 
-      {can("PEDIDO.GRAVAR") ? (
+      {can("PEDIDO.GRAVAR") || can("PEDIDO_COMP.GRAVAR") ? (
         <Pressable
-          onPress={() => router.push("/pedido-form")}
+          onPress={() => router.push(can("PEDIDO.GRAVAR") ? "/pedido-form" : "/pedido-completo")}
           style={({ pressed }) => [styles.fab, FAB_SHADOW_STYLE, pressed && { opacity: 0.85 }]}
           hitSlop={8}
           testID="pedidos-fab-new"
@@ -431,6 +548,10 @@ const styles = StyleSheet.create({
   clearBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
   clearBtnText: { fontSize: 12, color: colors.brandPrimary, fontWeight: "500" },
   filterRow: { flexDirection: "row", gap: 8 },
+  chipsRowWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  barTiposRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md, marginBottom: spacing.sm },
+  barCheckRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  barCheckLabel: { fontSize: 13, color: colors.onSurface, fontWeight: "500" },
   card: {
     flexDirection: "row", alignItems: "center", gap: spacing.md,
     backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,

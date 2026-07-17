@@ -18,7 +18,7 @@ type Entry = {
 
 export default function CadastrosScreen() {
   const router = useRouter();
-  const { can, moduleOn, isMaster } = usePermissions();
+  const { can, moduleOn } = usePermissions();
 
   const entries = useMemo<Entry[]>(
     () => [
@@ -43,6 +43,11 @@ export default function CadastrosScreen() {
         label: "Produtos",
         hint: "Catálogo de produtos",
         icon: "cube-outline",
+        // Sempre abre a lista compartilhada primeiro (produtos.tsx, mesma
+        // tela usada pelo picker de item de Pedido/O.S. e por Serviços,
+        // filtrada por tipo=P) — mesmo padrão de "Serviços" abaixo. No web,
+        // tocar num item (ou "Novo") abre o Cadastro de Produtos completo;
+        // no mobile continua só como catálogo/consulta.
         route: "/produtos?tipo=P",
         visible: can("PRODUTO.ABRIR"),
       },
@@ -59,7 +64,11 @@ export default function CadastrosScreen() {
         label: "Serviços",
         hint: "Cadastro e manutenção de serviços",
         icon: "construct-outline",
-        route: "/servicos",
+        // Mesmo padrão de Produtos: abre a lista compartilhada (produtos.tsx,
+        // já usada pelo picker de item de Pedido/O.S. e desenvolvida pro
+        // mobile — não mexer nesse comportamento), filtrada por tipo=S; de
+        // lá o toque num item (web) abre servicos.tsx só como formulário.
+        route: "/produtos?tipo=S",
         visible: Platform.OS === "web" && can("SERVICO.ABRIR") && moduleOn("servicos"),
       },
       {
@@ -69,10 +78,10 @@ export default function CadastrosScreen() {
         icon: "car-outline",
         route: "/veiculos",
         // Liberada pelas flags de módulo "Cilindro" OU "Emite MDF-e"
-        // (Configurações > Módulos e Recursos) OU pelo usuário master —
-        // pedido explícito do usuário, diferente do padrão "servicos" (que
-        // não abre exceção pro master).
-        visible: Platform.OS === "web" && can("VEICULOS.ABRIR") && (moduleOn("Cilindro") || moduleOn("emite_mdfe") || isMaster),
+        // (Configurações > Módulos e Recursos) — sem exceção pro master
+        // desde 2026-07-15 (correção [GLOBAL]: módulo vale igual pra todo
+        // mundo, ver CLAUDE.md > "Master User Has Full Permission").
+        visible: Platform.OS === "web" && can("VEICULOS.ABRIR") && (moduleOn("Cilindro") || moduleOn("emite_mdfe")),
       },
       {
         key: "funcionarios",
@@ -134,7 +143,7 @@ export default function CadastrosScreen() {
         visible: Platform.OS === "web" && (can("MARCAS.ABRIR") || can("MODELOS.ABRIR") || can("AREA.ABRIR") || can("AREA_ATUACAO.ABRIR")),
       },
     ],
-    [can, moduleOn, isMaster]
+    [can, moduleOn]
   );
 
   const visible = entries.filter((e) => e.visible).sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));

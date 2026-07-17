@@ -59,6 +59,14 @@ class PedidosListRequest(BaseModel):
     data_fim: Optional[str] = None  # ISO YYYY-MM-DD
     page: int = 1
     size: int = 20
+    # Filtros do painel "Pedidos Abertos" do Pedido Bar (FrmManPedBar.frm)
+    # — tela old-VB6 filtra pelo tipo do CLIENTE (cliente.cliente_forn),
+    # não por um tipo de pedido: os "tipos" Mesa/Balcão/Entrega/Comanda são
+    # linhas específicas em `tipo_cliente` (descricao='MESA'/'BALCÃO'/
+    # 'ENTREGA'/'COMANDA'), data-driven (só existem se cadastradas).
+    tipos_cliente: Optional[List[int]] = None  # códigos de tipo_cliente pra filtrar
+    data_entrega: Optional[str] = None  # ISO YYYY-MM-DD — previsao_entrega <= data_entrega
+    ordenar_por: Optional[str] = None  # "abertura" | "tipo" | "cliente"
 
 
 class PedidoSaveRequest(BaseModel):
@@ -69,9 +77,97 @@ class PedidoSaveRequest(BaseModel):
     validade: Optional[str] = None     # ISO date YYYY-MM-DD
     obs: Optional[str] = ""
     area_atuacao: Optional[int] = None  # area_atuacao.area (FK)
+    previsao_entrega: Optional[str] = None  # ISO date YYYY-MM-DD (pedido_venda.previsao_entrega)
+    hora_entrega: Optional[str] = None      # HH:MM ou HH:MM:SS (pedido_venda.hora_entrega)
+    forma_pag: Optional[str] = None    # forma_pagamento.codigo — combobox simples (1 forma só)
     usuario_alteracao: Optional[int] = None  # só pro log de auditoria
     classe: Optional[int] = None             # grupo do usuário — só pro log de auditoria
     plataforma: Optional[str] = None         # "web"/"android"/"ios" — só pro log de auditoria
+
+
+class FormaPagamentoAddRequest(BaseModel):
+    """Lança uma forma de pagamento (modal "Forma de Pagamento", FrmForPag.frm
+    — tela genérica reaproveitada por Pedido Bar, Pedido Completo e O.S. no
+    legado, mesmo `Type_FormaPagPedOS`) — um dos 8 tipos
+    (`forma_pagamento.tipo`), cada um com um subconjunto de campos extras
+    (os demais ficam None/ignorados)."""
+    servidor: str
+    banco: str
+    tipo_dav: str = "PED"  # PED (Pedido Bar/Completo) ou OS
+    tela: Optional[str] = None  # tela da permissão (PEDIDO/PEDIDO_COMP/OS) — Pedido Bar e Completo
+    # compartilham as mesmas tabelas (tipo_dav="PED"), mas têm permissões
+    # próprias; default fica a cargo do service (_TELA_POR_DAV) se omitido.
+    tipo: str            # DI/CH/CC/CD/DU/TI/VA/FI
+    forma_pag: str        # forma_pagamento.codigo
+    valor: float
+    vencimento: Optional[str] = None  # ISO date — CH/CC/CD/VA "Bom Para", DU/FI "Vencimento"
+    # Cheque
+    cod_banco: Optional[int] = None
+    agencia: Optional[int] = None
+    conta: Optional[str] = None
+    numero_ch: Optional[int] = None
+    nome_cheque: Optional[str] = None
+    telefone: Optional[str] = None
+    # Cartão crédito/débito
+    num_cartao1: Optional[int] = None
+    num_cartao2: Optional[int] = None
+    num_cartao3: Optional[int] = None
+    num_cartao4: Optional[int] = None
+    mes_validade: Optional[int] = None
+    ano_validade: Optional[int] = None
+    parcelas: Optional[int] = None
+    cod_administradora: Optional[int] = None
+    cod_parcelador: Optional[str] = None
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    master: Optional[bool] = False
+    plataforma: Optional[str] = None
+
+
+class FormaPagamentoUpdateRequest(FormaPagamentoAddRequest):
+    sequencia: int
+
+
+class FormaPagamentoDeleteRequest(BaseModel):
+    servidor: str
+    banco: str
+    tipo_dav: str = "PED"
+    tela: Optional[str] = None
+    tipo: str
+    sequencia: int
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    master: Optional[bool] = False
+    plataforma: Optional[str] = None
+
+
+class PedidoEntregueRequest(BaseModel):
+    """Checkbox 'Pedido Entregue' do Pedido Bar (FrmManPedBar.frm,
+    Check88_Click) — grava direto, fora do fluxo normal de Gravar."""
+    servidor: str
+    banco: str
+    entregue: bool
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class FormaPagSimplesRequest(BaseModel):
+    """Combobox simples 'Forma de Pagamento' do cabeçalho (não o modal de
+    múltiplas formas) — grava direto ao trocar a seleção, fora do fluxo
+    normal de Gravar. Sem isso, escolher a forma aqui só ficava em estado
+    local até o usuário clicar em Gravar; clicar direto em Faturar/Fechar
+    antes disso via `pedido_venda.forma_pag`/`os.forma_pagamento` ainda
+    vazio, e a validação de forma de pagamento bloqueava mesmo com uma
+    forma "selecionada" na tela (bug reportado pelo usuário 2026-07-16).
+    Reutilizado por Pedido (Bar e Completo, mesma tabela pedido_venda) e
+    O.S. — mesmo padrão de `FecharRequest`."""
+    servidor: str
+    banco: str
+    forma_pag: str = ""
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
 
 
 class ItemSaveRequest(BaseModel):
@@ -88,6 +184,18 @@ class ItemSaveRequest(BaseModel):
     funcao: Optional[int] = None           # 1=gerente,2=supervisor,3=vendedor (p/ validar limite)
     classe: Optional[int] = None           # grupo do usuário — só pro log de auditoria
     plataforma: Optional[str] = None       # "web"/"android"/"ios" — só pro log de auditoria
+
+
+class TaxaServicoRequest(BaseModel):
+    """Botão 'Incluir Tx Serviço' do Pedido Bar (FrmManPedBar.frm, Command50_Click)
+    — inclui (ou atualiza, se já existir) uma linha de 10% do subtotal atual
+    como serviço 'S002'. Idempotente: não empilha uma nova linha a cada
+    clique (decisão explícita do usuário, 2026-07-15 — diferente do legado)."""
+    servidor: str
+    banco: str
+    usuario_codigo: Optional[int] = -2
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
 
 
 class OSListRequest(BaseModel):
@@ -120,6 +228,7 @@ class OSSaveRequest(BaseModel):
     ano: Optional[str] = ""                # os.ano
     chassi: Optional[str] = ""             # os.chassi (Oficina)
     numero_de_serie: Optional[str] = ""    # os.numero_de_serie (Assistência)
+    forma_pagamento: Optional[str] = None  # forma_pagamento.codigo — combobox simples (1 forma só)
     usuario_alteracao: Optional[int] = None  # só pro log de auditoria
     classe: Optional[int] = None             # grupo do usuário — só pro log de auditoria
     plataforma: Optional[str] = None         # "web"/"android"/"ios" — só pro log de auditoria
@@ -151,6 +260,27 @@ class DescontoGeralRequest(BaseModel):
     funcao: Optional[int] = 1       # 1=gerente, 2=supervisor, 3=vendedor
     classe: Optional[int] = None    # grupo do usuário — só pro log de auditoria
     plataforma: Optional[str] = None  # "web"/"android"/"ios" — só pro log de auditoria
+
+
+class PedidoCompletoSaveRequest(BaseModel):
+    """Cabeçalho do Pedido Completo (web) — mesma tabela `pedido_venda` do
+    Pedido rápido (`PedidoSaveRequest`), mas com o conjunto de campos real
+    do `frmmanpedfor.frm` (Frame2), maior que o do fluxo rápido mobile."""
+    servidor: str
+    banco: str
+    cliente: int                       # cliente.codigo
+    vendedor: int                      # funcionarios.codigo_int
+    forma_pag: Optional[str] = ""      # forma_pagamento.codigo (nvarchar(3))
+    validade: Optional[str] = None     # ISO date YYYY-MM-DD
+    previsao_entrega: Optional[str] = None  # ISO date YYYY-MM-DD
+    local_entrega: Optional[str] = ""
+    infoentrega: Optional[str] = ""
+    num_ped_cliente: Optional[str] = ""     # "nº do pedido do cliente" (referência externa)
+    obs: Optional[str] = ""
+    area_atuacao: Optional[int] = None  # area_atuacao.area (FK)
+    usuario_alteracao: Optional[int] = None  # só pro log de auditoria
+    classe: Optional[int] = None             # grupo do usuário — só pro log de auditoria
+    plataforma: Optional[str] = None         # "web"/"android"/"ios" — só pro log de auditoria
 
 
 class FecharRequest(BaseModel):

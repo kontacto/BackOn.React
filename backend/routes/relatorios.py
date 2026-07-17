@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter
 
-from services import relatorios_service
+from services import relatorios_service, fechamento_caixa_service, caixa_analitico_service
 
 router = APIRouter()
 
@@ -46,3 +46,25 @@ async def relatorio_os_descontos_margem(
     return await relatorios_service.relatorio_os_desc_margem(
         servidor, banco, data_ini, data_fim, vendedor, os_cod, cliente_nome
     )
+
+
+@router.get("/relatorios/caixa")
+async def relatorio_caixa(
+    servidor: str, banco: str, data_ini: str, data_fim: str,
+    atendente: Optional[int] = None, filtrar_atendente_dav: bool = False,
+    area: Optional[int] = None, exibir_garantias: bool = False,
+):
+    return await fechamento_caixa_service.fechamento_caixa(
+        servidor, banco, data_ini, data_fim, atendente, filtrar_atendente_dav, area, exibir_garantias,
+    )
+
+
+@router.get("/relatorios/caixa-analitico")
+async def relatorio_caixa_analitico(
+    servidor: str, banco: str, data_ini: str, data_fim: str,
+    agrupamento: str = "diario", dias_semana: Optional[str] = None,
+):
+    # dias_semana chega como CSV ("0,1,2,3,4,5,6") — querystring simples, sem
+    # precisar de múltiplos parâmetros repetidos nem de um body em GET.
+    dias = [int(x) for x in dias_semana.split(",") if x.strip() != ""] if dias_semana else None
+    return await caixa_analitico_service.caixa_analitico(servidor, banco, data_ini, data_fim, agrupamento, dias)

@@ -45,6 +45,60 @@ ACOES_PEDIDO = [
     ("VER_DESCONTOS", "Ver descontos"),
     ("ANALISE", "Analisar margem"),
     ("SITUACAO", "Alterar situação"),
+    # Botão "Faturar Pedido" (FrmManPedBar.frm, Command111_Click — só a
+    # parte não-fiscal, ver PENDENCIAS.md > "Pedido Bar") — permissão
+    # própria, separada de SITUACAO (pedido `[GLOBAL]` do usuário
+    # 2026-07-16: "colocar todos os botões nas regras de permissões", cada
+    # botão real da tela com seu próprio checkbox, não compartilhar ação
+    # entre botões distintos). Só no Pedido Bar, mesmo escopo Bar-only do
+    # TX_SERVICO/ENTREGUE abaixo — não trazido pro ACOES_PEDIDO_COMP
+    # (Comanda é conceito exclusivo do segmento Bar).
+    ("FATURAR", "Faturar pedido"),
+    # Botão "Forma de Pagamento" (FrmForPag.frm) — tela genérica no legado,
+    # reaproveitada por Pedido Bar/Completo e O.S. (confirmado pelo usuário
+    # 2026-07-16). Permissão própria, mesmo raciocínio do FATURAR acima.
+    ("FORMA_PAG", "Forma de pagamento"),
+    # Botão "Imprimir Pedido" (FrmManPedBar.frm, Command10_Click/
+    # Pedido_48_COL) — recibo estilo térmico, só no Pedido Bar (formato de
+    # impressão próprio do segmento, não trazido pro ACOES_PEDIDO_COMP).
+    ("IMPRIMIR", "Imprimir pedido"),
+    # Botão "Imprimir Item" (FrmManPedBar.frm, Command62_Click) — ticket de
+    # um item só (sem preço/total), pra cozinha/bar. Botão em cada linha da
+    # lista de itens, sempre disponível (não depende de haver impressora
+    # configurada por Finalidade — isso só decide o disparo AUTOMÁTICO ao
+    # incluir o item, que reaproveita esta mesma permissão de ADD_ITEM, não
+    # uma nova). Permissão própria, mesmo raciocínio do IMPRIMIR acima —
+    # só no Pedido Bar.
+    ("IMPRIMIR_ITEM", "Imprimir item"),
+    # Botão "Anexo" (Gestor de Documentos) — entre "Faturar Pedido" e
+    # "Imprimir" na toolbar (pedido explícito do usuário, 2026-07-16). Pedido
+    # não é entidade principal do Gestor de Documentos — grava como anexo do
+    # Cliente (cod_grupo=1), sub-grupo "Pedidos de Venda" (cod_sub_grupo=2)
+    # + referencia=pedido, ver AnexosPedidoModal.tsx. Só no Pedido Bar por
+    # ora (mesmo escopo Bar-only do IMPRIMIR/IMPRIMIR_ITEM acima) — trazer
+    # pro ACOES_PEDIDO_COMP/ACOES_OS é trabalho futuro, não pedido ainda.
+    ("ANEXOS", "Anexos"),
+    # Botão "Reabrir" (FrmManPedBar.frm, `cmdReabrir_Click`) — entre
+    # "Faturar Pedido" e "Anexo" na toolbar, ao lado de "Cancelar" (pedido
+    # explícito do usuário, 2026-07-16). Só reabre pedido Fechado (F -> A) —
+    # legado bloqueia Aberto/Cancelado/Faturado com a mesma mensagem, sem
+    # senha de gerente (diferente do Cancelar). Reverte a baixa de estoque
+    # do Fechar. Permissão própria, mesmo raciocínio do CANCELAR abaixo.
+    ("REABRIR", "Reabrir pedido"),
+    # Botão "Cancelar Pedido" (FrmManPedBar.frm, Command9_Click) — entre
+    # "Faturar Pedido" e "Imprimir" na toolbar (pedido explícito do usuário,
+    # 2026-07-16). Legado exige senha de gerente antes de cancelar; esta
+    # migração usa permissão de grupo própria no lugar (mesmo raciocínio do
+    # FATURAR acima — cada botão real da tela com seu checkbox, não
+    # reaproveita SITUACAO). Só no Pedido Bar por ora.
+    ("CANCELAR", "Cancelar pedido"),
+    # Botão "Incluir Tx Serviço" (FrmManPedBar.frm) — só no Pedido Bar, não
+    # trazido pro ACOES_PEDIDO_COMP (feature do segmento Bar, sem
+    # equivalente no Pedido de Venda geral).
+    ("TX_SERVICO", "Taxa de serviço"),
+    # Checkbox "Pedido Entregue" (FrmManPedBar.frm, Check88) — grava direto
+    # no clique, mesmo escopo Bar-only do TX_SERVICO acima.
+    ("ENTREGUE", "Marcar como entregue"),
 ]
 
 
@@ -60,6 +114,51 @@ ACOES_OS = [
     ("VER_DESCONTOS", "Ver descontos"),
     ("ANALISE", "Analisar margem"),
     ("SITUACAO", "Alterar situação"),
+    # Botão "Forma de Pagamento" (FrmForPag.frm) — mesma tela genérica
+    # usada pelo Pedido, confirmado pelo usuário que também atende O.S.
+    ("FORMA_PAG", "Forma de pagamento"),
+]
+
+# Ações da tela de Manutenção de Viagens (módulo Cilindros — FrmManViagens.frm).
+ACOES_VIAGEM = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Gravar dados da viagem"),
+    ("ADD_ITEM", "Adicionar item"),
+    ("DEL_ITEM", "Excluir item"),
+    ("ALT_CILINDRO", "Alterar cilindro do item"),
+    ("FECHAR_SAIDA", "Fechar saída"),
+    ("FECHAR_ENTRADA", "Fechar entrada"),
+    ("REABRIR", "Reabrir saída ou retorno"),
+    ("CANCELAR", "Cancelar viagem"),
+    ("EXPORTAR", "Exportar"),
+]
+
+
+# Ações da tela "Pedido Completo" (frmmanpedfor.frm, Fase A — núcleo:
+# cabeçalho + grade de itens + Fechar/Cancelar). Mesmo vocabulário de
+# comando de ACOES_PEDIDO (pré-venda rápida) para não duplicar sentido —
+# "SITUACAO" cobre Fechar e Cancelar (mesma máquina de estados, mesmo
+# raciocínio de "Alterar situação" único já usado lá). WHATSAPP/DESC_ITEM/
+# DESC_GERAL/VER_DESCONTOS/ANALISE trazidos 2026-07-15 (pedido explícito do
+# usuário, "aplicar os recursos do Pedido Mobile no Pedido Completo") —
+# mesma lista de ACOES_PEDIDO, os endpoints/telas por trás são genéricos
+# (chave é o `pedido`, não a tela que criou o registro). Ações das fases
+# C-F ainda não trazidas (Promoção, Fiscal, Faturar/Fatura Parcial, Tray).
+ACOES_PEDIDO_COMP = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Gravar pedido"),
+    ("WHATSAPP", "Enviar por WhatsApp"),
+    ("ADD_ITEM", "Adicionar item"),
+    ("EDIT_ITEM", "Editar item"),
+    ("DEL_ITEM", "Excluir item"),
+    ("DESC_ITEM", "Desconto no item"),
+    ("DESC_GERAL", "Desconto geral"),
+    ("VER_DESCONTOS", "Ver descontos"),
+    ("ANALISE", "Analisar margem"),
+    ("SITUACAO", "Alterar situação"),
+    # Botão "Forma de Pagamento" (FrmForPag.frm) — confirmado pelo usuário
+    # 2026-07-16 que essa tela também atende Pedido Geral/Completo.
+    ("FORMA_PAG", "Forma de pagamento"),
 ]
 
 
@@ -99,6 +198,22 @@ ACOES_FUNCIONARIOS = ACOES_PADRAO + [
 # não se enquadra e por isso não ganhou permissão própria aqui.
 ACOES_SERVICO = ACOES_PADRAO + [
     ("PREV_PRODUTOS", "Previsão de Produtos"),
+]
+
+
+# Ações da tela "Produto Completo" (migração de FrmManPec.frm — Cadastro de
+# Produtos, tabela `pecas`, 2026-07-14). FORNECEDORES (pecas_fornecedor) e
+# GRADE (gera produtos-filhos de verdade) são sub-funcionalidades de CADASTRO
+# próprias, mesmo padrão de PREV_PRODUTOS/ESPECIALIDADE/LISTA_NEGRA acima.
+# FOTOGRAFIA e ENVIAR_SITE ganham permissão própria por serem ações
+# irreversíveis/com efeito colateral externo (grava cor por variante,
+# publica de verdade na Tray) — mesmo raciocínio de CRITICAR/CANCELAR em
+# Notas Fiscais.
+ACOES_PRODUTO_COMP = ACOES_PADRAO + [
+    ("FORNECEDORES", "Vincular Fornecedores"),
+    ("FOTOGRAFIA", "Gerenciar Fotos"),
+    ("ENVIAR_SITE", "Enviar/Atualizar no Site"),
+    ("GRADE", "Gerar Itens de Grade"),
 ]
 
 
@@ -192,6 +307,7 @@ CATALOGO = [
         _tela("CLIENTE", "Clientes", ACOES_CLIENTE),
         _tela("FORNECEDOR", "Fornecedores"),
         _tela("PRODUTO", "Produtos & Serviços"),
+        _tela("PRODUTO_COMP", "Produto Completo", ACOES_PRODUTO_COMP),
         _tela("SERVICO", "Serviços", ACOES_SERVICO),
         _tela("PRODUTO_NIVEIS", "Alt. Produtos Níveis", ACOES_PRODUTO_NIVEIS),
         _tela("VEICULOS", "Veículos"),
@@ -244,9 +360,9 @@ CATALOGO = [
         ]),
     ]),
     _menu("TRANSACOES", "Transações", [
-        _tela("PEDIDO", "Pedidos Mobile", ACOES_PEDIDO),
+        _tela("PEDIDO", "Pedido Bar", ACOES_PEDIDO),
         _tela("OS", "OS Mobile", ACOES_OS),
-        _tela("PEDIDO_COMP", "Pedido Completo"),
+        _tela("PEDIDO_COMP", "Pedido Completo", ACOES_PEDIDO_COMP),
         _tela("OS_COMP", "O.S. Completa"),
     ]),
     _menu("FINANCEIRO", "Financeiro", [
@@ -283,6 +399,19 @@ CATALOGO = [
         _tela("POSTO_TQ_EST", "Tanque/Estoque"),
         _tela("POSTO_TQ_NF", "Tanque/Nota Fiscal"),
     ]),
+    # Cilindros — módulo de segmento (indústria/locação de gás), gated por
+    # controle_configuracao.Cilindro (já existia essa coluna antes desta
+    # migração). Legado: FrmManCil.frm, ver PENDENCIAS.md > "Cilindros"
+    # pro rastreio completo. Fase 1 (2026-07-14): só CILINDRO (Cadastro/
+    # Consulta) tem tela real; as demais entram no catálogo desde já pra
+    # não precisar renumerar depois, mas ainda não têm frontend.
+    _menu("CILINDRO", "Cilindros", [
+        _tela("CILINDRO", "Cad. de Cilindros"),
+        _tela("CIL_CLIENTE", "Clientes x Cilindro"),
+        _tela("CILINDRO_SERIE", "Cilindro/Nº Série"),
+        _tela("VIAGEM", "Viagens", ACOES_VIAGEM),
+        _tela("BORDERO_CIL", "Borderô de Cilindros"),
+    ]),
     _menu("GERENCIAL", "Gerencial", [
         _tela("GERENCIAL", "Painel Gerencial", [
             ("TOTAIS", "Ver totais do dia"),
@@ -295,6 +424,8 @@ CATALOGO = [
         _tela("REL_PEDIDOS", "Relatório de Pedidos"),
         _tela("REL_DESCONTOS", "Descontos & Margem"),
         _tela("REL_OS", "Relatório de OS"),
+        _tela("REL_CAIXA", "Fechamento de Caixa"),
+        _tela("REL_CX_ANALIT", "Caixa Analítico"),
     ]),
     _menu("CONFIG", "Configurações", [
         _tela("CONEXAO", "Conexões"),
@@ -442,9 +573,13 @@ def disabled_telas(flags: dict) -> set:
     for modulo, telas in MODULE_TELAS.items():
         if not flags.get(modulo, False):
             disabled.update(telas)
-    # Ordem de Serviço: habilitada se Oficina OU Assistência estiver ligada.
+    # Ordem de Serviço (Mobile e Completa): habilitada se Oficina OU
+    # Assistência estiver ligada — nenhuma das duas telas de O.S. deve
+    # aparecer (nem pra grupo, nem pra master) se ambos os módulos
+    # estiverem desligados. [GLOBAL], 2026-07-15, user-directed.
     if not (flags.get("Oficina", False) or flags.get("Assistencia", False)):
         disabled.add("OS")
+        disabled.add("OS_COMP")
     return disabled
 
 

@@ -287,3 +287,12 @@ async def delete_direcionamento_impressora(codigo: int, req: DirecionamentoImpre
     if result.get("success"):
         await _log(req, request, comando="EXCLUIR_IMPR", referencia=codigo, descricao=f"Direcionamento de impressão #{codigo} excluído")
     return result
+
+
+@router.get("/controle-sistema/direcionamento-impressora/por-finalidade")
+async def direcionamento_impressora_por_finalidade(tipo: int, servidor: str, banco: str):
+    """Usado pelo Pedido Bar ao incluir um item — decide se deve abrir
+    (automático ou com confirmação) o preview de impressão do item.
+    Ver `_get_direcionamento_por_finalidade_sync` (ignora o campo
+    Computador, decisão explícita do usuário 2026-07-16)."""
+    return await controle_sistema_service.get_direcionamento_por_finalidade(servidor, banco, tipo)

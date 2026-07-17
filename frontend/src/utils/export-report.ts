@@ -1,6 +1,7 @@
 import { Platform } from "react-native";
 import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
+import { buildReportHeaderHtml, EmpresaHeader, REPORT_HEADER_CSS } from "./print-report-header";
 
 type PedidoRow = {
   pedido: number;
@@ -36,6 +37,10 @@ export type ReportPayload = {
   periodo?: string;
   totais: Totais;
   vendedores: VendedorGroup[];
+  // Dados da empresa (Controle) pro cabeçalho de impressão — [GLOBAL],
+  // ver print-report-header.ts. Sem filtro da tela no PDF, só empresa +
+  // nome do relatório.
+  empresa?: EmpresaHeader | null;
 };
 
 function brl(v: number): string {
@@ -96,8 +101,8 @@ function buildHtml(p: ReportPayload): string {
   <style>
     * { box-sizing: border-box; }
     body { font-family: -apple-system, Helvetica, Arial, sans-serif; color: #1a1a2e; padding: 24px; font-size: 12px; }
-    h1 { font-size: 18px; margin: 0 0 4px; color: #1f3a93; }
-    .meta { color: #777; font-size: 11px; margin-bottom: 16px; }
+    ${REPORT_HEADER_CSS}
+    .meta { color: #777; font-size: 11px; margin-bottom: 16px; text-align: center; }
     .totais { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
     .tot { border: 1px solid #ddd; border-radius: 6px; padding: 8px 12px; min-width: 110px; }
     .tot .lbl { font-size: 10px; text-transform: uppercase; color: #888; letter-spacing: .4px; }
@@ -112,7 +117,7 @@ function buildHtml(p: ReportPayload): string {
     .num { text-align: right; }
     .red { color: #c0392b; }
   </style></head><body>
-    <h1>${esc(p.titulo)}</h1>
+    ${buildReportHeaderHtml(p.empresa || null, p.titulo)}
     <div class="meta">${p.periodo ? esc(p.periodo) + " · " : ""}Gerado em ${esc(geradoEm)}</div>
     <div class="totais">
       <div class="tot"><div class="lbl">Pedidos</div><div class="val">${t.qtd_pedidos}</div></div>

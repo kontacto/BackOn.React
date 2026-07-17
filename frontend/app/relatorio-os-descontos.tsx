@@ -11,6 +11,7 @@ import SelectField, { SelectOption } from "@/src/components/SelectField";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { exportReportPdf } from "@/src/utils/export-report";
+import { fetchEmpresaHeader, EmpresaHeader } from "@/src/utils/print-report-header";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
@@ -62,6 +63,7 @@ export default function RelatorioOSDescontosScreen() {
   const [totais, setTotais] = useState<Totais | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [exporting, setExporting] = useState(false);
+  const [empresa, setEmpresa] = useState<EmpresaHeader | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -85,6 +87,7 @@ export default function RelatorioOSDescontosScreen() {
       } catch {
         // sem lista de vendedores
       }
+      setEmpresa(await fetchEmpresaHeader(cc.api, cc.servidor, cc.banco));
     })();
   }, [router]);
 
@@ -128,13 +131,14 @@ export default function RelatorioOSDescontosScreen() {
         periodo: `Período: ${brDate(dataIni || "")} a ${brDate(dataFim || "")}`,
         totais,
         vendedores,
+        empresa,
       });
     } catch (e) {
       feedback.showError(`Falha ao exportar: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setExporting(false);
     }
-  }, [totais, vendedores, dataIni, dataFim, feedback]);
+  }, [totais, vendedores, dataIni, dataFim, feedback, empresa]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="relatorio-os-descontos-screen">

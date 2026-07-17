@@ -19,6 +19,7 @@ import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
+import { clienteSearchParams } from "@/src/hooks/useClienteForm";
 
 type Conn = Connection;
 type Tipo = "A" | "C";
@@ -559,7 +560,7 @@ export default function EquipamentosScreen() {
         onPick={(c) => { setCliente(c); setClienteSearchOpen(false); }}
         onCreate={() => {
           setClienteSearchOpen(false);
-          router.push({ pathname: "/cliente-form", params: { initial_nome: clienteSearchTerm } });
+          router.push({ pathname: "/cliente-form", params: clienteSearchParams(clienteSearchTerm) });
         }}
       />
     </SafeAreaView>

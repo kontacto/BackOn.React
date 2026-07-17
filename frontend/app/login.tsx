@@ -138,6 +138,7 @@ export default function LoginScreen() {
   }, [selected, usuario, senha]);
 
   const handleSubmit = async () => {
+    if (submitting) return;
     setError(null);
     setErrorDetails(null);
     if (!selected) {
@@ -376,6 +377,8 @@ export default function LoginScreen() {
                 autoCorrect={false}
                 style={styles.input}
                 testID="login-senha-input"
+                returnKeyType="go"
+                onSubmitEditing={handleSubmit}
               />
             </View>
 
@@ -475,52 +478,60 @@ export default function LoginScreen() {
         animationType="slide"
         onRequestClose={() => setShowPicker(false)}
       >
-        <Pressable style={styles.backdrop} onPress={() => setShowPicker(false)} />
-        <View style={styles.sheet} testID="login-empresa-sheet">
-          <View style={styles.sheetHandle} />
-          <Text style={styles.sheetTitle}>Selecione a empresa</Text>
-          <ScrollView style={{ maxHeight: 360 }}>
-            {connections.map((c) => {
-              const isSel = selected?.id === c.id;
-              return (
-                <Pressable
-                  key={c.id}
-                  onPress={() => {
-                    setSelected(c);
-                    setShowPicker(false);
-                  }}
-                  style={({ pressed }) => [
-                    styles.sheetItem,
-                    isSel && styles.sheetItemSelected,
-                    pressed && styles.pressed,
-                  ]}
-                  testID={`login-empresa-option-${c.id}`}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.sheetItemTitle}>{c.empresa}</Text>
-                    <Text style={styles.sheetItemSub}>
-                      {c.servidor} · {c.banco || "sem banco"}
-                    </Text>
-                  </View>
-                  {isSel ? (
-                    <Ionicons name="checkmark" size={20} color={colors.brandPrimary} />
-                  ) : null}
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+        <Pressable
+          style={[styles.backdrop, isWeb && styles.backdropWebCompact]}
+          onPress={() => setShowPicker(false)}
+        >
           <Pressable
-            onPress={() => {
-              setShowPicker(false);
-              router.push("/connections");
-            }}
-            style={({ pressed }) => [styles.sheetCta, pressed && styles.pressed]}
-            testID="login-manage-connections-button"
+            style={[styles.sheet, isWeb && styles.sheetWebCompact]}
+            onPress={(e) => e.stopPropagation()}
+            testID="login-empresa-sheet"
           >
-            <Ionicons name="settings-outline" size={18} color={colors.brandPrimary} />
-            <Text style={styles.sheetCtaText}>Gerenciar conexões</Text>
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Selecione a empresa</Text>
+            <ScrollView style={{ maxHeight: 360 }}>
+              {connections.map((c) => {
+                const isSel = selected?.id === c.id;
+                return (
+                  <Pressable
+                    key={c.id}
+                    onPress={() => {
+                      setSelected(c);
+                      setShowPicker(false);
+                    }}
+                    style={({ pressed }) => [
+                      styles.sheetItem,
+                      isSel && styles.sheetItemSelected,
+                      pressed && styles.pressed,
+                    ]}
+                    testID={`login-empresa-option-${c.id}`}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.sheetItemTitle}>{c.empresa}</Text>
+                      <Text style={styles.sheetItemSub}>
+                        {c.servidor} · {c.banco || "sem banco"}
+                      </Text>
+                    </View>
+                    {isSel ? (
+                      <Ionicons name="checkmark" size={20} color={colors.brandPrimary} />
+                    ) : null}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <Pressable
+              onPress={() => {
+                setShowPicker(false);
+                router.push("/connections");
+              }}
+              style={({ pressed }) => [styles.sheetCta, pressed && styles.pressed]}
+              testID="login-manage-connections-button"
+            >
+              <Ionicons name="settings-outline" size={18} color={colors.brandPrimary} />
+              <Text style={styles.sheetCtaText}>Gerenciar conexões</Text>
+            </Pressable>
           </Pressable>
-        </View>
+        </Pressable>
       </Modal>
 
       <EnableBiometricModal
@@ -698,18 +709,28 @@ const styles = StyleSheet.create({
   },
   primaryBtnPressed: { opacity: 0.85 },
   primaryBtnText: { color: colors.onBrandPrimary, fontWeight: "500", fontSize: 15 },
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.4)" },
+  // "Modal/Selector Standard (Web)" — mobile: bottom sheet full-width, só
+  // cantos de cima arredondados; web: card centralizado, maxWidth 560,
+  // todos os cantos + borda ("redução forte"). Ver CLAUDE.md > "Padrões de
+  // UI — Modais, Mensagens e Formulários (Web)".
+  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "flex-end" },
+  backdropWebCompact: { justifyContent: "center", alignItems: "center", paddingHorizontal: spacing.xl },
   sheet: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
+    width: "100%",
     backgroundColor: colors.surfaceSecondary,
     borderTopLeftRadius: radius.lg,
     borderTopRightRadius: radius.lg,
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.md,
     paddingBottom: spacing.xxl,
+  },
+  sheetWebCompact: {
+    maxWidth: 560,
+    alignSelf: "center",
+    borderBottomLeftRadius: radius.lg,
+    borderBottomRightRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   sheetHandle: {
     alignSelf: "center",

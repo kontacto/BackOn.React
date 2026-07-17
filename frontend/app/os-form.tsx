@@ -16,7 +16,9 @@ import { colors, radius, spacing } from "@/src/theme/colors";
 import { formatBRL, parseNum, fmtNum, fmtMoney2, calcDescUnit, formatDateBR, todayISO } from "@/src/utils/format";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
+import FormaPagamentoField from "@/src/components/pedido/FormaPagamentoField";
 import WhatsappButton from "@/src/components/WhatsappButton";
+import { clienteSearchParams } from "@/src/hooks/useClienteForm";
 import { ClienteRow, ProdutoServico } from "@/src/components/pedido/types";
 
 const SIT_COLOR: Record<string, string> = { A: "#1e88e5", F: "#43a047", PG: "#8e24aa", C: "#e53935" };
@@ -45,6 +47,7 @@ type OSData = {
   resumo: string; status_os: number | null; atendente: number | null; atendente_nome: string;
   placa: string; marca: string; modelo: string; km: number | null; ano: string;
   chassi: string; numero_de_serie: string;
+  forma_pagamento: string; forma_pagamento_descricao: string;
 };
 
 type OSItem = {
@@ -85,6 +88,13 @@ export default function OSFormScreen() {
   const [resumo, setResumo] = useState("");
   const [statusOs, setStatusOs] = useState<number | null>(null);
   const [atendente, setAtendente] = useState<number | null>(null);
+  const [formaPagamento, setFormaPagamento] = useState<string>("");
+  const [formasPag, setFormasPag] = useState<{ codigo: string; descricao: string }[]>([]);
+  const handleFormaPagModalChanged = useCallback(async () => {
+    if (!conn || !osId) return;
+    const j = await apiGet(conn, `/api/os/${osId}`);
+    if (j?.success && j.os) setFormaPagamento(j.os.forma_pagamento || "");
+  }, [conn, osId]);
   const [situacao, setSituacao] = useState("A");
   const [placa, setPlaca] = useState("");
   const [marca, setMarca] = useState("");
@@ -172,10 +182,11 @@ export default function OSFormScreen() {
       }
       if (c) {
         try {
-          const [ra, rf, rm] = await Promise.all([
+          const [ra, rf, rm, rfp] = await Promise.all([
             apiGet(c, `/api/area-atuacao`).catch(() => null),
             apiGet(c, `/api/funcionarios`).catch(() => null),
             apiGet(c, `/api/tabelas/marcas`, { marca_produto: "false" }).catch(() => null),
+            apiGet(c, `/api/forma-pagamento`).catch(() => null),
           ]);
           if (ra?.success) {
             const arr = ra.items || [];
@@ -184,6 +195,7 @@ export default function OSFormScreen() {
           }
           if (rf?.success) setFuncionarios(rf.items || []);
           if (rm?.success) setMarcasList(rm.items || []);
+          if (rfp?.success) setFormasPag(rfp.items || []);
         } catch {
           // silencioso
         }
@@ -217,6 +229,7 @@ export default function OSFormScreen() {
         setResumo(o.resumo || "");
         setStatusOs(o.status_os ?? null);
         setAtendente(o.atendente ?? null);
+        setFormaPagamento(o.forma_pagamento || "");
         setSituacao(o.situacao || "A");
         setPlaca(o.placa || "");
         setMarca(o.marca || "");
@@ -299,6 +312,7 @@ export default function OSFormScreen() {
         resumo,
         status_os: statusOs,
         atendente: atendente,
+        forma_pagamento: formaPagamento || null,
         situacao,
         placa,
         marca,
@@ -501,6 +515,10 @@ export default function OSFormScreen() {
     })),
     [funcionarios]
   );
+  const formaPagOptions: SelectOption[] = useMemo(
+    () => formasPag.map((f) => ({ value: f.codigo, label: f.descricao })),
+    [formasPag]
+  );
 
   const sit = os?.situacao || "A";
   const sitColor = SIT_COLOR[sit] || colors.muted;
@@ -615,6 +633,23 @@ export default function OSFormScreen() {
             modalTitle="Selecionar Área de Atuação"
             allowClear
             testID="os-form-area"
+          />
+
+          {/* Forma de Pagamento — combobox simples (1 forma). Mais de uma
+              forma abre o modal completo (FrmForPag.frm), compartilhado com
+              Pedido Bar/Completo (mesmo Type_FormaPagPedOS do legado). */}
+          <Text style={styles.sectionTitle}>Forma de Pagamento</Text>
+          <FormaPagamentoField
+            conn={conn}
+            tipoDav="OS"
+            documento={osId}
+            tela="OS"
+            valorTotal={os?.total || 0}
+            formaPag={formaPagamento}
+            onFormaPagChange={setFormaPagamento}
+            formaPagOptions={formaPagOptions}
+            onChanged={handleFormaPagModalChanged}
+            testIDPrefix="os-form-forma-pag"
           />
 
           {/* Data */}
@@ -791,7 +826,7 @@ export default function OSFormScreen() {
         onPick={(c) => { setCliente(c); setSearchOpen(false); }}
         onCreate={() => {
           setSearchOpen(false);
-          router.push({ pathname: "/cliente-form", params: { initial_nome: searchTerm } });
+          router.push({ pathname: "/cliente-form", params: clienteSearchParams(searchTerm) });
         }}
       />
 

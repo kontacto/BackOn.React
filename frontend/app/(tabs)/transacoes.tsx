@@ -55,6 +55,14 @@ export default function TransacoesScreen() {
         visible: can("PEDIDO_COMP.ABRIR"),
       },
       {
+        key: "pedido-bar",
+        label: "Pedido Bar",
+        hint: "Pedido Bar e Restaurante",
+        icon: "restaurant-outline",
+        route: "/pedidos",
+        visible: can("PEDIDO.ABRIR"),
+      },
+      {
         key: "os-completa",
         label: "O.S. Completa",
         hint: "Versão completa da Ordem de Serviço (back-office, web)",

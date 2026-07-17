@@ -1,8 +1,17 @@
 // Contexto global de permissões (sistema=50).
 // Carrega as permissões do GRUPO (classe) do usuário logado e expõe `can(key)`.
 // Regras:
-//   • Usuário master (KONTACTO) → acesso total (can() sempre true).
-//   • Modo ESTRITO: sem registro na tabela = bloqueado.
+//   • Usuário master (KONTACTO) → acesso total a TODAS as ações/telas de
+//     permissão de GRUPO (`can()` sempre true), independente de classe. [GLOBAL].
+//   • Módulos ligados/desligados (Configurações > Módulos e Recursos) valem
+//     para TODO usuário igual, inclusive master — `moduleOn()` NUNCA
+//     bypassa por master. Corrigido 2026-07-15 (pedido explícito do
+//     usuário: "só aparece os módulos selecionados, independente do
+//     usuário" — revoga o bypass de módulo que existia antes pro master;
+//     o master continua sendo o ÚNICO que consegue ABRIR a tela "Módulos e
+//     Recursos" pra configurar os módulos, mas isso é gate por `isKontacto`
+//     em `configuracoes.tsx`, não por `moduleOn()` aqui).
+//   • Modo ESTRITO (não-master): sem registro na tabela = bloqueado.
 //   • key no formato "TELA.COMANDO" (ex.: "CLIENTE.GRAVAR") ou "TELA" (abrir tela).
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
@@ -23,7 +32,8 @@ type PermState = {
 // Mapa: módulo (coluna controle_configuracao) -> telas controladas.
 // Manter alinhado com backend services/controle_config_service.MODULE_TELAS.
 const MODULE_TELAS: Record<string, string[]> = {
-  Pedido_venda: ["PEDIDO"],
+  Pedido_venda: ["PEDIDO_COMP"],
+  Bar: ["PEDIDO"],
   Clientes: ["CLIENTE"],
   servicos: ["SERVICO", "TIPO_SERVICO"],
 };
@@ -130,10 +140,12 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
     (key: string) => {
       const k = (key || "").trim().toUpperCase();
       if (!k) return false;
-      // Módulo desligado (controle_configuracao) sobrepõe tudo, inclusive master.
+      // Master (KONTACTO) tem acesso total a todos os módulos e opções do
+      // sistema, independente de permissões — inclusive módulos desligados
+      // em Configurações > Módulos e Recursos. [GLOBAL], 2026-07-14.
+      if (state.isMaster) return true;
       const tela = k.split(".")[0];
       if (state.disabledTelas.has(tela)) return false;
-      if (state.isMaster) return true;
       if (state.keys.has(k)) return true;
       // "CLIENTE" sem comando → considera permitido se houver "CLIENTE.ABRIR".
       if (!k.includes(".") && state.keys.has(`${k}.ABRIR`)) return true;
@@ -143,6 +155,8 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
   );
 
   const moduleOn = useCallback(
+    // Sem bypass de master aqui — módulo ligado/desligado vale igual pra
+    // todo mundo, inclusive master (ver comentário no topo do arquivo).
     (name: string) => state.modules[name] === true,
     [state.modules]
   );

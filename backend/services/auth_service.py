@@ -5,7 +5,7 @@ from typing import Optional
 import pymssql
 
 from db.connection import (
-    _pick_sql_credentials, SQL_TDS_VERSION, _to_json_safe, _err_origin,
+    _pick_sql_credentials, SQL_TDS_VERSION, _to_json_safe, _err_origin, friendly_db_error,
 )
 from models.schemas import LoginRequest, LoginResponse
 
@@ -151,7 +151,7 @@ def _sql_login_sync(payload: LoginRequest) -> LoginResponse:
         line, code = _err_origin()
         return LoginResponse(
             success=False,
-            message=f"Falha na conexão: {e}",
+            message=friendly_db_error(e),
             error_step="connect",
             error_line=line,
             error_code_line=code,
@@ -161,7 +161,7 @@ def _sql_login_sync(payload: LoginRequest) -> LoginResponse:
         line, code = _err_origin()
         return LoginResponse(
             success=False,
-            message=f"Erro inesperado: {e}",
+            message=friendly_db_error(e),
             error_step="connect",
             error_line=line,
             error_code_line=code,

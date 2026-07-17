@@ -3,7 +3,7 @@ import {
   ActivityIndicator, Alert, Image, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import { usePermissions } from "@/src/permissions";
@@ -21,7 +21,6 @@ import PrevisaoProdutosModal from "@/src/components/PrevisaoProdutosModal";
 
 type Conn = Connection;
 type NivelFlat = { codigo: string; descricao: string; niveis: string[] };
-type ServicoItem = { codigo: string; descricao: string; situacao: string; valor_hora: number };
 type ServicoDetalhe = {
   codigo: string; descricao: string; descricao_nf: string; codigo_especialidade: number | null;
   tipo: number; situacao: string; valor_hora: number; custo_hora: number; preco_variado: boolean;
@@ -68,8 +67,17 @@ const TABS: { key: TabKey; label: string; icon: keyof typeof Ionicons.glyphMap }
 // Layout do formulário segue o padrão de cliente-completo.tsx (header com
 // Gravar no topo direito, abas com ícone, conteúdo em cards full-width) —
 // ver CLAUDE.md > "Padrão de Tela CRUD (Form em Abas)".
+//
+// Update 2026-07-14 (pedido do usuário): esta tela é só o FORMULÁRIO —
+// a lista de serviços vive em `produtos.tsx` (buscador compartilhado com
+// Produtos e com o picker de item de Pedido/O.S., já desenvolvido pro
+// mobile — não mexer nesse comportamento), aberta com `?tipo=S` a partir
+// de Cadastros. De lá, tocar num serviço ou no botão "Novo" abre esta
+// tela com (ou sem) `?codigo=` na URL. Mesmo padrão de
+// produto-completo.tsx/produtos.tsx.
 export default function ServicosScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ codigo?: string }>();
   const { can, isMaster, moduleOn } = usePermissions();
   const auditCtx = useAuditContext();
   const fb = useFeedback();
@@ -96,16 +104,13 @@ export default function ServicosScreen() {
   }
 
   const [conn, setConn] = useState<Conn | null>(null);
-  const [items, setItems] = useState<ServicoItem[]>([]);
-  const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loadingInit, setLoadingInit] = useState(true);
 
   const [tipoServicoOptions, setTipoServicoOptions] = useState<SelectOption[]>([]);
   const [especialidadeOptions, setEspecialidadeOptions] = useState<SelectOption[]>([]);
   const [cstPisOptions, setCstPisOptions] = useState<SelectOption[]>([]);
   const [cstCofinsOptions, setCstCofinsOptions] = useState<SelectOption[]>([]);
 
-  const [formOpen, setFormOpen] = useState(false);
   const [tab, setTab] = useState<TabKey>("principal");
   const [editingCodigo, setEditingCodigo] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -156,17 +161,6 @@ export default function ServicosScreen() {
 
   const [prevProdutosOpen, setPrevProdutosOpen] = useState(false);
 
-  const load = useCallback(async (c: Conn) => {
-    setLoading(true);
-    try {
-      const base = c.api.replace(/\/+$/, "");
-      const qs = `servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`;
-      const r = await fetch(`${base}/api/servicos?${qs}`);
-      const j = await r.json();
-      setItems(j?.success ? j.items || [] : []);
-    } catch { setItems([]); } finally { setLoading(false); }
-  }, []);
-
   const loadLookups = useCallback(async (c: Conn) => {
     const base = c.api.replace(/\/+$/, "");
     const qs = `servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`;
@@ -205,25 +199,6 @@ export default function ServicosScreen() {
     return found ? `${found.codigo} · ${found.descricao}` : codigo;
   }, [nivelList]);
 
-  useEffect(() => {
-    (async () => {
-      const s = await getSession();
-      if (!s) { router.replace("/login"); return; }
-      const c = (await listConnections()).find((x) => x.empresa === s.empresa);
-      if (!c) return;
-      setConn(c);
-      load(c);
-      loadLookups(c);
-      loadNiveis(c);
-    })();
-  }, [router, load, loadLookups, loadNiveis]);
-
-  const filtered = items.filter((i) =>
-    !search.trim() ||
-    i.codigo.toLowerCase().includes(search.toLowerCase()) ||
-    i.descricao.toLowerCase().includes(search.toLowerCase())
-  );
-
   const resetForm = () => {
     setCodigo(""); setDescricao(""); setDescricaoNf(""); setEspecialidade(null); setTipoServico(0);
     setSituacao("A"); setValorHora(""); setCustoHora(""); setPrecoVariado(false);
@@ -242,20 +217,17 @@ export default function ServicosScreen() {
     setEditingCodigo(null);
     resetForm();
     setTab("principal");
-    setFormOpen(true);
   };
 
-  const openEdit = async (item: ServicoItem) => {
-    if (!conn) return;
-    setEditingCodigo(item.codigo);
+  const openEdit = async (c: Conn, codigoServico: string) => {
+    setEditingCodigo(codigoServico);
     setTab("principal");
-    setFormOpen(true);
     try {
-      const base = conn.api.replace(/\/+$/, "");
-      const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`;
-      const r = await fetch(`${base}/api/servicos/${item.codigo}?${qs}`);
+      const base = c.api.replace(/\/+$/, "");
+      const qs = `servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`;
+      const r = await fetch(`${base}/api/servicos/${codigoServico}?${qs}`);
       const j = await r.json();
-      if (!j?.success) { fb.showError(j?.message || "Erro ao carregar."); setFormOpen(false); return; }
+      if (!j?.success) { fb.showError(j?.message || "Erro ao carregar."); router.back(); return; }
       const d: ServicoDetalhe = j.item;
       setCodigo(d.codigo); setDescricao(d.descricao); setDescricaoNf(d.descricao_nf || "");
       setEspecialidade(d.codigo_especialidade); setTipoServico(d.tipo); setSituacao(d.situacao || "A");
@@ -275,9 +247,29 @@ export default function ServicosScreen() {
       setNivelLabel(findNivelLabel(segs));
     } catch (e) {
       fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
-      setFormOpen(false);
+      router.back();
     }
   };
+
+  useEffect(() => {
+    (async () => {
+      setLoadingInit(true);
+      const s = await getSession();
+      if (!s) { router.replace("/login"); return; }
+      const c = (await listConnections()).find((x) => x.empresa === s.empresa);
+      if (!c) { fb.showError("Conexão não encontrada."); setLoadingInit(false); return; }
+      setConn(c);
+      loadLookups(c);
+      loadNiveis(c);
+      if (params.codigo) {
+        await openEdit(c, String(params.codigo));
+      } else {
+        openNew();
+      }
+      setLoadingInit(false);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.codigo]);
 
   const save = async () => {
     if (!conn) return;
@@ -315,30 +307,36 @@ export default function ServicosScreen() {
       const j = await r.json();
       if (j?.success) {
         fb.showSuccess(j.message || "Serviço gravado.");
+        const wasNew = !editingCodigo;
         setEditingCodigo(j.codigo);
         setCodigo(j.codigo);
-        load(conn);
+        if (wasNew) {
+          // Primeiro save de um serviço novo — atualiza a URL (mesmo padrão
+          // de cliente-completo.tsx/produto-completo.tsx) pra destravar
+          // Anexos e permitir recarregar a tela sem perder o registro.
+          router.replace({ pathname: "/servicos", params: { codigo: j.codigo } });
+        }
       } else {
         fb.showError(j?.message || (Array.isArray(j?.detail) ? j.detail.map((d: any) => d.msg).join("; ") : "Falha ao gravar."));
       }
     } catch (e) { fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`); } finally { setSaving(false); }
   };
 
-  const remove = (item: ServicoItem) => {
-    if (!conn) return;
-    Alert.alert("Excluir", `Confirma a exclusão do serviço "${item.codigo}"?`, [
+  const remove = () => {
+    if (!conn || !editingCodigo) return;
+    Alert.alert("Excluir", `Confirma a exclusão do serviço "${editingCodigo}"?`, [
       { text: "Cancelar", style: "cancel" },
       {
         text: "Excluir", style: "destructive",
         onPress: async () => {
           try {
             const base = conn.api.replace(/\/+$/, "");
-            const r = await fetch(`${base}/api/servicos/${item.codigo}/excluir`, {
+            const r = await fetch(`${base}/api/servicos/${editingCodigo}/excluir`, {
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...auditCtx }),
             });
             const j = await r.json();
-            if (j?.success) { fb.showSuccess(j.message || "Excluído."); load(conn); }
+            if (j?.success) { fb.showSuccess(j.message || "Excluído."); router.back(); }
             else fb.showError(j?.message || "Falha ao excluir.");
           } catch (e) { fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`); }
         },
@@ -366,15 +364,26 @@ export default function ServicosScreen() {
   const canSave = can("SERVICO.GRAVAR") || isMaster;
   const canDel = can("SERVICO.EXCLUIR") || isMaster;
 
-  // ============================================================
-  // Formulário (tela cheia) — padrão cliente-completo.tsx
-  // ============================================================
-  if (formOpen) {
+  if (loadingInit) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="servicos-form-screen">
+      <SafeAreaView style={styles.safe}>
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+          <ActivityIndicator color={colors.brandPrimary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ============================================================
+  // Formulário (tela cheia) — padrão cliente-completo.tsx. A lista de
+  // serviços não vive mais aqui — ver produtos.tsx?tipo=S (compartilhada
+  // com Produtos e com o picker de item de Pedido/O.S.).
+  // ============================================================
+  return (
+    <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="servicos-form-screen">
         <View style={styles.header}>
           <Pressable
-            onPress={() => setFormOpen(false)}
+            onPress={() => router.back()}
             style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]}
             hitSlop={12}
             testID="servicos-form-back-button"
@@ -409,6 +418,26 @@ export default function ServicosScreen() {
 
         <ScrollView contentContainerStyle={[styles.scroll, styles.scrollWeb]} showsVerticalScrollIndicator={false}>
           <View style={styles.webShell}>
+            {/* Identidade — sempre visível, qualquer aba selecionada. Mesmo
+                padrão de produto-completo.tsx/cliente-completo.tsx (ver
+                CLAUDE.md > "Full CRUD Form Screen Standard"). */}
+            <View style={styles.card} testID="servicos-identidade">
+              <View style={styles.rowFields}>
+                <View style={styles.colNarrow}>
+                  <Text style={styles.label}>Código *</Text>
+                  <TextInput value={codigo} onChangeText={(v) => setCodigo(v.toUpperCase())} style={styles.input} maxLength={8} autoCapitalize="characters" editable={!editingCodigo} testID="servicos-codigo" />
+                </View>
+                <View style={styles.colFlex}>
+                  <Text style={styles.label}>Descrição *</Text>
+                  <TextInput value={descricao} onChangeText={setDescricao} style={styles.input} maxLength={50} testID="servicos-descricao" />
+                </View>
+                <View style={styles.colTiny}>
+                  <Text style={styles.label}>Situação</Text>
+                  <TextInput value={situacao} onChangeText={(v) => setSituacao(v.toUpperCase())} style={styles.input} maxLength={2} testID="servicos-situacao" />
+                </View>
+              </View>
+            </View>
+
             <View style={styles.tabBar}>
               {TABS.filter((t) => t.key !== "anexos" || !!editingCodigo).map((t) => {
                 const sel = tab === t.key;
@@ -428,21 +457,6 @@ export default function ServicosScreen() {
 
             {tab === "principal" ? (
               <View style={styles.card} testID="servicos-tab-content-principal">
-                <View style={styles.rowFields}>
-                  <View style={styles.colNarrow}>
-                    <Text style={styles.label}>Código *</Text>
-                    <TextInput value={codigo} onChangeText={(v) => setCodigo(v.toUpperCase())} style={styles.input} maxLength={8} autoCapitalize="characters" editable={!editingCodigo} testID="servicos-codigo" />
-                  </View>
-                  <View style={styles.colFlex}>
-                    <Text style={styles.label}>Descrição *</Text>
-                    <TextInput value={descricao} onChangeText={setDescricao} style={styles.input} maxLength={50} testID="servicos-descricao" />
-                  </View>
-                  <View style={styles.colTiny}>
-                    <Text style={styles.label}>Situação</Text>
-                    <TextInput value={situacao} onChangeText={(v) => setSituacao(v.toUpperCase())} style={styles.input} maxLength={2} testID="servicos-situacao" />
-                  </View>
-                </View>
-
                 <Text style={styles.label}>Descrição Nota Fiscal</Text>
                 <TextInput value={descricaoNf} onChangeText={setDescricaoNf} style={[styles.input, { minHeight: 60 }]} multiline testID="servicos-descricao-nf" />
 
@@ -507,6 +521,15 @@ export default function ServicosScreen() {
                   Preço por Quantidade, Layouts e Exceções de Comissão ainda não estão disponíveis nesta versão
                   da tela.
                 </Text>
+
+                {editingCodigo && canDel ? (
+                  <View style={styles.toolbarRow}>
+                    <Pressable onPress={remove} style={[styles.secondaryBtn, styles.dangerBtn]} testID="servicos-excluir">
+                      <Ionicons name="trash-outline" size={16} color={colors.error} />
+                      <Text style={[styles.secondaryBtnText, { color: colors.error }]}>Excluir</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
               </View>
             ) : null}
 
@@ -685,62 +708,6 @@ export default function ServicosScreen() {
           canEdit={canSave}
         />
       </SafeAreaView>
-    );
-  }
-
-  // ============================================================
-  // Lista
-  // ============================================================
-  return (
-    <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="servicos-screen">
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.iconBtn}>
-          <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
-        </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
-        <Text style={styles.headerTitle}>Serviços</Text>
-        <View style={{ width: 40 }} />
-      </View>
-
-      <View style={styles.listShell}>
-        <View style={styles.filterBox}>
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Buscar por código ou descrição…"
-            placeholderTextColor={colors.muted}
-            style={styles.input}
-            testID="servicos-search"
-          />
-        </View>
-
-        <ScrollView contentContainerStyle={[styles.listScroll, styles.scrollWeb]}>
-          {loading ? <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 24 }} /> : null}
-          {!loading && filtered.length === 0 ? <Text style={styles.empty}>Nenhum serviço cadastrado.</Text> : null}
-          {filtered.map((s) => (
-            <View key={s.codigo} style={styles.row} testID={`servicos-${s.codigo}`}>
-              <Pressable style={{ flex: 1 }} onPress={() => canSave && openEdit(s)}>
-                <Text style={styles.rowTitle}>{s.codigo} · {s.descricao || "—"}</Text>
-                <Text style={styles.rowSub}>
-                  Preço/Hora: {s.valor_hora.toFixed(2)}{s.situacao && s.situacao !== "A" ? ` · ${s.situacao}` : ""}
-                </Text>
-              </Pressable>
-              {canDel ? (
-                <Pressable onPress={() => remove(s)} hitSlop={8} testID={`servicos-del-${s.codigo}`}>
-                  <Ionicons name="trash-outline" size={20} color={colors.error} />
-                </Pressable>
-              ) : null}
-            </View>
-          ))}
-        </ScrollView>
-      </View>
-
-      {canSave ? (
-        <Pressable onPress={openNew} style={styles.fab} testID="servicos-novo">
-          <Ionicons name="add" size={28} color="#fff" />
-        </Pressable>
-      ) : null}
-    </SafeAreaView>
   );
 }
 
@@ -773,19 +740,7 @@ const styles = StyleSheet.create({
   },
   saveLabel: { color: colors.onBrandPrimary, fontWeight: "500", fontSize: 13 },
 
-  // ---- Lista ----
-  listShell: { width: "100%", maxWidth: 640, alignSelf: "center", flex: 1 },
-  filterBox: { padding: spacing.lg, paddingBottom: 0, gap: 4 },
-  listScroll: { padding: spacing.lg, gap: spacing.sm, paddingBottom: 90 },
   scrollWeb: WEB_SCROLL_CENTER,
-  row: {
-    flexDirection: "row", alignItems: "center", alignSelf: "stretch", width: "100%", gap: spacing.md,
-    backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, padding: spacing.md,
-  },
-  rowTitle: { fontSize: 14, fontWeight: "600", color: colors.onSurface },
-  rowSub: { fontSize: 11, color: colors.muted, marginTop: 2 },
-  empty: { textAlign: "center", color: colors.muted, marginTop: 8, marginBottom: 8, fontSize: 12 },
-  fab: { position: "absolute", right: 20, bottom: 28, width: 56, height: 56, borderRadius: 28, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center", elevation: 4 },
 
   // ---- Formulário ----
   scroll: { paddingBottom: spacing.xxxl },
@@ -823,6 +778,14 @@ const styles = StyleSheet.create({
   colTiny: { width: 90 },
   checkRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.md },
   checkLabel: { fontSize: 13, color: colors.onSurface, fontWeight: "500" },
+  toolbarRow: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.lg, flexWrap: "wrap" },
+  secondaryBtn: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingHorizontal: spacing.md, paddingVertical: 10, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.brandPrimary, backgroundColor: colors.surface,
+  },
+  dangerBtn: { borderColor: colors.error },
+  secondaryBtnText: { color: colors.brandPrimary, fontWeight: "500", fontSize: 13 },
   nivelBox: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm,
