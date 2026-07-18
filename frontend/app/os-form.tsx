@@ -77,7 +77,7 @@ export default function OSFormScreen() {
   const showToast = useCallback((m: string, t: "info" | "error" | "success" = "info") => {
     setToast({ msg: m, tone: t });
     if (tref.current) clearTimeout(tref.current);
-    tref.current = setTimeout(() => setToast(null), 3500);
+    tref.current = setTimeout(() => setToast(null), 1500);
   }, []);
 
   const [os, setOs] = useState<OSData | null>(null);

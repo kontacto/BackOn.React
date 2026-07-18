@@ -20,6 +20,7 @@ import { Ionicons } from "@/src/components/Ionicons";
 import { usePermissions } from "@/src/permissions";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { useClienteForm, ENDERECO_TIPOS, toastBackgroundColor } from "@/src/hooks/useClienteForm";
+import { apiSend } from "@/src/utils/api";
 
 const TOAST_SHADOW_STYLE =
   Platform.OS === "web"
@@ -39,13 +40,23 @@ const TOAST_SHADOW_STYLE =
 // ============================================================
 export default function ClienteFormScreen() {
   const router = useRouter();
-  const { can } = usePermissions();
+  const { can, isMaster, classe, usuarioCodigo } = usePermissions();
   const isWeb = Platform.OS === "web";
-  const params = useLocalSearchParams<{ codigo?: string; initial_nome?: string; initial_cgc_cpf?: string }>();
+  const params = useLocalSearchParams<{
+    codigo?: string; initial_nome?: string; initial_cgc_cpf?: string;
+    // Veio do botão "Novo Pedido" do Painel de Pedidos (app/pedidos.tsx) —
+    // o cliente não existia, o usuário caiu aqui pra cadastrar. Ao Gravar,
+    // em vez de só voltar, cria o pedido pro cliente recém-cadastrado e
+    // sai direto pra lista (mesma intenção do botão original: nunca abrir
+    // a tela cheia do pedido). Pedido explícito do usuário, 2026-07-18.
+    criar_pedido?: string;
+  }>();
   const editing = !!params.codigo;
   const codigo = params.codigo ? parseInt(String(params.codigo), 10) : null;
+  const criarPedidoAoGravar = params.criar_pedido === "1";
 
   const [tipoModalVisible, setTipoModalVisible] = useState(false);
+  const [criandoPedido, setCriandoPedido] = useState(false);
 
   const f = useClienteForm({
     editing,
@@ -54,6 +65,28 @@ export default function ClienteFormScreen() {
     initialCgcCpf: params.initial_cgc_cpf ? String(params.initial_cgc_cpf) : undefined,
     selfRoute: "/cliente-form",
   });
+
+  const criarPedidoParaCliente = async (codigoCliente: number) => {
+    if (!f.conn) { router.back(); return; }
+    setCriandoPedido(true);
+    try {
+      const usuarioCod = isMaster ? -2 : (usuarioCodigo ?? -2);
+      const j = await apiSend(f.conn, "/api/pedidos/create", "POST", {
+        cliente: codigoCliente, vendedor: f.vendedor || usuarioCod,
+        usuario_alteracao: usuarioCod, classe, plataforma: Platform.OS,
+      });
+      if (!j?.success) {
+        f.showToast(j?.message || "Cliente gravado, mas falhou ao criar o pedido.", "error");
+      } else {
+        f.showToast(`Pedido ${j.pedido} criado.`, "success");
+      }
+    } catch (e) {
+      f.showToast(`Cliente gravado, mas falhou ao criar o pedido: ${e instanceof Error ? e.message : String(e)}`, "error");
+    } finally {
+      setCriandoPedido(false);
+      router.replace({ pathname: "/pedidos", params: { situacao: "A" } });
+    }
+  };
 
   // Cadastro rápido edita apenas o primeiro endereço (cadastro completo, web-only,
   // expõe a lista inteira com incluir/excluir).
@@ -89,16 +122,21 @@ export default function ClienteFormScreen() {
         </Text>
         {can("CLIENTE.GRAVAR") ? (
           <Pressable
-            onPress={() => f.handleSave(() => router.back())}
-            disabled={f.saving}
+            onPress={() =>
+              f.handleSave((savedCodigo) => {
+                if (criarPedidoAoGravar && savedCodigo) criarPedidoParaCliente(savedCodigo);
+                else router.back();
+              })
+            }
+            disabled={f.saving || criandoPedido}
             style={({ pressed }) => [
               styles.saveBtn,
-              (pressed || f.saving) && { opacity: 0.7 },
+              (pressed || f.saving || criandoPedido) && { opacity: 0.7 },
             ]}
             hitSlop={8}
             testID="cliente-form-save-button"
           >
-            {f.saving ? (
+            {f.saving || criandoPedido ? (
               <ActivityIndicator color={colors.onBrandPrimary} size="small" />
             ) : (
               <>
@@ -126,7 +164,10 @@ export default function ClienteFormScreen() {
           <Text style={styles.sectionTitle}>Dados Principais</Text>
           <View style={[styles.card, isWeb && styles.cardWeb]}>
             <View style={isWeb ? styles.formGridWeb : undefined}>
-              <Field label={`CGC/CPF ${f.docType === "UNKNOWN" ? "" : `(${f.docType})`}`} style={isWeb ? styles.colHalf : undefined}>
+              <Field
+                label={`CGC/CPF ${f.docType === "UNKNOWN" ? "" : `(${f.docType})`}${f.exigeCpfCliente ? " *" : ""}`}
+                style={isWeb ? styles.colHalf : undefined}
+              >
               <TextInput
                 value={f.cgcCpf}
                 onChangeText={f.handleCgcCpfChange}

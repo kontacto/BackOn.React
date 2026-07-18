@@ -80,9 +80,49 @@ class PedidoSaveRequest(BaseModel):
     previsao_entrega: Optional[str] = None  # ISO date YYYY-MM-DD (pedido_venda.previsao_entrega)
     hora_entrega: Optional[str] = None      # HH:MM ou HH:MM:SS (pedido_venda.hora_entrega)
     forma_pag: Optional[str] = None    # forma_pagamento.codigo — combobox simples (1 forma só)
+    # Combobox "Tipo" do Pedido Bar (pedido_venda.tipo, FK tipo_cliente.codigo)
+    # — tipo do PEDIDO, separado do tipo do CLIENTE (cliente.cliente_forn):
+    # um cliente Entrega pode virar um pedido lançado como Comanda na lista,
+    # sem mudar o tipo do cliente. Cliente reservado Mesa/Comanda/Balcão
+    # sempre sobrescreve esse valor com o próprio tipo dele no backend (ver
+    # `_save_pedido_sync`) — este campo aqui é só o que foi pedido/
+    # selecionado na tela, não o valor final gravado. None = sem tipo
+    # próprio, a listagem cai pro tipo do cliente. Pedido explícito do
+    # usuário, 2026-07-18.
+    tipo: Optional[int] = None
+    # Campo livre "Referência" — reaproveita pedido_venda.num_ped_cliente (já
+    # existente na tabela, já exposto no Pedido Completo como "Nº Pedido do
+    # Cliente"), agora também no Pedido Bar. Usado tanto como referência livre
+    # do cliente quanto, ao Dividir Pedido, para registrar o nº do pedido que
+    # originou a divisão nos pedidos filhos (pedido explícito do usuário,
+    # 2026-07-17 — ver `_dividir_pedido_sync`).
+    referencia: Optional[str] = None
     usuario_alteracao: Optional[int] = None  # só pro log de auditoria
     classe: Optional[int] = None             # grupo do usuário — só pro log de auditoria
     plataforma: Optional[str] = None         # "web"/"android"/"ios" — só pro log de auditoria
+
+
+class DividirPedidoItem(BaseModel):
+    codauto: int    # pedido_venda_prod.codauto do item no pedido ORIGINAL
+    qtd: float      # quantidade movida pra este grupo (pode ser fracionária —
+                     # é assim que se divide o VALOR de 1 unidade indivisível
+                     # entre várias pessoas, ex. 1 pizza / 4 = qtd 0.25 cada)
+
+
+class DividirPedidoGrupo(BaseModel):
+    """Um grupo vira um pedido NOVO. O que não for atribuído a nenhum grupo
+    continua no pedido original — não precisa ser listado explicitamente."""
+    itens: list[DividirPedidoItem]
+
+
+class DividirPedidoRequest(BaseModel):
+    servidor: str
+    banco: str
+    grupos: list[DividirPedidoGrupo]
+    classe: Optional[int] = None
+    master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    plataforma: Optional[str] = None
 
 
 class FormaPagamentoAddRequest(BaseModel):
@@ -125,7 +165,16 @@ class FormaPagamentoAddRequest(BaseModel):
 
 
 class FormaPagamentoUpdateRequest(FormaPagamentoAddRequest):
-    sequencia: int
+    # Opcional (não `int` puro) de propósito: o frontend nunca manda
+    # `sequencia` no corpo (só no path da URL, `PUT .../{sequencia}`) — a
+    # rota sempre sobrescreve `req.sequencia` a partir do path logo depois
+    # de validar o body (`routes/pedidos.py`/`routes/os.py`). Se este campo
+    # fosse obrigatório, o FastAPI rejeitava a requisição com 422 ANTES da
+    # rota rodar (o body nunca tem `sequencia`), e a sobrescrita nunca
+    # chegava a acontecer — bug real encontrado 2026-07-17 (usuário
+    # reportou "não exclui pagamento"; alterar tinha o mesmo problema,
+    # só não relatado ainda).
+    sequencia: Optional[int] = None
 
 
 class FormaPagamentoDeleteRequest(BaseModel):
@@ -134,7 +183,10 @@ class FormaPagamentoDeleteRequest(BaseModel):
     tipo_dav: str = "PED"
     tela: Optional[str] = None
     tipo: str
-    sequencia: int
+    # Mesmo motivo do comentário em FormaPagamentoUpdateRequest.sequencia
+    # acima — opcional de propósito, sempre sobrescrito pela rota a partir
+    # do path da URL.
+    sequencia: Optional[int] = None
     usuario_alteracao: Optional[int] = None
     classe: Optional[int] = None
     master: Optional[bool] = False
@@ -147,6 +199,21 @@ class PedidoEntregueRequest(BaseModel):
     servidor: str
     banco: str
     entregue: bool
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class QtdPessoasRequest(BaseModel):
+    """Painel de Pedidos (Mesa/Comanda/Balcão) — quantidade de pessoas
+    sentadas na mesa/comanda/balcão, usada só pra dividir o valor total na
+    impressão da conta (ver `ReciboPedidoModal`). Grava direto ao editar no
+    card, fora do fluxo normal de Gravar — mesmo padrão de
+    `FormaPagSimplesRequest`/`PedidoEntregueRequest` abaixo. Campo novo, sem
+    precedente no legado. Pedido explícito do usuário, 2026-07-17."""
+    servidor: str
+    banco: str
+    qtd_pessoas: Optional[int] = None  # None/0 = "não informado"
     usuario_alteracao: Optional[int] = None
     classe: Optional[int] = None
     plataforma: Optional[str] = None

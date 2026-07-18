@@ -92,6 +92,14 @@ ACOES_PEDIDO = [
     # FATURAR acima — cada botão real da tela com seu checkbox, não
     # reaproveita SITUACAO). Só no Pedido Bar por ora.
     ("CANCELAR", "Cancelar pedido"),
+    # Botão "Dividir Pedido" — funcionalidade NOVA, sem precedente no legado
+    # (pesquisado em toda a árvore VB6, nenhum "Dividir/Separar Conta"
+    # existe). Divide um pedido Aberto em 2+ pedidos novos, cada um com um
+    # subconjunto dos itens (quantidade inteira ou fracionária, pra dividir
+    # o valor de um item indivisível entre várias pessoas), todos sob o
+    # mesmo cliente (Mesa/Comanda). Pedido explícito do usuário, 2026-07-17
+    # — ver `_dividir_pedido_sync` em pedidos_service.py. Só no Pedido Bar.
+    ("DIVIDIR", "Dividir pedido"),
     # Botão "Incluir Tx Serviço" (FrmManPedBar.frm) — só no Pedido Bar, não
     # trazido pro ACOES_PEDIDO_COMP (feature do segmento Bar, sem
     # equivalente no Pedido de Venda geral).

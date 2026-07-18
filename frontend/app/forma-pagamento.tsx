@@ -163,7 +163,7 @@ export default function FormaPagamentoScreen() {
   const [novoPrazo, setNovoPrazo] = useState("");
   const [novoPercentual, setNovoPercentual] = useState("");
 
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2500); };
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 500); };
 
   const load = useCallback(async (c: Conn, q: string) => {
     setLoading(true);

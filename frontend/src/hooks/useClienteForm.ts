@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { useAuditContext } from "@/src/hooks/useAuditContext";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors } from "@/src/theme/colors";
 
 // ---------- Tipos ----------
@@ -40,6 +41,25 @@ export const ENDERECO_TIPOS = [
   { value: 1, label: "Cobrança" },
   { value: 2, label: "Entrega" },
 ];
+
+// DDD padrão por UF (capital de cada estado) — usado quando o usuário não
+// digita o DDD de um telefone: cai pro DDD da UF da empresa (controle.uf),
+// não pro DDD do cliente/endereço. Pedido explícito do usuário, 2026-07-18
+// ("se não for digitado o DDD do telefone, considerar sempre a UF da
+// empresa cadastrada no Controle"). Estados com mais de um DDD (SP, RJ, MG,
+// PR, etc.) usam o DDD da capital como default único — não há como saber
+// qual dos vários DDDs do estado é o certo sem mais contexto, a capital é
+// a escolha mais razoável.
+const DDD_POR_UF: Record<string, string> = {
+  AC: "68", AL: "82", AP: "96", AM: "92", BA: "71", CE: "85", DF: "61",
+  ES: "27", GO: "62", MA: "98", MT: "65", MS: "67", MG: "31", PA: "91",
+  PB: "83", PR: "41", PE: "81", PI: "86", RJ: "21", RN: "84", RS: "51",
+  RO: "69", RR: "95", SC: "48", SP: "11", SE: "79", TO: "63",
+};
+
+export function dddPadraoPorUf(uf: string | null | undefined): string {
+  return DDD_POR_UF[(uf || "").trim().toUpperCase()] || "";
+}
 
 // Nomes das rotas de lookup (codigo, descricao) usadas na aba Dados Secundários.
 const LOOKUP_ROUTES = {
@@ -169,7 +189,7 @@ export function useToast() {
       setMsg(m);
       setTone(t);
       if (tRef.current) clearTimeout(tRef.current);
-      tRef.current = setTimeout(() => setMsg(null), 3500);
+      tRef.current = setTimeout(() => setMsg(null), 1500);
     },
     []
   );
@@ -201,11 +221,30 @@ export function useClienteForm(opts: {
   const { editing, codigo, initialNome, initialCgcCpf, selfRoute } = opts;
   const router = useRouter();
   const auditCtx = useAuditContext();
+  const feedback = useFeedback();
 
   const [conn, setConn] = useState<Connection | null>(null);
   const [vendedor, setVendedor] = useState<number | null>(null);
   const [loadingInit, setLoadingInit] = useState(true);
   const [saving, setSaving] = useState(false);
+  // `controle.exige_cpf_cliente` (Controle do Sistema > aba Kontacto) — se
+  // ligado, CPF/CNPJ passa a ser obrigatório no cadastro; padrão é opcional
+  // (false/sem registro de controle). Validação real é reforçada no backend
+  // (`_save_cliente_sync`); isso aqui é só pra mostrar o erro sem round-trip.
+  // Pedido explícito do usuário, 2026-07-17.
+  const [exigeCpfCliente, setExigeCpfCliente] = useState(false);
+  // `controle.aceita_duplicar_cnpj` — decide o que acontece ao digitar um
+  // CPF/CNPJ que já existe em outro cliente: false (padrão) carrega o
+  // cliente existente automaticamente (comportamento de sempre); true
+  // pergunta se o usuário quer consultar o existente ou criar um novo com
+  // o mesmo documento (caso de filiais com o mesmo CNPJ/Inscrições
+  // Estaduais diferentes, ex. redes de banco). Pedido explícito do
+  // usuário, 2026-07-17.
+  const [aceitaDuplicarCnpj, setAceitaDuplicarCnpj] = useState(false);
+  // DDD padrão pra telefone sem DDD digitado — derivado de `controle.uf`
+  // (UF da empresa), não do cliente/endereço. Pedido explícito do usuário,
+  // 2026-07-18.
+  const [empresaDdd, setEmpresaDdd] = useState("");
   const { show: showToast, msg: toastMsg, tone: toastTone } = useToast();
 
   // Dados principais
@@ -343,6 +382,24 @@ export function useClienteForm(opts: {
       } catch (e) {
         if (!cancelled)
           showToast(`Erro ao carregar tipos: ${e instanceof Error ? e.message : e}`, "error");
+      }
+
+      // controle.exige_cpf_cliente / controle.aceita_duplicar_cnpj / uf —
+      // falha silenciosa (mantém os defaults: documento opcional, duplicata
+      // sempre carrega o existente, sem DDD padrão).
+      try {
+        const url = `${c.api.replace(/\/+$/, "")}/api/controle/empresa?servidor=${encodeURIComponent(
+          c.servidor
+        )}&banco=${encodeURIComponent(c.banco)}`;
+        const r = await fetch(url);
+        const j = await r.json();
+        if (!cancelled && j?.success) {
+          setExigeCpfCliente(!!j.exige_cpf_cliente);
+          setAceitaDuplicarCnpj(!!j.aceita_duplicar_cnpj);
+          setEmpresaDdd(dddPadraoPorUf(j.uf));
+        }
+      } catch {
+        /* silencioso */
       }
 
       // Carrega lookups da aba Dados Secundários (falhas individuais são silenciosas —
@@ -638,19 +695,35 @@ export function useClienteForm(opts: {
       const r = await fetch(url);
       const j = await r.json();
       if (j?.success && j?.found && j?.codigo) {
-        // Recarrega a tela em modo edição (substitui rota — assim o efeito inicial roda)
-        showToast(`Cliente já cadastrado: #${j.codigo}. Carregando...`, "info");
-        setTimeout(() => {
-          router.replace({
-            pathname: selfRoute,
-            params: { codigo: String(j.codigo) },
-          } as never);
-        }, 600);
+        const codigoExistente = j.codigo as number;
+        const irParaExistente = () => {
+          // Recarrega a tela em modo edição (substitui rota — assim o efeito inicial roda)
+          showToast(`Cliente já cadastrado: #${codigoExistente}. Carregando...`, "info");
+          setTimeout(() => {
+            router.replace({
+              pathname: selfRoute,
+              params: { codigo: String(codigoExistente) },
+            } as never);
+          }, 600);
+        };
+        if (aceitaDuplicarCnpj) {
+          // controle.aceita_duplicar_cnpj ligado — casos de filiais com o
+          // mesmo CNPJ (Inscrições Estaduais diferentes): pergunta em vez
+          // de carregar direto, deixando o usuário optar por criar um novo
+          // cadastro com o mesmo documento.
+          feedback.showConfirm(
+            `Já existe um cliente com este CPF/CNPJ (#${codigoExistente}). Deseja consultar o cadastro existente ou continuar criando um novo com o mesmo documento?`,
+            irParaExistente,
+            { title: "Cliente já cadastrado", confirmText: "Consultar Existente", cancelText: "Criar Novo" }
+          );
+        } else {
+          irParaExistente();
+        }
       }
     } catch {
       /* silencioso — busca é opcional */
     }
-  }, [cgcCpf, conn, editing, router, selfRoute, showToast]);
+  }, [cgcCpf, conn, editing, router, selfRoute, showToast, aceitaDuplicarCnpj, feedback]);
 
   // Dispara a busca por CGC/CPF AUTOMATICAMENTE quando o número fica válido
   // (debounce 350ms para evitar muitas chamadas durante a digitação).
@@ -686,8 +759,25 @@ export function useClienteForm(opts: {
       showToast("Máximo de 3 telefones.", "info");
       return;
     }
-    setTelefones((prev) => [...prev, blankTelefone()]);
+    // Nova linha já nasce com o DDD padrão da UF da empresa (Controle) —
+    // usuário só digita se o telefone for de outra área. Pedido explícito
+    // do usuário, 2026-07-18.
+    setTelefones((prev) => [...prev, { ...blankTelefone(), ddd: empresaDdd }]);
   };
+
+  // Assim que o DDD padrão (UF da empresa) carrega, preenche a PRIMEIRA
+  // linha de telefone se ela ainda estiver intocada (cadastro novo, campo
+  // ainda em branco) — cobre o caso em que essa linha já existe desde o
+  // `useState` inicial, antes do fetch de `empresaDdd` terminar. Não mexe
+  // em cadastro em edição nem em linha já preenchida pelo usuário.
+  useEffect(() => {
+    if (editing || !empresaDdd) return;
+    setTelefones((prev) =>
+      prev.length === 1 && !prev[0].ddd && !prev[0].tel && !prev[0].descricao
+        ? [{ ...prev[0], ddd: empresaDdd }]
+        : prev
+    );
+  }, [empresaDdd, editing]);
 
   const removeTelefone = (idx: number) => {
     setTelefones((prev) => {
@@ -727,7 +817,10 @@ export function useClienteForm(opts: {
 
   const limparTelefoneForm = () => {
     setTelefoneEditIdx(null);
-    setTelefoneDraft(blankTelefone());
+    // Mesmo default de DDD do cadastro rápido (UF da empresa) — cliente
+    // completo usa esse formulário único (Incluir/Alterar/Excluir) em vez
+    // da linha direta. Pedido explícito do usuário, 2026-07-18.
+    setTelefoneDraft({ ...blankTelefone(), ddd: empresaDdd });
   };
 
   const incluirTelefone = () => {
@@ -887,6 +980,8 @@ export function useClienteForm(opts: {
       } else {
         return "CGC/CPF deve ter 11 (CPF) ou 14 (CNPJ) caracteres.";
       }
+    } else if (exigeCpfCliente) {
+      return "CPF/CNPJ é obrigatório no cadastro de clientes.";
     }
     if (!emailValido(email)) return "E-mail inválido.";
     for (const e of enderecos) {
@@ -919,7 +1014,11 @@ export function useClienteForm(opts: {
         .filter((t) => (t.tel || "").trim().length > 0)
         .slice(0, 3)
         .map((t) => ({
-          ddd: (t.ddd || "").trim(),
+          // Rede de segurança: se o DDD não foi digitado (nem preenchido
+          // pelo default ao adicionar a linha), cai pro DDD da UF da
+          // empresa no momento de gravar. Pedido explícito do usuário,
+          // 2026-07-18.
+          ddd: (t.ddd || "").trim() || empresaDdd,
           tel: (t.tel || "").trim(),
           descricao: (t.descricao || "").trim(),
         }));
@@ -1055,6 +1154,7 @@ export function useClienteForm(opts: {
     toastTone,
     showToast,
     vendedor,
+    exigeCpfCliente,
     cgcCpf,
     handleCgcCpfChange,
     buscarPorCgc,

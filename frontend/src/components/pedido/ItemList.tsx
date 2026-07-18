@@ -1,5 +1,5 @@
 // Seção "Itens do Pedido": lista de itens + botões de desconto geral/concedidos + subtotal.
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ActivityIndicator, Platform, Pressable, Text, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@/src/components/Ionicons";
 // Ícone de garçom/prato servido pra Taxa de Serviço (pedido explícito do
@@ -41,6 +41,11 @@ type Props = {
   onFaturar?: () => void;
   faturando?: boolean;
   isFechado?: boolean;
+  // Abre o DividirPedidoModal — pill ao lado de "Fechar Pedido" (só com o
+  // pedido Aberto, mesma condição), permissão própria DIVIDIR. Pedido
+  // explícito do usuário, 2026-07-17 — funcionalidade nova, sem
+  // equivalente no legado.
+  onDividir?: () => void;
   // Abre o Gestor de Documentos (AnexosPedidoModal) — pill entre "Faturar
   // Pedido" e "Imprimir" (pedido explícito do usuário, 2026-07-16), só
   // Pedido Bar, permissão própria ANEXOS. Só aparece com cliente já
@@ -65,13 +70,18 @@ type Props = {
   // — pill ao lado de Faturar Pedido (pedido explícito do usuário), só web
   // (window.print()), só Pedido Bar, permissão própria IMPRIMIR.
   onImprimir?: () => void;
+  // Conteúdo extra ao lado de Margem/Desconto Geral/Pedido Totalizado, no
+  // rodapé (final da lista de itens) — a tela dona usa isso pra encaixar o
+  // botão de WhatsApp na mesma linha (pedido explícito do usuário,
+  // 2026-07-17), sem o ItemList precisar conhecer `conn`/`documentId`/etc.
+  footerRight?: ReactNode;
 };
 
 const isWeb = Platform.OS === "web";
 
 export default function ItemList({
   editing, isAberto, it, tela = "PEDIDO", onAnalisar, onFechar, fechando, onFaturar, faturando, isFechado,
-  onAnexos, onReabrir, reabrindo, onCancelar, cancelando, onImprimir,
+  onDividir, onAnexos, onReabrir, reabrindo, onCancelar, cancelando, onImprimir, footerRight,
 }: Props) {
   const { itens, subtotal, itensLoading, descTotalItens, geralAtual } = it;
   const { can } = usePermissions();
@@ -79,6 +89,7 @@ export default function ItemList({
   const canAnalise = !!onAnalisar && can(`${tela}.ANALISE`);
   const canGeral = isAberto && can(`${tela}.DESC_GERAL`);
   const canFechar = !!onFechar && isAberto && can(`${tela}.SITUACAO`);
+  const canDividir = !!onDividir && tela === "PEDIDO" && isAberto && itens.length > 0 && can(`${tela}.DIVIDIR`);
   const canFaturar = !!onFaturar && tela === "PEDIDO" && (isAberto || !!isFechado) && can(`${tela}.FATURAR`);
   const canAnexos = !!onAnexos && tela === "PEDIDO" && can(`${tela}.ANEXOS`);
   const canReabrir = !!onReabrir && tela === "PEDIDO" && !!isFechado && can(`${tela}.REABRIR`);
@@ -106,7 +117,7 @@ export default function ItemList({
       {/* Ação de Fechar/Faturar Pedido — acima da lista, pra não exigir rolar
           até o fim do pedido pra achá-la. Faturar fica ao lado de Fechar
           (pedido explícito do usuário). */}
-      {canFechar || canFaturar || canReabrir || canCancelar || canAnexos || canImprimir ? (
+      {canFechar || canDividir || canFaturar || canReabrir || canCancelar || canAnexos || canImprimir ? (
         <View style={styles.itensToolbar}>
           {canFechar ? (
             <TouchableOpacity
@@ -122,6 +133,17 @@ export default function ItemList({
                 <Ionicons name="lock-closed-outline" size={16} color="#fff" />
               )}
               <Text style={styles.toolbarPillFecharText}>Fechar Pedido</Text>
+            </TouchableOpacity>
+          ) : null}
+          {canDividir ? (
+            <TouchableOpacity
+              onPress={onDividir}
+              activeOpacity={0.8}
+              style={styles.toolbarPillAnexo}
+              testID="pedido-form-dividir-btn"
+            >
+              <Ionicons name="git-branch-outline" size={16} color={colors.brandPrimary} />
+              <Text style={styles.toolbarPillAnexoText}>Distribuir</Text>
             </TouchableOpacity>
           ) : null}
           {canFaturar ? (
@@ -215,31 +237,8 @@ export default function ItemList({
               <Ionicons name="chevron-forward" size={14} color={colors.error} />
             </TouchableOpacity>
           ) : null}
-          {canAnalise ? (
-            <TouchableOpacity
-              onPress={onAnalisar}
-              activeOpacity={0.8}
-              style={styles.toolbarPill}
-              testID="pedido-form-analise-btn"
-            >
-              <Ionicons name="bar-chart-outline" size={16} color={colors.brandPrimary} />
-              <Text style={styles.toolbarPillText}>Margem</Text>
-              <Ionicons name="chevron-forward" size={14} color={colors.brandPrimary} />
-            </TouchableOpacity>
-          ) : null}
-          {canGeral ? (
-            <TouchableOpacity
-              onPress={it.openGeralModal}
-              activeOpacity={0.8}
-              style={styles.toolbarPill}
-              testID="pedido-form-desconto-geral-btn"
-            >
-              <Ionicons name="cash-outline" size={16} color={colors.brandPrimary} />
-              <Text style={styles.toolbarPillText}>
-                Desconto geral{geralAtual > 0 ? ` (${formatBRL(geralAtual)})` : ""}
-              </Text>
-            </TouchableOpacity>
-          ) : null}
+        </View>
+        <View style={styles.itensSummaryRight}>
           {canTaxaServico ? (
             <TouchableOpacity
               onPress={it.handleTaxaServico}
@@ -266,19 +265,6 @@ export default function ItemList({
               </Text>
             </TouchableOpacity>
           ) : null}
-          {showPedidoTotalizado ? (
-            <TouchableOpacity
-              onPress={() => it.setPedidoTotalizadoOpen(true)}
-              activeOpacity={0.8}
-              style={styles.toolbarPill}
-              testID="pedido-form-pedido-totalizado-btn"
-            >
-              <Ionicons name="receipt-outline" size={15} color={colors.brandPrimary} />
-              <Text style={styles.toolbarPillText}>Pedido Totalizado</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-        <View style={styles.itensSummaryRight}>
           {editing && isAberto && can(`${tela}.ADD_ITEM`) ? (
             <Pressable
               onPress={it.openAddModal}
@@ -392,6 +378,51 @@ export default function ItemList({
           })}
         </View>
       )}
+
+      {/* Rodapé — Margem/Desconto Geral/Pedido Totalizado no final da lista,
+          ao lado do botão de WhatsApp (`footerRight`, injetado pela tela
+          dona — pedido explícito do usuário, 2026-07-17). */}
+      {canAnalise || canGeral || showPedidoTotalizado || footerRight ? (
+        <View style={styles.itensFooterRow}>
+          {canAnalise ? (
+            <TouchableOpacity
+              onPress={onAnalisar}
+              activeOpacity={0.8}
+              style={styles.toolbarPill}
+              testID="pedido-form-analise-btn"
+            >
+              <Ionicons name="bar-chart-outline" size={16} color={colors.brandPrimary} />
+              <Text style={styles.toolbarPillText}>Margem</Text>
+              <Ionicons name="chevron-forward" size={14} color={colors.brandPrimary} />
+            </TouchableOpacity>
+          ) : null}
+          {canGeral ? (
+            <TouchableOpacity
+              onPress={it.openGeralModal}
+              activeOpacity={0.8}
+              style={styles.toolbarPill}
+              testID="pedido-form-desconto-geral-btn"
+            >
+              <Ionicons name="cash-outline" size={16} color={colors.brandPrimary} />
+              <Text style={styles.toolbarPillText}>
+                Desconto geral{geralAtual > 0 ? ` (${formatBRL(geralAtual)})` : ""}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+          {showPedidoTotalizado ? (
+            <TouchableOpacity
+              onPress={() => it.setPedidoTotalizadoOpen(true)}
+              activeOpacity={0.8}
+              style={styles.toolbarPill}
+              testID="pedido-form-pedido-totalizado-btn"
+            >
+              <Ionicons name="receipt-outline" size={15} color={colors.brandPrimary} />
+              <Text style={styles.toolbarPillText}>Pedido Totalizado</Text>
+            </TouchableOpacity>
+          ) : null}
+          {footerRight}
+        </View>
+      ) : null}
     </>
   );
 }

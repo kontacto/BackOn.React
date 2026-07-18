@@ -9,12 +9,23 @@
 // 7 abas (principal/cadastros/transacoes/financeiro/posto/configuracoes/
 // relatorios) — só a barra visual dele é escondida no web (`tabBarStyle:
 // display:none`) pra não duplicar este componente.
+import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter, usePathname } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import { usePermissions } from "@/src/permissions";
 import { colors, radius, spacing } from "@/src/theme/colors";
+
+// Preferência de menu recolhido (só ícones) — lembrada no navegador entre
+// sessões, mesmo padrão de outras preferências de UI já persistidas no
+// app (ex.: pedidosFilters.ts), mas aqui é global (não por empresa+banco,
+// é só uma preferência visual de janela). `window.localStorage` direto é
+// seguro aqui: este componente só é montado com `Platform.OS === "web"`
+// (ver app/_layout.tsx). Pedido explícito do usuário, 2026-07-18.
+const COLLAPSE_KEY = "sidebar_collapsed";
+const SIDEBAR_WIDTH_EXPANDED = 188;
+const SIDEBAR_WIDTH_COLLAPSED = 56;
 
 type NavItem = {
   key: string;
@@ -99,8 +110,31 @@ export default function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
   const { moduleOn } = usePermissions();
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(COLLAPSE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  // Tooltip com o rótulo — só faz sentido com o menu recolhido (label
+  // escondido); um só hover de cada vez, mesmo padrão já usado no card do
+  // Painel de Pedidos. Pedido explícito do usuário, 2026-07-18.
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
 
   if (HIDDEN_ON.includes(pathname)) return null;
+
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0");
+      } catch {
+        // silencioso — preferência só não persiste, não impede o toggle
+      }
+      return next;
+    });
+  };
 
   const items: NavItem[] = [
     { key: "principal", label: "Início", icon: "home-outline", href: "/principal", visible: true },
@@ -116,7 +150,18 @@ export default function Sidebar() {
   const activeHref = DETAIL_TO_TAB[pathname] ?? pathname;
 
   return (
-    <View style={styles.sidebar} testID="app-sidebar">
+    <View
+      style={[styles.sidebar, { width: collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED }]}
+      testID="app-sidebar"
+    >
+      <Pressable
+        onPress={toggleCollapsed}
+        style={[styles.collapseBtn, collapsed && styles.collapseBtnCollapsed]}
+        hitSlop={6}
+        testID="sidebar-toggle-collapse"
+      >
+        <Ionicons name={collapsed ? "chevron-forward" : "chevron-back"} size={16} color={colors.muted} />
+      </Pressable>
       {items
         .filter((i) => i.visible)
         .map((item) => {
@@ -125,11 +170,24 @@ export default function Sidebar() {
             <Pressable
               key={item.key}
               onPress={() => router.push(item.href as never)}
-              style={[styles.item, active && styles.itemActive]}
+              onHoverIn={() => setHoveredKey(item.key)}
+              onHoverOut={() => setHoveredKey(null)}
+              style={[styles.item, active && styles.itemActive, collapsed && styles.itemCollapsed]}
               testID={`sidebar-${item.key}`}
             >
               <Ionicons name={item.icon} size={20} color={active ? colors.brandPrimary : colors.muted} />
-              <Text style={[styles.label, active && styles.labelActive]}>{item.label}</Text>
+              {!collapsed ? (
+                <Text style={[styles.label, active && styles.labelActive]} numberOfLines={1}>
+                  {item.label}
+                </Text>
+              ) : null}
+              {collapsed && hoveredKey === item.key ? (
+                <View style={styles.tooltip} pointerEvents="none">
+                  <View style={styles.tooltipInner}>
+                    <Text style={styles.tooltipText}>{item.label}</Text>
+                  </View>
+                </View>
+              ) : null}
             </Pressable>
           );
         })}
@@ -146,6 +204,27 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRightWidth: 1,
     borderRightColor: colors.border,
+    // zIndex explícito — sem isso, o tooltip (absoluto, escapa a largura
+    // estreita da sidebar) renderiza ATRÁS do painel de conteúdo: eles são
+    // View irmãs em app/_layout.tsx (Sidebar antes, content depois no
+    // JSX), e react-native-web dá position:relative padrão a toda View, então
+    // o irmão mais tarde no DOM (content) pinta por cima por padrão. Mesma
+    // causa raiz já corrigida no tooltip do nome do card do Painel de
+    // Pedidos. Pedido explícito do usuário, 2026-07-18 ("está por trás da
+    // tela").
+    zIndex: 20,
+  },
+  collapseBtn: {
+    alignSelf: "flex-end",
+    width: 28,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.md,
+    marginBottom: spacing.xs,
+  },
+  collapseBtnCollapsed: {
+    alignSelf: "center",
   },
   item: {
     flexDirection: "row",
@@ -154,10 +233,29 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: radius.md,
+    // position:relative pra ancorar o tooltip do menu recolhido — sem
+    // efeito visual quando expandido (não usa tooltip nesse caso).
+    position: "relative",
+  },
+  itemCollapsed: {
+    justifyContent: "center",
+    paddingHorizontal: 0,
   },
   itemActive: {
     backgroundColor: colors.surfaceSecondary,
   },
+  // Tooltip do rótulo no menu recolhido — à direita do ícone, verticalmente
+  // centralizado (spans a altura inteira do item via top:0/bottom:0 +
+  // justifyContent:center, evita precisar de transform pra centralizar).
+  tooltip: {
+    position: "absolute", left: "100%", top: 0, bottom: 0,
+    marginLeft: 8, justifyContent: "center", zIndex: 20,
+  },
+  tooltipInner: {
+    backgroundColor: "#1a1a1a", borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm, paddingVertical: 4,
+  },
+  tooltipText: { color: "#fff", fontSize: 12, fontWeight: "600" },
   label: {
     fontSize: 13,
     fontWeight: "500",

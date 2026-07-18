@@ -366,7 +366,10 @@ export function usePedidoItens({
       if (!j?.success) { showToast(j?.message || "Falha ao remover.", "error"); }
       else {
         setEditItem(null);
-        showToast("Item removido.", "success");
+        showToast(
+          j.devolvido_para ? `Item devolvido para o Pedido nº ${j.devolvido_para}.` : "Item removido.",
+          "success"
+        );
         loadItens();
       }
     } catch (e) {

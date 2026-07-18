@@ -199,7 +199,12 @@ def _list_selecionar_sync(servidor: str, banco: str, f: dict) -> dict:
             if termo.isdigit():
                 where.append("c.codigo = %s"); params.append(int(termo))
             else:
-                where.append("c.nome LIKE %s"); params.append(f"%{termo}%")
+                # Busca por nome também bate no nome fantasia — [GLOBAL] em
+                # toda busca de cliente do sistema, pedido explícito do
+                # usuário, 2026-07-18.
+                where.append("(c.nome LIKE %s OR c.fantasia LIKE %s)")
+                like_termo = f"%{termo}%"
+                params.extend([like_termo, like_termo])
         if f.get("cgc_cpf"):
             where.append("c.cgc_cpf LIKE %s"); params.append(f"%{f['cgc_cpf'].strip()}%")
         if f.get("bairro"):

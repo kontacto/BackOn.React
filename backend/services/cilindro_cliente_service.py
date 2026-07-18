@@ -34,9 +34,12 @@ def _list_vinculos_sync(servidor: str, banco: str, search: str, page: int, size:
         params: list = []
         term = (search or "").strip()
         if term:
-            where += " AND (cli.nome LIKE %s OR cil.codigo LIKE %s)"
+            # Busca por nome também bate no nome fantasia — [GLOBAL] em toda
+            # busca de cliente do sistema, pedido explícito do usuário,
+            # 2026-07-18.
+            where += " AND (cli.nome LIKE %s OR cli.fantasia LIKE %s OR cil.codigo LIKE %s)"
             like = f"%{term}%"
-            params += [like, like]
+            params += [like, like, like]
         cur.execute(
             f"SELECT COUNT(*) AS n FROM Cilindro_Cliente cc "
             f"JOIN Cilindro cil ON cil.cod = cc.cilindro "

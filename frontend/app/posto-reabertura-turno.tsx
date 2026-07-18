@@ -43,7 +43,7 @@ export default function PostoReaberturaTurnoScreen() {
   const [confirmando, setConfirmando] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3000); };
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1000); };
 
   const load = useCallback(async (c: Conn) => {
     setLoading(true);

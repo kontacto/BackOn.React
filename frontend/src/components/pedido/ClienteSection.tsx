@@ -30,6 +30,11 @@ type Props = {
   // + Área de Atuação + Data/Validade + Observação) — o botão de resumo
   // ao lado do nome é o gatilho.
   onOpenDados?: () => void;
+  // Abre o cadastro rápido de cliente (`cliente-form.tsx`) já carregado no
+  // cliente atual, pra alterar os dados dele sem sair do Pedido — só
+  // aparece com um cliente selecionado. Pedido explícito do usuário,
+  // 2026-07-17.
+  onEditCliente?: () => void;
   // Campo de busca — sempre editável, mesmo com um cliente já selecionado
   // (o pai preenche com o nome do cliente atual; digitar por cima refaz a
   // busca e troca o cliente).
@@ -43,7 +48,7 @@ type Props = {
 };
 
 export default function ClienteSection({
-  clienteResumo, loadingResumo, hasCliente, onOpenSearch, onOpenDados,
+  clienteResumo, loadingResumo, hasCliente, onOpenSearch, onOpenDados, onEditCliente,
   quickTerm, onQuickTermChange, quickLoading,
   onSubmitTerm, disabled,
 }: Props) {
@@ -71,6 +76,16 @@ export default function ClienteSection({
               importantForAutofill="no"
             />
             {quickLoading ? <ActivityIndicator size="small" color={colors.brandPrimary} /> : null}
+            {hasCliente && onEditCliente ? (
+              <Pressable
+                onPress={onEditCliente}
+                disabled={disabled}
+                hitSlop={8}
+                testID="pedido-form-cliente-editar"
+              >
+                <Ionicons name="create-outline" size={18} color={colors.muted} />
+              </Pressable>
+            ) : null}
             <Pressable
               onPress={onOpenSearch}
               disabled={disabled}

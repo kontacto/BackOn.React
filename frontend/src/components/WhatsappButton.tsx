@@ -19,11 +19,18 @@ type Props = {
   companyId?: string | null;
   // true = sem marginTop, ocupa o espaço flexível do pai (uso: lado a lado
   // com outro botão, ex. "Gravar" em Telemarketing). false/omitido = bloco
-  // full-width com marginTop (comportamento original, Pedido/O.S.). Quando
-  // compact, a frase "WhatsApp desativado..." NÃO é renderizada aqui dentro
-  // (ficaria espremida na metade da linha) — o pai deve ler `onStatusChange`
-  // e renderizar a frase onde quiser (ex. largura cheia, abaixo da linha).
+  // full-width com marginTop (comportamento original, Pedido/O.S.).
   compact?: boolean;
+  // true = mesmo padrão visual dos pills da toolbar (altura 36, borda
+  // totalmente arredondada, largura pelo conteúdo — não ocupa a linha
+  // inteira), na cor verde do WhatsApp (pedido explícito do usuário,
+  // 2026-07-17) — usado no rodapé de Itens do Pedido (`ItemList.footerRight`),
+  // ao lado de Margem/Desconto Geral/Pedido Totalizado.
+  pill?: boolean;
+  // Quando `compact` OU `pill`, a frase "WhatsApp desativado..." NÃO é
+  // renderizada aqui dentro (ficaria espremida/deslocada) — o pai deve ler
+  // `onStatusChange` e renderizar a frase onde quiser (ex. largura cheia,
+  // abaixo da linha).
   onStatusChange?: (enabled: boolean | null) => void;
 };
 
@@ -32,7 +39,7 @@ type LogItem = {
   provider: string; sent_at: string | null; user_nome: string;
 };
 
-export default function WhatsappButton({ conn, documentType, documentId, userId, companyId, compact, onStatusChange }: Props) {
+export default function WhatsappButton({ conn, documentType, documentId, userId, companyId, compact, pill, onStatusChange }: Props) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"send" | "history">("send");
   const [loading, setLoading] = useState(false);
@@ -146,17 +153,18 @@ export default function WhatsappButton({ conn, documentType, documentId, userId,
         style={({ pressed }) => [
           styles.btn,
           compact && styles.btnCompact,
+          pill && styles.btnPill,
           globalEnabled === false && styles.btnDisabled,
           pressed && globalEnabled !== false && { opacity: 0.85 },
         ]}
         testID={`whatsapp-btn-${documentType}`}
       >
-        <Ionicons name="logo-whatsapp" size={18} color="#fff" />
-        <Text style={styles.btnText}>
+        <Ionicons name="logo-whatsapp" size={pill ? 16 : 18} color="#fff" />
+        <Text style={[styles.btnText, pill && styles.btnTextPill]}>
           {globalEnabled === false ? "WhatsApp desativado" : "Enviar por WhatsApp"}
         </Text>
       </Pressable>
-      {globalEnabled === false && !compact ? (
+      {globalEnabled === false && !compact && !pill ? (
         <Text style={styles.disabledHint} testID={`whatsapp-disabled-${documentType}`}>
           O envio por WhatsApp está desativado em Configurações.
         </Text>
@@ -277,9 +285,19 @@ const styles = StyleSheet.create({
   compactWrap: { flex: 1 },
   btn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm, backgroundColor: "#25D366", borderRadius: radius.md, paddingVertical: 14, marginTop: spacing.md },
   btnCompact: { width: "100%", marginTop: 0 },
+  // Mesmo padrão dos pills da toolbar (ver `toolbarPill` em pedido/styles.ts)
+  // — altura 36, borda totalmente arredondada, largura pelo conteúdo (não
+  // herda o `width:"100%"` do btnCompact), sem marginTop pra sentar inline
+  // na linha do rodapé de Itens do Pedido.
+  btnPill: {
+    alignSelf: "flex-start",
+    height: 36, paddingVertical: 0, paddingHorizontal: spacing.md,
+    borderRadius: radius.pill, marginTop: 0, gap: 6,
+  },
   btnDisabled: { backgroundColor: colors.muted, opacity: 0.6 },
   disabledHint: { fontSize: 12, color: colors.muted, textAlign: "center", marginTop: spacing.xs },
   btnText: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  btnTextPill: { fontSize: 13, fontWeight: "600" },
   modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
   modalCard: { backgroundColor: colors.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.xxl, minHeight: 360 },
   handle: { alignSelf: "center", width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, marginBottom: spacing.sm },

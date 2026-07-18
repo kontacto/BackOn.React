@@ -28,6 +28,20 @@ export const styles = StyleSheet.create({
   row: { flexDirection: "row", gap: 8, alignItems: "flex-end" },
   dateRow: { flexDirection: "row", gap: 8, alignItems: "flex-start" },
   headerMeta: { fontSize: 12, color: colors.muted },
+  // Chips de "Pedidos criados a partir deste" / "Pedidos da mesma divisão"
+  // (Dividir Pedido) — pedido explícito do usuário, 2026-07-17.
+  filhoChip: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingVertical: 6, paddingHorizontal: spacing.sm,
+    borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surfaceSecondary,
+  },
+  filhoDot: { width: 8, height: 8, borderRadius: 4 },
+  filhoText: { fontSize: 12, color: colors.onSurface, fontWeight: "500" },
+  // Cor própria pro chip do pedido ORIGINAL da divisão, pra se destacar dos
+  // filhos/irmãos na mesma lista — pedido explícito do usuário, 2026-07-17.
+  filhoChipOriginal: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  filhoTextOriginal: { color: colors.onBrandPrimary },
   clienteBox: {
     flexDirection: "row", alignItems: "center", gap: 8,
     backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
@@ -292,6 +306,13 @@ export const styles = StyleSheet.create({
   },
   itensSummaryLeft: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm, flex: 1 },
   itensSummaryRight: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  // Rodapé no final da lista de itens (Margem/Desconto Geral/Pedido
+  // Totalizado + o que a tela dona injetar via `footerRight`, ex. botão de
+  // WhatsApp) — pedido explícito do usuário, 2026-07-17.
+  itensFooterRow: {
+    flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "center",
+    gap: spacing.sm, marginTop: spacing.lg,
+  },
   subtotalPill: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, height: 36,
     paddingHorizontal: spacing.md, borderRadius: radius.pill,
@@ -367,4 +388,8 @@ export const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary,
   },
   fullListText: { color: colors.brandPrimary, fontWeight: "500", fontSize: 14 },
+  // Aviso "WhatsApp desativado" quando o botão compacto (ItemList.footerRight)
+  // é usado — o próprio WhatsappButton não renderiza essa frase em modo
+  // compact (ver seu comentário de prop), quem chama decide onde encaixar.
+  whatsappDisabledHint: { fontSize: 12, color: colors.muted, textAlign: "center", marginTop: spacing.xs },
 });

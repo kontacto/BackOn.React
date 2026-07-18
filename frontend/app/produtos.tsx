@@ -196,7 +196,7 @@ export default function ProdutosScreen() {
 
   const showToast = useCallback((m: string) => {
     setToast(m);
-    setTimeout(() => setToast(null), 2500);
+    setTimeout(() => setToast(null), 500);
   }, []);
 
   // Reaproveita o mesmo modal "Adicionar Item" do Pedido (AddItemModal.tsx +

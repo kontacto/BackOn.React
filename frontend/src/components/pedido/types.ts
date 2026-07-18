@@ -1,6 +1,17 @@
 // Tipos compartilhados das telas de pedido.
 
-export type ClienteRow = { codigo: number; nome: string; cgc_cpf: string; telefone: string };
+export type ClienteRow = {
+  codigo: number; nome: string; cgc_cpf: string; telefone: string;
+  // Tipo do cliente (Mesa/Comanda/Balcão/Entrega/...) — só vem preenchido
+  // pela busca do Painel de Pedidos (`GET /api/clientes/find/search`);
+  // omitido em construções locais de ClienteRow que não vêm dessa busca.
+  tipo_cliente_descricao?: string;
+  // Código numérico do tipo do cliente (cliente.cliente_forn, FK
+  // tipo_cliente.codigo) — mesma busca acima; usado pra pré-preencher o
+  // combobox "Tipo" do Pedido (cadastro) ao carregar um cliente, pedido
+  // explícito do usuário, 2026-07-17. `null`/ausente = cliente sem tipo.
+  tipo_cliente_codigo?: number | null;
+};
 
 export type ClienteResumo = {
   codigo: number; nome: string; cgc_cpf: string; e_mail: string;
@@ -24,6 +35,27 @@ export type PedidoData = {
   forma_pag: string; forma_pag_descricao: string;
   // Localização (mesa/balcão) — pedido_venda.LOCALIZACAO, exibida no recibo.
   localizacao_descricao: string;
+  // Qtd. de pessoas na mesa/comanda/balcão (Painel de Pedidos) — usada só
+  // pra dividir o valor total na impressão da conta. null = não informado.
+  qtd_pessoas: number | null;
+  // Combobox "Tipo" do Pedido Bar (pedido_venda.tipo, FK tipo_cliente.codigo)
+  // — tipo do PEDIDO, separado do tipo do CLIENTE (cliente.cliente_forn).
+  // null = sem tipo próprio, a listagem cai pro tipo do cliente.
+  // `tipo_descricao` já vem resolvido (pedido ou, na falta, cliente).
+  // Pedido explícito do usuário, 2026-07-18.
+  tipo: number | null; tipo_descricao: string;
+  // Campo livre "Referência" — reaproveita pedido_venda.num_ped_cliente (já
+  // existente na tabela, já exposto no Pedido Completo como "Nº Pedido do
+  // Cliente"); no Pedido Bar também guarda o nº do pedido original ao
+  // Dividir Pedido (pedido explícito do usuário, 2026-07-17).
+  referencia: string;
+  // Outros pedidos da MESMA divisão (mesma mesa) — calculado pela raiz (o
+  // pedido original), não importa se este aqui é a raiz ou um filho, então
+  // a lista fica igual em qualquer um dos pedidos da divisão. Mostrados na
+  // tela pra permitir abrir/faturar cada um sem perder a referência da
+  // mesa até o fechamento total de todos eles (pedido explícito do
+  // usuário, 2026-07-17).
+  pedidos_relacionados: { pedido: number; situacao: string; situacao_label: string; total: number }[];
 };
 
 export type ItemRow = {

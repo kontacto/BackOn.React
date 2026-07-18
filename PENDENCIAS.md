@@ -1637,6 +1637,121 @@ CataTipoCliente()`.
 - **Não testado ao vivo** (sem chromium-cli/credenciais neste sandbox) —
   só tsc/testes unitários/boot do backend.
 
+### Dividir Pedido — implementado 2026-07-17 (funcionalidade NOVA, sem precedente no legado)
+
+**Pedido do usuário**: "um pedido pode se tornar 2 ou mais pedidos com alguns
+produtos do pedido original. Por exemplo: tem 4 pessoas na mesa e 1 pedido
+aberto. cada pessoa vai pagar por 1 ou 2 produtos ou uma certa quantidade de
+um produto, outros produtos vão ser divididos."
+
+**Pesquisado em toda a árvore VB6** (todas as linhas de negócio — Geral,
+Posto, Revenda, Tesouraria, ValPorto, Cartorio, Clauwan — `.frm` e
+`Mdl_Proc.bas`) por "Dividir"/"Split"/"Separar Conta" — **nada encontrado**.
+Não existe `FrmComanda*.frm` nenhum. `FrmManPedBar.frm` não tem esse botão.
+Confirmado explicitamente ao usuário antes de desenhar a solução — é
+funcionalidade genuinamente nova, desenhada em cima da máquina de estados já
+existente (A/F/C/PG).
+
+**Decisões confirmadas com o usuário** (via `AskUserQuestion` +
+confirmações diretas em mensagens seguintes):
+1. Os pedidos filhos ficam sob o **mesmo cliente** do pedido original (a
+   Mesa/Comanda) — relaxa de propósito a invariante de "1 pedido aberto por
+   cliente" só pra pedidos originados de uma divisão. Efeito colateral
+   conhecido e aceito: o atalho "digitar M15 + Enter" no campo Cliente
+   (`_pedido_aberto_por_cliente_sync`) continua trazendo só o pedido mais
+   recente quando há mais de um aberto pro mesmo cliente — a tela
+   "Pedidos Abertos" já lista todos normalmente, então não é um beco sem
+   saída, só não é o atalho de 1 clique nesse caso específico. Não
+   ajustado nesta rodada — nenhuma pergunta do usuário indicou que isso
+   precisa mudar agora.
+2. Divisão de item compartilhado por **valor fracionário** de uma unidade
+   indivisível (ex. 1 pizza dividida 4x) usa a MESMA mecânica que dividir
+   por quantidade inteira — `qtd_pedida` já é numérico/decimal (produtos
+   por m²/kg já usam fração), então `qtd=0.25` em cada um de 4 pedidos
+   representa exatamente 25% do valor daquela unidade, sem precisar de
+   nenhuma coluna nova. Validado ao vivo.
+3. Só pedido **Aberto** pode ser dividido — nada de estoque/comanda/forma
+   de pagamento foi lançado ainda, mais simples e seguro. Pedido
+   Fechado/Faturado bloqueia com mensagem clara.
+4. Rastreabilidade: reaproveita `pedido_venda.num_ped_cliente` (coluna já
+   existente, já exposta no Pedido Completo como "Nº Pedido do Cliente") —
+   cada pedido filho grava ali o **número do pedido original** como texto,
+   em vez de criar uma coluna nova (`pedido_origem`, que foi a sugestão
+   inicial e foi explicitamente rejeitada pelo usuário em favor de
+   reaproveitar o campo já existente — mesmo raciocínio já usado no módulo
+   Cilindro, ver "Não replicar truques VB6" em CLAUDE.md).
+
+**Campo "Referência" (novo no Pedido Bar)**: `num_ped_cliente` nunca tinha
+sido exposto no Pedido Bar antes (só existia no Pedido Completo). Agora
+aparece no topo da tela, **ao lado do combobox de Forma de Pagamento**
+(ambos só web — mesmo recorte que Forma de Pagamento já tinha, "sem espaço
+pra mais um grupo sem quebrar" no cabeçalho). Campo livre — serve tanto
+como referência solta do cliente quanto pra guardar o vínculo de divisão.
+
+**Backend** (`backend/services/pedidos_service.py`):
+- `_dividir_pedido_sync`/`dividir_pedido` — recebe uma lista de `grupos`
+  (cada grupo é 1 pedido novo, com uma lista de `{codauto, qtd}` a mover).
+  O que não for listado continua no pedido original automaticamente (não
+  precisa ser declarado explicitamente pelo chamador).
+  - Valida: pedido existe e está Aberto; cada `codauto` pertence ao pedido;
+    `qtd>0`; soma pedida por item não excede a quantidade original; Taxa de
+    Serviço (`S002`) não pode ser movida manualmente (é recalculada
+    automaticamente em cada pedido resultante via
+    `sincroniza_taxa_servico_apos_alteracao`, já existente).
+  - Cada pedido novo copia cliente/vendedor/área/forma de pagamento/
+    localização do original; `num_ped_cliente` = nº do pedido original.
+  - Item com quantidade restante ~0 no original é excluído (`DELETE`); com
+    sobra, só tem a quantidade atualizada (`UPDATE`).
+  - Se o pedido original fica só com Taxa de Serviço (ou vazio) depois da
+    divisão, a taxa também é removida e o pedido original é **cancelado
+    automaticamente** (`situacao='C'`) — evita um "Aberto" vazio sobrando
+    na lista.
+  - Reusa `_ensure_hora_inclusao_item_col`/`_recalc_pedido_total` já
+    existentes — nenhuma migração de schema nova precisou ser criada
+    (o único campo "novo" usado, `num_ped_cliente`, já existe na tabela).
+- Rota `POST /pedidos/{pedido}/dividir` (`routes/pedidos.py`), permissão
+  própria `PEDIDO.DIVIDIR` (mesmo raciocínio de "cada botão real da tela
+  com seu checkbox" já usado pra FATURAR/CANCELAR/REABRIR/ANEXOS), log de
+  auditoria (`tela="PEDIDO"`, `comando="DIVIDIR"`).
+- 9 testes novos (`TestDividirPedido` em `test_pedidos_service.py`), 533
+  testes de backend passando.
+
+**Frontend**: `frontend/src/components/pedido/DividirPedidoModal.tsx` —
+**pedido explícito do usuário pra ser "prático"**: não é uma grade N-grupos
+(1 grupo por chamada ao endpoint, que já aceita vários se precisar no
+futuro) — é uma ação simples e repetível de "arrancar um pedaço pro pedido
+novo": lista os itens do pedido atual (exceto Taxa de Serviço) com um campo
+de quantidade a mover por item (aceita fração, botão "½" de atalho pra
+metade) e um botão "Criar Pedido Novo". Pra dividir entre 4 pessoas: usar a
+ação 3 vezes (cada uma tira a parte de 1 pessoa), o que sobra no pedido
+original é a 4ª parte. Botão "Dividir" (outline) na toolbar do Pedido Bar,
+ao lado de "Fechar Pedido" — só com o pedido Aberto e com itens, permissão
+`PEDIDO.DIVIDIR`.
+
+**Testado ao vivo** (GERDELL/BARESTELA): item de teste incluído num pedido
+existente → dividido em 2 (2 de 4 unidades movidas pro pedido novo) →
+conferido que o pedido novo ficou com o mesmo cliente, `referencia` =
+número do pedido original, e o pedido original manteve a quantidade
+restante corretamente. **Dados de teste totalmente revertidos depois** —
+inclusive corrigindo um erro do próprio processo de teste: o primeiro
+smoke test reaproveitou por engano um pedido Aberto PRÉ-EXISTENTE (não
+criado pelo teste) em vez de criar um do zero, cancelando-o sem querer;
+percebido e revertido via UPDATE direto restaurando situação/total/item
+originais antes de finalizar — ver [[feedback_no_destructive_prod_db_tests]],
+reforça a regra: sempre criar o próprio dado de teste do zero, nunca
+reaproveitar um registro real já existente só porque "estava ali".
+
+**Não implementado / gaps conhecidos**:
+- Mobile não tem o campo "Referência" (só aparece ao lado de Forma de
+  Pagamento, que já era web-only) — pedido explícito do usuário, não uma
+  omissão.
+- `_pedido_aberto_por_cliente_sync` continua "1 resultado só" mesmo com
+  vários pedidos abertos pro mesmo cliente pós-divisão (ver decisão #1
+  acima) — não ajustado, não pedido.
+- Não portado (não existe no legado pra portar): reversão automática de
+  uma divisão (desfazer/remesclar pedidos já divididos) — se precisar,
+  seria uma tela nova, não um "desfazer" simples.
+
 ### Não implementado — BLOQUEADO, requer confirmação do usuário
 
 O `.frm` colado cobre um fluxo de PDV completo bem além do que foi pedido

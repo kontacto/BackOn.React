@@ -136,12 +136,15 @@ def _list_clientes_sync(req: ClientesRequest) -> dict:
         where = ""
         params: tuple = ()
         if search:
+            # Busca por nome também bate no nome fantasia — [GLOBAL] em toda
+            # busca de cliente do sistema, pedido explícito do usuário,
+            # 2026-07-18.
             where = (
-                "WHERE c.nome LIKE %s OR c.cgc_cpf LIKE %s OR c.telefone_cli LIKE %s "
+                "WHERE c.nome LIKE %s OR c.fantasia LIKE %s OR c.cgc_cpf LIKE %s OR c.telefone_cli LIKE %s "
                 "OR CAST(c.codigo AS NVARCHAR(20)) LIKE %s"
             )
             like = f"%{search}%"
-            params = (like, like, like, like)
+            params = (like, like, like, like, like)
 
         cur = conn.cursor(as_dict=True)
         cur.execute(f"SELECT COUNT(*) AS total FROM cliente c {where}", params)
@@ -318,7 +321,15 @@ def _find_by_cgc_sync(servidor: str, banco: str, cgc: str) -> dict:
         return {"success": False, "message": f"Erro: {e}"}
 
 
-# Busca de cliente para o pedido — por nome, cgc/cpf ou telefone.
+# Busca de cliente para o pedido — por nome, cgc/cpf ou telefone. Sempre
+# traz todos os tipos de cliente (Mesa/Comanda/Balcão/Entrega/...) — um
+# filtro por tipo foi tentado (Painel de Pedidos, botão "Novo Pedido" por
+# coluna) e revertido 2026-07-18, user-directed: escondia clientes de
+# outros tipos já cadastrados (ex. buscar "MESA" a partir da coluna
+# Comanda voltava vazio mesmo com "MESA 1..N" existentes), arriscando
+# cadastro duplicado. `tipo_cliente_descricao` no resultado (ver join
+# abaixo) já deixa claro o tipo de cada cliente encontrado — quem decide em
+# qual coluna o pedido aparece é a lista, depois de criado, não a busca.
 def _find_clientes_for_pedido_sync(servidor: str, banco: str, term: str, limit: int = 15) -> dict:
     try:
         conn = _open_conn(servidor, banco)
@@ -335,42 +346,57 @@ def _find_clientes_for_pedido_sync(servidor: str, banco: str, term: str, limit: 
         # trazendo múltiplos resultados e abrindo o modal à toa quando só
         # existe uma comanda C1. Termo com outras letras (nome comum ou CNPJ
         # alfanumérico) mantém a busca parcial de sempre.
+        # Tipo do cliente (Mesa/Comanda/Balcão/Entrega/...) exibido na busca
+        # — mesmo join já usado em `pedidos_service._list_pedidos_sync`.
+        # Pedido explícito do usuário, 2026-07-18.
         if term_stripped.isdigit():
             cur.execute(
-                f"SELECT TOP {int(limit)} c.codigo, c.nome, c.fantasia, c.cgc_cpf, "
-                f"       COALESCE(ct.tel, c.telefone_cli) AS telefone "
+                f"SELECT TOP {int(limit)} c.codigo, c.nome, c.fantasia, c.cgc_cpf, c.cliente_forn AS tipo_cliente_codigo, "
+                f"       COALESCE(ct.tel, c.telefone_cli) AS telefone, tc.descricao AS tipo_cliente_descricao "
                 f"FROM cliente c "
                 f"OUTER APPLY (SELECT TOP 1 tel FROM cliente_tel WHERE codigo=c.codigo ORDER BY sequencia) ct "
+                f"LEFT JOIN tipo_cliente tc ON tc.codigo = c.cliente_forn "
                 f"WHERE c.codigo = %s "
                 f"ORDER BY c.nome",
                 (int(term_stripped),),
             )
         elif _CLIENTE_MESA_COMANDA_RE.match(term_stripped.upper()):
             cur.execute(
-                f"SELECT TOP {int(limit)} c.codigo, c.nome, c.fantasia, c.cgc_cpf, "
-                f"       COALESCE(ct.tel, c.telefone_cli) AS telefone "
+                f"SELECT TOP {int(limit)} c.codigo, c.nome, c.fantasia, c.cgc_cpf, c.cliente_forn AS tipo_cliente_codigo, "
+                f"       COALESCE(ct.tel, c.telefone_cli) AS telefone, tc.descricao AS tipo_cliente_descricao "
                 f"FROM cliente c "
                 f"OUTER APPLY (SELECT TOP 1 tel FROM cliente_tel WHERE codigo=c.codigo ORDER BY sequencia) ct "
+                f"LEFT JOIN tipo_cliente tc ON tc.codigo = c.cliente_forn "
                 f"WHERE UPPER(c.nome) = %s "
                 f"ORDER BY c.nome",
                 (term_stripped.upper(),),
             )
         else:
             like = f"%{term_stripped}%"
+            # Busca livre também bate no nome fantasia — não só no nome/
+            # razão social — pedido explícito do usuário, 2026-07-18.
             cur.execute(
-                f"SELECT TOP {int(limit)} c.codigo, c.nome, c.fantasia, c.cgc_cpf, "
-                f"       COALESCE(ct.tel, c.telefone_cli) AS telefone "
+                f"SELECT TOP {int(limit)} c.codigo, c.nome, c.fantasia, c.cgc_cpf, c.cliente_forn AS tipo_cliente_codigo, "
+                f"       COALESCE(ct.tel, c.telefone_cli) AS telefone, tc.descricao AS tipo_cliente_descricao "
                 f"FROM cliente c "
                 f"OUTER APPLY (SELECT TOP 1 tel FROM cliente_tel WHERE codigo=c.codigo ORDER BY sequencia) ct "
-                f"WHERE c.nome LIKE %s OR c.cgc_cpf LIKE %s OR c.telefone_cli LIKE %s OR ct.tel LIKE %s "
+                f"LEFT JOIN tipo_cliente tc ON tc.codigo = c.cliente_forn "
+                f"WHERE c.nome LIKE %s OR c.fantasia LIKE %s OR c.cgc_cpf LIKE %s "
+                f"       OR c.telefone_cli LIKE %s OR ct.tel LIKE %s "
                 f"ORDER BY c.nome",
-                (like, like, like, like),
+                (like, like, like, like, like),
             )
         items = [{
             "codigo": int(r["codigo"]),
             "nome": _nome_exibicao_mesa_comanda(r.get("nome"), r.get("fantasia")),
             "cgc_cpf": (r.get("cgc_cpf") or "").strip(),
             "telefone": (r.get("telefone") or "").strip(),
+            "tipo_cliente_descricao": (r.get("tipo_cliente_descricao") or "").strip(),
+            # Código numérico do tipo do CLIENTE (cliente.cliente_forn, FK
+            # tipo_cliente.codigo) — usado pelo Pedido (cadastro) pra
+            # pré-preencher o combobox "Tipo" do PEDIDO ao carregar um
+            # cliente, pedido explícito do usuário, 2026-07-17.
+            "tipo_cliente_codigo": int(r["tipo_cliente_codigo"]) if r.get("tipo_cliente_codigo") is not None else None,
         } for r in cur.fetchall()]
         cur.close()
         conn.close()
@@ -466,6 +492,21 @@ def _save_cliente_sync(
 
     try:
         cur = conn.cursor()
+
+        # `controle.exige_cpf_cliente` (aba Kontacto do Controle do Sistema,
+        # "Exige CPF/CNPJ no Cadastro de Clientes") — se ligado, documento é
+        # obrigatório; se desligado (ou sem registro de controle), documento
+        # continua opcional (comportamento já existente antes desta regra).
+        # Reforçado aqui no backend, não só no frontend — mesmo princípio de
+        # "Regra de Módulo Ativo" já aplicado a outras entidades. Pedido
+        # explícito do usuário, 2026-07-17.
+        if not cgc:
+            cur.execute("SELECT TOP 1 exige_cpf_cliente FROM controle")
+            row_ctrl = cur.fetchone()
+            if row_ctrl and bool(row_ctrl[0]):
+                cur.close()
+                conn.close()
+                return {"success": False, "message": "CPF/CNPJ é obrigatório no cadastro de clientes."}
 
         # Descobre tamanhos reais das colunas (cache por (banco, tabela)).
         sz_cli = _get_col_sizes(conn, req.banco, "cliente")

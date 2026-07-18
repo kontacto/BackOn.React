@@ -28,10 +28,13 @@ def _list_os_sync(req: OSListRequest) -> dict:
         term = (req.search or "").strip()
         if term:
             like = f"%{term}%"
+            # Busca por nome também bate no nome fantasia — [GLOBAL] em toda
+            # busca de cliente do sistema, pedido explícito do usuário,
+            # 2026-07-18.
             where_parts.append(
-                "(c.nome LIKE %s OR c.cgc_cpf LIKE %s OR CAST(o.codigo AS NVARCHAR(20)) LIKE %s)"
+                "(c.nome LIKE %s OR c.fantasia LIKE %s OR c.cgc_cpf LIKE %s OR CAST(o.codigo AS NVARCHAR(20)) LIKE %s)"
             )
-            params.extend([like, like, like])
+            params.extend([like, like, like, like])
         if req.situacao:
             where_parts.append("o.situacao = %s")
             params.append(req.situacao)

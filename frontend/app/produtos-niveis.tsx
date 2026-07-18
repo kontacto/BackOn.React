@@ -154,7 +154,7 @@ function ProdutosNiveisWebScreen({
   const [conn, setConn] = useState<Connection | null>(null);
   const [usuarioAlteracao, setUsuarioAlteracao] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 3500); };
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1500); };
 
   // ---------------- Filtro ----------------
   const [modoFiltro, setModoFiltro] = useState<ModoFiltro>("nivel");

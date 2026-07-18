@@ -209,7 +209,10 @@ function ClienteCompletoWebScreen({
               CLAUDE.md > "Produto Completo" / decisão do usuário 2026-07-14. */}
           <View style={styles.card} testID="cliente-completo-identidade">
             <View style={styles.formGrid}>
-              <Field label={`CGC/CPF ${f.docType === "UNKNOWN" ? "" : `(${f.docType})`}`} style={styles.colHalf}>
+              <Field
+                label={`CGC/CPF ${f.docType === "UNKNOWN" ? "" : `(${f.docType})`}${f.exigeCpfCliente ? " *" : ""}`}
+                style={styles.colHalf}
+              >
                 <TextInput
                   value={f.cgcCpf}
                   onChangeText={f.handleCgcCpfChange}

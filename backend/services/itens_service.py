@@ -284,6 +284,19 @@ def _add_taxa_servico_sync(req: TaxaServicoRequest, pedido: int) -> dict:
                 "message": f"Serviço de Taxa de Serviço (código '{TAXA_SERVICO_CODIGO}') não está cadastrado.",
             }
 
+        # Não permite incluir Taxa de Serviço num pedido sem nenhum item de
+        # produto/serviço lançado (excluindo a própria S002) — pedido
+        # explícito do usuário, 2026-07-17: taxa de 10% sobre um subtotal
+        # zerado não faz sentido.
+        cur.execute(
+            "SELECT COUNT(*) c FROM pedido_venda_prod "
+            "WHERE pedido=%s AND produto<>%s AND ISNULL(item_cancelado,0)=0",
+            (pedido, TAXA_SERVICO_CODIGO),
+        )
+        if int(cur.fetchone()["c"] or 0) == 0:
+            conn.close()
+            return {"success": False, "message": "Inclua ao menos um item no pedido antes de lançar a Taxa de Serviço."}
+
         valor_servico = _recalc_valor_taxa_servico(cur, pedido)
         descricao = (serv.get("descricao") or "").strip() or "Taxa de Serviço"
 
@@ -409,6 +422,15 @@ def _update_item_sync(req: ItemSaveRequest, pedido: int, codauto: int) -> dict:
 
 
 def _delete_item_sync(servidor: str, banco: str, pedido: int, codauto: int) -> dict:
+    """Exclui um item do pedido. Se este pedido é FILHO de uma divisão
+    (Dividir Pedido — `pedido_venda.num_ped_cliente` aponta pra um pedido
+    original numérico) e o original ainda existe e está Aberto, o item não
+    é simplesmente descartado: volta pro pedido original (soma na linha já
+    existente do mesmo produto, se houver, ou cria uma nova) — pedido
+    explícito do usuário, 2026-07-17. Taxa de Serviço (S002) nunca é
+    devolvida (é recalculada automaticamente em cada pedido, nunca uma
+    linha "dona" que faça sentido mover). Se o original não existir mais ou
+    não estiver Aberto, cai no comportamento normal (exclui sem devolver)."""
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
@@ -422,6 +444,56 @@ def _delete_item_sync(servidor: str, banco: str, pedido: int, codauto: int) -> d
         if sit != "A":
             conn.close()
             return {"success": False, "message": f"Pedido '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterado."}
+
+        cur.execute(
+            "SELECT produto, qtd_pedida, p_venda, p_normal, desconto, acrescimo, custo_ped, "
+            "descricao_produto, unidade_pedido FROM pedido_venda_prod WHERE codauto=%s AND pedido=%s",
+            (codauto, pedido),
+        )
+        item = cur.fetchone()
+        if not item:
+            conn.close()
+            return {"success": False, "message": "Item não encontrado."}
+
+        devolvido_para = None
+        produto = (item.get("produto") or "").strip()
+        if produto.upper() != TAXA_SERVICO_CODIGO:
+            cur.execute("SELECT num_ped_cliente FROM pedido_venda WHERE pedido=%s", (pedido,))
+            ref_row = cur.fetchone()
+            referencia = (ref_row.get("num_ped_cliente") or "").strip() if ref_row else ""
+            if referencia.isdigit():
+                original = int(referencia)
+                existe_orig, sit_orig = _check_pedido_aberto(cur, original)
+                if existe_orig and sit_orig == "A":
+                    _ensure_hora_inclusao_item_col(cur)
+                    cur.execute(
+                        "SELECT codauto, qtd_pedida FROM pedido_venda_prod "
+                        "WHERE pedido=%s AND produto=%s AND ISNULL(item_cancelado,0)=0",
+                        (original, produto),
+                    )
+                    existente = cur.fetchone()
+                    if existente:
+                        nova_qtd = float(existente["qtd_pedida"] or 0) + float(item["qtd_pedida"] or 0)
+                        cur.execute(
+                            "UPDATE pedido_venda_prod SET qtd_pedida=%s WHERE codauto=%s",
+                            (nova_qtd, int(existente["codauto"])),
+                        )
+                    else:
+                        cur.execute(
+                            "INSERT INTO pedido_venda_prod "
+                            "(pedido, produto, qtd_pedida, p_venda, p_normal, desconto, acrescimo, custo_ped, "
+                            " descricao_produto, unidade_pedido, situacao_item, item_cancelado, data_inclusao_item, "
+                            " hora_inclusao_item) "
+                            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'A',0,CAST(GETDATE() AS DATE),"
+                            "        CONVERT(NVARCHAR(8), GETDATE(), 108))",
+                            (
+                                original, produto, item["qtd_pedida"], item["p_venda"], item["p_normal"],
+                                item["desconto"], item["acrescimo"], item["custo_ped"],
+                                item.get("descricao_produto"), item.get("unidade_pedido"),
+                            ),
+                        )
+                    devolvido_para = original
+
         cur.execute("DELETE FROM pedido_venda_prod WHERE codauto=%s AND pedido=%s", (codauto, pedido))
         if cur.rowcount == 0:
             conn.rollback(); conn.close()
@@ -431,11 +503,17 @@ def _delete_item_sync(servidor: str, banco: str, pedido: int, codauto: int) -> d
             "WHERE TIPO='PED' AND CODIGO=%s AND CODIGO_PRODUTO=%s AND TIPO_DESCONTO='I'",
             (pedido, codauto),
         )
+        sincroniza_taxa_servico_apos_alteracao(cur, pedido)
         novo_total = _recalc_pedido_total(cur, pedido)
+
+        if devolvido_para is not None:
+            sincroniza_taxa_servico_apos_alteracao(cur, devolvido_para)
+            _recalc_pedido_total(cur, devolvido_para)
+
         conn.commit()
         cur.close()
         conn.close()
-        return {"success": True, "total": novo_total}
+        return {"success": True, "total": novo_total, "devolvido_para": devolvido_para}
     except Exception as e:
         try:
             conn.rollback(); conn.close()

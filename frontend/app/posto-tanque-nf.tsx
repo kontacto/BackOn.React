@@ -53,7 +53,7 @@ export default function PostoTanqueNfScreen() {
   const [tanque, setTanque] = useState<number | null>(null);
   const [qtd, setQtd] = useState("");
 
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2500); };
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 500); };
 
   const ensureConn = useCallback(async () => {
     if (conn) return conn;

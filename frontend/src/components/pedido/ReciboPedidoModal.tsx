@@ -51,7 +51,13 @@ type Props = {
   pedido: PedidoData | null;
   cliente: ClienteRow | null;
   clienteResumo: ClienteResumo | null;
-  it: UsePedidoItens;
+  // Só `.itens`/`.pedidoTotalizadoGrupos` são lidos aqui — `Pick` em vez do
+  // hook inteiro (`UsePedidoItens`) pra permitir montar esse recibo fora do
+  // fluxo normal de pedido-form/pedido-completo (ex.: Painel de Pedidos,
+  // `app/pedidos.tsx`) sem precisar instanciar `usePedidoItens` inteiro (que
+  // carrega muito mais estado — descontos, modais de item, etc. — do que
+  // esse componente usa). Pedido explícito do usuário, 2026-07-17.
+  it: Pick<UsePedidoItens, "itens" | "pedidoTotalizadoGrupos">;
   // Quando informado, imprime só ESTE item (ticket de cozinha/bar — sem
   // preço, sem forma de pagamento, sem totais), réplica de `Pedido_Geral`
   // com `item <> ""` (FrmManPedBar.frm) — usado pelo botão "Imprimir" de
@@ -154,6 +160,12 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
       }
       hr();
       row("TOTAL", formatBRL(pedido.total));
+      // Divisão da conta pela qtd. de pessoas (Painel de Pedidos, campo
+      // "Qtd. Pessoas" do card) — só aparece quando informada. Pedido
+      // explícito do usuário, 2026-07-17.
+      if (pedido.qtd_pessoas && pedido.qtd_pessoas > 0) {
+        row(`Valor p/ pessoa (${pedido.qtd_pessoas})`, formatBRL(pedido.total / pedido.qtd_pessoas));
+      }
       hr();
       if (pedido.obs) { line(`Obs: ${pedido.obs}`); hr(); }
       bold("FORMA DE PAGAMENTO");
@@ -286,6 +298,12 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
                     <Text style={rs.bold}>TOTAL</Text>
                     <Text style={rs.bold}>{formatBRL(pedido.total)}</Text>
                   </View>
+                  {pedido.qtd_pessoas && pedido.qtd_pessoas > 0 ? (
+                    <View style={rs.row}>
+                      <Text style={rs.mono}>Valor p/ pessoa ({pedido.qtd_pessoas})</Text>
+                      <Text style={rs.mono}>{formatBRL(pedido.total / pedido.qtd_pessoas)}</Text>
+                    </View>
+                  ) : null}
                   <View style={rs.hr} />
 
                   {pedido.obs ? (

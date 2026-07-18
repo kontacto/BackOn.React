@@ -81,6 +81,38 @@ class TestValidacoesSemBanco:
         assert r["success"] is False and "3" in r["message"]
 
 
+class TestExigeCpfCliente:
+    """controle.exige_cpf_cliente — CPF/CNPJ obrigatório no cadastro só
+    quando essa flag está ligada; padrão (desligada ou sem registro de
+    controle) mantém o documento opcional, como já era antes desta regra."""
+
+    def test_bloqueia_sem_cpf_quando_exige_ligado(self, monkeypatch):
+        cur = FakeCursor(one=[[True]])
+        _patch(monkeypatch, cur)
+        r = cs._save_cliente_sync(_req(cgc_cpf=""), [], [], None)
+        assert r["success"] is False and "obrigatório" in r["message"]
+
+    def test_permite_sem_cpf_quando_exige_desligado(self, monkeypatch):
+        cur = FakeCursor(one=[[False], [123]])
+        _patch(monkeypatch, cur)
+        r = cs._save_cliente_sync(_req(cgc_cpf=""), [], [], None)
+        assert r["success"] is True
+
+    def test_permite_sem_cpf_quando_sem_registro_de_controle(self, monkeypatch):
+        cur = FakeCursor(one=[None, [123]])
+        _patch(monkeypatch, cur)
+        r = cs._save_cliente_sync(_req(cgc_cpf=""), [], [], None)
+        assert r["success"] is True
+
+    def test_nao_consulta_controle_quando_cpf_ja_preenchido(self, monkeypatch):
+        cur = FakeCursor(one=[[123]])
+        _patch(monkeypatch, cur)
+        r = cs._save_cliente_sync(_req(cgc_cpf="11144477735"), [], [], None)
+        assert r["success"] is True
+        joined = " ".join(q[0].upper() for q in cur.queries)
+        assert "EXIGE_CPF_CLIENTE" not in joined
+
+
 class TestInsertComMock:
     def test_insert_retorna_codigo_e_commita(self, monkeypatch):
         # INSERT cliente ... OUTPUT INSERTED.codigo → fetchone retorna [123]
@@ -216,33 +248,38 @@ class TestClienteMesaComandaBarBloqueiaRenomeio:
     """Cliente Mesa/Comanda (módulo Bar) — nome/fantasia não podem ser
     alterados via UPDATE (CLAUDE.md, seção "Pedido Bar")."""
 
+    # `one[0]` em cada caso abaixo é consumido pela checagem nova de
+    # `controle.exige_cpf_cliente` (ver TestExigeCpfCliente) — None = sem
+    # registro de controle, documento continua opcional, não interfere
+    # nestes testes. `one[1]` é quem essas tests já esperavam (nome/fantasia
+    # atuais do cliente, pro bloqueio de renomeio de Mesa/Comanda).
     def test_bloqueia_renomear_mesa_por_nome(self, monkeypatch):
-        cur = FakeCursor(one=[["M15", None]], rowcount=1)
+        cur = FakeCursor(one=[None, ["M15", None]], rowcount=1)
         conn = _patch(monkeypatch, cur)
         r = cs._save_cliente_sync(_req(nome="Mesa Renomeada"), [], [], codigo=50)
         assert r["success"] is False and "Mesa/Comanda" in r["message"]
         assert conn.rolled is True
 
     def test_bloqueia_renomear_fantasia_de_mesa(self, monkeypatch):
-        cur = FakeCursor(one=[["M15", "MESA 15"]], rowcount=1)
+        cur = FakeCursor(one=[None, ["M15", "MESA 15"]], rowcount=1)
         conn = _patch(monkeypatch, cur)
         r = cs._save_cliente_sync(_req(nome="M15", nome_fantasia="Outra Coisa"), [], [], codigo=50)
         assert r["success"] is False and "Mesa/Comanda" in r["message"]
 
     def test_bloqueia_renomear_comanda(self, monkeypatch):
-        cur = FakeCursor(one=[["C1", None]], rowcount=1)
+        cur = FakeCursor(one=[None, ["C1", None]], rowcount=1)
         conn = _patch(monkeypatch, cur)
         r = cs._save_cliente_sync(_req(nome="Comanda Nova"), [], [], codigo=51)
         assert r["success"] is False and "Mesa/Comanda" in r["message"]
 
     def test_permite_gravar_mesa_sem_alterar_nome_fantasia(self, monkeypatch):
-        cur = FakeCursor(one=[["M15", None]], rowcount=1)
+        cur = FakeCursor(one=[None, ["M15", None]], rowcount=1)
         conn = _patch(monkeypatch, cur)
         r = cs._save_cliente_sync(_req(nome="M15"), [], [], codigo=50)
         assert r["success"] is True
 
     def test_cliente_normal_pode_ser_renomeado(self, monkeypatch):
-        cur = FakeCursor(one=[["Cliente Antigo", None]], rowcount=1)
+        cur = FakeCursor(one=[None, ["Cliente Antigo", None]], rowcount=1)
         conn = _patch(monkeypatch, cur)
         r = cs._save_cliente_sync(_req(nome="Cliente Novo Nome"), [], [], codigo=52)
         assert r["success"] is True
@@ -262,6 +299,34 @@ class TestBuscaClientePorCodigo:
         assert "c.codigo = %s" in select_q
         assert 42 in params
         assert r["items"][0]["codigo"] == 42
+
+    def test_busca_livre_inclui_fantasia(self, monkeypatch):
+        cur = FakeCursor(many=[[]])
+        _patch(monkeypatch, cur)
+        cs._find_clientes_for_pedido_sync("srv", "bd", "gama termic")
+        select_q, params = cur.queries[-1]
+        assert "c.fantasia LIKE %s" in select_q
+        assert params.count("%gama termic%") == 5
+
+    def test_busca_nunca_filtra_por_tipo(self, monkeypatch):
+        # Filtro por tipo (Painel de Pedidos, "Novo Pedido" por coluna) foi
+        # revertido 2026-07-18 — a busca sempre traz todos os tipos (só o
+        # JOIN com tipo_cliente continua, pra exibir `tipo_cliente_descricao`
+        # em cada resultado).
+        cur = FakeCursor(many=[[]])
+        _patch(monkeypatch, cur)
+        cs._find_clientes_for_pedido_sync("srv", "bd", "fulano")
+        select_q, _ = cur.queries[-1]
+        assert "c.cliente_forn = %s" not in select_q
+
+    def test_expoe_tipo_cliente_descricao(self, monkeypatch):
+        cur = FakeCursor(many=[[{
+            "codigo": 42, "nome": "Fulano", "cgc_cpf": "", "telefone": "",
+            "tipo_cliente_descricao": "MESA",
+        }]])
+        _patch(monkeypatch, cur)
+        r = cs._find_clientes_for_pedido_sync("srv", "bd", "fulano")
+        assert r["items"][0]["tipo_cliente_descricao"] == "MESA"
 
     def test_list_clientes_aceita_codigo(self, monkeypatch):
         cur = FakeCursor(one=[{"total": 1}], many=[[{

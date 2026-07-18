@@ -7,6 +7,7 @@ from models.schemas import (
     PedidosListRequest, PedidoSaveRequest, ItemSaveRequest, FecharRequest,
     TaxaServicoRequest, PedidoEntregueRequest, FormaPagSimplesRequest,
     FormaPagamentoAddRequest, FormaPagamentoUpdateRequest, FormaPagamentoDeleteRequest,
+    DividirPedidoRequest, QtdPessoasRequest,
 )
 from services import pedidos_service, itens_service, log_auditoria_service, forma_pagamento_service
 
@@ -146,6 +147,23 @@ async def cancelar_pedido(pedido: int, req: FecharRequest, request: Request):
     return result
 
 
+@router.post("/pedidos/{pedido}/dividir")
+async def dividir_pedido(pedido: int, req: DividirPedidoRequest, request: Request):
+    result = await pedidos_service.dividir_pedido(req, pedido)
+    if result.get("success"):
+        novos = result.get("novos_pedidos") or []
+        descricao = f"Pedido {pedido} dividido em {len(novos)} pedido(s): {', '.join(str(n) for n in novos)}"
+        if result.get("original_cancelado"):
+            descricao += " (pedido original cancelado, ficou sem itens)"
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO", comando="DIVIDIR",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido), descricao=descricao,
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
 @router.post("/pedidos/{pedido}/entregue")
 async def toggle_entregue(pedido: int, req: PedidoEntregueRequest, request: Request):
     """Checkbox 'Pedido Entregue' — grava direto no clique, fora do fluxo
@@ -174,6 +192,22 @@ async def set_forma_pag_simples(pedido: int, req: FormaPagSimplesRequest, reques
             req.servidor, req.banco, tela="PEDIDO", comando="FORMA_PAG",
             usuario=req.usuario_alteracao, classe=req.classe,
             referencia=str(pedido), descricao=f"Pedido {pedido}: forma de pagamento definida como '{req.forma_pag}'",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/pedidos/{pedido}/qtd-pessoas")
+async def set_qtd_pessoas(pedido: int, req: QtdPessoasRequest, request: Request):
+    """Painel de Pedidos (Mesa/Comanda/Balcão) — quantidade de pessoas,
+    grava direto no card, fora do fluxo normal de Gravar (ver
+    `pedidos_service._set_qtd_pessoas_sync`)."""
+    result = await pedidos_service.set_qtd_pessoas(req, pedido)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO", comando="GRAVAR",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido), descricao=f"Pedido {pedido}: qtd. de pessoas definida como {req.qtd_pessoas}",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

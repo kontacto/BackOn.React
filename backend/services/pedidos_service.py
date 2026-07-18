@@ -3,9 +3,16 @@ import asyncio
 from typing import Optional
 
 from db.connection import _open_conn
-from models.schemas import PedidosListRequest, PedidoSaveRequest, FecharRequest, PedidoEntregueRequest, FormaPagSimplesRequest
+from models.schemas import (
+    PedidosListRequest, PedidoSaveRequest, FecharRequest, PedidoEntregueRequest, FormaPagSimplesRequest,
+    DividirPedidoRequest, QtdPessoasRequest,
+)
 from services.constants import SITUACAO_LABEL
-from services.pedido_common import _check_cliente_ativo, _mover_estoque, _liberar_reservado, _fechar_pedido_itens
+from services.pedido_common import (
+    _check_cliente_ativo, _mover_estoque, _liberar_reservado, _fechar_pedido_itens,
+    _ensure_hora_inclusao_item_col, _recalc_pedido_total, _ensure_qtd_pessoas_col,
+)
+from services.itens_service import TAXA_SERVICO_CODIGO, sincroniza_taxa_servico_apos_alteracao
 from services.permissoes_service import tem_permissao
 
 
@@ -16,32 +23,59 @@ def _list_pedidos_sync(req: PedidosListRequest) -> dict:
         return {"success": False, "message": f"Falha conexão: {e}", "items": [], "total": 0}
     try:
         cur = conn.cursor(as_dict=True)
+        _ensure_qtd_pessoas_col(cur)
         where_parts: list[str] = []
         params: list = []
         term = (req.search or "").strip()
         if term:
             like = f"%{term}%"
+            # Busca por nome também bate no nome fantasia — [GLOBAL] em toda
+            # busca de cliente do sistema, pedido explícito do usuário,
+            # 2026-07-18.
             where_parts.append(
-                "(c.nome LIKE %s OR c.cgc_cpf LIKE %s OR p.NOME_CLIENTE LIKE %s "
+                "(c.nome LIKE %s OR c.fantasia LIKE %s OR c.cgc_cpf LIKE %s OR p.NOME_CLIENTE LIKE %s "
                 "OR p.TELEFONE_CLIENTE LIKE %s OR CAST(p.pedido AS NVARCHAR(20)) LIKE %s "
                 "OR CAST(c.codigo AS NVARCHAR(20)) LIKE %s)"
             )
-            params.extend([like, like, like, like, like, like])
+            params.extend([like, like, like, like, like, like, like])
         if req.situacao:
             where_parts.append("p.situacao = %s")
             params.append(req.situacao)
         if req.vendedor and str(req.vendedor).lower() != "all":
             where_parts.append("p.vendedor = %s")
             params.append(req.vendedor)
+        # Pedido tipo FIADO ainda Aberto nunca é escondido pelo filtro de
+        # data — uma comanda fiado (fiado de verdade, tipo do CLIENTE
+        # também prevalece via o mesmo COALESCE/NULLIF já usado pro filtro
+        # de tipo acima) pode ficar aberta por semanas, e a tela de Pedidos
+        # agora carrega sempre com o filtro de data do dia atual (ver
+        # `_list_req`/pedidos.tsx) — sem essa exceção, fiados antigos
+        # sumiriam da lista todo santo dia. Pedido explícito do usuário,
+        # 2026-07-18.
+        fiado_aberto_exempt = (
+            "(p.situacao = 'A' AND (SELECT descricao FROM tipo_cliente wt "
+            "WHERE wt.codigo = COALESCE(NULLIF(p.tipo, 0), c.cliente_forn)) = 'FIADO')"
+        )
         if req.data_ini:
-            where_parts.append("p.data >= %s")
+            where_parts.append(f"(p.data >= %s OR {fiado_aberto_exempt})")
             params.append(req.data_ini)
         if req.data_fim:
-            where_parts.append("p.data <= %s")
+            where_parts.append(f"(p.data <= %s OR {fiado_aberto_exempt})")
             params.append(req.data_fim)
         if req.tipos_cliente:
+            # Filtra pelo tipo do PEDIDO (pedido_venda.tipo), caindo pro
+            # tipo do cliente quando o pedido não tem tipo próprio definido
+            # — mesma regra da listagem/colunas do Painel de Pedidos.
+            # `NULLIF(p.tipo, 0)` é necessário porque TODO pedido gravado
+            # antes desta feature (2026-07-18) tem `tipo=0` hardcoded (não
+            # NULL) — sem isso, `COALESCE` nunca cai pro tipo do cliente
+            # pra esses pedidos antigos (0 não é NULL), e como não existe
+            # `tipo_cliente.codigo=0`, o JOIN falha silenciosamente e o
+            # pedido some de todas as colunas/filtros por tipo. Bug real
+            # reportado pelo usuário ao ver a lista virar "Pedidos (0)"
+            # depois desta feature. Pedido explícito do usuário, 2026-07-18.
             placeholders = ",".join(["%s"] * len(req.tipos_cliente))
-            where_parts.append(f"c.cliente_forn IN ({placeholders})")
+            where_parts.append(f"COALESCE(NULLIF(p.tipo, 0), c.cliente_forn) IN ({placeholders})")
             params.extend(req.tipos_cliente)
         if req.data_entrega:
             where_parts.append("p.previsao_entrega <= %s")
@@ -71,14 +105,45 @@ def _list_pedidos_sync(req: PedidosListRequest) -> dict:
             order_by = "p.pedido DESC"
 
         offset = max(0, (req.page - 1) * req.size)
+        # Nome do vendedor sempre exibe nome_guerra (apelido), caindo pro
+        # nome completo só quando nome_guerra está vazio/nulo — regra
+        # [GLOBAL] pra qualquer exibição de vendedor no sistema, pedido
+        # explícito do usuário, 2026-07-17. Mesmo raciocínio já aplicado a
+        # atendente/executor em os_service.py/os_itens_service.py.
         cur.execute(
             f"SELECT p.pedido, p.data, p.validade, p.situacao, p.total, p.cliente, "
-            f"       COALESCE(c.nome, p.NOME_CLIENTE) AS cliente_nome, "
-            f"       p.vendedor, f.nome AS vendedor_nome, p.hora_aberto "
+            f"       COALESCE(c.nome, p.NOME_CLIENTE) AS cliente_nome, c.fantasia AS cliente_fantasia, "
+            f"       p.vendedor, COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS vendedor_nome, "
+            f"       p.hora_aberto, tc.descricao AS tipo_cliente_descricao, "
+            f"       l.descricao AS localizacao_descricao, p.qtd_pessoas, "
+            # Taxa de Serviço (S002) já lançada neste pedido — usado pelo
+            # Painel de Pedidos pra colorir o ícone do botão "Tx Serviço" de
+            # verde sem precisar carregar os itens de cada card. Pedido
+            # explícito do usuário, 2026-07-17.
+            f"       CASE WHEN EXISTS ("
+            f"         SELECT 1 FROM pedido_venda_prod ip "
+            f"         WHERE ip.pedido = p.pedido AND ip.produto = 'S002' AND ISNULL(ip.item_cancelado,0) = 0"
+            f"       ) THEN 1 ELSE 0 END AS taxa_servico_incluida, "
+            # Tem ao menos 1 item de produto/serviço (fora a própria S002)
+            # — usado pra desabilitar o botão "Tx Serviço" do Painel de
+            # Pedidos quando o pedido ainda está vazio (mesmo bloqueio
+            # aplicado no backend, `_add_taxa_servico_sync`). Pedido
+            # explícito do usuário, 2026-07-18.
+            f"       CASE WHEN EXISTS ("
+            f"         SELECT 1 FROM pedido_venda_prod ip2 "
+            f"         WHERE ip2.pedido = p.pedido AND ip2.produto <> 'S002' AND ISNULL(ip2.item_cancelado,0) = 0"
+            f"       ) THEN 1 ELSE 0 END AS tem_itens "
             f"FROM pedido_venda p "
             f"LEFT JOIN cliente c ON c.codigo = p.cliente "
             f"LEFT JOIN funcionarios f ON f.codigo_int = p.vendedor "
-            f"LEFT JOIN tipo_cliente tc ON tc.codigo = c.cliente_forn "
+            # Tipo do PEDIDO prevalece sobre o tipo do cliente — só cai pro
+            # tipo do cliente quando o pedido não tem tipo próprio (NULL OU
+            # 0 — pedidos gravados antes desta feature têm `tipo=0`
+            # hardcoded, tratado como "sem tipo" aqui). Pedido explícito do
+            # usuário, 2026-07-18 ("caso o tipo de pedido seja nulo,
+            # prevalecerá o tipo de cliente").
+            f"LEFT JOIN tipo_cliente tc ON tc.codigo = COALESCE(NULLIF(p.tipo, 0), c.cliente_forn) "
+            f"LEFT JOIN localizacao l ON l.codigo = p.LOCALIZACAO "
             f"{where} "
             f"ORDER BY {order_by} OFFSET {offset} ROWS FETCH NEXT {req.size} ROWS ONLY",
             params,
@@ -86,6 +151,17 @@ def _list_pedidos_sync(req: PedidosListRequest) -> dict:
         items: list[dict] = []
         for r in cur.fetchall():
             sit = (r.get("situacao") or "").strip()
+            tipo_desc = (r.get("tipo_cliente_descricao") or "").strip()
+            nome = (r.get("cliente_nome") or "").strip()
+            fantasia = (r.get("cliente_fantasia") or "").strip()
+            # Cliente Mesa/Comanda: mostra o nome fantasia ("MESA 15") em vez
+            # do nome bruto ("M15") — mesmo efeito de
+            # `_nome_exibicao_mesa_comanda` (clientes_service.py), mas
+            # decidido aqui pelo TIPO DO CLIENTE já resolvido (tipo_cliente_
+            # descricao), não pelo padrão regex do nome. Pedido explícito do
+            # usuário, 2026-07-17.
+            if tipo_desc.upper() in ("MESA", "COMANDA") and fantasia:
+                nome = fantasia
             items.append({
                 "pedido": int(r["pedido"] or 0),
                 "data": r["data"].isoformat() if r.get("data") else None,
@@ -94,10 +170,15 @@ def _list_pedidos_sync(req: PedidosListRequest) -> dict:
                 "situacao_label": SITUACAO_LABEL.get(sit, sit),
                 "total": float(r.get("total") or 0),
                 "cliente": int(r["cliente"] or 0) if r.get("cliente") else None,
-                "cliente_nome": (r.get("cliente_nome") or "").strip(),
+                "cliente_nome": nome,
                 "vendedor": int(r["vendedor"] or 0) if r.get("vendedor") else None,
                 "vendedor_nome": (r.get("vendedor_nome") or "").strip(),
                 "hora_aberto": (r.get("hora_aberto") or "").strip(),
+                "tipo_cliente_descricao": tipo_desc,
+                "localizacao_descricao": (r.get("localizacao_descricao") or "").strip(),
+                "qtd_pessoas": int(r["qtd_pessoas"]) if r.get("qtd_pessoas") else None,
+                "taxa_servico_incluida": bool(r.get("taxa_servico_incluida")),
+                "tem_itens": bool(r.get("tem_itens")),
             })
         cur.close()
         conn.close()
@@ -117,27 +198,63 @@ def _get_pedido_sync(servidor: str, banco: str, pedido: int) -> dict:
         return {"success": False, "message": f"Falha conexão: {e}"}
     try:
         cur = conn.cursor(as_dict=True)
+        _ensure_qtd_pessoas_col(cur)
         cur.execute(
             "SELECT p.pedido, p.cliente, p.data, p.validade, p.vendedor, p.hora_aberto, "
             "       p.obs, p.situacao, p.total, p.NOME_CLIENTE, p.TELEFONE_CLIENTE, p.area_atuacao, "
             "       p.previsao_entrega, p.hora_entrega, p.pedido_entregue, p.forma_pag, p.LOCALIZACAO, "
+            "       p.num_ped_cliente, p.qtd_pessoas, p.tipo, "
             "       fp.descricao AS forma_pag_descricao, l.descricao AS localizacao_descricao, "
             "       c.nome AS cliente_nome, c.cgc_cpf AS cliente_cgc, "
-            "       f.nome AS vendedor_nome, a.descricao AS area_descricao "
+            "       COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS vendedor_nome, a.descricao AS area_descricao, "
+            # Descrição do tipo efetivo do pedido — cai pro tipo do cliente
+            # quando p.tipo é NULL, mesma regra de _list_pedidos_sync.
+            "       tc.descricao AS tipo_descricao "
             "FROM pedido_venda p "
             "LEFT JOIN cliente c ON c.codigo = p.cliente "
             "LEFT JOIN funcionarios f ON f.codigo_int = p.vendedor "
             "LEFT JOIN area_atuacao a ON a.area = p.area_atuacao "
             "LEFT JOIN forma_pagamento fp ON fp.codigo = p.forma_pag "
             "LEFT JOIN localizacao l ON l.codigo = p.LOCALIZACAO "
+            "LEFT JOIN tipo_cliente tc ON tc.codigo = COALESCE(NULLIF(p.tipo, 0), c.cliente_forn) "
             "WHERE p.pedido = %s",
             (pedido,),
         )
         row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return {"success": False, "message": "Pedido não encontrado."}
+
+        # Pedidos da mesma divisão (mesma mesa) — rastreados via
+        # num_ped_cliente=str(pedido_raiz) (reaproveitado, não uma FK
+        # própria, ver _dividir_pedido_sync). A "raiz" é sempre o pedido
+        # original: se ESTE pedido tem uma referência numérica, ele é um
+        # filho, então a raiz é o número apontado por ela; senão, ele mesmo
+        # é a raiz. Consultando por raiz (não só "quem aponta pra mim"), a
+        # lista fica igual não importa a partir de qual pedido da mesma
+        # divisão a tela foi aberta — mantém a referência da mesa visível o
+        # tempo todo, até o fechamento total de todos eles (pedido explícito
+        # do usuário, 2026-07-17).
+        referencia_atual = (row.get("num_ped_cliente") or "").strip()
+        raiz = int(referencia_atual) if referencia_atual.isdigit() else pedido
+        cur.execute(
+            "SELECT pedido, situacao, total FROM pedido_venda "
+            "WHERE (num_ped_cliente = %s OR pedido = %s) AND pedido <> %s "
+            "ORDER BY pedido",
+            (str(raiz), raiz, pedido),
+        )
+        pedidos_relacionados = [
+            {
+                "pedido": int(r["pedido"]),
+                "situacao": (r.get("situacao") or "").strip(),
+                "situacao_label": SITUACAO_LABEL.get((r.get("situacao") or "").strip(), (r.get("situacao") or "").strip()),
+                "total": float(r.get("total") or 0),
+            }
+            for r in cur.fetchall()
+        ]
         cur.close()
         conn.close()
-        if not row:
-            return {"success": False, "message": "Pedido não encontrado."}
         sit = (row.get("situacao") or "").strip()
         return {
             "success": True,
@@ -163,6 +280,16 @@ def _get_pedido_sync(servidor: str, banco: str, pedido: int) -> dict:
                 "forma_pag": (row.get("forma_pag") or "").strip(),
                 "forma_pag_descricao": (row.get("forma_pag_descricao") or "").strip(),
                 "localizacao_descricao": (row.get("localizacao_descricao") or "").strip(),
+                "qtd_pessoas": int(row["qtd_pessoas"]) if row.get("qtd_pessoas") else None,
+                # Combobox "Tipo" do Pedido Bar (tipo_cliente.codigo) — `tipo`
+                # é o que foi explicitamente selecionado nesse pedido (None =
+                # nenhum, cai pro tipo do cliente); `tipo_descricao` já vem
+                # resolvido (pedido ou, na falta, cliente). Pedido explícito
+                # do usuário, 2026-07-18.
+                "tipo": int(row["tipo"]) if row.get("tipo") is not None else None,
+                "tipo_descricao": (row.get("tipo_descricao") or "").strip(),
+                "referencia": (row.get("num_ped_cliente") or "").strip(),
+                "pedidos_relacionados": pedidos_relacionados,
             },
         }
     except Exception as e:
@@ -230,9 +357,11 @@ def _save_pedido_sync(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> d
                     "success": False,
                     "message": f"Cliente com situação '{label}' não pode gerar novo pedido.",
                 }
-        # Busca o nome e telefone do cliente para denormalizar em NOME_CLIENTE / TELEFONE_CLIENTE
+        # Busca o nome/telefone do cliente (denormalizados em NOME_CLIENTE /
+        # TELEFONE_CLIENTE) + fantasia/cliente_forn, usados logo abaixo pra
+        # resolver o campo "Tipo" do pedido.
         cur.execute(
-            "SELECT TOP 1 c.nome, "
+            "SELECT TOP 1 c.nome, c.fantasia, c.cliente_forn, "
             "  COALESCE((SELECT TOP 1 LTRIM(RTRIM(CAST(ddd AS NVARCHAR(4))) + tel) "
             "            FROM cliente_tel WHERE codigo=c.codigo ORDER BY sequencia), "
             "           LTRIM(RTRIM(CAST(c.ddd_cli AS NVARCHAR(4))) + ISNULL(c.telefone_cli,''))) AS tel "
@@ -243,11 +372,34 @@ def _save_pedido_sync(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> d
         nome_cli = (cli_row.get("nome") or "").strip()[:60]
         tel_cli = (cli_row.get("tel") or "").strip()[:60]
 
+        # Campo "Tipo" do pedido (pedido_venda.tipo, combobox do Pedido Bar,
+        # FK tipo_cliente.codigo) — separado do tipo do CLIENTE
+        # (cliente.cliente_forn): um cliente Entrega pode ser lançado como
+        # Comanda na lista (o tipo do cliente não muda, só o do pedido), e
+        # vice-versa. EXCEÇÃO: cliente reservado — nome fantasia contendo
+        # "MESA"/"COMANDA"/"BALCÃO" (mesa/comanda/balcão físicos do
+        # estabelecimento, mesmo critério de texto já usado em
+        # `clientes_service._cliente_mesa_ou_comanda`, aqui estendido pros
+        # 3 tipos em vez de só Mesa) — sempre trava o pedido no seu
+        # próprio tipo (cliente_forn), ignorando o que foi pedido: não faz
+        # sentido uma "MESA 7" virar um pedido de Entrega. Sem cliente
+        # reservado e sem `req.tipo` informado, o campo fica NULL — a
+        # listagem cai pro tipo do cliente nesse caso
+        # (`COALESCE(p.tipo, c.cliente_forn)`, ver `_list_pedidos_sync`).
+        # Pedido explícito do usuário, 2026-07-18.
+        fantasia_up = (cli_row.get("fantasia") or "").strip().upper()
+        cliente_reservado = any(k in fantasia_up for k in ("MESA", "COMANDA", "BALCÃO", "BALCAO"))
+        if cliente_reservado:
+            tipo_final = cli_row.get("cliente_forn")
+        else:
+            tipo_final = req.tipo
+
         validade = req.validade or None
         obs = req.obs or ""
         previsao_entrega = req.previsao_entrega or None
         hora_entrega = (req.hora_entrega or "").strip() or None
         forma_pag = (req.forma_pag or "")[:3] or None
+        referencia = (req.referencia or "")[:64] or None
 
         if pedido_codigo is None:
             # pedido é IDENTITY — deixar o SQL gerar e retornar via OUTPUT INSERTED.pedido
@@ -255,12 +407,12 @@ def _save_pedido_sync(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> d
                 "INSERT INTO pedido_venda "
                 "(cliente, data, validade, vendedor, hora_aberto, obs, situacao, "
                 " NOME_CLIENTE, TELEFONE_CLIENTE, abertopor, total, tipo, area_atuacao, "
-                " previsao_entrega, hora_entrega, forma_pag) "
+                " previsao_entrega, hora_entrega, forma_pag, num_ped_cliente) "
                 "OUTPUT INSERTED.pedido "
                 "VALUES (%s, CAST(GETDATE() AS DATE), %s, %s, "
-                "        CONVERT(NVARCHAR(8), GETDATE(), 108), %s, 'A', %s, %s, %s, 0, 0, %s, %s, %s, %s)",
-                (req.cliente, validade, req.vendedor, obs, nome_cli, tel_cli, req.vendedor, req.area_atuacao,
-                 previsao_entrega, hora_entrega, forma_pag),
+                "        CONVERT(NVARCHAR(8), GETDATE(), 108), %s, 'A', %s, %s, %s, 0, %s, %s, %s, %s, %s, %s)",
+                (req.cliente, validade, req.vendedor, obs, nome_cli, tel_cli, req.vendedor, tipo_final,
+                 req.area_atuacao, previsao_entrega, hora_entrega, forma_pag, referencia),
             )
             row = cur.fetchone()
             if not row:
@@ -273,11 +425,11 @@ def _save_pedido_sync(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> d
             cur.execute(
                 "UPDATE pedido_venda SET "
                 " cliente=%s, validade=%s, vendedor=%s, obs=%s, "
-                " NOME_CLIENTE=%s, TELEFONE_CLIENTE=%s, area_atuacao=%s, "
-                " previsao_entrega=%s, hora_entrega=%s, forma_pag=%s "
+                " NOME_CLIENTE=%s, TELEFONE_CLIENTE=%s, tipo=%s, area_atuacao=%s, "
+                " previsao_entrega=%s, hora_entrega=%s, forma_pag=%s, num_ped_cliente=%s "
                 "WHERE pedido=%s",
-                (req.cliente, validade, req.vendedor, obs, nome_cli, tel_cli, req.area_atuacao,
-                 previsao_entrega, hora_entrega, forma_pag, pedido_codigo),
+                (req.cliente, validade, req.vendedor, obs, nome_cli, tel_cli, tipo_final, req.area_atuacao,
+                 previsao_entrega, hora_entrega, forma_pag, referencia, pedido_codigo),
             )
             if cur.rowcount == 0:
                 conn.rollback()
@@ -366,6 +518,41 @@ def _set_forma_pag_simples_sync(req: FormaPagSimplesRequest, pedido: int) -> dic
         return {"success": False, "message": f"Erro ao gravar forma de pagamento: {e}"}
 
 
+def _set_qtd_pessoas_sync(req: QtdPessoasRequest, pedido: int) -> dict:
+    """Painel de Pedidos — quantidade de pessoas na mesa/comanda/balcão,
+    grava direto ao editar no card (mesmo raciocínio de
+    `_set_forma_pag_simples_sync` acima). Só permitido com o pedido ainda
+    Aberto ou Fechado."""
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        _ensure_qtd_pessoas_col(cur)
+        cur.execute("SELECT situacao FROM pedido_venda WHERE pedido=%s", (pedido,))
+        ex = cur.fetchone()
+        if not ex:
+            conn.close()
+            return {"success": False, "message": "Pedido não encontrado."}
+        sit = (ex.get("situacao") or "").strip().upper()
+        if sit not in ("A", "F"):
+            conn.close()
+            return {"success": False, "message": f"Pedido '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterado."}
+        qtd = req.qtd_pessoas if (req.qtd_pessoas or 0) > 0 else None
+        cur.execute("UPDATE pedido_venda SET qtd_pessoas=%s WHERE pedido=%s", (qtd, pedido))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao gravar quantidade de pessoas: {e}"}
+
+
 async def list_pedidos(req: PedidosListRequest) -> dict:
     return await asyncio.to_thread(_list_pedidos_sync, req)
 
@@ -388,6 +575,10 @@ async def toggle_entregue(req: PedidoEntregueRequest, pedido: int) -> dict:
 
 async def set_forma_pag_simples(req: FormaPagSimplesRequest, pedido: int) -> dict:
     return await asyncio.to_thread(_set_forma_pag_simples_sync, req, pedido)
+
+
+async def set_qtd_pessoas(req: QtdPessoasRequest, pedido: int) -> dict:
+    return await asyncio.to_thread(_set_qtd_pessoas_sync, req, pedido)
 
 
 def _fechar_pedido_sync(req: FecharRequest, pedido: int) -> dict:
@@ -655,3 +846,192 @@ def _reabrir_pedido_sync(req: FecharRequest, pedido: int) -> dict:
 
 async def reabrir_pedido(req: FecharRequest, pedido: int) -> dict:
     return await asyncio.to_thread(_reabrir_pedido_sync, req, pedido)
+
+
+def _dividir_pedido_sync(req: DividirPedidoRequest, pedido: int) -> dict:
+    """Dividir Pedido — funcionalidade NOVA, sem precedente no legado
+    (pesquisado em toda a árvore VB6, nenhum "Dividir/Separar Conta" existe
+    em nenhuma linha de negócio; ver PENDENCIAS.md > "Pedido Bar" >
+    "Dividir Pedido"). Decisões confirmadas com o usuário (2026-07-17):
+
+    - Só pedido Aberto pode ser dividido (nada de estoque/comanda/forma de
+      pagamento foi lançado ainda — mais simples e seguro).
+    - Cada grupo em `req.grupos` vira um pedido NOVO, sob o MESMO cliente do
+      pedido original (a Mesa/Comanda) — relaxa de propósito a invariante de
+      "1 pedido aberto por cliente" só para pedidos originados de uma
+      divisão (`_pedido_aberto_por_cliente_sync` continua trazendo só o
+      pedido mais recente quando há mais de um; ver docstring lá).
+    - Divisão de item compartilhado por VALOR fracionário de uma unidade
+      indivisível é a MESMA mecânica que dividir por quantidade inteira —
+      `qtd_pedida` já é numérico/decimal (produtos vendidos por m²/kg já
+      usam fração), então qtd=0.25 em 4 pedidos representa exatamente 25%
+      do valor (e, futuramente, 25% da baixa de estoque, cada pedido
+      baixando a sua fração no PRÓPRIO Fechar) sem precisar de nenhuma
+      coluna nova de "valor fracionado".
+    - Rastreabilidade: reaproveita `pedido_venda.num_ped_cliente` (coluna já
+      existente, já exposta no Pedido Completo como "Nº Pedido do Cliente")
+      — cada pedido filho grava ali o nº do pedido original, em vez de criar
+      uma coluna nova (mesmo raciocínio de reaproveitar schema legado já
+      usado no módulo Cilindro, ver CLAUDE.md "Não replicar truques VB6").
+
+    O que fica no pedido original nunca é listado explicitamente pelo
+    chamador — é sempre "o que sobrar" depois de descontar o que foi movido
+    pra cada grupo. Se um item fica com quantidade zero no original, a linha
+    é excluída; se o pedido original fica sem nenhum item além da Taxa de
+    Serviço, a taxa também é removida e o pedido original é cancelado
+    automaticamente (evita um pedido "Aberto" vazio sobrando na lista)."""
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT situacao, cliente, vendedor, area_atuacao, forma_pag, obs, "
+            "NOME_CLIENTE, TELEFONE_CLIENTE, LOCALIZACAO, num_ped_cliente "
+            "FROM pedido_venda WHERE pedido=%s",
+            (pedido,),
+        )
+        ex = cur.fetchone()
+        if not ex:
+            conn.close()
+            return {"success": False, "message": "Pedido não encontrado."}
+        sit = (ex.get("situacao") or "").strip().upper()
+        if sit != "A":
+            conn.close()
+            return {"success": False, "message": "Somente pedidos em Aberto podem ser divididos."}
+        # Pedido FILHO de uma divisão (referência numérica aponta pro
+        # original) não pode ser dividido de novo — evita uma cadeia de
+        # múltiplos níveis (filho de filho), que a resolução de "raiz" em
+        # `_get_pedido_sync`/o retorno de item ao original em
+        # `_delete_item_sync` não foram desenhados pra acompanhar. Pedido
+        # explícito do usuário, 2026-07-17.
+        if (ex.get("num_ped_cliente") or "").strip().isdigit():
+            conn.close()
+            return {"success": False, "message": "Este pedido já é resultado de uma distribuição — não pode ser distribuído novamente."}
+        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, "PEDIDO", "DIVIDIR"):
+            conn.close()
+            return {"success": False, "message": "Sem permissão para dividir o pedido."}
+
+        grupos = [g for g in req.grupos if g.itens]
+        if not grupos:
+            conn.close()
+            return {"success": False, "message": "Informe ao menos um grupo com itens para dividir."}
+
+        cur.execute(
+            "SELECT codauto, produto, qtd_pedida, p_venda, p_normal, desconto, acrescimo, custo_ped, "
+            "descricao_produto, unidade_pedido "
+            "FROM pedido_venda_prod WHERE pedido=%s AND ISNULL(item_cancelado,0)=0",
+            (pedido,),
+        )
+        itens_originais = {int(r["codauto"]): r for r in cur.fetchall()}
+
+        somas: dict[int, float] = {}
+        for g in grupos:
+            for it in g.itens:
+                if it.codauto not in itens_originais:
+                    conn.close()
+                    return {"success": False, "message": f"Item #{it.codauto} não pertence a este pedido."}
+                if it.qtd <= 0:
+                    conn.close()
+                    return {"success": False, "message": "Quantidade dividida deve ser maior que zero."}
+                produto = (itens_originais[it.codauto].get("produto") or "").strip().upper()
+                if produto == TAXA_SERVICO_CODIGO:
+                    conn.close()
+                    return {"success": False, "message": "Taxa de Serviço é recalculada automaticamente em cada pedido — não pode ser dividida manualmente."}
+                somas[it.codauto] = somas.get(it.codauto, 0.0) + it.qtd
+        for codauto, soma in somas.items():
+            qtd_original = float(itens_originais[codauto].get("qtd_pedida") or 0)
+            if soma > qtd_original + 0.0001:
+                conn.close()
+                return {"success": False, "message": "A quantidade dividida de um item não pode exceder a quantidade do pedido original."}
+
+        _ensure_hora_inclusao_item_col(cur)
+        referencia_original = str(pedido)
+        novos_pedidos: list[int] = []
+
+        for g in grupos:
+            cur.execute(
+                "INSERT INTO pedido_venda "
+                "(cliente, data, vendedor, hora_aberto, obs, situacao, "
+                " NOME_CLIENTE, TELEFONE_CLIENTE, abertopor, total, tipo, area_atuacao, "
+                " forma_pag, LOCALIZACAO, num_ped_cliente) "
+                "OUTPUT INSERTED.pedido "
+                "VALUES (%s, CAST(GETDATE() AS DATE), %s, CONVERT(NVARCHAR(8), GETDATE(), 108), %s, 'A', "
+                "        %s, %s, %s, 0, 0, %s, %s, %s, %s)",
+                (
+                    ex["cliente"], ex.get("vendedor"), ex.get("obs") or "",
+                    ex.get("NOME_CLIENTE") or "", ex.get("TELEFONE_CLIENTE") or "", ex.get("vendedor"),
+                    ex.get("area_atuacao"), ex.get("forma_pag"), ex.get("LOCALIZACAO"),
+                    referencia_original,
+                ),
+            )
+            novo_pedido = int(cur.fetchone()["pedido"])
+            novos_pedidos.append(novo_pedido)
+
+            for it in g.itens:
+                original = itens_originais[it.codauto]
+                cur.execute(
+                    "INSERT INTO pedido_venda_prod "
+                    "(pedido, produto, qtd_pedida, p_venda, p_normal, desconto, acrescimo, custo_ped, "
+                    " descricao_produto, unidade_pedido, situacao_item, item_cancelado, data_inclusao_item, "
+                    " hora_inclusao_item) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'A',0,CAST(GETDATE() AS DATE),"
+                    "        CONVERT(NVARCHAR(8), GETDATE(), 108))",
+                    (
+                        novo_pedido, original["produto"], it.qtd, original["p_venda"], original["p_normal"],
+                        original["desconto"], original["acrescimo"], original["custo_ped"],
+                        original.get("descricao_produto"), original.get("unidade_pedido"),
+                    ),
+                )
+
+        # Reduz/remove o que foi movido no pedido original.
+        itens_zerados_ou_taxa_apenas = True
+        for codauto, original in itens_originais.items():
+            movido = somas.get(codauto, 0.0)
+            restante = round(float(original.get("qtd_pedida") or 0) - movido, 4)
+            if restante <= 0.0001:
+                cur.execute("DELETE FROM pedido_venda_prod WHERE codauto=%s", (codauto,))
+            else:
+                cur.execute("UPDATE pedido_venda_prod SET qtd_pedida=%s WHERE codauto=%s", (restante, codauto))
+                if (original.get("produto") or "").strip().upper() != TAXA_SERVICO_CODIGO:
+                    itens_zerados_ou_taxa_apenas = False
+
+        sincroniza_taxa_servico_apos_alteracao(cur, pedido)
+        for novo_pedido in novos_pedidos:
+            sincroniza_taxa_servico_apos_alteracao(cur, novo_pedido)
+            _recalc_pedido_total(cur, novo_pedido)
+
+        original_cancelado = False
+        if itens_zerados_ou_taxa_apenas:
+            # Só sobrou (no máximo) a linha de Taxa de Serviço, sem nenhum
+            # produto/serviço real — remove ela também e cancela o pedido
+            # original, em vez de deixar um "Aberto" vazio na lista.
+            cur.execute(
+                "DELETE FROM pedido_venda_prod WHERE pedido=%s AND produto=%s",
+                (pedido, TAXA_SERVICO_CODIGO),
+            )
+            cur.execute("UPDATE pedido_venda SET situacao='C', total=0 WHERE pedido=%s", (pedido,))
+            original_cancelado = True
+        else:
+            _recalc_pedido_total(cur, pedido)
+
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {
+            "success": True,
+            "message": f"Pedido dividido em {len(novos_pedidos)} pedido(s) novo(s).",
+            "novos_pedidos": novos_pedidos,
+            "original_cancelado": original_cancelado,
+        }
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao dividir pedido: {e}"}
+
+
+async def dividir_pedido(req: DividirPedidoRequest, pedido: int) -> dict:
+    return await asyncio.to_thread(_dividir_pedido_sync, req, pedido)

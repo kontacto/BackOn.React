@@ -19,7 +19,7 @@ import {
 import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors, spacing } from "@/src/theme/colors";
-import { formatBRL, parseNum, fmtNum } from "@/src/utils/format";
+import { formatBRL, parseNum, fmtMoney2, round2 } from "@/src/utils/format";
 import { apiGet, apiSend } from "@/src/utils/api";
 import { Connection } from "@/src/utils/storage/connections";
 import { usePermissions } from "@/src/permissions";
@@ -79,7 +79,7 @@ export default function FormaPagamentoModal({
   const showToast = useCallback((m: string) => {
     setToast(m);
     if (tref.current) clearTimeout(tref.current);
-    tref.current = setTimeout(() => setToast(null), 3000);
+    tref.current = setTimeout(() => setToast(null), 1000);
   }, []);
 
   const [formaSel, setFormaSel] = useState<string | null>(null);
@@ -109,9 +109,19 @@ export default function FormaPagamentoModal({
 
   // Sugere sempre o valor que falta pra fechar o total — evita o usuário
   // ter que calcular/digitar de cabeça (pedido explícito do usuário).
+  //
+  // `round2` (2 casas) e não `fmtNum` (3 casas, pensado pra QUANTIDADE de
+  // item, não valor monetário) — bug real encontrado 2026-07-17: subtração
+  // de ponto flutuante (`valorTotal - lancado`) sempre deixa ruído de
+  // precisão binária (ex. 83.74 - 40 = 43.739999999999995), e formatando
+  // com 3 casas esse ruído aparecia como um dígito visível de verdade
+  // ("43,735"/"0,005" em vez de "43,74"/"0,01"). Se o usuário gravava esse
+  // valor sugerido sem perceber o problema, a 3ª casa ia pro banco de
+  // verdade e o pedido nunca fechava certinho (sobrava R$0,01 de "Falta"
+  // pra sempre). `fmtMoney2` sempre imprime exatamente 2 casas.
   const sugerirValorFalta = (lancado: number) => {
-    const falta = valorTotal - lancado;
-    setValor(falta > 0 ? fmtNum(falta) : "");
+    const falta = round2(valorTotal - lancado);
+    setValor(falta > 0 ? fmtMoney2(falta) : "");
   };
 
   const resetForm = () => {
@@ -157,7 +167,10 @@ export default function FormaPagamentoModal({
     setEditSequencia(it.sequencia);
     setEditTipo(it.tipo);
     setFormaSel(it.forma_pag);
-    setValor(fmtNum(it.valor));
+    // fmtMoney2 (2 casas, valor monetário) — mesmo raciocínio de
+    // `sugerirValorFalta` acima, não `fmtNum` (3 casas, pensado pra
+    // quantidade de item).
+    setValor(fmtMoney2(it.valor));
     setVencimento(it.vencimento);
   };
 
@@ -185,7 +198,10 @@ export default function FormaPagamentoModal({
   const handleGravar = async () => {
     if (!conn || !documento) return;
     if (!formaSel) { showToast("Selecione a forma de pagamento."); return; }
-    const v = parseNum(valor);
+    // round2 na gravação (defesa em profundidade) — mesmo raciocínio de
+    // `sugerirValorFalta` acima: nunca deixar um valor monetário com mais
+    // de 2 casas ir pro banco, mesmo que o campo tenha sido editado à mão.
+    const v = round2(parseNum(valor));
     if (!v || v <= 0) { showToast("Informe um valor maior que zero."); return; }
     setSaving(true);
     try {

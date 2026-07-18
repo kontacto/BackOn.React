@@ -49,7 +49,7 @@ export default function PostoTanquesScreen() {
   const [combustivel, setCombustivel] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2500); };
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 500); };
 
   const load = useCallback(async (c: Conn) => {
     setLoading(true);

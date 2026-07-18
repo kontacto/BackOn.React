@@ -48,7 +48,7 @@ export default function ModelosScreen() {
   const [descricao, setDescricao] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2500); };
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 500); };
 
   const loadModelos = useCallback(async (c: Conn, marca: string | number | null) => {
     setLoading(true);

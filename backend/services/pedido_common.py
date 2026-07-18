@@ -66,6 +66,21 @@ def _ensure_hora_inclusao_item_col(cur) -> None:
     )
 
 
+def _ensure_qtd_pessoas_col(cur) -> None:
+    """Migração idempotente: coluna `qtd_pessoas` em `pedido_venda` — usada
+    pelo Painel de Pedidos (Mesa/Comanda/Balcão) pra dividir o valor total da
+    conta na impressão. Campo genuinamente novo, sem precedente no legado
+    (nunca existiu no VB6) — não é reaproveitamento de coluna existente,
+    diferente do caso Cilindro. Mesmo padrão de
+    `_ensure_hora_inclusao_item_col` acima. Pedido explícito do usuário,
+    2026-07-17."""
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='qtd_pessoas' AND Object_ID=Object_ID('pedido_venda')) "
+        "ALTER TABLE pedido_venda ADD qtd_pessoas INT NULL"
+    )
+
+
 def _modulo_servicos_ativo(cur) -> bool:
     """True se o módulo "Serviço" está ligado em Configurações de Módulo do
     Sistema (controle_configuracao.servicos). Cadastro/consulta/movimentação

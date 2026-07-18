@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import { getSession } from "@/src/utils/storage/session";
@@ -10,7 +10,7 @@ import { apiGet, apiSend } from "@/src/utils/api";
 import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
 import { colors, spacing } from "@/src/theme/colors";
-import { formatDateBR, todayISO } from "@/src/utils/format";
+import { formatDateBR, formatBRL, todayISO } from "@/src/utils/format";
 import DateField from "@/src/components/DateField";
 import WebDateField from "@/src/components/WebDateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
@@ -31,6 +31,7 @@ import PedidoTotalizadoModal from "@/src/components/pedido/PedidoTotalizadoModal
 import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
 import FormaPagamentoField from "@/src/components/pedido/FormaPagamentoField";
 import AnexosPedidoModal from "@/src/components/pedido/AnexosPedidoModal";
+import DividirPedidoModal from "@/src/components/pedido/DividirPedidoModal";
 import WhatsappButton from "@/src/components/WhatsappButton";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 
@@ -56,7 +57,7 @@ export default function PedidoFormScreen() {
   const showToast = useCallback((m: string, t: ToastTone = "info") => {
     setToast({ msg: m, tone: t });
     if (tref.current) clearTimeout(tref.current);
-    tref.current = setTimeout(() => setToast(null), 3500);
+    tref.current = setTimeout(() => setToast(null), 1500);
   }, []);
 
   const [pedido, setPedido] = useState<PedidoData | null>(null);
@@ -65,9 +66,20 @@ export default function PedidoFormScreen() {
   const [loadingResumo, setLoadingResumo] = useState(false);
   const [validade, setValidade] = useState<string | null>(null);
   const [obs, setObs] = useState("");
+  // Campo livre "Referência" — reaproveita pedido_venda.num_ped_cliente (já
+  // existente na tabela, já exposto no Pedido Completo). No Pedido Bar
+  // também guarda o nº do pedido original ao Dividir Pedido.
+  const [referencia, setReferencia] = useState("");
   const [areaAtuacao, setAreaAtuacao] = useState<number | null>(null);
   const [formaPag, setFormaPag] = useState<string>("");
   const [formasPag, setFormasPag] = useState<{ codigo: string; descricao: string }[]>([]);
+  // Combobox "Tipo" do Pedido Bar (pedido_venda.tipo, FK tipo_cliente.codigo)
+  // — tipo do PEDIDO, separado do tipo do CLIENTE. Cliente reservado Mesa/
+  // Comanda/Balcão sempre sobrescreve isso com o próprio tipo no backend
+  // (`_save_pedido_sync`); pra outros clientes, fica livre. Pedido
+  // explícito do usuário, 2026-07-18.
+  const [tipoPedido, setTipoPedido] = useState<number | null>(null);
+  const [tiposClienteOpts, setTiposClienteOpts] = useState<{ codigo: number; descricao: string }[]>([]);
   const handleFormaPagModalChanged = useCallback(async () => {
     if (!conn || !pedidoId) return;
     const j = await apiGet(conn, `/api/pedidos/${pedidoId}`);
@@ -100,6 +112,9 @@ export default function PedidoFormScreen() {
   const [usuarioCod, setUsuarioCod] = useState<number>(-2);
   const [funcaoCod, setFuncaoCod] = useState<number>(1); // 1=gerente,2=supervisor,3=vendedor
   const [waCompany, setWaCompany] = useState<string | null>(null);
+  // Status global do WhatsApp (pill = não renderiza a frase sozinho, ver
+  // WhatsappButton.tsx) — usado pra mostrar "desativado" abaixo do rodapé.
+  const [waEnabled, setWaEnabled] = useState<boolean | null>(null);
 
   const isAberto = (pedido?.situacao || "A").toUpperCase() === "A";
   const it = usePedidoItens({
@@ -145,10 +160,11 @@ export default function PedidoFormScreen() {
       // Carrega listas (áreas e funcionários) em paralelo
       if (c) {
         try {
-          const [ra, rf, rfp] = await Promise.all([
+          const [ra, rf, rfp, rtc] = await Promise.all([
             apiGet(c, `/api/area-atuacao`).catch(() => null),
             apiGet(c, `/api/funcionarios`).catch(() => null),
             apiGet(c, `/api/forma-pagamento`).catch(() => null),
+            apiGet(c, `/api/tipo-cliente`).catch(() => null),
           ]);
           if (ra?.success) {
             const arr = ra.items || [];
@@ -158,6 +174,7 @@ export default function PedidoFormScreen() {
           }
           if (rf?.success) setFuncionarios(rf.items || []);
           if (rfp?.success) setFormasPag(rfp.items || []);
+          if (rtc?.success) setTiposClienteOpts(rtc.items || []);
         } catch {
           // silencioso — combobox vazio
         }
@@ -173,11 +190,13 @@ export default function PedidoFormScreen() {
             if (p.cliente) setCliente({ codigo: p.cliente, nome: p.cliente_nome, cgc_cpf: p.cliente_cgc, telefone: "" });
             setValidade(p.validade || null);
             setObs(p.obs || "");
+            setReferencia(p.referencia || "");
             setAreaAtuacao(p.area_atuacao ?? null);
             setPrevisaoEntrega(p.previsao_entrega || null);
             setHoraEntrega((p.hora_entrega || "").slice(0, 5));
             setPedidoEntregue(!!p.pedido_entregue);
             setFormaPag(p.forma_pag || "");
+            setTipoPedido(p.tipo ?? null);
             if (p.vendedor != null) setVendedor(p.vendedor);
             if (p.vendedor_nome) setVendedorNome(p.vendedor_nome);
           } else {
@@ -210,6 +229,31 @@ export default function PedidoFormScreen() {
       .finally(() => { if (!cancelled) setLoadingResumo(false); });
     return () => { cancelled = true; };
   }, [conn, cliente?.codigo]);
+
+  // Ao voltar de "Alterar dados do cliente" (cadastro rápido), o código do
+  // cliente não muda — então o efeito acima não refaz a busca sozinho.
+  // Refaz o resumo (e sincroniza nome/CPF-CNPJ exibidos no topo) sempre que
+  // a tela reganha foco com um cliente já selecionado. Pedido explícito do
+  // usuário, 2026-07-17.
+  useFocusEffect(
+    useCallback(() => {
+      if (!conn || !cliente?.codigo) return;
+      const codigo = cliente.codigo;
+      apiGet(conn, `/api/clientes/${codigo}/resumo`)
+        .then((j) => {
+          if (j?.success && j.cliente) {
+            setClienteResumo(j.cliente);
+            setCliente((prev) =>
+              prev && prev.codigo === codigo
+                ? { ...prev, nome: j.cliente.nome, cgc_cpf: j.cliente.cgc_cpf, telefone: j.cliente.telefone }
+                : prev
+            );
+          }
+        })
+        .catch(() => {});
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [conn, cliente?.codigo])
+  );
 
   // -------- Busca cliente (debounce)
   useEffect(() => {
@@ -246,6 +290,12 @@ export default function PedidoFormScreen() {
 
   const handlePickClienteQuick = async (c: ClienteRow, typedTerm?: string) => {
     setCliente(c);
+    // Ao carregar um cliente no pedido, o tipo do CLIENTE (cliente_forn)
+    // pré-preenche o combobox "Tipo" do PEDIDO — só nesta tela de
+    // cadastro do pedido (não no "Novo Pedido" por coluna do Painel, que
+    // já decide o tipo pela coluna clicada). Continua editável depois —
+    // mesma regra de sempre (pedido explícito do usuário, 2026-07-17).
+    setTipoPedido(c.tipo_cliente_codigo ?? null);
     if (!editing && conn && typedTerm && COMANDA_TERM_RE.test(typedTerm.trim())) {
       try {
         const j = await apiGet(conn, `/api/pedidos/aberto-por-cliente`, { cliente: c.codigo });
@@ -307,10 +357,12 @@ export default function PedidoFormScreen() {
         vendedor,
         validade: validade || null,
         obs,
+        referencia: referencia || null,
         area_atuacao: areaAtuacao,
         previsao_entrega: previsaoEntrega || null,
         hora_entrega: horaEntrega || null,
         forma_pag: formaPag || null,
+        tipo: tipoPedido,
         usuario_alteracao: usuarioCod,
         classe,
         plataforma: Platform.OS,
@@ -362,6 +414,21 @@ export default function PedidoFormScreen() {
   const sit = pedido?.situacao || "A";
   const sitColor = useMemo(() => SIT_COLOR[sit] || colors.muted, [sit]);
   const isFechado = sit.toUpperCase() === "F";
+  // Pedido filho de uma divisão (Dividir Pedido) — `referencia` numérica
+  // aponta pro pedido original, mesmo teste usado no backend pra resolver a
+  // raiz (`_get_pedido_sync`). Campo Referência trava (não editável) nesse
+  // caso pra não perder o vínculo com a mesa por engano (pedido explícito
+  // do usuário, 2026-07-17).
+  const isPedidoFilho = /^\d+$/.test((referencia || "").trim());
+  // Cor do ponto na lista "Pedidos da mesma mesa/distribuição" — pedido explícito
+  // do usuário, 2026-07-17: verde pra Aberto, vermelho pra Faturado. Local a
+  // esta lista, não reaproveita `SIT_COLOR` (que já é usado em outros
+  // lugares do app, ex. o badge de situação logo acima, e tem cores
+  // diferentes pra cada situação) — Fechado/Cancelado seguem o mapa padrão.
+  const relacionadoDotColor = useCallback(
+    (situacao: string) => (situacao === "A" ? colors.success : situacao === "PG" ? colors.error : SIT_COLOR[situacao] || colors.muted),
+    []
+  );
 
   const [fechando, setFechando] = useState(false);
   const handleFechar = useCallback(async () => {
@@ -433,6 +500,21 @@ export default function PedidoFormScreen() {
     } finally { setReabrindo(false); }
   }, [conn, pedidoId, classe, isMaster, usuarioCod, showToast]);
 
+  // Dividir Pedido — funcionalidade nova, sem precedente no legado (ver
+  // DividirPedidoModal.tsx). Pill "Dividir" na toolbar, ao lado de "Fechar
+  // Pedido" (pedido explícito do usuário, 2026-07-17).
+  const [dividirOpen, setDividirOpen] = useState(false);
+  const handleDivided = useCallback(async (novosPedidos: number[]) => {
+    if (novosPedidos.length) {
+      showToast(`Pedido(s) criado(s): ${novosPedidos.join(", ")}`, "success");
+    }
+    await it.loadItens();
+    if (conn && pedidoId) {
+      const j = await apiGet(conn, `/api/pedidos/${pedidoId}`);
+      if (j?.success && j.pedido) setPedido(j.pedido);
+    }
+  }, [conn, pedidoId, it, showToast]);
+
   // Cancelar Pedido (FrmManPedBar.frm, Command9_Click) — situação -> C, só
   // Aberto/Fechado (backend bloqueia Faturado). Pill vermelho ao lado de
   // "Reabrir" (pedido explícito do usuário, 2026-07-16).
@@ -477,6 +559,10 @@ export default function PedidoFormScreen() {
     () => formasPag.map((f) => ({ value: f.codigo, label: f.descricao })),
     [formasPag]
   );
+  const tipoOptions: SelectOption[] = useMemo(
+    () => tiposClienteOpts.map((t) => ({ value: t.codigo, label: t.descricao })),
+    [tiposClienteOpts]
+  );
   const vendedorOptions: SelectOption[] = useMemo(
     () => funcionarios.map((f) => ({
       value: f.codigo,
@@ -509,7 +595,11 @@ export default function PedidoFormScreen() {
       <PedidoHeader
         title={editing ? `Pedido #${pedidoId}` : "Novo Pedido"}
         saving={saving}
-        onBack={() => router.back()}
+        // Sempre volta direto pra lista de Pedidos com situação Aberto — não
+        // `router.back()` (que, navegando entre pedidos da mesma mesa/
+        // distribuição, empilha várias telas de Pedido e voltaria pra outro
+        // Pedido em vez da lista). Pedido explícito do usuário, 2026-07-17.
+        onBack={() => router.replace({ pathname: "/pedidos", params: { situacao: "A" } })}
         onSave={handleSave}
         canSave={can("PEDIDO.GRAVAR") && isAberto}
         titleExtra={
@@ -549,80 +639,168 @@ export default function PedidoFormScreen() {
                   Só web — mobile mantém o cabeçalho como já era (situação +
                   Entrega), sem espaço pra um terceiro grupo sem quebrar. */}
               {isWeb ? (
-                <View style={{ flexDirection: "column", gap: 2, flexShrink: 0 }}>
-                  <Text style={[styles.headerMeta, { textTransform: "uppercase", fontSize: 10, letterSpacing: 0.5 }]}>Forma de Pagamento</Text>
-                  <FormaPagamentoField
-                    conn={conn}
-                    tipoDav="PED"
-                    documento={pedidoId}
-                    tela="PEDIDO"
-                    valorTotal={pedido?.total || 0}
-                    formaPag={formaPag}
-                    onFormaPagChange={setFormaPag}
-                    formaPagOptions={formaPagOptions}
-                    onChanged={handleFormaPagModalChanged}
-                    compactWeb
-                    fieldWidth={200}
-                    testIDPrefix="pedido-form-forma-pag"
-                  />
+                <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
+                  <View style={{ flexDirection: "column", gap: 2 }}>
+                    <Text style={[styles.headerMeta, { textTransform: "uppercase", fontSize: 10, letterSpacing: 0.5 }]}>Forma de Pagamento</Text>
+                    <FormaPagamentoField
+                      conn={conn}
+                      tipoDav="PED"
+                      documento={pedidoId}
+                      tela="PEDIDO"
+                      valorTotal={pedido?.total || 0}
+                      formaPag={formaPag}
+                      onFormaPagChange={setFormaPag}
+                      formaPagOptions={formaPagOptions}
+                      onChanged={handleFormaPagModalChanged}
+                      compactWeb
+                      fieldWidth={200}
+                      testIDPrefix="pedido-form-forma-pag"
+                    />
+                  </View>
+                  <View style={{ flexDirection: "column", gap: 2 }}>
+                    <Text style={[styles.headerMeta, { textTransform: "uppercase", fontSize: 10, letterSpacing: 0.5 }]}>Referência</Text>
+                    <TextInput
+                      value={referencia}
+                      onChangeText={setReferencia}
+                      editable={!isPedidoFilho}
+                      placeholder="Referência livre"
+                      placeholderTextColor={colors.muted}
+                      style={[
+                        styles.input,
+                        { width: 160, height: 36, paddingVertical: 6 },
+                        isPedidoFilho && { color: colors.muted },
+                      ]}
+                      testID="pedido-form-referencia"
+                    />
+                  </View>
+                  <View style={{ flexDirection: "column", gap: 2 }}>
+                    <Text style={[styles.headerMeta, { textTransform: "uppercase", fontSize: 10, letterSpacing: 0.5 }]}>Tipo</Text>
+                    <View style={{ width: 180 }}>
+                      <SelectField
+                        value={tipoPedido}
+                        onChange={(v) => setTipoPedido(v == null ? null : Number(v))}
+                        options={tipoOptions}
+                        placeholder="Tipo do pedido"
+                        modalTitle="Selecionar Tipo"
+                        allowClear
+                        compactWeb
+                        testID="pedido-form-tipo"
+                      />
+                    </View>
+                  </View>
                 </View>
               ) : null}
 
               {/* Grupo Entrega nunca encolhe/corta — a prioridade é o
                   checkbox "Pedido Entregue" ficar sempre visível; se faltar
-                  espaço, quem cede é o texto de situação à esquerda. */}
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                <Text style={styles.headerMeta}>Entrega</Text>
-                <View style={{ width: 150 }}>
-                  {Platform.OS === "web" ? (
-                    <WebDateField
-                      value={previsaoEntrega}
-                      onChange={setPrevisaoEntrega}
-                      type="date"
-                      icon="calendar-outline"
-                      testID="pedido-form-previsao-entrega"
-                    />
-                  ) : (
-                    <DateField
-                      value={previsaoEntrega}
-                      onChange={setPrevisaoEntrega}
-                      placeholder="DD/MM/AAAA"
-                      testID="pedido-form-previsao-entrega"
-                    />
-                  )}
+                  espaço, quem cede é o texto de situação à esquerda. Label
+                  "Entrega" fica ACIMA dos campos, mesmo padrão coluna dos
+                  outros grupos do cabeçalho (Forma de Pagamento/Referência/
+                  Tipo), pedido explícito do usuário, 2026-07-17. */}
+              <View style={{ flexDirection: "column", gap: 2, flexShrink: 0 }}>
+                <Text style={[styles.headerMeta, { textTransform: "uppercase", fontSize: 10, letterSpacing: 0.5 }]}>Entrega</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <View style={{ width: 150 }}>
+                    {Platform.OS === "web" ? (
+                      <WebDateField
+                        value={previsaoEntrega}
+                        onChange={setPrevisaoEntrega}
+                        type="date"
+                        icon="calendar-outline"
+                        testID="pedido-form-previsao-entrega"
+                      />
+                    ) : (
+                      <DateField
+                        value={previsaoEntrega}
+                        onChange={setPrevisaoEntrega}
+                        placeholder="DD/MM/AAAA"
+                        testID="pedido-form-previsao-entrega"
+                      />
+                    )}
+                  </View>
+                  <View style={{ width: 120 }}>
+                    {Platform.OS === "web" ? (
+                      <WebDateField
+                        value={horaEntrega || null}
+                        onChange={setHoraEntrega}
+                        type="time"
+                        icon="time-outline"
+                        testID="pedido-form-hora-entrega"
+                      />
+                    ) : (
+                      <TextInput
+                        value={horaEntrega}
+                        onChangeText={setHoraEntrega}
+                        placeholder="HH:MM"
+                        placeholderTextColor={colors.muted}
+                        style={styles.input}
+                        testID="pedido-form-hora-entrega"
+                      />
+                    )}
+                  </View>
+                  {pedidoId && can("PEDIDO.ENTREGUE") ? (
+                    <TouchableOpacity
+                      onPress={handleToggleEntregue}
+                      disabled={entregueSaving}
+                      activeOpacity={0.7}
+                      style={{ flexDirection: "row", alignItems: "center", gap: 4, opacity: entregueSaving ? 0.6 : 1 }}
+                      testID="pedido-form-entregue-checkbox"
+                    >
+                      <Ionicons name={pedidoEntregue ? "checkbox" : "square-outline"} size={16} color={colors.brandPrimary} />
+                      <Text style={[styles.headerMeta, { fontSize: 11 }]} numberOfLines={1}>Entregue</Text>
+                    </TouchableOpacity>
+                  ) : null}
                 </View>
-                <View style={{ width: 120 }}>
-                  {Platform.OS === "web" ? (
-                    <WebDateField
-                      value={horaEntrega || null}
-                      onChange={setHoraEntrega}
-                      type="time"
-                      icon="time-outline"
-                      testID="pedido-form-hora-entrega"
-                    />
-                  ) : (
-                    <TextInput
-                      value={horaEntrega}
-                      onChangeText={setHoraEntrega}
-                      placeholder="HH:MM"
-                      placeholderTextColor={colors.muted}
-                      style={styles.input}
-                      testID="pedido-form-hora-entrega"
-                    />
-                  )}
-                </View>
-                {pedidoId && can("PEDIDO.ENTREGUE") ? (
-                  <TouchableOpacity
-                    onPress={handleToggleEntregue}
-                    disabled={entregueSaving}
-                    activeOpacity={0.7}
-                    style={{ flexDirection: "row", alignItems: "center", gap: 4, opacity: entregueSaving ? 0.6 : 1 }}
-                    testID="pedido-form-entregue-checkbox"
-                  >
-                    <Ionicons name={pedidoEntregue ? "checkbox" : "square-outline"} size={16} color={colors.brandPrimary} />
-                    <Text style={[styles.headerMeta, { fontSize: 11 }]} numberOfLines={1}>Entregue</Text>
-                  </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+
+          {/* Pedidos da mesma divisão (Dividir Pedido) — mantém a referência
+              da mesa visível e navegável a partir de QUALQUER pedido do
+              grupo (original ou filho), até o fechamento total de todos
+              eles (pedido explícito do usuário, 2026-07-17). */}
+          {editing && pedido && pedido.pedidos_relacionados.length > 0 ? (
+            <View style={{ marginBottom: 12 }}>
+              <Text style={[styles.headerMeta, { textTransform: "uppercase", fontSize: 10, letterSpacing: 0.5, marginBottom: 4 }]}>
+                Pedidos da mesma mesa/distribuição
+              </Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {!isPedidoFilho ? (
+                  // Este pedido (o carregado na tela) É o original — mantém
+                  // a mesma cor de destaque mesmo sem aparecer como um chip
+                  // navegável na lista (não faria sentido "abrir" o pedido
+                  // que já está aberto). Pedido explícito do usuário,
+                  // 2026-07-17.
+                  <View style={[styles.filhoChip, styles.filhoChipOriginal]} testID="pedido-form-original-self">
+                    <View style={[styles.filhoDot, { backgroundColor: relacionadoDotColor(sit) }]} />
+                    <Text style={[styles.filhoText, styles.filhoTextOriginal]}>
+                      Original nº {pedido.pedido} (este pedido)
+                    </Text>
+                  </View>
                 ) : null}
+                {pedido.pedidos_relacionados.map((f) => {
+                  // O pedido ORIGINAL da divisão (a raiz) ganha cor própria
+                  // pra se destacar dos demais filhos/irmãos na lista —
+                  // pedido explícito do usuário, 2026-07-17. Só existe um
+                  // "original" na lista quando ESTE pedido é filho (a
+                  // referência aponta pra ele); visto a partir do próprio
+                  // original, todos os relacionados são filhos.
+                  const isOriginal = isPedidoFilho && String(f.pedido) === referencia.trim();
+                  return (
+                    <TouchableOpacity
+                      key={f.pedido}
+                      onPress={() => router.push({ pathname: "/pedido-form", params: { pedido: String(f.pedido) } })}
+                      style={[styles.filhoChip, isOriginal && styles.filhoChipOriginal]}
+                      testID={`pedido-form-relacionado-${f.pedido}`}
+                    >
+                      <View style={[styles.filhoDot, { backgroundColor: relacionadoDotColor(f.situacao) }]} />
+                      <Text style={[styles.filhoText, isOriginal && styles.filhoTextOriginal]}>
+                        {isOriginal ? "Original" : "Pedido"} nº {f.pedido} · {f.situacao_label} · {formatBRL(f.total)}
+                      </Text>
+                      <Ionicons name="chevron-forward" size={14} color={isOriginal ? colors.onBrandPrimary : colors.muted} />
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             </View>
           ) : null}
@@ -634,6 +812,11 @@ export default function PedidoFormScreen() {
             loadingResumo={loadingResumo}
             onOpenSearch={() => { setSearchTerm(clienteQuickTerm); setSearchResults([]); setSearchOpen(true); }}
             onOpenDados={() => setDadosOpen(true)}
+            onEditCliente={
+              cliente?.codigo
+                ? () => router.push({ pathname: "/cliente-form", params: { codigo: String(cliente.codigo) } })
+                : undefined
+            }
             quickTerm={clienteQuickTerm}
             onQuickTermChange={handleClienteQuickChange}
             quickLoading={clienteQuickLoading}
@@ -755,6 +938,7 @@ export default function PedidoFormScreen() {
             }
             onFechar={editing && pedidoId ? handleFechar : undefined}
             fechando={fechando}
+            onDividir={editing && pedidoId && !isPedidoFilho ? () => setDividirOpen(true) : undefined}
             onFaturar={editing && pedidoId ? handleFaturar : undefined}
             faturando={faturando}
             isFechado={isFechado}
@@ -764,16 +948,24 @@ export default function PedidoFormScreen() {
             cancelando={cancelando}
             onAnexos={editing && pedidoId && cliente ? () => setAnexosOpen(true) : undefined}
             onImprimir={editing && pedidoId ? () => setReciboOpen(true) : undefined}
+            footerRight={
+              editing && pedidoId && can("PEDIDO.WHATSAPP") ? (
+                <WhatsappButton
+                  conn={conn}
+                  documentType="PED"
+                  documentId={pedidoId}
+                  userId={usuarioCod}
+                  companyId={waCompany}
+                  pill
+                  onStatusChange={setWaEnabled}
+                />
+              ) : undefined
+            }
           />
-
-          {editing && pedidoId && can("PEDIDO.WHATSAPP") ? (
-            <WhatsappButton
-              conn={conn}
-              documentType="PED"
-              documentId={pedidoId}
-              userId={usuarioCod}
-              companyId={waCompany}
-            />
+          {waEnabled === false ? (
+            <Text style={styles.whatsappDisabledHint}>
+              O envio por WhatsApp está desativado em Configurações.
+            </Text>
           ) : null}
 
           <View style={{ height: 80 }} />
@@ -798,7 +990,7 @@ export default function PedidoFormScreen() {
         setTerm={setSearchTerm}
         loading={searchLoading}
         results={searchResults}
-        onPick={(c) => { setCliente(c); setSearchOpen(false); }}
+        onPick={(c) => { setCliente(c); setTipoPedido(c.tipo_cliente_codigo ?? null); setSearchOpen(false); }}
         onCreate={() => {
           setSearchOpen(false);
           handleCreateClienteFromQuick(searchTerm);
@@ -813,6 +1005,14 @@ export default function PedidoFormScreen() {
           clienteCodigo={cliente.codigo}
         />
       ) : null}
+      <DividirPedidoModal
+        visible={dividirOpen}
+        onClose={() => setDividirOpen(false)}
+        conn={conn}
+        pedido={pedidoId || 0}
+        itens={it.itens}
+        onDivided={handleDivided}
+      />
       <ReciboPedidoModal
         visible={reciboOpen}
         onClose={() => setReciboOpen(false)}

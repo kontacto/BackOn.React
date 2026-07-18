@@ -63,7 +63,8 @@ def _relatorio_pedidos_sync(servidor: str, banco: str, data_ini: str, data_fim: 
             params.append(situacao)
         cur.execute(
             "SELECT TOP 300 pv.pedido, pv.data, pv.situacao, ISNULL(pv.total,0) AS total, "
-            "       c.nome AS cliente, pv.vendedor AS vendedor_cod, f.nome AS vendedor_nome "
+            "       c.nome AS cliente, pv.vendedor AS vendedor_cod, "
+            "       COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS vendedor_nome "
             "FROM pedido_venda pv "
             "LEFT JOIN cliente c ON c.codigo = pv.cliente "
             "LEFT JOIN funcionarios f ON f.codigo_int = pv.vendedor "
@@ -149,11 +150,15 @@ def _relatorio_desc_margem_sync(servidor: str, banco: str, data_ini: str, data_f
             where.append("pv.pedido = %s")
             params.append(pedido)
         if cliente_nome and cliente_nome.strip():
-            where.append("c.nome LIKE %s")
-            params.append(f"%{cliente_nome.strip()}%")
+            # Busca por nome também bate no nome fantasia — [GLOBAL] em toda
+            # busca de cliente do sistema, pedido explícito do usuário,
+            # 2026-07-18.
+            where.append("(c.nome LIKE %s OR c.fantasia LIKE %s)")
+            like_cliente = f"%{cliente_nome.strip()}%"
+            params.extend([like_cliente, like_cliente])
         cur.execute(
             "SELECT pv.pedido, pv.data, pv.vendedor, pv.situacao, "
-            "       f.nome AS vendedor_nome, c.nome AS cliente_nome, "
+            "       COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS vendedor_nome, c.nome AS cliente_nome, "
             "       ISNULL(ag.venda,0) AS venda, ISNULL(ag.desconto,0) AS desconto, ISNULL(ag.custo,0) AS custo "
             "FROM pedido_venda pv "
             "LEFT JOIN funcionarios f ON f.codigo_int = pv.vendedor "
@@ -362,7 +367,7 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
         movimento = []
         cur.execute(
             "SELECT TOP 50 pv.pedido, pv.situacao, c.nome AS cliente, ISNULL(pv.total,0) AS valor, "
-            "       f.nome AS vendedor_nome "
+            "       COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS vendedor_nome "
             "FROM pedido_venda pv "
             f"{date_join}"
             "LEFT JOIN cliente c ON c.codigo = pv.cliente "
@@ -534,11 +539,15 @@ def _relatorio_os_desc_margem_sync(servidor: str, banco: str, data_ini: str, dat
             where.append("o.codigo = %s")
             params.append(os_cod)
         if cliente_nome and cliente_nome.strip():
-            where.append("c.nome LIKE %s")
-            params.append(f"%{cliente_nome.strip()}%")
+            # Busca por nome também bate no nome fantasia — [GLOBAL] em toda
+            # busca de cliente do sistema, pedido explícito do usuário,
+            # 2026-07-18.
+            where.append("(c.nome LIKE %s OR c.fantasia LIKE %s)")
+            like_cliente = f"%{cliente_nome.strip()}%"
+            params.extend([like_cliente, like_cliente])
         cur.execute(
             "SELECT i.vendedor, o.codigo AS pedido, o.data_entrada AS data, o.situacao, "
-            "       f.nome AS vendedor_nome, c.nome AS cliente_nome, "
+            "       COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS vendedor_nome, c.nome AS cliente_nome, "
             "       SUM(i.p_venda*i.quant) AS venda, "
             "       SUM(ISNULL(i.desconto,0)*i.quant) AS desconto, "
             "       SUM(i.custo_os*i.quant) AS custo "
@@ -546,7 +555,7 @@ def _relatorio_os_desc_margem_sync(servidor: str, banco: str, data_ini: str, dat
             "LEFT JOIN funcionarios f ON f.codigo_int = i.vendedor "
             "LEFT JOIN cliente c ON c.codigo = o.cliente "
             f"WHERE {' AND '.join(where)} "
-            "GROUP BY i.vendedor, o.codigo, o.data_entrada, o.situacao, f.nome, c.nome "
+            "GROUP BY i.vendedor, o.codigo, o.data_entrada, o.situacao, f.nome_guerra, f.nome, c.nome "
             "ORDER BY i.vendedor, o.codigo",
             tuple(params),
         )

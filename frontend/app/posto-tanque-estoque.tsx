@@ -47,7 +47,7 @@ export default function PostoTanqueEstoqueScreen() {
   const [data, setData] = useState(todayIso());
   const [estoque, setEstoque] = useState("");
 
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2500); };
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 500); };
 
   const loadTanques = useCallback(async (c: Conn) => {
     try {

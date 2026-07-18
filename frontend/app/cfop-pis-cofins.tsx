@@ -86,7 +86,7 @@ export default function CfopPisCofinsScreen() {
   const [aliquotaCofins, setAliquotaCofins] = useState("0");
   const [acatarNfe, setAcatarNfe] = useState(true);
 
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2500); };
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 500); };
 
   const load = useCallback(async (c: Conn, q: string) => {
     setLoading(true);

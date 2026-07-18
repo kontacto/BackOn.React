@@ -57,7 +57,7 @@ export default function PostoCustoScreen() {
   const [custo, setCusto] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2500); };
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 500); };
 
   const loadCombustiveis = useCallback(async (c: Conn) => {
     try {

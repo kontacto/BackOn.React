@@ -67,7 +67,7 @@ export default function PostoMovEncerrantesScreen() {
   const [contadorFinal, setContadorFinal] = useState("");
   const [afericao, setAfericao] = useState("0");
 
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2500); };
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 500); };
 
   const loadOpcoes = useCallback(async (c: Conn) => {
     try {

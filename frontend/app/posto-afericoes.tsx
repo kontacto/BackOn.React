@@ -56,7 +56,7 @@ export default function PostoAfericoesScreen() {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
-  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2500); };
+  const showToast = (m: string) => { setToast(m); setTimeout(() => setToast(null), 500); };
 
   const loadPendentes = useCallback(async (c: Conn) => {
     setLoading(true);

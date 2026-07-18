@@ -586,6 +586,301 @@ mobile pre-sales, and a full version for web-only back-office use.
   Serviço") — distinguishes them from "Pedido Completo"/"O.S. Completa" in
   the tree UI. Pure label change, no key/behavior change.
 
+## Campo "Tipo" do Pedido Bar (`pedido_venda.tipo`)
+
+**Added 2026-07-18, user-directed.** Combobox novo no cabeçalho do Pedido
+Bar (`frontend/app/pedido-form.tsx`, web-only, ao lado de Forma de
+Pagamento e Referência — só aparece com o pedido já gravado, mesmo padrão
+de "related record precisa do pai salvo primeiro") — grava o TIPO DO
+**PEDIDO** (`pedido_venda.tipo`, coluna já existente no banco, `smallint`,
+antes sempre hardcoded em `0`; nenhuma migração foi necessária), FK pra
+`tipo_cliente.codigo` (a mesma tabela Mesa/Comanda/Balcão/Entrega/Fiado já
+usada em toda parte). É um campo **separado** do tipo do CLIENTE
+(`cliente.cliente_forn`) — antes desta mudança, a única noção de "tipo" na
+lista de pedidos vinha do cliente; agora o pedido pode ter seu próprio tipo,
+independente.
+
+**Regras de negócio** (`_save_pedido_sync`, `pedidos_service.py` — aplicadas
+tanto no CREATE quanto no UPDATE):
+
+1. Por padrão, o tipo pedido no combobox é gravado como veio (`req.tipo`).
+2. **Exceção — cliente reservado**: se o `cliente.fantasia` contém "MESA",
+   "COMANDA" ou "BALCÃO"/"BALCAO" (mesa/comanda/balcão físicos do
+   estabelecimento — mesmo critério de texto já usado em
+   `clientes_service._cliente_mesa_ou_comanda`, aqui estendido dos 3 tipos
+   ao invés de só "MESA"), o backend **sempre sobrescreve** o tipo do
+   pedido com o próprio tipo do cliente (`cliente.cliente_forn`),
+   **ignorando** o que foi selecionado no combobox — não faz sentido uma
+   "MESA 7" física virar um pedido de Entrega. Fora esse caso (cliente
+   comum, mesmo que seu `cliente_forn` aponte pra Mesa/Comanda/Balcão), o
+   tipo do pedido é sempre livre — exemplo do próprio usuário: "um cliente
+   do tipo mesa pode ser adicionado na lista como entrega, o tipo dele não
+   muda, mas o tipo de pedido será entrega". **A detecção é por texto
+   (fantasia), não pelo tipo resolvido via `cliente_forn`** — testado ao
+   vivo contra dados reais e confirmado necessário: vários clientes têm
+   `cliente_forn` apontando pra Mesa/Comanda só por serem clientes
+   frequentes categorizados assim administrativamente, sem serem
+   fisicamente uma mesa/comanda reservada (nome comum, fantasia vazia) —
+   só a fantasia identifica os que são de fato o objeto físico reservado.
+3. Sem `req.tipo` informado (combobox vazio) e cliente não-reservado, o
+   campo fica `NULL` no banco.
+
+**A listagem/Painel de Pedidos obedece o tipo do PEDIDO, caindo pro tipo do
+CLIENTE quando `pedido_venda.tipo` é `NULL` (ou `0` — ver bug abaixo)** —
+`_list_pedidos_sync`/`_get_pedido_sync` (`pedidos_service.py`) resolvem
+`tipo_cliente_descricao`/`tipo_descricao` via
+`LEFT JOIN tipo_cliente tc ON tc.codigo = COALESCE(NULLIF(p.tipo, 0), c.cliente_forn)`,
+e o filtro por tipo (chips Balcão/Comanda/Entrega/Mesa, painel de colunas)
+usa a mesma expressão `COALESCE(NULLIF(p.tipo, 0), c.cliente_forn) IN (...)`.
+`GET /api/pedidos/{pedido}` expõe tanto `tipo` (valor bruto, `null` se não
+definido — usado pra popular o combobox) quanto `tipo_descricao` (já
+resolvido com o mesmo fallback, pra exibição).
+
+**Bug corrigido no dia seguinte (2026-07-17)**: logo após o deploy desta
+feature, o Painel de Pedidos ficou COMPLETAMENTE vazio ("Pedidos (0)"), e
+depois de um pedido ter o Tipo setado manualmente na tela, só ELE aparecia
+na lista — todo o resto sumiu. Causa raiz: TODO pedido gravado antes desta
+feature tem `pedido_venda.tipo = 0` hardcoded no banco (não `NULL` — era o
+valor fixo do INSERT antigo). `COALESCE(p.tipo, c.cliente_forn)` só cai pro
+tipo do cliente quando `p.tipo IS NULL`; com `tipo=0` (não-NULL), o
+`COALESCE` ficava com `0`, e como `tipo_cliente.codigo` começa em 1, o
+`LEFT JOIN` nunca casava — `tipo_cliente_descricao`/`tipo_descricao` ficava
+vazio E o pedido desaparecia de qualquer filtro por tipo (inclusive com
+todos os chips marcados, que é o estado padrão da tela). Corrigido
+envolvendo `p.tipo` em `NULLIF(p.tipo, 0)` antes do `COALESCE`, nos 3
+lugares que usavam essa expressão (`_list_pedidos_sync`'s WHERE e JOIN,
+`_get_pedido_sync`'s JOIN) — assim `0` também é tratado como "sem tipo
+próprio", igual `NULL`. Regra confirmada pelo usuário: "se o pedido tem
+tipo =0 ou nulo, prevalece o tipo do cliente no filtro por tipo". Qualquer
+código futuro que leia `pedido_venda.tipo` diretamente (sem passar por
+`COALESCE(NULLIF(...))`) deve tratar `0` como "não definido", nunca como um
+`tipo_cliente.codigo` válido.
+
+O botão "Novo Pedido" de cada coluna do Painel (ver seção logo abaixo)
+passa o `tipo` da coluna clicada em `POST /api/pedidos/create` — mesmo que
+o cliente escolhido seja de outro tipo, o pedido nasce naquela coluna
+(regra 1 acima), a menos que o cliente escolhido seja reservado (regra 2
+acima sobrescreve de qualquer forma). Isso implementa exatamente o
+cenário que motivou a feature: "mesmo que cliente seja do tipo entrega, no
+momento em que o pedido for adicionado como comanda na tela de lista de
+pedidos, ele ficará na lista de comanda."
+
+## Painel de Pedidos (`app/pedidos.tsx`, segmento Bar)
+
+**Added 2026-07-17, user-directed.** A lista de Pedidos (`app/pedidos.tsx`,
+compartilhada por Mobile e Completo — ver "Transações Screens Strategy"
+acima) virou um verdadeiro painel de atendimento pro segmento Bar/
+restaurante quando `moduleOn("Bar")`: em vez da lista genérica de sempre,
+mostra os pedidos agrupados em **colunas por tipo de cliente** (Mesa/
+Comanda/Balcão/Entrega), com totalizadores e cards ricos que permitem
+agilizar o atendimento sem precisar abrir a tela cheia do pedido a cada
+ação. A tela cheia (`pedido-form.tsx`/`pedido-completo.tsx`) continua
+existindo pra quando o atendimento precisar de mais recursos (descontos,
+edição de item, Distribuir Pedido, etc.) — o painel cobre só o fluxo rápido
+do dia a dia.
+
+**Atualização 2026-07-17 — vale pra toda Situação, não só Aberto**: a
+regra de colunas/totalizadores foi inicialmente construída só pra
+`situacao === "A"` (Aberto); o usuário pediu explicitamente pra repetir a
+mesma regra pras outras situações (Fechado/Faturado/Cancelado/Todos)
+também — "repetir a regra da situação aberto para todos os tipo de
+situação, inclusive com separação das colunas e valores e totais". A
+flag que controla a view (renomeada de `barAbertoView` pra
+`barColunasView`, já que não é mais Aberto-específica) e o modo de busca
+"tudo de uma vez" (`isColunas` em `load`, sem paginar) agora dependem só de
+`moduleOn("Bar")`, independente de `situacao`. O destaque de "pedido
+parado" (`isStale`, fonte vermelha) continua checando
+`item.situacao === "A"` internamente — só pedidos Abertos ficam vermelhos
+mesmo dentro de uma coluna de outra situação, o que já é o comportamento
+correto (um pedido Faturado não "envelhece" da mesma forma).
+
+- **Colunas dinâmicas, não um par fixo**: o nº de colunas segue o nº de
+  tipos marcados no filtro (ao lado dos chips de Situação, sempre visível,
+  não escondido em "Filtros") — 0 selecionado = lista única de sempre; N
+  selecionados = N colunas. Ordem sempre fixa **Mesa, Comanda, Balcão,
+  Entrega, Fiado** (`FIADO` adicionado 2026-07-18, user-directed, mesmo
+  padrão dos outros 4 — coluna/chip/total/ícone/cor próprios) —
+  (`ORDEM_COLUNAS_TIPO` em
+  `frontend/src/components/pedido/painelTipos.ts`), independente da ordem
+  de seleção ou da ordem devolvida por `/api/tipo-cliente`. Um pedido
+  Aberto há mais de um dia (`item.data < hoje`) fica com a fonte em
+  vermelho e desce pro fim da sua coluna — nunca é filtrado por data (só
+  reordenado), a menos que o próprio usuário defina um filtro de data
+  explícito.
+- **Totalizadores no topo**: quantidade + valor de cada tipo, mais o valor
+  total somado dos tipos — sempre visíveis quando `moduleOn("Bar")`,
+  independente da Situação selecionada e de quais tipos estão marcados nas
+  colunas.
+- **Nome fantasia em Mesa/Comanda**: os cards desses dois tipos mostram o
+  nome fantasia do cliente ("MESA 15") em vez do nome bruto ("M15") quando
+  cadastrado — decidido pelo `tipo_cliente_descricao` já resolvido
+  (`_list_pedidos_sync`), não pelo padrão regex de nome usado em
+  `_nome_exibicao_mesa_comanda` (`clientes_service.py` — mesma ideia,
+  critério diferente, ambos coexistem).
+- **Última seleção de filtros é lembrada** por empresa+banco
+  (`frontend/src/utils/storage/pedidosFilters.ts`, mesmo padrão de
+  `mlFilters.ts`) — situação, tipos marcados, vendedor, datas.
+- **Primeira visita (nunca salvou filtro antes) já nasce com todos os
+  tipos marcados** (Balcão/Comanda/Entrega/Mesa) — o painel de colunas fica
+  ativo de cara, sem precisar de seleção manual. Distinção importante:
+  `loadPedidosFiltros` retornando `null` (chave nunca existiu no storage) é
+  o único gatilho — se o usuário já salvou alguma seleção antes (mesmo que
+  tenha limpado todos os tipos de propósito, salvando `[]`), essa escolha é
+  respeitada exatamente como está, não reforça o default.
+- **Campo de busca + chips de Situação + Tipo ficam num `AccordionSection`**
+  ("Buscar e Filtrar") no topo da lista
+  (`frontend/src/components/pedido/AccordionSection.tsx` — mesmo
+  componente recolhível já usado em "Dados Principais" do Cliente/Pedido
+  Completo), aberto por padrão (`defaultExpanded`) — pedido explícito do
+  usuário, 2026-07-17. Dá pra recolher e ganhar espaço vertical pra
+  lista/colunas sem perder o acesso rápido aos filtros.
+  - **Acordeon e campo de busca encolhidos pra largura da linha de chips**
+    (não a tela toda) — pedido explícito do usuário, 2026-07-17 ("reduzir o
+    tamanho do campo busca, alinhado com último tipo (mesa)" + "o acordion
+    também reduzido"). Medido via `onContentSizeChange` do `ScrollView`
+    horizontal dos chips (`chipsRowWidth` em `app/pedidos.tsx`), aplicado
+    tanto no `searchWrap` quanto — via `AccordionSection`'s novo prop
+    `style` opcional (aplicado ao `View` mais externo, por cima do
+    `itensHeader` compartilhado que normalmente força `width: "100%"`) —
+    no acordeon inteiro. Sem medição ainda (primeiro render), os dois ficam
+    largura cheia; depois de medido, encolhem — pequeno "flash" aceitável.
+    `AccordionSection.style` é opcional e não quebra os outros usos
+    (Cliente/Pedido Completo) que não passam esse prop.
+
+### Card rico e ações rápidas (`PainelPedidoCard.tsx`)
+
+**Densidade do card, atualizado 2026-07-17 (user-directed — "a intenção é
+reduzir o máximo os cards")**: 2 linhas de informação, sem rótulos de
+campo (nada de "Atendente:"/"Tempo aberto:" etc.), mais a barra de ações —
+não a versão em grade com rótulos que existiu brevemente antes disso.
+Localização foi removida do card por pedido explícito do usuário (o dado
+continua existindo no backend/tipo, só não é mais mostrado aqui).
+
+- **Linha 1**: `[ícone do tipo] Nº do pedido · Cliente` alinhado à
+  esquerda, **Valor total** alinhado à direita (a linha inteira é também o
+  toque de "Abrir").
+- **Linha 2**: `Atendente · Tempo aberto` (texto corrido, sem rótulo) à
+  esquerda, stepper de **Qtd. Pessoas** (+/-, sem rótulo) à direita. Tempo
+  aberto é calculado ao vivo a partir de `data`+`hora_aberto`, atualizado
+  por um relógio ÚNICO compartilhado no componente pai (`nowMs`, tick a
+  cada 10s) — nunca um `setInterval` por card, podem ser dezenas
+  simultâneos.
+- Pedido "parado" (aberto há mais de 1 dia, ver seção do painel acima)
+  deixa as duas linhas de texto e o valor em vermelho, mesma cor da borda
+  esquerda de destaque do card.
+- **Tooltip nos botões de ação** (pedido explícito do usuário): hover no
+  web mostra um rótulo curto acima de cada ícone ("Abrir pedido",
+  "Adicionar item", "Faturar", "Imprimir conta") — mesmo padrão já usado
+  pela etiqueta de desconto em `ItemList.tsx` (`onHoverIn`/`onHoverOut` +
+  `View` absoluto com `pointerEvents="none"`), um estado (`hoverBtn`)
+  compartilhado entre os 4 botões já que só um tooltip aparece por vez.
+
+4 ações na barra inferior evitam abrir a tela cheia do pedido:
+
+- **Abrir**: navega pro pedido completo (`onAbrir`, mesma função
+  `abrirPedido` já usada pelo card padrão da lista).
+- **+ Item**: busca de produto (`GET /api/produtos-servicos`) + toque
+  adiciona direto (`POST /api/pedidos/{pedido}/itens`, qtd=1, valor cheio,
+  sem desconto) — mesmo padrão do `quickAddItem` já existente em
+  `usePedidoItens.ts`, mas **sem reaproveitar o hook inteiro**: ele carrega
+  muito mais estado (descontos, modal de editar item, relatórios) do que um
+  card de lista precisa, e instanciar um hook completo por card (podem ser
+  dezenas simultâneos) seria desperdício. O card monta sua própria busca +
+  chamada de API, mais enxuto.
+- **Faturar ($)**: escolhe UMA forma de pagamento (lista fixa,
+  `GET /api/forma-pagamento`, buscada uma vez pela tela-mãe e repassada a
+  todos os cards) pro valor cheio do pedido — chama
+  `POST /api/pedidos/{pedido}/forma-pag-simples` seguido de
+  `POST /api/pedidos/{pedido}/faturar` (`FecharRequest`). **Achado
+  confirmado ao investigar o fluxo**: `/faturar` já aceita fechar+faturar
+  num clique só e já auto-lança a forma de pagamento simples do cabeçalho
+  pro subtotal inteiro quando nada foi lançado via grid de múltiplas formas
+  — não existe (nem foi necessário criar) um endpoint de "faturamento
+  parcial/rápido" separado, o fluxo padrão já serve.
+- **Imprimir (🖨, web only)**: busca `GET /api/pedidos/{pedido}` +
+  `GET /api/pedidos/{pedido}/itens` + `GET /api/clientes/{codigo}/resumo`
+  no clique e abre `ReciboPedidoModal` (o mesmo modal de impressão da tela
+  cheia — **não duplicado**). Pra isso, a prop `it` de `ReciboPedidoModal`
+  foi estreitada de `UsePedidoItens` (o hook inteiro) pra
+  `Pick<UsePedidoItens, "itens" | "pedidoTotalizadoGrupos">` — só os 2
+  campos que o modal de fato lê —, permitindo montar um objeto sintético
+  com os dados buscados na hora em vez de depender do hook completo (troca
+  compatível com os dois usos já existentes em `pedido-form.tsx`/
+  `pedido-completo.tsx`, que continuam passando o hook inteiro sem
+  mudança).
+
+### Qtd. Pessoas — divisão da conta
+
+Campo genuinamente novo (sem precedente no legado VB6) — `qtd_pessoas`
+(`INT NULL`) foi adicionado a `pedido_venda` via migração idempotente
+(`_ensure_qtd_pessoas_col`, `services/pedido_common.py`, mesmo padrão de
+`_ensure_hora_inclusao_item_col`: `IF NOT EXISTS (SELECT 1 FROM sys.columns
+...) ALTER TABLE ... ADD ...`, chamada sob demanda porque este backend
+atende múltiplas empresas sem executor de migração central). Grava direto
+no stepper do card via `POST /api/pedidos/{pedido}/qtd-pessoas`
+(`QtdPessoasRequest`, mesmo padrão de `FormaPagSimplesRequest`/
+`PedidoEntregueRequest` — fora do fluxo normal de Gravar). Quando
+informada, `ReciboPedidoModal` mostra uma linha extra "Valor p/ pessoa (N)"
+= `total / qtd_pessoas`, logo abaixo do TOTAL — tanto no preview JSX quanto
+em `buildHtml()` (as duas versões precisam ficar em sincronia, ver o
+comentário no topo desse arquivo).
+
+### "Novo Pedido" por coluna
+
+Botão dedicado no cabeçalho de cada coluna (só quando `can("PEDIDO.GRAVAR")`)
+abre `ClientSearchModal` — escolher um cliente cria o pedido direto
+(`POST /api/pedidos/create`) sem navegar pra `pedido-form.tsx`, e a lista
+recarrega no lugar. Se a busca não encontra ninguém (cliente novo, ainda
+não cadastrado), o botão "Cadastrar novo cliente" do próprio
+`ClientSearchModal` sai do painel e abre `cliente-form.tsx` — única exceção
+onde uma ação do painel navega pra outra tela, aceitável por ser
+configuração inicial rara (cadastrar um cliente novo), não uma ação
+repetida por pedido.
+
+- **Correção 2026-07-18, user-directed — filtro por tipo na busca foi
+  tentado e revertido**: a primeira versão filtrava a busca pelo tipo da
+  coluna que abriu o modal (`tipo_cliente` opcional em
+  `GET /api/clientes/find/search` → `_find_clientes_for_pedido_sync`,
+  `AND c.cliente_forn = %s`). Removido por completo (rota, service, e os 3
+  testes que cobriam o filtro) depois que o usuário reportou o problema
+  real: buscar "MESA" a partir da coluna Comanda voltava "Nenhum cliente
+  encontrado" mesmo com várias "MESA N" já cadastradas — um filtro cego
+  assim arrisca cadastro duplicado (o usuário não vendo o cliente que
+  procura, clica em "Cadastrar novo" e cria outro). **A busca de cliente
+  volta a trazer todos os tipos sempre** — o JOIN com `tipo_cliente`
+  continua (cada resultado de `ClientSearchModal` mostra seu
+  `tipo_cliente_descricao` — MESA/COMANDA/BALCÃO/ENTREGA — destacado ao
+  lado do código, deixando claro visualmente qual é o tipo de cada cliente
+  encontrado), só a cláusula de FILTRO que foi removida. Em qual coluna o
+  pedido aparece depois de criado é decidido pela lista
+  (`tipo_cliente_descricao` do pedido recém-criado), nunca pela busca.
+- **Atualização 2026-07-18 — a coluna ainda decide o tipo do PEDIDO
+  criado**, mesmo com a busca acima não filtrando mais: `handleCriarPedido`
+  passa `tipo: novoPedidoCodigoTipo` (o código da coluna clicada) no
+  `POST /api/pedidos/create`, que grava em `pedido_venda.tipo` — ver "Campo
+  'Tipo' do Pedido Bar" logo acima pra a regra completa (inclusive a
+  exceção de cliente reservado, que sobrescreve isso de qualquer forma).
+  Ou seja: a busca é livre (não esconde clientes de outros tipos), mas o
+  pedido criado ainda nasce na coluna que o usuário clicou — as duas
+  decisões (2026-07-18, mesma sessão) não se contradizem, resolvem
+  problemas diferentes.
+
+- **Bug corrigido 2026-07-18, user-directed**: nessa navegação pra
+  `cliente-form.tsx`, o pedido nunca era criado de volta — Gravar o
+  cliente novo só fazia `router.back()` (comportamento padrão da tela,
+  pensado pro fluxo normal de Pedido/O.S. onde o usuário volta e busca o
+  cliente de novo na tela que já estava aberta), e como o painel não tinha
+  mais nenhum pedido em andamento pra "voltar buscando", o usuário
+  simplesmente caía na lista sem nada acontecer. Corrigido passando um
+  parâmetro novo `criar_pedido=1` nessa navegação específica — só quando
+  vem do painel — que `cliente-form.tsx` lê pra, ao Gravar com sucesso,
+  chamar `POST /api/pedidos/create` pro cliente recém-criado (em vez do
+  `router.back()` padrão) e voltar pro painel (`/pedidos?situacao=A`) já
+  com o pedido criado. O fluxo normal de Pedido/O.S. (`pedido-form.tsx`'s
+  `handleCreateClienteFromQuick`) **não** passa esse parâmetro e continua
+  com o `router.back()` de sempre — só o painel precisa desse atalho, já
+  que ele nunca tem uma tela de pedido aberta esperando o cliente voltar.
+
 ## Web Layout Standard
 
 Use the shared web layout tokens from:
@@ -1312,6 +1607,58 @@ not just the screen being worked on when the rule was stated.
   the user create a duplicate. See `useClienteForm.buscarPorCgc` and
   `app/fornecedores.tsx`'s `buscarPorCodigo` for the two reference
   implementations.
+  - **CPF/CNPJ required-ness is conditional, Cliente-specific** (added
+    2026-07-17, user-directed `[GLOBAL]`): `controle.exige_cpf_cliente`
+    ("Exige CPF/CNPJ no Cadastro de Clientes", Controle do Sistema > aba
+    Kontacto) decides whether CPF/CNPJ can be left blank when saving a
+    **Cliente** — `true` blocks the save without a document, `false` (or no
+    `controle` row at all) keeps it optional, which was already the
+    long-standing default behavior before this flag was wired up. This is
+    **Cliente-only** — the column is literally `exige_cpf_CLIENTE`, there is
+    no equivalent flag for Fornecedor or any other entity today; don't
+    generalize this specific rule to other screens unless a matching
+    controle flag shows up for them. Enforced in both layers:
+    - **Backend** (`services/clientes_service.py::_save_cliente_sync`):
+      queries `SELECT TOP 1 exige_cpf_cliente FROM controle` only when
+      `cgc_cpf` is empty, rejects with a clear message when the flag is on
+      — this is the real, authoritative enforcement (same "backend
+      reinforces, doesn't just trust the frontend" principle as "Regra de
+      Módulo Ativo" below).
+    - **Frontend** (`frontend/src/hooks/useClienteForm.ts`, shared by both
+      Cliente screens): fetches the flag via `GET /api/controle/empresa`
+      (`exige_cpf_cliente` field, added to that endpoint's response) and
+      mirrors the same check in `validateAll()`, purely to avoid a round
+      trip for the common case — the backend check above is what actually
+      matters. Applied in **both** `cliente-form.tsx` (rápido) and
+      `cliente-completo.tsx` (completo) — same hook, same validation, and
+      the CGC/CPF field label gets a trailing `*` in both screens when the
+      flag is on (`f.exigeCpfCliente`).
+  - **Duplicate CPF/CNPJ handling is conditional, Cliente-specific** (added
+    2026-07-17, user-directed `[GLOBAL]`): `controle.aceita_duplicar_cnpj`
+    decides what happens when the CPF/CNPJ typed into a **Cliente**
+    registration already belongs to another client — real-world case: a
+    company's branches (filiais) sharing the same CNPJ with different
+    Inscrições Estaduais, same shape as branch networks (e.g. banks). Also
+    Cliente-only, same reasoning as `exige_cpf_cliente` above — no
+    equivalent flag exists for Fornecedor.
+    - `false` (default): auto-loads the existing client into the screen —
+      this was already the only behavior before this flag was wired up, no
+      change for installations that leave it off.
+    - `true`: instead of auto-loading, asks via `useFeedback().showConfirm`
+      ("Consultar Existente" vs "Criar Novo") — picking "Consultar
+      Existente" does the same auto-load as the `false` case; "Criar Novo"
+      just closes the dialog and leaves the user on the new-registration
+      form with that CPF/CNPJ already filled in, free to save a genuinely
+      new client with the same document (nothing in the backend blocks a
+      duplicate `cgc_cpf` — confirmed live data already has many clients
+      sharing one CNPJ across branches).
+    - Implemented entirely in `useClienteForm.buscarPorCgc` (the same
+      function `exige_cpf_cliente`'s sibling rule references above) — flag
+      fetched via the same `GET /api/controle/empresa` call
+      (`aceita_duplicar_cnpj` field). No backend enforcement needed here
+      (unlike `exige_cpf_cliente`) since there's no invariant to protect —
+      this flag only changes which UI flow runs, not whether a save is
+      valid.
 - **Gestor de Documentos (Anexos)**: every entity screen must integrate
   `GestorDocumentosSection` (see "Gestor de Documentos" project memory for
   the architecture) — this is not optional per-screen, it's a standing
@@ -1354,6 +1701,89 @@ not just the screen being worked on when the rule was stated.
     sections to unlock and returning to the calling Pedido/O.S. flow
     immediately is the correct behavior there, don't "fix" it to match
     cliente-completo's flow.
+
+## Nome do Vendedor — sempre `nome_guerra` `[GLOBAL]`
+
+**Added 2026-07-17, user-directed `[GLOBAL]`** ("em toda a pré venda e
+relatórios, em fim em todo o sistema o que é exibido sempre para o nome do
+vendedor tem que ser exibido funcionarios.nome_guerra"). Toda exibição do
+campo **vendedor** (o funcionário responsável por um Pedido/O.S. —
+`pedido_venda.vendedor`, `os_produto.vendedor`, não outros papéis de
+funcionário) mostra `funcionarios.nome_guerra` (apelido) em vez de
+`funcionarios.nome` (nome completo), caindo pro nome completo só quando
+`nome_guerra` está vazio/nulo.
+
+- **Padrão de implementação**: `COALESCE(NULLIF(f.nome_guerra,''), f.nome)
+  AS vendedor_nome` direto no SQL, no lugar de um `f.nome AS vendedor_nome`
+  cru — resolve o fallback numa linha só, sem precisar de 2 colunas + lógica
+  em Python, e não muda a chave (`vendedor_nome`) que o frontend já
+  consome, então nenhum teste unitário existente precisou ser tocado.
+  Aplicado em `pedidos_service.py` (`_list_pedidos_sync`,
+  `_get_pedido_sync`), `pedido_completo_service.py`
+  (`_get_pedido_completo_sync`), e `relatorios_service.py`
+  (`_relatorio_pedidos_sync`, `_relatorio_desc_margem_sync`,
+  `_dashboard_sync`, `_relatorio_os_desc_margem_sync` — esta última também
+  precisou trocar `f.nome` por `f.nome_guerra, f.nome` no `GROUP BY`, já
+  que o SQL Server exige que toda coluna não-agregada do SELECT apareça no
+  GROUP BY).
+- **Escopo é literalmente "vendedor", não "todo nome de funcionário"** —
+  outros papéis (atendente, executor, motorista, operador de
+  turno/bomba/ilha, usuário de auditoria, remetente de WhatsApp,
+  profissional de contato) já seguiam esse mesmo padrão nome_guerra-
+  primeiro antes desta regra ser escrita explicitamente (auditado 2026-07-17
+  e confirmado correto em `os_service.py`, `os_itens_service.py`,
+  `contatos_service.py`, `entrada_saida_caixa_service.py`,
+  `log_auditoria_service.py`, `whatsapp/repository.py`,
+  `viagem_service.py`, `veiculos_service.py`, `mov_encerrante_service.py`,
+  `ilha_service.py`, `telemarketing_service.py`, `tabelas_aux_service.py`)
+  — não generalizar essa regra pra esses outros papéis sem pedido
+  explícito, mesmo que pareça consistente fazer isso.
+- **Pendência conhecida, fora do escopo desta regra**:
+  `usuarios_service.py` (tela Perfil de Usuário, mapeamento login→
+  funcionário) ainda usa `f.nome` puro sem nenhum fallback pra
+  `nome_guerra` — não é um campo "vendedor" (é a lista de usuários do
+  sistema), então não foi tocado aqui, mas fica registrado como a única
+  exibição de nome de funcionário no sistema ainda sem esse padrão, caso
+  vire pedido explícito no futuro.
+- Ao adicionar uma NOVA tela/relatório que exiba o campo vendedor,
+  reproduzir o mesmo `COALESCE(NULLIF(f.nome_guerra,''), f.nome)` — não
+  usar `f.nome` cru.
+
+## Busca de Cliente Inclui Nome Fantasia `[GLOBAL]`
+
+**Added 2026-07-18, user-directed `[GLOBAL]`** ("incluir na busca do
+cliente o nome fantasia em todas as telas"). Toda busca por CLIENTE que
+filtra por `cliente.nome` (LIKE, texto livre) também busca em
+`cliente.fantasia` — um cliente encontrado pelo nome fantasia (ex.: "GAMA
+TERMIC") mesmo quando a razão social/nome cadastrado é bem diferente (ex.:
+"SEMIN TECNICA E COMERCIO DE MAT INDUST LTDA"), caso real observado em
+produção onde o mesmo CNPJ tem dezenas de filiais só distinguíveis pelo
+fantasia.
+
+- **Padrão**: em toda cláusula `WHERE (...c.nome LIKE %s...)`, adicionar
+  `OR c.fantasia LIKE %s` (mesmo termo/parâmetro) ao lado — nunca
+  substituir a busca por nome, só estender.
+- **Escopo é "cliente" especificamente** — não Fornecedor
+  (`fornecedores_service.py`) nem Funcionário (`funcionarios_service.py`),
+  que têm suas próprias buscas por `nome` já existentes e não foram
+  tocadas; a instrução do usuário foi explicitamente "busca do cliente".
+- **Aplicado em 8 pontos** (toda ocorrência de busca livre por
+  `cliente.nome` encontrada no backend):
+  - `clientes_service.py` — `_find_clientes_for_pedido_sync` (busca usada
+    por `ClientSearchModal`, todas as telas de Pedido/O.S./Painel/Contatos/
+    Equipamentos/Telemarketing/Notas Fiscais/Relatório de Margem) e
+    `_list_clientes_sync` (tela Cadastro de Clientes, `clientes.tsx`).
+  - `pedidos_service.py` — `_list_pedidos_sync` (busca da lista de
+    Pedidos/Painel de Pedidos).
+  - `os_service.py` — `_list_os_sync` (busca da lista de O.S.).
+  - `cilindro_cliente_service.py` — `_list_vinculos_sync` (busca de
+    "Clientes x Cilindro").
+  - `relatorios_service.py` — `_relatorio_desc_margem_sync` e
+    `_relatorio_os_desc_margem_sync` (filtro `cliente_nome`).
+  - `telemarketing_service.py` — busca por `cliente_termo`.
+- Ao criar uma NOVA busca de cliente (ou tocar numa existente), replicar
+  esse padrão — `OR <alias>.fantasia LIKE %s` ao lado de `<alias>.nome
+  LIKE %s`, sempre.
 
 ## Regra de Módulo Ativo — Gating por Entidade (Backend)
 

@@ -236,6 +236,116 @@ def _taxa_req(**over):
     return TaxaServicoRequest(**base)
 
 
+ITEM_ROW = {
+    "produto": "P001", "qtd_pedida": 2.0, "p_venda": 10.0, "p_normal": 10.0,
+    "desconto": 0.0, "acrescimo": 0.0, "custo_ped": 5.0, "descricao_produto": "", "unidade_pedido": "UN",
+}
+
+
+class TestDeleteItemDevolveParaPedidoOriginal:
+    """Excluir um item de um pedido FILHO (criado por "Distribuir"/Dividir
+    Pedido) devolve o item pro pedido original em vez de só descartar —
+    pedido explícito do usuário, 2026-07-17."""
+
+    def test_devolve_somando_em_linha_existente_do_mesmo_produto(self, monkeypatch):
+        cur = FakeCursor(
+            one=[
+                {"situacao": "A"},          # _check_pedido_aberto(pedido filho)
+                dict(ITEM_ROW),              # item sendo excluído
+                {"num_ped_cliente": "77"},   # referencia do pedido filho
+                {"situacao": "A"},           # _check_pedido_aberto(original=77)
+                {"codauto": 900, "qtd_pedida": 3.0},  # linha já existente do mesmo produto no original
+                None,                         # sincroniza_taxa(pedido filho) -> sem S002
+                {"total": 0.0},              # recalc_total(pedido filho)
+                None,                         # sincroniza_taxa(original) -> sem S002
+                {"total": 50.0},             # recalc_total(original)
+            ],
+            rowcount=1,
+        )
+        conn = _patch(monkeypatch, cur)
+        r = svc._delete_item_sync("srv", "bd", 501, 20232)
+        assert r["success"] is True
+        assert r["devolvido_para"] == 77
+        assert conn.committed is True
+        soma_q, soma_p = next((q, p) for q, p in cur.queries if q.startswith("UPDATE pedido_venda_prod SET qtd_pedida="))
+        assert soma_p == (5.0, 900)  # 3.0 (já no original) + 2.0 (devolvido)
+        assert not any("INSERT INTO pedido_venda_prod" in q for q, _ in cur.queries)
+
+    def test_devolve_criando_nova_linha_quando_produto_nao_existe_no_original(self, monkeypatch):
+        cur = FakeCursor(
+            one=[
+                {"situacao": "A"}, dict(ITEM_ROW), {"num_ped_cliente": "77"}, {"situacao": "A"},
+                None,  # nenhuma linha existente do produto no original
+                None, {"total": 0.0}, None, {"total": 20.0},
+            ],
+            rowcount=1,
+        )
+        _patch(monkeypatch, cur)
+        r = svc._delete_item_sync("srv", "bd", 501, 20232)
+        assert r["success"] is True
+        assert r["devolvido_para"] == 77
+        insert_q, insert_p = next((q, p) for q, p in cur.queries if q.startswith("INSERT INTO pedido_venda_prod"))
+        assert insert_p[:3] == (77, "P001", 2.0)
+
+    def test_nao_devolve_taxa_de_servico(self, monkeypatch):
+        item_taxa = {**ITEM_ROW, "produto": "S002"}
+        cur = FakeCursor(
+            one=[{"situacao": "A"}, item_taxa, None, {"total": 0.0}],
+            rowcount=1,
+        )
+        _patch(monkeypatch, cur)
+        r = svc._delete_item_sync("srv", "bd", 501, 20232)
+        assert r["success"] is True
+        assert r["devolvido_para"] is None
+        assert not any("INSERT INTO pedido_venda_prod" in q or q.startswith("UPDATE pedido_venda_prod SET qtd_pedida=") for q, _ in cur.queries)
+
+    def test_nao_devolve_quando_pedido_nao_e_filho(self, monkeypatch):
+        cur = FakeCursor(
+            one=[{"situacao": "A"}, dict(ITEM_ROW), {"num_ped_cliente": None}, None, {"total": 0.0}],
+            rowcount=1,
+        )
+        _patch(monkeypatch, cur)
+        r = svc._delete_item_sync("srv", "bd", 1, 1)
+        assert r["success"] is True
+        assert r["devolvido_para"] is None
+
+    def test_nao_devolve_quando_original_nao_esta_mais_aberto(self, monkeypatch):
+        cur = FakeCursor(
+            one=[
+                {"situacao": "A"}, dict(ITEM_ROW), {"num_ped_cliente": "77"},
+                {"situacao": "PG"},  # original já foi faturado — não devolve
+                None, {"total": 0.0},
+            ],
+            rowcount=1,
+        )
+        _patch(monkeypatch, cur)
+        r = svc._delete_item_sync("srv", "bd", 501, 20232)
+        assert r["success"] is True
+        assert r["devolvido_para"] is None
+        assert not any("INSERT INTO pedido_venda_prod" in q or q.startswith("UPDATE pedido_venda_prod SET qtd_pedida=") for q, _ in cur.queries)
+
+    def test_pedido_nao_encontrado(self, monkeypatch):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        r = svc._delete_item_sync("srv", "bd", 999, 1)
+        assert r["success"] is False
+        assert "não encontrado" in r["message"].lower()
+
+    def test_bloqueia_pedido_nao_aberto(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "F"}])
+        _patch(monkeypatch, cur)
+        r = svc._delete_item_sync("srv", "bd", 1, 1)
+        assert r["success"] is False
+        assert "não pode ser alterado" in r["message"]
+
+    def test_item_nao_encontrado(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "A"}, None])
+        _patch(monkeypatch, cur)
+        r = svc._delete_item_sync("srv", "bd", 1, 999)
+        assert r["success"] is False
+        assert "não encontrado" in r["message"].lower()
+
+
 class TestAddTaxaServico:
     def test_pedido_nao_encontrado(self, monkeypatch):
         cur = FakeCursor(one=[None])
@@ -255,9 +365,16 @@ class TestAddTaxaServico:
         r = svc._add_taxa_servico_sync(_taxa_req(), 1)
         assert r["success"] is False and "S002" in r["message"]
 
+    def test_bloqueia_quando_pedido_sem_itens(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "A"}, {"descricao": "Taxa de Serviço"}, {"c": 0}])
+        _patch(monkeypatch, cur)
+        r = svc._add_taxa_servico_sync(_taxa_req(), 1)
+        assert r["success"] is False
+        assert "item" in r["message"].lower()
+
     def test_primeira_inclusao_insere_nova_linha(self, monkeypatch):
         cur = FakeCursor(
-            one=[{"situacao": "A"}, {"descricao": "Taxa de Serviço"}, {"s": 50.0}, {"codauto": 800}, {"total": 55.0}],
+            one=[{"situacao": "A"}, {"descricao": "Taxa de Serviço"}, {"c": 1}, {"s": 50.0}, {"codauto": 800}, {"total": 55.0}],
             many=[[]],  # nenhuma linha S002 existente
         )
         conn = _patch(monkeypatch, cur)
@@ -273,7 +390,7 @@ class TestAddTaxaServico:
 
     def test_ja_incluido_atualiza_linha_existente_sem_pedir_confirmacao(self, monkeypatch):
         cur = FakeCursor(
-            one=[{"situacao": "A"}, {"descricao": "Taxa de Serviço"}, {"s": 100.0}, {"total": 110.0}],
+            one=[{"situacao": "A"}, {"descricao": "Taxa de Serviço"}, {"c": 1}, {"s": 100.0}, {"total": 110.0}],
             many=[[{"codauto": 900}]],  # já existe uma linha S002
         )
         conn = _patch(monkeypatch, cur)
@@ -295,7 +412,7 @@ class TestAddTaxaServico:
         # verificado indiretamente: valor recalculado bate com o subtotal
         # "puro" retornado pelo fake, não um valor maior.
         cur = FakeCursor(
-            one=[{"situacao": "A"}, {"descricao": "Taxa de Serviço"}, {"s": 100.0}, {"total": 110.0}],
+            one=[{"situacao": "A"}, {"descricao": "Taxa de Serviço"}, {"c": 1}, {"s": 100.0}, {"total": 110.0}],
             many=[[{"codauto": 900}]],
         )
         _patch(monkeypatch, cur)
@@ -306,7 +423,7 @@ class TestAddTaxaServico:
 
     def test_valor_e_10_por_cento_do_subtotal_arredondado(self, monkeypatch):
         cur = FakeCursor(
-            one=[{"situacao": "A"}, {"descricao": "Taxa de Serviço"}, {"s": 33.333}, {"codauto": 1}, {"total": 36.67}],
+            one=[{"situacao": "A"}, {"descricao": "Taxa de Serviço"}, {"c": 1}, {"s": 33.333}, {"codauto": 1}, {"total": 36.67}],
             many=[[]],
         )
         _patch(monkeypatch, cur)
@@ -315,7 +432,7 @@ class TestAddTaxaServico:
 
     def test_multiplas_linhas_existentes_sao_consolidadas(self, monkeypatch):
         cur = FakeCursor(
-            one=[{"situacao": "A"}, {"descricao": "Taxa de Serviço"}, {"s": 100.0}, {"total": 110.0}],
+            one=[{"situacao": "A"}, {"descricao": "Taxa de Serviço"}, {"c": 1}, {"s": 100.0}, {"total": 110.0}],
             many=[[{"codauto": 900}, {"codauto": 901}]],
         )
         _patch(monkeypatch, cur)

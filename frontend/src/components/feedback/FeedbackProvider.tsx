@@ -1,6 +1,16 @@
 // Sistema GLOBAL de feedback (erros, avisos, sucesso) exibido SEMPRE no CENTRO da tela.
 // Padrão do projeto: toda mensagem de erro/aviso deve usar useFeedback() em vez de
 // renderizar texto inline (que pode ficar fora da área visível ao rolar).
+//
+// Não-bloqueante por design (pedido explícito do usuário, 2026-07-17):
+// showError/showWarning/showSuccess/showInfo NUNCA impedem o usuário de
+// continuar usando o sistema enquanto a mensagem está na tela — sempre
+// somem sozinhas (timer) e o wrapper usa `pointerEvents="box-none"` (mesmo
+// padrão já usado em `ScreenToast.tsx`), então cliques fora do cartão
+// passam direto pro que está por baixo; não há mais backdrop escurecido
+// nem botão "OK" obrigatório pra fechar. Isso é diferente de `showConfirm`
+// (Sim/Não) — uma confirmação, por definição, precisa pausar o fluxo até o
+// usuário decidir, então continua sendo um modal bloqueante de verdade.
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -47,6 +57,15 @@ const META: Record<FeedbackType, { icon: keyof typeof Ionicons.glyphMap; color: 
   info: { icon: "information-circle", color: colors.brandPrimary, title: "Aviso" },
 };
 
+// Duração antes de sumir sozinha — mais tempo pra erro/atenção (mensagem
+// costuma ser mais importante/longa de ler), mas SEMPRE some sozinha;
+// nenhum tipo fica esperando um clique em "OK" (ver nota no topo do
+// arquivo — não-bloqueante é o padrão pros 4 tipos, só showConfirm continua
+// pausando o fluxo de verdade).
+// 2026-07-17: reduzido 2s em cada duração (pedido explícito do usuário,
+// "em todo o sistema") — valores originais eram {2600, 2600, 4000, 5000}.
+const DURACAO: Record<FeedbackType, number> = { success: 600, info: 600, warning: 2000, error: 3000 };
+
 export function FeedbackProvider({ children }: { children: React.ReactNode }) {
   const [visible, setVisible] = useState(false);
   const [type, setType] = useState<FeedbackType>("info");
@@ -73,10 +92,7 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
     setMessage(msg);
     setTitle(ttl);
     setVisible(true);
-    // Sucesso/aviso informativo fecham sozinhos; erro/atenção exigem confirmação.
-    if (t === "success" || t === "info") {
-      timerRef.current = setTimeout(() => setVisible(false), 2600);
-    }
+    timerRef.current = setTimeout(() => setVisible(false), DURACAO[t]);
   }, []);
 
   useEffect(() => () => clearTimer(), []);
@@ -121,21 +137,22 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
         // Só montando o <Modal> aqui quando `visible` é true, o portal nasce
         // na hora do alerta — sempre depois de qualquer modal de tela já
         // aberta — e por isso sempre por cima. Bug sistêmico, não só de Taxas.
-        <Modal visible transparent animationType="fade" onRequestClose={hide}>
-          <Pressable style={styles.backdrop} onPress={hide}>
-            <Pressable style={styles.card} onPress={(e) => e.stopPropagation()} testID="feedback-card">
-              <Ionicons name={meta.icon} size={44} color={meta.color} />
-              <Text style={styles.title}>{title || meta.title}</Text>
-              <Text style={styles.message}>{message}</Text>
-              <Pressable
-                onPress={hide}
-                style={({ pressed }) => [styles.btn, { backgroundColor: meta.color }, pressed && { opacity: 0.85 }]}
-                testID="feedback-ok"
-              >
-                <Text style={styles.btnText}>OK</Text>
-              </Pressable>
+        //
+        // SEM backdrop e com `pointerEvents="box-none"` no wrapper (mesmo
+        // padrão de `ScreenToast.tsx`) — só o cartão em si captura toque (pra
+        // fechar antes do tempo, opcional); o resto da tela por baixo
+        // continua 100% clicável enquanto a mensagem está visível.
+        <Modal visible transparent animationType="fade">
+          <View style={styles.toastWrap} pointerEvents="box-none">
+            <Pressable style={styles.toastCard} onPress={hide} testID="feedback-card">
+              <Ionicons name={meta.icon} size={28} color={meta.color} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.toastTitle}>{title || meta.title}</Text>
+                <Text style={styles.toastMessage}>{message}</Text>
+              </View>
+              <Ionicons name="close" size={18} color={colors.muted} />
             </Pressable>
-          </Pressable>
+          </View>
         </Modal>
       ) : null}
       {confirm ? (
@@ -219,13 +236,33 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 18, fontWeight: "700", color: colors.onSurface, marginTop: spacing.xs },
   message: { fontSize: 15, color: colors.onSurface, textAlign: "center", lineHeight: 21 },
-  btn: {
-    marginTop: spacing.md,
-    minWidth: 120,
-    borderRadius: radius.pill,
-    paddingVertical: 12,
+  // Toast não-bloqueante (showError/showWarning/showSuccess/showInfo) — ver
+  // nota no topo do arquivo. Layout horizontal compacto, sem backdrop
+  // escurecido (diferente de `backdrop`/`card` acima, que continuam sendo
+  // só do showConfirm, esse sim um modal bloqueante de verdade).
+  toastWrap: { flex: 1, alignItems: "center", justifyContent: "center", padding: spacing.xl },
+  toastCard: {
+    flexDirection: "row",
     alignItems: "center",
+    gap: spacing.sm,
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    ...Platform.select({
+      web: { boxShadow: "0 6px 16px rgba(0, 0, 0, 0.2)" },
+      default: {
+        shadowColor: "#000",
+        shadowOpacity: 0.2,
+        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 6 },
+        elevation: 8,
+      },
+    }),
   },
+  toastTitle: { fontSize: 14, fontWeight: "700", color: colors.onSurface },
+  toastMessage: { fontSize: 13, color: colors.onSurface, lineHeight: 18, marginTop: 2 },
   btnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   confirmBtnRow: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md, width: "100%" },
   confirmBtn: {

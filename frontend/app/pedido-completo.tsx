@@ -12,7 +12,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import { getSession } from "@/src/utils/storage/session";
@@ -99,7 +99,7 @@ function PedidoCompletoWebScreen({ router }: { router: ReturnType<typeof useRout
   const showToast = useCallback((m: string, t: ToastTone = "info") => {
     setToast({ msg: m, tone: t });
     if (tref.current) clearTimeout(tref.current);
-    tref.current = setTimeout(() => setToast(null), 3500);
+    tref.current = setTimeout(() => setToast(null), 1500);
   }, []);
 
   const [pedido, setPedido] = useState<PedidoCompletoData | null>(null);
@@ -238,6 +238,31 @@ function PedidoCompletoWebScreen({ router }: { router: ReturnType<typeof useRout
       .finally(() => { if (!cancelled) setLoadingResumo(false); });
     return () => { cancelled = true; };
   }, [conn, cliente?.codigo]);
+
+  // Ao voltar de "Alterar dados do cliente" (cadastro rápido), o código do
+  // cliente não muda — então o efeito acima não refaz a busca sozinho.
+  // Refaz o resumo (e sincroniza nome/CPF-CNPJ exibidos no topo) sempre que
+  // a tela reganha foco com um cliente já selecionado. Pedido explícito do
+  // usuário, 2026-07-17.
+  useFocusEffect(
+    useCallback(() => {
+      if (!conn || !cliente?.codigo) return;
+      const codigo = cliente.codigo;
+      apiGet(conn, `/api/clientes/${codigo}/resumo`)
+        .then((j) => {
+          if (j?.success && j.cliente) {
+            setClienteResumo(j.cliente);
+            setCliente((prev) =>
+              prev && prev.codigo === codigo
+                ? { ...prev, nome: j.cliente.nome, cgc_cpf: j.cliente.cgc_cpf, telefone: j.cliente.telefone }
+                : prev
+            );
+          }
+        })
+        .catch(() => {});
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [conn, cliente?.codigo])
+  );
 
   useEffect(() => {
     if (!searchOpen || !conn) return;
@@ -500,6 +525,11 @@ function PedidoCompletoWebScreen({ router }: { router: ReturnType<typeof useRout
                 if (camposTravados) return;
                 setSearchTerm(clienteQuickTerm); setSearchResults([]); setSearchOpen(true);
               }}
+              onEditCliente={
+                cliente?.codigo
+                  ? () => router.push({ pathname: "/cliente-form", params: { codigo: String(cliente.codigo) } })
+                  : undefined
+              }
               quickTerm={clienteQuickTerm}
               onQuickTermChange={handleClienteQuickChange}
               quickLoading={clienteQuickLoading}

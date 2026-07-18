@@ -49,7 +49,8 @@ def _get_empresa_sync(servidor: str, banco: str) -> dict:
         cur = conn.cursor(as_dict=True)
         cur.execute(
             "SELECT TOP 1 empresa, fantasia, rz_social, uf, endereco, numero, complemento, "
-            "       bairro, cidade, cep, ddd, telefone, CELULAR, cgc, inscr_est, cod_rel "
+            "       bairro, cidade, cep, ddd, telefone, CELULAR, cgc, inscr_est, cod_rel, "
+            "       exige_cpf_cliente, aceita_duplicar_cnpj "
             "FROM controle"
         )
         r = cur.fetchone() or {}
@@ -72,6 +73,8 @@ def _get_empresa_sync(servidor: str, banco: str) -> dict:
             "cgc": (r.get("cgc") or "").strip(),
             "inscr_est": (r.get("inscr_est") or "").strip(),
             "cod_rel": (r.get("cod_rel") or "").strip(),
+            "exige_cpf_cliente": bool(r.get("exige_cpf_cliente")),
+            "aceita_duplicar_cnpj": bool(r.get("aceita_duplicar_cnpj")),
         }
     except Exception as e:
         try:
