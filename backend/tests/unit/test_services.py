@@ -15,6 +15,7 @@ from services.auth_service import (  # noqa: E402
 from services.relatorios_service import _ratear_totais_por_pedido  # noqa: E402
 from services.pedido_common import (  # noqa: E402
     _item_total, _check_pedido_aberto, _resolve_produto, _recalc_pedido_total,
+    _arredonda_pbox, _area_preco, _trunca3,
 )
 from services.descontos_service import (  # noqa: E402
     _limite_por_funcao, _validar_limite_desconto, _log_desconto_item,
@@ -239,3 +240,72 @@ class TestDescontos:
         _log_desconto_item(cur, 1, 10, 10.0, 2.40, 5)
         assert len(cur.queries) == 2
         assert "INSERT" in cur.queries[1][0].upper()
+
+
+# =====================================================================
+# Metro Quadrado (m²) — `ArredondaPBox`/`AreaPreco` do legado
+# (`mdl_proc.bas`), ver PENDENCIAS.md > "Transações" > "Pedido Geral —
+# Metro Quadrado".
+# =====================================================================
+class TestArredondaPBox:
+    def test_modo_5_resto_baixo_arredonda_pra_x5(self):
+        # resto (além da 1ª casa) entre 0,001 e 0,499 → sobe pra "X,X5"
+        assert _arredonda_pbox(1.23, 5) == 1.25
+
+    def test_modo_5_resto_alto_arredonda_pra_proxima_decima(self):
+        # resto entre 0,501 e 0,999 → arredonda normal pra 1 casa
+        assert _arredonda_pbox(1.27, 5) == 1.3
+
+    def test_modo_5_resto_exato_500_mantem(self):
+        assert _arredonda_pbox(1.25, 5) == 1.25
+
+    def test_modo_5_resto_zero_mantem(self):
+        assert _arredonda_pbox(1.20, 5) == 1.2
+
+    def test_modo_10_com_resto_soma_01(self):
+        assert _arredonda_pbox(1.23, 10) == 1.3
+
+    def test_modo_10_sem_resto_mantem(self):
+        assert _arredonda_pbox(1.20, 10) == 1.2
+
+
+class TestTrunca3:
+    def test_trunca_sem_arredondar(self):
+        assert _trunca3(1.23456) == 1.234
+
+    def test_trunca_valor_exato(self):
+        assert _trunca3(2.0) == 2.0
+
+
+class TestAreaPreco:
+    def test_dimensao_zero_devolve_1(self):
+        assert _area_preco(0, 1.5, False, 5, 0, 0, False, 0.25) == 1.0
+        assert _area_preco(1.5, 0, False, 5, 0, 0, False, 0.25) == 1.0
+
+    def test_sem_chapa_multiplica_dimensoes_arredondadas(self):
+        # 1,23 -> 1,25 (resto baixo) ; 0,87 -> 0,9 (resto alto)
+        assert _area_preco(1.23, 0.87, False, 5, 0, 0, False, 0.25) == 1.125
+
+    def test_area_minima_desligada_nao_aplica_piso(self):
+        assert _area_preco(0.2, 0.2, False, 5, 0, 0, False, 1.0) == 0.04
+
+    def test_area_minima_ligada_aplica_piso(self):
+        assert _area_preco(0.2, 0.2, True, 5, 0, 0, False, 1.0) == 1.0
+
+    def test_chapa_com_tamanho_padrao_nao_arredonda(self):
+        # comprimento_chapa/largura_chapa divergem dos digitados e batem
+        # exatamente em tamanho padrão de chapa (1,8/2,4/3,21) — usa direto,
+        # sem chamar ArredondaPBox.
+        area = _area_preco(1.23, 0.87, False, 5, 2.4, 1.8, True, 0.25)
+        assert area == 4.32
+
+    def test_chapa_tamanho_nao_padrao_arredonda(self):
+        area = _area_preco(1.23, 0.87, False, 5, 2.5, 1.8, True, 0.25)
+        # comprimento_chapa=2.5 não é padrão -> arredonda_pbox(2.5,5)=2.5 (resto zero)
+        assert area == 4.5
+
+    def test_chapa_igual_ao_digitado_nao_usa_chapa(self):
+        # comprimento_chapa/largura_chapa == comprimento/largura -> mesmo
+        # resultado do caminho sem chapa.
+        area = _area_preco(1.23, 0.87, False, 5, 1.23, 0.87, True, 0.25)
+        assert area == 1.125

@@ -81,6 +81,28 @@ def _ensure_qtd_pessoas_col(cur) -> None:
     )
 
 
+def _resolve_tipo_pedido(fantasia: Optional[str], cliente_forn, tipo_solicitado: Optional[int]):
+    """Resolve o valor final de `pedido_venda.tipo` (combobox "Tipo" do
+    pedido — Mesa/Comanda/Balcão/Entrega, FK `tipo_cliente.codigo`),
+    separado do tipo do CLIENTE (`cliente.cliente_forn`): um cliente
+    Entrega pode virar um pedido lançado como Comanda na lista, sem mudar o
+    tipo do cliente. EXCEÇÃO: cliente reservado — nome fantasia contendo
+    "MESA"/"COMANDA"/"BALCÃO" (mesa/comanda/balcão físicos do
+    estabelecimento) sempre sobrescreve com o próprio tipo do cliente,
+    ignorando o que foi pedido/selecionado — não faz sentido uma "MESA 7"
+    física virar um pedido de Entrega.
+
+    Compartilhada entre Pedido Bar (`pedidos_service._save_pedido_sync`) e
+    Pedido Geral/Completo (`pedido_completo_service._save_pedido_completo_sync`)
+    — mesmo combobox, mesma regra, mesma tabela `pedido_venda`. Extraída
+    pra cá 2026-07-20 (pedido explícito do usuário: "tente usar as mesmas
+    funções para não replicar o mesmo código entre telas") a partir da
+    regra original do Pedido Bar, 2026-07-18."""
+    fantasia_up = (fantasia or "").strip().upper()
+    cliente_reservado = any(k in fantasia_up for k in ("MESA", "COMANDA", "BALCÃO", "BALCAO"))
+    return cliente_forn if cliente_reservado else tipo_solicitado
+
+
 def _modulo_servicos_ativo(cur) -> bool:
     """True se o módulo "Serviço" está ligado em Configurações de Módulo do
     Sistema (controle_configuracao.servicos). Cadastro/consulta/movimentação
@@ -90,6 +112,283 @@ def _modulo_servicos_ativo(cur) -> bool:
     row = cur.fetchone()
     val = row.get("servicos") if isinstance(row, dict) else (row[0] if row else None)
     return bool(val)
+
+
+def _exige_aprovacao_itens_os_ativo(cur) -> bool:
+    """True se a empresa exige Autorização de Itens antes de baixar estoque
+    na O.S. (`controle_aux.exige_aprovacao_itens_os` — migração de
+    `FrmTraOsNew.frm`, aba "Autorização de Itens"). Confirmado pelo usuário,
+    2026-08-01: com a flag ligada, o estoque só é reservado quando o item é
+    AUTORIZADO, não mais na inclusão do item (default/flag desligada mantém
+    o comportamento já existente — reserva na inclusão)."""
+    cur.execute("SELECT TOP 1 exige_aprovacao_itens_os FROM controle_aux")
+    row = cur.fetchone()
+    val = row.get("exige_aprovacao_itens_os") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
+
+
+def _exige_expedicao_itens_os_ativo(cur) -> bool:
+    """True se a empresa exige Autorização de Expedição ANTES da
+    Autorização de Itens em si (`controle_aux.exige_expedicao_itens_os`) —
+    confirmado no rastreio de `FrmTraOsNew.frm`: quando ligada, um item só
+    pode ser Autorizado depois de já ter sido Expedido. Expedição em si
+    nunca movimenta estoque (só Autorização move, ver
+    `_exige_aprovacao_itens_os_ativo`) — é um registro de picking/separação
+    física do item no estoque, independente da flag de aprovação estar
+    ligada ou não."""
+    cur.execute("SELECT TOP 1 exige_expedicao_itens_os FROM controle_aux")
+    row = cur.fetchone()
+    val = row.get("exige_expedicao_itens_os") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
+
+
+def _modulo_agenda_ativo(cur) -> bool:
+    """True se "Clínica" OU "Assistência" está ligado (controle_configuracao.
+    CLINICA / Assistencia) — mesmo princípio de `_modulo_servicos_ativo`.
+    Os dois módulos ligam exatamente o mesmo comportamento de Agenda no
+    Pedido Geral (mesma tela, mesmo fluxo — "é só chamar a tela", user-
+    directed 2026-07-28): desdobramento de item de Serviço em N linhas
+    agendáveis e o fluxo de Agendar/Layouts no Pedido Geral, mais a tela
+    dedicada Agenda (`app/agenda.tsx`). Clínica é o segmento de Pedido
+    (mutuamente exclusivo com Bar/Cilindro/Pedido de Venda/Metro Quadrado,
+    ver SEGMENTOS_PEDIDO_EXCLUSIVOS); Assistência é o módulo de O.S. que já
+    gateia OS/OS_COMP (par Oficina/Assistência) — independente dos
+    segmentos de Pedido, uma empresa pode ter Assistência ligada junto com
+    qualquer um deles. Nome anterior desta função: `_modulo_clinica_ativo`.
+    Ver PENDENCIAS.md > "Transações" > "Pedido Geral — Fase B: Clínica
+    (Agendamento)"."""
+    cur.execute("SELECT TOP 1 CLINICA, Assistencia FROM controle_configuracao")
+    row = cur.fetchone()
+    if isinstance(row, dict):
+        clinica = row.get("CLINICA")
+        assistencia = row.get("Assistencia")
+    else:
+        clinica = row[0] if row else None
+        assistencia = row[1] if row else None
+    return bool(clinica) or bool(assistencia)
+
+
+def _modulo_contratos_ativo(cur) -> bool:
+    """True se o módulo "Contratos" está ligado (controle_configuracao.
+    contratos) — mesmo princípio de `_modulo_servicos_ativo`. Cadastro/
+    consulta/movimentação de todo o módulo Contratos (Tipo de Contrato,
+    Tipo de Reajuste, Índices de Reajuste, Produtos Disponíveis, Contrato
+    em si) só é permitido com o módulo ativo. Pedido explícito do usuário,
+    2026-07-19."""
+    cur.execute("SELECT TOP 1 contratos FROM controle_configuracao")
+    row = cur.fetchone()
+    val = row.get("contratos") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
+
+
+def _modulo_gestor_projetos_ativo(cur) -> bool:
+    """True se o módulo "Gestor de Projetos" está ligado
+    (controle_configuracao.gestor_projetos) — mesmo princípio de
+    `_modulo_contratos_ativo`. Coluna própria, não reaproveita
+    Assistência/Oficina/etc. — ver PENDENCIAS.md > "Gestor de Projetos"."""
+    cur.execute("SELECT TOP 1 gestor_projetos FROM controle_configuracao")
+    row = cur.fetchone()
+    val = row.get("gestor_projetos") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
+
+
+def _modulo_bar_ativo(cur) -> bool:
+    """True se o módulo "Bar" está ligado (controle_configuracao.Bar) —
+    mesmo princípio de `_modulo_servicos_ativo`. Gateia o módulo
+    Modificadores (Tabelas Auxiliares > Modificadores + o retrofit em
+    Produto Completo/Serviços), que hoje só faz sentido pro Pedido Bar
+    (único lugar com o seletor de modificador na venda, ver
+    modificadores_service.py). Pedido explícito do usuário, 2026-07-23:
+    "colocar o modificador ligado ao módulo de Pedido Bar. Só aparecerá
+    para esse módulo ativo em configurações"."""
+    cur.execute("SELECT TOP 1 Bar FROM controle_configuracao")
+    row = cur.fetchone()
+    val = row.get("Bar") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
+
+
+def _modulo_curva_abc_ativo(cur) -> bool:
+    """True se o módulo "Curva ABC" está ligado (controle_configuracao.
+    Curva_abc) — mesmo princípio de `_modulo_servicos_ativo`. Gateia todo o
+    submenu Transações > Compra (Pedido de Compra, Curva ABC e Estoques,
+    Gestão de Compras/Ressuprimento, Cotação de Compra) — pedido explícito
+    do usuário, 2026-07-19: "o módulo Compras deve ser habilitado em
+    Configurações > Módulo Curva ABC" (o flag legado já existente pra essa
+    área é literalmente chamado Curva_abc, não existe um flag "Compras"
+    separado)."""
+    cur.execute("SELECT TOP 1 Curva_abc FROM controle_configuracao")
+    row = cur.fetchone()
+    val = row.get("Curva_abc") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
+
+
+def _modulo_metro_quadrado_ativo(cur) -> bool:
+    """True se o módulo "Metro Quadrado" está ligado (controle_configuracao.
+    metro_quadrado) — mesmo princípio de `_modulo_servicos_ativo`. Diferente
+    dos outros módulos acima, este NÃO bloqueia a inclusão do item quando
+    desligado — só decide se o item de um produto m²/ml/m³ (`pecas.uni`)
+    entra pela precificação especial (`_area_preco`) ou pelo caminho normal
+    (preço cheio, sem cálculo de área), réplica fiel do `Else` do legado
+    (`AreaPreco`, `mdl_proc.bas`) — mesmo produto, mesmo pedido, o módulo é
+    que decide o comportamento, não é uma trava de acesso. Ver
+    PENDENCIAS.md > "Transações" > "Pedido Geral — Metro Quadrado"."""
+    cur.execute("SELECT TOP 1 metro_quadrado FROM controle_configuracao")
+    row = cur.fetchone()
+    val = row.get("metro_quadrado") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
+
+
+# Tipos de preço m² (`ListPrecos` do legado, `frmmanpedfor.frm:5881-5886`) —
+# índice, rótulo, coluna de `pecas` de onde vem o preço, e a flag booleana
+# de `controle_aux` que decide se aquele tipo aplica o piso de área mínima
+# compartilhado (`metro_quadrado_minima_metragem`). Ordem = ordem do legado.
+TIPOS_PRECO_M2 = [
+    (0, "Padrão", "p_venda", "m2_area_minima_padrao"),
+    (1, "Modelado Comum", "p_sugestao", "m2_area_minima_modelado"),
+    (2, "Engenharia", "p_garantia", "m2_area_minima_engenharia"),
+    (3, "Comum (S/Lapidação)", "p_sugerido", "m2_area_minima_comum_sem_lapidacao"),
+    (4, "Modelado Engenharia", "preco_base", "m2_area_minima_modelado_engenharia"),
+    (5, "Comum (C/Lapidação)", "preco_lista", "m2_area_minima_comum_lapidacao"),
+]
+
+
+def _config_m2(cur) -> dict:
+    """Lê de uma vez os campos de `controle_aux` que a precificação m² usa —
+    as 6 flags de área mínima por tipo de preço, o piso de área mínima
+    compartilhado (`metro_quadrado_minima_metragem`, default 0,25 igual ao
+    legado quando a coluna vem 0/NULL — `mdl_proc.bas:7263`), e o flag de
+    "controla cabeça de chapa" (arredondamento pra tamanho padrão de chapa
+    de vidro). Configuração já existia pronta em Controle do Sistema antes
+    desta feature (`controle-sistema.tsx`) — só nunca tinha sido lida por
+    nenhuma tela de venda."""
+    cur.execute(
+        "SELECT m2_area_minima_padrao, m2_area_minima_modelado, m2_area_minima_engenharia, "
+        "m2_area_minima_modelado_engenharia, m2_area_minima_comum_lapidacao, "
+        "m2_area_minima_comum_sem_lapidacao, metro_quadrado_minima_metragem, "
+        "vidro_controla_cabeca_chapa FROM controle_aux"
+    )
+    row = cur.fetchone() or {}
+    minima = float(row.get("metro_quadrado_minima_metragem") or 0)
+    return {
+        "m2_area_minima_padrao": bool(row.get("m2_area_minima_padrao")),
+        "m2_area_minima_modelado": bool(row.get("m2_area_minima_modelado")),
+        "m2_area_minima_engenharia": bool(row.get("m2_area_minima_engenharia")),
+        "m2_area_minima_modelado_engenharia": bool(row.get("m2_area_minima_modelado_engenharia")),
+        "m2_area_minima_comum_lapidacao": bool(row.get("m2_area_minima_comum_lapidacao")),
+        "m2_area_minima_comum_sem_lapidacao": bool(row.get("m2_area_minima_comum_sem_lapidacao")),
+        "metro_quadrado_minima_metragem": minima if minima > 0 else 0.25,
+        "vidro_controla_cabeca_chapa": bool(row.get("vidro_controla_cabeca_chapa")),
+    }
+
+
+def _trunca3(v) -> float:
+    """Réplica de `trunca3` (legado) — trunca (não arredonda) em 3 casas
+    decimais. Mesmo idioma já usado por `_trunca2` em `inventario_service.py`
+    (`Decimal.quantize(..., ROUND_DOWN)`), só com 3 casas em vez de 2."""
+    from decimal import ROUND_DOWN, Decimal
+    return float(Decimal(str(v)).quantize(Decimal("0.001"), rounding=ROUND_DOWN))
+
+
+def _arredonda_pbox(num: float, modo_arredondamento) -> float:
+    """Réplica de `ArredondaPBox` (`mdl_proc.bas:11969`) — arredonda uma
+    dimensão (comprimento ou largura) antes de calcular a área m², usada só
+    no modo "controla cabeça de chapa" (`vidro_controla_cabeca_chapa`).
+
+    Modo 10 (usado quando o produto controla número de série — ver
+    `_area_preco`): trunca em 1 casa decimal e soma 0,1 se houver qualquer
+    resto além dela.
+    Outros modos (o Pedido Geral sempre usa modo 5, ver `_area_preco`):
+    arredonda pra a centésima ".5" mais próxima por cima quando o resto
+    (além da 1ª casa decimal) está entre 0,001 e 0,499; arredonda pra 1
+    casa decimal quando o resto está entre 0,501 e 0,999; senão (resto
+    exatamente 0 ou 0,500) trunca em 2 casas."""
+    num = float(num or 0)
+    # Format(num, "###,###,##0.0000") — sempre 4 casas decimais.
+    texto = f"{num:.4f}"
+    inteiro, decimais = texto.split(".")  # decimais sempre tem 4 dígitos
+    # Right(Decimais, 3) — os 3 últimos dos 4 dígitos decimais (tudo além
+    # da casa das décimas).
+    resto3 = int(decimais[1:])
+    tenths = f"{inteiro}.{decimais[0]}"  # Left(temp, Len(temp)-3) — trunca em 1 casa
+
+    if int(modo_arredondamento or 0) == 10:
+        base = float(tenths) + 0.1 if resto3 > 0 else float(tenths)
+    else:
+        if 0 < resto3 < 500:
+            base = float(f"{tenths}5")  # concatena "5" na casa das centésimas
+        elif 500 < resto3 <= 999:
+            base = round(float(texto), 1)  # Format(temp, "0.0") — arredonda p/ 1 casa
+        else:  # resto3 == 0 ou == 500 exatos — trunca em 2 casas, já fica em X,X5 nesse caso
+            base = float(f"{inteiro}.{decimais[:2]}")
+    return round(base, 4)
+
+
+def _area_preco(
+    comprimento: float, largura: float, area_minima_ativa: bool,
+    modo_arredondamento, comprimento_chapa: float, largura_chapa: float,
+    vidro_controla_cabeca_chapa: bool, metro_quadrado_minima_metragem: float,
+) -> float:
+    """Réplica de `AreaPreco` (`mdl_proc.bas:12004`) — calcula a área de
+    venda (m²/ml/m³) de um item, usada como multiplicador do preço unitário
+    escolhido (ver decisão de arquitetura em PENDENCIAS.md > "Transações" >
+    "Pedido Geral — Metro Quadrado": aqui só devolvemos a área, quem chama
+    dobra ela dentro do preço unitário — o app não replica a multiplicação
+    de 3 fatores espalhada pelo legado).
+
+    `comprimento`/`largura` = 0 (produto sem dimensão informada, ex. item
+    controlado por número de série) sempre devolve 1 (regra do legado —
+    nesse caso a "área" não participa do cálculo).
+
+    Sem "controla cabeça de chapa": trunca(arredonda(comprimento) ×
+    arredonda(largura), 3 casas).
+
+    Com "controla cabeça de chapa": se comprimento_chapa/largura_chapa
+    divergem de comprimento/largura, usa os valores de chapa em vez dos
+    digitados (e pula o arredondamento se a chapa já bate num tamanho
+    padrão — 1,8/2,4/3,21m, réplica exata do legado).
+
+    Em ambos os casos, se `area_minima_ativa` (flag do tipo de preço
+    escolhido) e a área calculada é menor que o piso compartilhado
+    (`metro_quadrado_minima_metragem`), a área sobe pro piso."""
+    comprimento = float(comprimento or 0)
+    largura = float(largura or 0)
+    if comprimento == 0 or largura == 0:
+        return 1.0
+
+    if vidro_controla_cabeca_chapa:
+        m1, m2 = comprimento, largura
+        comprimento_chapa = float(comprimento_chapa or 0)
+        largura_chapa = float(largura_chapa or 0)
+        usa_chapa = comprimento != comprimento_chapa or largura != largura_chapa
+        if usa_chapa:
+            m1, m2 = comprimento_chapa, largura_chapa
+            cm1 = m1 if m1 in (1.8, 2.4, 3.21) else _arredonda_pbox(m1, modo_arredondamento)
+            cm2 = m2 if m2 in (1.8, 2.4, 3.21) else _arredonda_pbox(m2, modo_arredondamento)
+        else:
+            cm1 = _arredonda_pbox(m1, modo_arredondamento)
+            cm2 = _arredonda_pbox(m2, modo_arredondamento)
+        area = _trunca3(cm1 * cm2)
+    else:
+        area = _trunca3(_arredonda_pbox(comprimento, modo_arredondamento) * _arredonda_pbox(largura, modo_arredondamento))
+
+    if area_minima_ativa and area < metro_quadrado_minima_metragem:
+        area = metro_quadrado_minima_metragem
+    return area
+
+
+def _area_estoque(comprimento, largura) -> float:
+    """Réplica de `AreaEstoque` (`mdl_proc.bas:12103`) — área BRUTA usada
+    pra movimentar estoque de um item m² (sem arredondamento de
+    `ArredondaPBox` nem piso de área mínima, propositalmente diferente de
+    `_area_preco`: o estoque físico consumido é a área real da peça, não a
+    área "faturável" com o piso mínimo aplicado). `comprimento`/`largura`
+    0 devolve 1 (mesma regra do legado — sem dimensão, não participa do
+    cálculo de área)."""
+    comprimento = float(comprimento or 0)
+    largura = float(largura or 0)
+    if comprimento == 0 or largura == 0:
+        return 1.0
+    return _trunca3(comprimento * largura)
 
 
 def _resolve_produto(cur, codigo: str) -> Optional[dict]:
@@ -211,6 +510,58 @@ def _linha_peca_completo(r: dict) -> dict:
     }
 
 
+def _preco_promocional(cur, codigo_int: str, qtd: float) -> Optional[dict]:
+    """Resolve o preço promocional aplicável (`pecas_promocao` — "Variações
+    de Preços" no Cadastro de Produtos, ver produto_completo_service.py) pro
+    produto+quantidade+momento atual, respeitando os critérios opcionais e
+    combináveis de dias da semana/período de data/período de hora (todos em
+    branco/NULL = sem restrição nesse critério, mesma regra documentada em
+    CLAUDE.md > "Produto Completo").
+
+    Usada ao incluir item em qualquer Pedido (Bar/Geral e futuros, via
+    `usePedidoItens` no frontend — pedido explícito do usuário, 2026-07-30).
+    Sem precedente no legado pra escolher entre várias linhas cujo período
+    bate ao mesmo tempo — decisão desta implementação: prefere a de maior
+    `qtd` (maior faixa de quantidade atingida), mesmo critério de tier já
+    usado em Preço por Quantidade (`pecas_preco_qtd`). Retorna None se
+    nenhuma linha bate (produto sem promoção cadastrada, ou fora do
+    período/dia/hora de todas as cadastradas)."""
+    from services.produto_completo_service import _ensure_promocao_periodo_cols
+    _ensure_promocao_periodo_cols(cur)
+    cur.execute("SELECT GETDATE() AS agora")
+    agora = cur.fetchone()["agora"]
+    dow = str((agora.weekday() + 1) % 7)  # 0=domingo..6=sábado, mesmo esquema do frontend (DIAS_SEMANA_LABELS)
+    hora_atual = agora.strftime("%H:%M")
+    data_atual = agora.date()
+    cur.execute(
+        "SELECT p_venda, codigo_promocao, descricao_promocao, dias_semana, "
+        "data_inicio, data_fim, hora_inicio, hora_fim "
+        "FROM pecas_promocao WHERE codigo_int=%s AND qtd<=%s ORDER BY qtd DESC",
+        (codigo_int, qtd),
+    )
+    for r in cur.fetchall():
+        dias = (r.get("dias_semana") or "").strip()
+        if dias and dow not in [d.strip() for d in dias.split(",") if d.strip()]:
+            continue
+        di, df = r.get("data_inicio"), r.get("data_fim")
+        if di and data_atual < di:
+            continue
+        if df and data_atual > df:
+            continue
+        hi = (r.get("hora_inicio") or "").strip()
+        hf = (r.get("hora_fim") or "").strip()
+        if hi and hora_atual < hi:
+            continue
+        if hf and hora_atual > hf:
+            continue
+        return {
+            "p_venda": float(r["p_venda"]),
+            "codigo_promocao": (r.get("codigo_promocao") or "").strip(),
+            "descricao_promocao": (r.get("descricao_promocao") or "").strip(),
+        }
+    return None
+
+
 def _kit_componentes(cur, codigo_principal: str) -> list:
     """Componentes de um kit/produto composto (`produtos_compostos.principal`).
 
@@ -259,17 +610,23 @@ def _mover_estoque(cur, codigo: str, delta_qtd: float, campo_reservado: str) -> 
 # genérica no legado, reaproveitada por Pedido, O.S. e Agenda via uma
 # struct global só (`Type_FormaPagPedOS` — Tipo/Documento/Situacao/valor/
 # Forma_Padrao). Portamos o mesmo desenho: um "tipo de DAV" central
-# (DAV_PED/DAV_OS) mapeando pra onde os dados vivem — mesmo padrão já usado
-# em `gestor_documentos_service.py` (`GRUPO_*`/`_JUNCAO`) pra grupo de
-# anexos. Agenda (AGE) não está em uso em nenhuma tela migrada — não
-# incluído no mapa; adicionar quando/se for pedido.
+# (DAV_PED/DAV_OS/DAV_AGE) mapeando pra onde os dados vivem — mesmo padrão
+# já usado em `gestor_documentos_service.py` (`GRUPO_*`/`_JUNCAO`) pra grupo
+# de anexos.
 DAV_PED = "PED"
 DAV_OS = "OS"
+# Agenda (agendamento avulso, sem vir de Pedido/O.S. — Fase B Clínica,
+# 2026-07-28) — só usa o caminho automático de 1 forma (nunca a grade
+# manual completa), por isso as tabelas próprias (`_ensure_agenda_forma_
+# pag_tables` abaixo) têm só as colunas que `_cadastra_forma_automatica`
+# de fato usa, não um espelho 1:1 de `pedido_venda_*`.
+DAV_AGE = "AGE"
 
 # tipo de DAV -> prefixo das tabelas de forma de pagamento + coluna FK.
 DAV_CONFIG: dict[str, dict[str, str]] = {
     DAV_PED: {"prefixo": "pedido_venda_", "fk": "pedido_venda"},
     DAV_OS: {"prefixo": "os_", "fk": "os"},
+    DAV_AGE: {"prefixo": "agenda_", "fk": "agenda"},
 }
 
 # tipo de forma de pagamento (`forma_pagamento.tipo`) -> sufixo de tabela +
@@ -289,6 +646,256 @@ FORMA_PAG_VENC_COL: dict[str, Optional[str]] = {
     "DI": None, "CH": "bom_para", "CC": "bom_para", "CD": "bom_para",
     "DU": "data_venc", "TI": None, "VA": "bom_para", "FI": "data_venc",
 }
+
+
+def _ensure_agenda_forma_pag_tables(cur) -> None:
+    """Migração idempotente (`IF NOT EXISTS ... CREATE TABLE`, mesmo padrão
+    de `_ensure_hora_inclusao_item_col` — este backend atende múltiplas
+    empresas sem executor de migração central): cria as 8 tabelas de forma
+    de pagamento da Agenda (`agenda_dinheiro`, `agenda_cheque`, ...) usadas
+    pelo Faturar avulso (Fase B — Clínica, 2026-07-28). Só com as colunas
+    que o caminho automático de 1 forma (`_cadastra_forma_automatica`)
+    realmente usa (`sequencia`/`agenda`/`forma_pag`/valor/vencimento) — a
+    Agenda nunca expõe a grade manual completa de múltiplas formas que
+    Pedido/O.S. têm, então não replica colunas extras só usadas por ela."""
+    for tipo_forma, valor_col in FORMA_PAG_VALOR_COL.items():
+        tabela = DAV_CONFIG[DAV_AGE]["prefixo"] + FORMA_PAG_SUFIXO_TIPO[tipo_forma]
+        venc_col = FORMA_PAG_VENC_COL[tipo_forma]
+        colunas_extra = f", {venc_col} DATE" if venc_col else ""
+        cur.execute(
+            f"IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '{tabela}') "
+            f"CREATE TABLE {tabela} ("
+            f"sequencia INT IDENTITY(1,1) PRIMARY KEY, "
+            f"agenda INT NOT NULL, "
+            f"forma_pag NVARCHAR(10) NOT NULL, "
+            f"{valor_col} DECIMAL(18,2) NOT NULL DEFAULT 0"
+            f"{colunas_extra})"
+        )
+
+
+def _controla_revisao_os_ativo(cur) -> bool:
+    """True se a empresa controla Revisão programada de O.S.
+    (`controle_aux.ControlaRevisaoOS`) — migração de `FrmTraOsNew.frm`,
+    campo "Doc. Origem". Com a flag ligada, O.S. do tipo Revisão só aceita
+    outra O.S. (nunca Pedido) como origem, e exige uma data de revisão
+    programada disponível na O.S. de origem (`osrevisao`). Ver
+    `_validar_doc_origem` abaixo."""
+    cur.execute("SELECT TOP 1 ControlaRevisaoOS FROM controle_aux")
+    row = cur.fetchone()
+    val = row.get("ControlaRevisaoOS") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
+
+
+def _exige_os_original_garantia_ativo(cur) -> bool:
+    """True se a empresa exige Doc. Origem (O.S. OU Pedido) em O.S. do tipo
+    Garantia — ou Revisão, quando `_controla_revisao_os_ativo` está
+    desligada (`controle_aux.EXIGE_OS_ORIGINAL_GARANTIA`). Ver
+    `_validar_doc_origem` abaixo."""
+    cur.execute("SELECT TOP 1 EXIGE_OS_ORIGINAL_GARANTIA FROM controle_aux")
+    row = cur.fetchone()
+    val = row.get("EXIGE_OS_ORIGINAL_GARANTIA") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
+
+
+def _ensure_os_doc_origem_cols(cur) -> None:
+    """Migração idempotente: `os.Tipo_Doc_Original`/`.VALIDOU_GARANTIA`/
+    `.QtdRevisoes` — `OS_ORIGINAL` já existe (NOT NULL, sempre gravada,
+    default 0 até esta migração). Mesmo padrão de `_ensure_qtd_pessoas_col`.
+    Ver "O.S. Completa" > "Doc. Origem / Revisão Programada" em
+    PENDENCIAS.md."""
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='Tipo_Doc_Original' AND Object_ID=Object_ID('os')) "
+        "ALTER TABLE os ADD Tipo_Doc_Original NVARCHAR(1) NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='VALIDOU_GARANTIA' AND Object_ID=Object_ID('os')) "
+        "ALTER TABLE os ADD VALIDOU_GARANTIA BIT NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='QtdRevisoes' AND Object_ID=Object_ID('os')) "
+        "ALTER TABLE os ADD QtdRevisoes INT NULL"
+    )
+
+
+def _ensure_os_forma_pagamento_garantia_col(cur) -> None:
+    """Migração idempotente: `os.forma_pagamento_garantia` — forma de
+    pagamento usada só pra faturar o bloco de itens Garantia/Interno/
+    Contrato (`os_produto.situacao<>0`), separado do bloco Cliente paga
+    (`.forma_pagamento`, já existente). Ver "Bifurcação de faturamento
+    Garantia×Cliente" em PENDENCIAS.md > "O.S. Completa"."""
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='forma_pagamento_garantia' AND Object_ID=Object_ID('os')) "
+        "ALTER TABLE os ADD forma_pagamento_garantia NVARCHAR(3) NULL"
+    )
+
+
+def _ensure_osrevisao_table(cur) -> None:
+    """Migração idempotente: tabela `osrevisao` (datas de revisão
+    programada de uma O.S. — `sequencia` PK, `os` = O.S. dona da data,
+    `data`, `osrevisao` = 0/NULL enquanto disponível, ou o código da O.S.
+    que consumiu essa data ao ser aberta como Revisão dessa origem).
+    Confirmada como parte do schema legado real (rastreio de
+    `Revenda\\FrmTraOsNew.frm`) — instalações antigas devem já ter essa
+    tabela; `IF NOT EXISTS` cobre as que não têm."""
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'osrevisao') "
+        "CREATE TABLE osrevisao (sequencia INT IDENTITY(1,1) PRIMARY KEY, "
+        "os INT NOT NULL, data DATE NOT NULL, osrevisao INT NULL)"
+    )
+
+
+def _validar_doc_origem(
+    cur, codigo, cliente, tipo_os_desc: str, os_original: int, tipo_doc_original: str, autorizado_por,
+):
+    """Validação cruzada de OS/Pedido de origem pra O.S. do tipo Garantia/
+    Revisão — réplica de `Command2_Click` em `FrmTraOsNew.frm`, linhas
+    9737-9982 (rastreio completo em PENDENCIAS.md > "O.S. Completa" >
+    "Doc. Origem / Revisão Programada").
+
+    Dois ramos MUTUAMENTE EXCLUSIVOS, decididos pelo texto de
+    `tipo_os_desc` (substring, sem acento — mesmo critério do legado, não
+    dá pra usar um código fixo porque o cadastro `tipo_os` é livre):
+      • Ramo "revisao": tipo contém "REVISÃO"/"REVISAO" E
+        `_controla_revisao_os_ativo` — só aceita O.S. como origem (nunca
+        Pedido), e exige uma data de revisão programada disponível na O.S.
+        de origem (`osrevisao`).
+      • Ramo "garantia": tipo contém "GARANTIA" (ou "REVISÃO"/"REVISAO"
+        quando o ramo acima não se aplicou) E
+        `_exige_os_original_garantia_ativo` — aceita O.S. OU Pedido de
+        Venda como origem.
+    Se nenhum ramo se aplica, não há nada a validar (retorna ok=True,
+    validou_garantia=False, sem tocar o campo).
+
+    Retorna `(ok, validou_garantia, tipo_doc_original_final, mensagem_erro)`.
+    `tipo_doc_original_final` é sempre "O" no ramo Revisão (a tela nem
+    deixa escolher Pedido nesse caso) — o chamador deve gravar esse valor,
+    não o que veio cru na requisição.
+
+    Bypass por "senha superior": se a validação falhar mas
+    `autorizado_por` vier preenchido (não-vazio), a gravação é liberada
+    mesmo assim — mesmo padrão já usado em `AgendarItemRequest.
+    autorizado_por`/`AuthorizationSlide` (o frontend já validou a senha de
+    gerente/supervisor/master antes de reenviar; o backend não reverifica,
+    só confia no sinal e deixa o CHAMADOR registrar a auditoria)."""
+    desc = (tipo_os_desc or "").upper()
+    eh_revisao = "REVIS" in desc  # cobre REVISÃO/REVISAO, com ou sem acento
+    eh_garantia = "GARANTIA" in desc
+
+    if eh_revisao and _controla_revisao_os_ativo(cur):
+        ramo = "revisao"
+        tipo_doc_original = "O"
+    elif (eh_garantia or eh_revisao) and _exige_os_original_garantia_ativo(cur):
+        ramo = "garantia"
+    else:
+        return True, False, tipo_doc_original, None
+
+    # Já validado antes com os MESMOS valores (reedição sem mudar Doc.
+    # Origem) — não repete a validação nem pede senha de novo.
+    if codigo:
+        cur.execute(
+            "SELECT os_original, tipo_doc_original, validou_garantia FROM os WHERE codigo=%s", (codigo,),
+        )
+        ex = cur.fetchone()
+        if ex and ex.get("validou_garantia"):
+            os_original_atual = int(ex.get("os_original") or 0)
+            tipo_atual = (ex.get("tipo_doc_original") or "").strip().upper()
+            if os_original_atual == int(os_original or 0) and tipo_atual == tipo_doc_original:
+                return True, True, tipo_doc_original, None
+
+    erro = None
+    if ramo == "revisao":
+        if not os_original:
+            erro = "Para O.S.'s do Tipo Revisão, deve-se obrigatoriamente preencher o Número da O.S. de origem!"
+        elif codigo and int(os_original) == int(codigo):
+            erro = "O número da O.S. de origem não pode ser o mesmo número da O.S. de revisão!"
+        else:
+            cur.execute("SELECT cliente, situacao FROM os WHERE codigo=%s", (os_original,))
+            origem = cur.fetchone()
+            if not origem:
+                erro = "O.S. de origem não encontrada!"
+            elif int(origem.get("cliente") or 0) != int(cliente or 0):
+                erro = "O número da O.S. de origem não é do mesmo cliente da O.S. de revisão!"
+            elif (origem.get("situacao") or "").strip().upper() != "PG":
+                erro = "A O.S. de origem da revisão não está faturada!"
+            else:
+                ja_vinculada = False
+                if codigo:
+                    cur.execute("SELECT TOP 1 1 AS ok FROM osrevisao WHERE osrevisao=%s", (codigo,))
+                    ja_vinculada = cur.fetchone() is not None
+                if not ja_vinculada:
+                    cur.execute(
+                        "SELECT TOP 1 1 AS ok FROM osrevisao WHERE os=%s AND ISNULL(osrevisao,0)=0", (os_original,),
+                    )
+                    if not cur.fetchone():
+                        erro = "O.S. de origem não tem datas de revisão disponíveis!"
+    else:  # garantia
+        if not os_original:
+            erro = "Para O.S.'s do Tipo Garantia, deve-se obrigatoriamente preencher o Número do Documento de origem!"
+        elif codigo and int(os_original) == int(codigo) and tipo_doc_original == "O":
+            erro = "O número da O.S. de origem não pode ser o mesmo número do Documento de garantia!"
+        elif tipo_doc_original == "O":
+            cur.execute("SELECT cliente, situacao FROM os WHERE codigo=%s", (os_original,))
+            origem = cur.fetchone()
+            if not origem:
+                erro = "O.S. de origem não encontrada!"
+            elif int(origem.get("cliente") or 0) != int(cliente or 0):
+                erro = "O número da O.S. de origem não é do mesmo cliente da O.S. de garantia!"
+            elif (origem.get("situacao") or "").strip().upper() != "PG":
+                erro = "A O.S. de origem da garantia não está faturada!"
+        else:
+            cur.execute("SELECT cliente, situacao FROM pedido_venda WHERE pedido=%s", (os_original,))
+            origem = cur.fetchone()
+            if not origem:
+                erro = "Pedido de Venda não encontrado!"
+            elif int(origem.get("cliente") or 0) != int(cliente or 0):
+                erro = "O número do Pedido de Venda informado como origem da garantia não é do mesmo cliente da O.S. de garantia!"
+            elif (origem.get("situacao") or "").strip().upper() != "PG":
+                erro = "O Pedido de Venda informado como origem da garantia não está faturado!"
+
+    if not erro:
+        return True, True, tipo_doc_original, None
+    if (autorizado_por or "").strip():
+        return True, True, tipo_doc_original, None
+    return False, False, tipo_doc_original, erro
+
+
+def _ensure_agenda_os_table(cur) -> None:
+    """Migração idempotente: tabela ponte `AGENDA_OS(CODAGENDA, CODOS)` —
+    equivalente de `AGENDA_PEDIDO` pro lado da O.S. (`CODOS` guarda o
+    `os_produto.cod_os_prod` do ITEM, não o número da O.S. — mesma
+    convenção de `AGENDA_PEDIDO.CODPEDIDO` guardar o `codauto` do item, não
+    o pedido). Confirmada como parte do schema legado (rastreio de
+    `Revenda\\FrmTraOsNew.frm`/`FrmOsProdutoNV2.frm`, ver PENDENCIAS.md >
+    "O.S. Completa" > "Agendar item de Serviço") — instalações antigas
+    devem já ter essa tabela; `IF NOT EXISTS` cobre as que não têm (mesmo
+    padrão de `_ensure_agenda_forma_pag_tables`, sem executor de migração
+    central)."""
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'AGENDA_OS') "
+        "CREATE TABLE AGENDA_OS (CODAGENDA INT NOT NULL, CODOS INT NOT NULL)"
+    )
+
+
+def _ensure_os_produto_agenda_cols(cur) -> None:
+    """Migração idempotente: `os_produto.data_servico`/`.executor_agenda` —
+    espelham as mesmas colunas já usadas em `pedido_venda_prod` pra cachear
+    o último agendamento do item (ver `agenda_service.py`). Mesmo raciocínio
+    de `_ensure_agenda_os_table` acima — instalações que já têm essas
+    colunas no schema legado não sofrem nada (`IF NOT EXISTS`)."""
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='data_servico' AND Object_ID=Object_ID('os_produto')) "
+        "ALTER TABLE os_produto ADD data_servico DATE NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='executor_agenda' AND Object_ID=Object_ID('os_produto')) "
+        "ALTER TABLE os_produto ADD executor_agenda INT NULL"
+    )
 
 
 @dataclass
@@ -453,9 +1060,16 @@ def _fechar_pedido_itens(cur, pedido: int, subtotal: float = 0.0, forma_padrao: 
     comita/desfaz a transação. Compartilhado entre o Fechar isolado
     (`/pedidos/{pedido}/fechar`) e o Faturar (`/pedidos/{pedido}/faturar`,
     que fecha-e-fatura num clique só quando o pedido ainda está Aberto —
-    mesmo comportamento de `Command111_Click` no legado)."""
+    mesmo comportamento de `Command111_Click` no legado).
+
+    Item m² (`comprimento`/`largura` gravados, ver `_add_item_completo_sync`)
+    baixa estoque pela ÁREA REAL da peça (`_area_estoque`, réplica de
+    `AreaEstoque` — sem arredondamento nem piso de área mínima, diferente
+    do `_area_preco` usado pra precificar), não pela contagem de peças —
+    `qtd_pedida × área_estoque`. Item normal continua baixando por
+    `qtd_pedida` sozinho, sem mudança."""
     cur.execute(
-        "SELECT produto, qtd_pedida FROM pedido_venda_prod "
+        "SELECT produto, qtd_pedida, comprimento, largura FROM pedido_venda_prod "
         "WHERE pedido=%s AND ISNULL(item_cancelado,0)=0",
         (pedido,),
     )
@@ -469,19 +1083,26 @@ def _fechar_pedido_itens(cur, pedido: int, subtotal: float = 0.0, forma_padrao: 
     if _qtd_formas(cur, dav) == 0 and subtotal > 0:
         return "Defina a Forma de Pagamento do Pedido!"
     for it in itens:
-        _mover_estoque(cur, (it.get("produto") or "").strip(), float(it.get("qtd_pedida") or 0), "reservado")
+        qtd_pedida = float(it.get("qtd_pedida") or 0)
+        comprimento, largura = it.get("comprimento"), it.get("largura")
+        qtd_estoque = qtd_pedida * _area_estoque(comprimento, largura) if comprimento and largura else qtd_pedida
+        _mover_estoque(cur, (it.get("produto") or "").strip(), qtd_estoque, "reservado")
     cur.execute("UPDATE pedido_venda SET situacao='F' WHERE pedido=%s", (pedido,))
     return None
 
 
-def _liberar_reservado(cur, codigo: str, delta_qtd: float) -> None:
+def _liberar_reservado(cur, codigo: str, delta_qtd: float, campo: str = "reservado") -> None:
     """Libera o estoque RESERVADO de uma PEÇA ao faturar (Comanda) — a baixa
-    de `qtd` já aconteceu no Fechar (ver `_mover_estoque`), aqui só se
-    desfaz a reserva. Efeito: pecas.reservado -= delta_qtd. Não faz nada
-    para serviços/itens inexistentes."""
+    de `qtd` já aconteceu no Fechar/Inclusão de item (ver `_mover_estoque`),
+    aqui só se desfaz a reserva. Efeito: pecas.<campo> -= delta_qtd. Não faz
+    nada para serviços/itens inexistentes. `campo` é "reservado" (Pedido) ou
+    "reservado_os" (O.S. — mesma coluna já usada por `_mover_estoque` na
+    inclusão de item da OS, ver `os_itens_service.py`)."""
+    if campo not in ("reservado", "reservado_os"):
+        raise ValueError("campo inválido")
     if not delta_qtd or not _is_peca(cur, codigo):
         return
     cur.execute(
-        "UPDATE pecas SET reservado = ISNULL(reservado,0) - %s WHERE codigo_int=%s",
+        f"UPDATE pecas SET {campo} = ISNULL({campo},0) - %s WHERE codigo_int=%s",
         (delta_qtd, codigo),
     )

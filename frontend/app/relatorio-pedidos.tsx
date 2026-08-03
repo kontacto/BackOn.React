@@ -1,4 +1,4 @@
-import { Image, Platform, Pressable, ScrollView, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@/src/components/Ionicons";
 
@@ -19,7 +19,6 @@ export default function RelatorioPedidosScreen() {
         <Pressable onPress={() => r.router.back()} hitSlop={12} style={styles.backBtn} testID="relpedidos-back">
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Relatório de Pedidos</Text>
         <View style={{ width: 40 }} />
       </View>
@@ -32,16 +31,10 @@ export default function RelatorioPedidosScreen() {
           dataFim={r.dataFim} setDataFim={r.setDataFim}
           vendedorOpts={r.vendedorOpts} vendedor={r.vendedor} setVendedor={r.setVendedor}
           situacao={r.situacao} setSituacao={r.setSituacao}
+          projeto={r.projeto} setProjeto={r.setProjeto}
           loading={r.loading} onBuscar={r.buscar}
         />
         </View>
-
-        {r.error ? (
-          <View style={styles.errorBox} testID="relpedidos-error">
-            <Ionicons name="alert-circle-outline" size={16} color={colors.error} />
-            <Text style={styles.errorText}>{r.error}</Text>
-          </View>
-        ) : null}
 
         {!r.loading && !r.error && r.pedidos.length === 0 ? (
           <Text style={styles.empty}>Nenhum pedido no período/filtros.</Text>

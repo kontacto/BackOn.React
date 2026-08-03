@@ -6,7 +6,16 @@
 // do navegador só com o cabeçalho/rodapé nativos do Chrome, nada do
 // recibo). Um iframe tem seu PRÓPRIO documento, isolado do resto da
 // página — nada pra esconder, nada pra vazar.
-export function printHtml(bodyHtml: string, title = "") {
+// `paperWidthMm`: só pra impressão em bobina térmica (cupom/comanda) — sem
+// isso, o navegador imprime na página padrão dele (A4/Letter), sem noção
+// nenhuma da largura real do rolo, o que faz o conteúdo sair desproporcional
+// (achado ao vivo 2026-07-23, comparando cupom impresso de verdade). Passar
+// a largura real (mm) injeta `@page{size:...}` + trava a largura do `body`
+// nesse valor, então o navegador já "sabe" o tamanho certo do papel. Deixar
+// de fora (chamada padrão) mantém o comportamento de sempre — página normal
+// — pros outros usos deste utilitário (relatórios, DANFCe, cotação, etc.),
+// que não são impressão térmica.
+export function printHtml(bodyHtml: string, title = "", paperWidthMm?: number) {
   if (typeof document === "undefined") return;
   const iframe = document.createElement("iframe");
   iframe.style.position = "fixed";
@@ -22,15 +31,21 @@ export function printHtml(bodyHtml: string, title = "") {
     document.body.removeChild(iframe);
     return;
   }
+  const paperCss = paperWidthMm
+    ? `@page { size: ${paperWidthMm}mm auto; margin: 0; } html, body { width: ${paperWidthMm}mm; }`
+    : "";
   doc.open();
   doc.write(
     `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>` +
       `<style>
         * { box-sizing: border-box; }
+        ${paperCss}
         body { font-family: "Courier New", Courier, monospace; font-size: 12px; color: #111; margin: 0; padding: 12px; }
         .center { text-align: center; }
         .bold { font-weight: 700; }
         .big { font-size: 15px; font-weight: 700; }
+        .huge { font-size: 26px; font-weight: 800; line-height: 1.15; }
+        .huge2 { font-size: 20px; font-weight: 800; line-height: 1.15; }
         .row { display: flex; justify-content: space-between; gap: 8px; }
         .row span:first-child { flex: 1; min-width: 0; word-break: break-word; }
         .row span:last-child { flex-shrink: 0; white-space: nowrap; }

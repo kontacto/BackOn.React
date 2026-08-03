@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  ActivityIndicator, Alert, Image, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
-} from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -12,12 +10,17 @@ import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import LockedView from "@/src/components/LockedView";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import GestorDocumentosSection, { GESTOR_DOC_GRUPO_SERVICO } from "@/src/components/GestorDocumentosSection";
+import ModificadoresSection from "@/src/components/ModificadoresSection";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
+import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import NiveisModal from "@/src/components/NiveisModal";
+import { buildNivelBreadcrumb } from "@/src/utils/nivelTree";
 import PrevisaoProdutosModal from "@/src/components/PrevisaoProdutosModal";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 
 type Conn = Connection;
 type NivelFlat = { codigo: string; descricao: string; niveis: string[] };
@@ -47,11 +50,75 @@ const TIPO_GARANTIA_OPTS: SelectOption[] = [
 const num = (s: string): number => (s.trim() ? parseFloat(s.replace(",", ".")) || 0 : 0);
 const int_ = (s: string): number => (s.trim() ? parseInt(s.replace(/[^0-9]/g, ""), 10) || 0 : 0);
 
-type TabKey = "principal" | "fiscal" | "descontos" | "anexos";
+// Modo Didático (CLAUDE.md) — ícone único de Ajuda no cabeçalho, reunindo a
+// explicação de campos/abas com efeito não-óbvio em linguagem de usuário
+// final. Reaproveita o mesmo `AjudaPedidoModal` do Pedido Bar/Geral (já
+// parametrizável por `titulo`/`itens`) em vez de duplicar o componente.
+const SERVICO_AJUDA_ITENS: HelpItem[] = [
+  {
+    titulo: "Especialidade do Serviço",
+    texto: "Categoria usada pela Agenda para saber quais profissionais podem atender este serviço — só aparece um profissional como opção pra agendar se ele tiver essa MESMA especialidade marcada no cadastro dele (aba Especialidades do Funcionário).",
+    icon: { lib: "ion", name: "ribbon-outline" },
+  },
+  {
+    titulo: "Preço Variado",
+    texto: "Quando ligado, o valor deste serviço pode ser digitado livremente ao incluir no Pedido/O.S., em vez de usar sempre o Preço/Hora cadastrado aqui.",
+    icon: { lib: "ion", name: "cash-outline" },
+  },
+  {
+    titulo: "Garantia",
+    texto: "Prazo e unidade (dias, meses, km, etc.) de garantia deste serviço. Usado para calcular automaticamente se um novo atendimento do mesmo serviço, para o mesmo cliente, ainda está dentro do período de garantia.",
+    icon: { lib: "ion", name: "shield-checkmark-outline" },
+  },
+  {
+    titulo: "Classificação Mercadológica",
+    texto: "Categoria/nível deste serviço na árvore de classificação, compartilhada com Produtos — usada em filtros e relatórios.",
+    icon: { lib: "ion", name: "pricetags-outline" },
+  },
+  {
+    titulo: "Composição — Previsão de Produtos",
+    texto: "Lista os produtos que costumam ser consumidos junto com este serviço (ex.: peças usadas numa manutenção) — apenas informativo, não baixa estoque automaticamente.",
+    icon: { lib: "ion", name: "cube-outline" },
+  },
+  {
+    titulo: "Aba Configurações Fiscais",
+    texto: "Códigos de tributação (Lista de Serviço, ICMS, PIS/Cofins) usados na emissão de Nota Fiscal de Serviço.",
+    icon: { lib: "ion", name: "receipt-outline" },
+  },
+  {
+    titulo: "Aceita Desconto",
+    texto: "Define os limites de desconto que Gerente, Supervisor e Vendedor podem aplicar neste serviço ao incluir num Pedido/O.S.",
+    icon: { lib: "ion", name: "pricetag-outline" },
+  },
+  {
+    titulo: "Paga Comissão",
+    texto: "Define o percentual (ou valor fixo) de comissão deste serviço para Vendedor, Executor e Atendente, e quanto de desconto no item reduz a base de cálculo da comissão.",
+    icon: { lib: "ion", name: "wallet-outline" },
+  },
+  {
+    titulo: "Aba Modificadores",
+    texto: "Opções extras que aparecem ao incluir este serviço no Pedido Bar (ex.: ponto da carne) — só disponível com o módulo Bar ligado.",
+    icon: { lib: "ion", name: "options-outline" },
+  },
+  {
+    titulo: "Aba Anexos",
+    texto: "Fotos ou documentos relacionados a este serviço, guardados no Gestor de Documentos.",
+    icon: { lib: "ion", name: "attach-outline" },
+  },
+  {
+    titulo: "Excluir",
+    texto: "Remove definitivamente o cadastro deste serviço. Ação não pode ser desfeita.",
+    icon: { lib: "ion", name: "trash-outline" },
+    cor: colors.error,
+  },
+];
+
+type TabKey = "principal" | "fiscal" | "descontos" | "modificadores" | "anexos";
 const TABS: { key: TabKey; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { key: "principal", label: "Principal", icon: "construct-outline" },
   { key: "fiscal", label: "Configurações Fiscais", icon: "receipt-outline" },
   { key: "descontos", label: "Descontos, Comissões e Outros", icon: "pricetag-outline" },
+  { key: "modificadores", label: "Modificadores", icon: "options-outline" },
   { key: "anexos", label: "Anexos", icon: "attach-outline" },
 ];
 
@@ -114,6 +181,7 @@ export default function ServicosScreen() {
   const [tab, setTab] = useState<TabKey>("principal");
   const [editingCodigo, setEditingCodigo] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [ajudaOpen, setAjudaOpen] = useState(false);
 
   const [codigo, setCodigo] = useState("");
   const [descricao, setDescricao] = useState("");
@@ -195,8 +263,7 @@ export default function ServicosScreen() {
   const findNivelLabel = useCallback((segments: string[]): string => {
     const codigo = segments.filter((p) => p && p.trim()).join("");
     if (!codigo) return "";
-    const found = nivelList.find((n) => n.codigo === codigo);
-    return found ? `${found.codigo} · ${found.descricao}` : codigo;
+    return buildNivelBreadcrumb(nivelList, codigo) || codigo;
   }, [nivelList]);
 
   const resetForm = () => {
@@ -246,7 +313,7 @@ export default function ServicosScreen() {
       setNivelSegments(segs);
       setNivelLabel(findNivelLabel(segs));
     } catch (e) {
-      fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
+      fb.showError(friendlyCatchError(e));
       router.back();
     }
   };
@@ -317,9 +384,9 @@ export default function ServicosScreen() {
           router.replace({ pathname: "/servicos", params: { codigo: j.codigo } });
         }
       } else {
-        fb.showError(j?.message || (Array.isArray(j?.detail) ? j.detail.map((d: any) => d.msg).join("; ") : "Falha ao gravar."));
+        fb.showError(friendlyApiError(j, "Não foi possível gravar o serviço. Verifique os campos e tente novamente."));
       }
-    } catch (e) { fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`); } finally { setSaving(false); }
+    } catch (e) { fb.showError(friendlyCatchError(e)); } finally { setSaving(false); }
   };
 
   const remove = () => {
@@ -337,8 +404,8 @@ export default function ServicosScreen() {
             });
             const j = await r.json();
             if (j?.success) { fb.showSuccess(j.message || "Excluído."); router.back(); }
-            else fb.showError(j?.message || "Falha ao excluir.");
-          } catch (e) { fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`); }
+            else fb.showError(friendlyApiError(j, "Falha ao excluir o serviço."));
+          } catch (e) { fb.showError(friendlyCatchError(e)); }
         },
       },
     ]);
@@ -354,7 +421,7 @@ export default function ServicosScreen() {
     const found = nivelList.find((n) => n.codigo === codigoNivel);
     if (found) {
       setNivelSegments(found.niveis);
-      setNivelLabel(`${found.codigo} · ${found.descricao}`);
+      setNivelLabel(buildNivelBreadcrumb(nivelList, found.codigo));
     } else {
       setNivelSegments(["", "", "", "", ""]);
       setNivelLabel(label);
@@ -390,30 +457,36 @@ export default function ServicosScreen() {
           >
             <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
           </Pressable>
-          <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
           <Text style={styles.headerTitle} numberOfLines={1}>
             {editingCodigo ? `Serviço ${editingCodigo}` : "Novo Serviço"}
           </Text>
-          {canSave ? (
-            <Pressable
-              onPress={save}
-              disabled={saving}
-              style={({ pressed }) => [styles.saveBtn, (pressed || saving) && { opacity: 0.7 }]}
-              hitSlop={8}
-              testID="servicos-salvar"
-            >
-              {saving ? (
-                <ActivityIndicator color={colors.onBrandPrimary} size="small" />
-              ) : (
-                <>
-                  <Ionicons name="checkmark" size={18} color={colors.onBrandPrimary} />
-                  <Text style={styles.saveLabel}>Gravar</Text>
-                </>
-              )}
-            </Pressable>
-          ) : (
-            <View style={{ width: 40 }} />
-          )}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+            <IconButtonWithTooltip
+              icon="information-circle-outline"
+              label="Ajuda"
+              onPress={() => setAjudaOpen(true)}
+              color={colors.onBrandPrimary}
+              testID="servicos-ajuda"
+            />
+            {canSave ? (
+              <Pressable
+                onPress={save}
+                disabled={saving}
+                style={({ pressed }) => [styles.saveBtn, (pressed || saving) && { opacity: 0.7 }]}
+                hitSlop={8}
+                testID="servicos-salvar"
+              >
+                {saving ? (
+                  <ActivityIndicator color={colors.onBrandPrimary} size="small" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark" size={18} color={colors.onBrandPrimary} />
+                    <Text style={styles.saveLabel}>Gravar</Text>
+                  </>
+                )}
+              </Pressable>
+            ) : null}
+          </View>
         </View>
 
         <ScrollView contentContainerStyle={[styles.scroll, styles.scrollWeb]} showsVerticalScrollIndicator={false}>
@@ -439,7 +512,13 @@ export default function ServicosScreen() {
             </View>
 
             <View style={styles.tabBar}>
-              {TABS.filter((t) => t.key !== "anexos" || !!editingCodigo).map((t) => {
+              {TABS.filter((t) => {
+                // Modificadores só faz sentido com o módulo Bar ligado —
+                // pedido explícito do usuário, 2026-07-23.
+                if (t.key === "modificadores") return moduleOn("Bar") && !!editingCodigo;
+                if (t.key === "anexos") return !!editingCodigo;
+                return true;
+              }).map((t) => {
                 const sel = tab === t.key;
                 return (
                   <Pressable
@@ -694,6 +773,15 @@ export default function ServicosScreen() {
                 </View>
               </>
             ) : null}
+
+            {tab === "modificadores" && conn && editingCodigo ? (
+              <View style={styles.card} testID="servicos-tab-content-modificadores">
+                <ModificadoresSection
+                  api={conn.api} servidor={conn.servidor} banco={conn.banco}
+                  tipo="S" codigo={editingCodigo} podeGravar={canSave}
+                />
+              </View>
+            ) : null}
           </View>
         </ScrollView>
 
@@ -706,6 +794,13 @@ export default function ServicosScreen() {
           principalLabel={editingCodigo ? `${editingCodigo} · ${descricao}` : ""}
           onClose={() => setPrevProdutosOpen(false)}
           canEdit={canSave}
+        />
+
+        <AjudaPedidoModal
+          visible={ajudaOpen}
+          onClose={() => setAjudaOpen(false)}
+          titulo="Serviço"
+          itens={SERVICO_AJUDA_ITENS}
         />
       </SafeAreaView>
   );

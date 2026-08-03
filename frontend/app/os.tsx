@@ -1,16 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  FlatList,
-  Image,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -239,7 +228,7 @@ export default function OSScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="os-screen">
-      {!(can("OS.ABRIR") || can("OS_COMP.ABRIR")) ? (
+      {!can("OS.ABRIR") ? (
         <LockedView testID="os-locked" />
       ) : (
       <>
@@ -252,7 +241,6 @@ export default function OSScreen() {
         >
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Ordem de Serviço ({total})</Text>
         <Pressable
           onPress={() => setShowFilters((v) => !v)}
@@ -283,15 +271,7 @@ export default function OSScreen() {
         ListFooterComponent={loading ? <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 16 }} /> : null}
         renderItem={({ item }) => (
           <Pressable
-            onPress={() => {
-              // Enquanto "O.S. Completa" não existe, abrir um item só
-              // funciona pra quem tem a pré-venda rápida (OS) — pra quem
-              // só tem OS_COMP, o clique ainda não tem efeito. Ver
-              // CLAUDE.md > "Transações Screens Strategy".
-              if (can("OS.ABRIR")) {
-                router.push({ pathname: "/os-form", params: { os: String(item.codigo) } });
-              }
-            }}
+            onPress={() => router.push({ pathname: "/os-form", params: { os: String(item.codigo) } })}
             style={({ pressed }) => [styles.card, pressed && { opacity: 0.7 }]}
             testID={`os-${item.codigo}`}
           >

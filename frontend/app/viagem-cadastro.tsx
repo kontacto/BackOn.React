@@ -11,9 +11,7 @@
 // (inclusão em massa a partir de Pedido_Venda), "Adicionar Itens do Pátio",
 // "Itens Avulsos de Entrada", impressão formatada — ver PENDENCIAS.md.
 import { useCallback, useEffect, useState } from "react";
-import {
-  ActivityIndicator, Alert, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
-} from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -511,7 +509,6 @@ export default function ViagemCadastroScreen() {
           <Pressable onPress={() => { setFormOpen(false); if (conn) loadList(conn); }} style={styles.iconBtn} hitSlop={12} testID="viagem-form-back">
             <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
           </Pressable>
-          <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
           <Text style={styles.headerTitle} numberOfLines={1}>
             {viagem ? `Viagem #${viagem.codigo} — ${viagem.situacao === "A" ? "Aberta" : viagem.situacao === "F" ? "Fechada" : "Cancelada"}` : "Nova Viagem"}
           </Text>
@@ -901,7 +898,6 @@ export default function ViagemCadastroScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.iconBtn}>
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
         <Text style={styles.headerTitle}>Viagens</Text>
         <View style={{ width: 40 }} />
       </View>

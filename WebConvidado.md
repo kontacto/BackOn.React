@@ -4,8 +4,17 @@ Status: EM ANÁLISE (não implementar até liberação explícita)
 
 ## 1. Visão geral
 
-Tela de consulta de cardápio para clientes avulsos, não cadastrados no
-sistema — acesso via QR Code, estilo "Olá Click".
+Tela de consulta de listagem de produtos para clientes avulsos, não
+cadastrados no sistema — acesso via QR Code, estilo "Olá Click".
+
+**Correção importante (2026-07-30, regra 20, seção 3)**: "cardápio" é só
+o rótulo/apresentação quando o módulo **Bar** está ativo na empresa — sem
+Bar ativo, é uma apresentação genérica "Listagem de Produtos Web" (mesmos
+dados, sem a linguagem/estilo de restaurante). O termo "cardápio" usado
+no resto deste documento (herdado da referência visual original, um
+bar/restaurante) deve ser lido como "cardápio OU listagem genérica,
+dependendo do módulo Bar" — não reescrito em massa neste arquivo, mas a
+regra 20 é quem manda em caso de conflito de leitura.
 
 **Referência visual (screenshot fornecido em 2026-07-11)**: cardápio
 digital de terceiro ("BAIXO BRISA BISTRÔ") — abas de categoria no topo
@@ -179,9 +188,13 @@ de cadastro/login tradicional.
     presentes, não adiciona/remove nenhum).
     **Colunas de `gruposweb` DEFINIDAS (2026-07-11)**: código do grupo +
     sequência (nomes de rótulo, mapeamento exato pra nome de coluna SQL
-    fica pra fase de implementação). Levantada dúvida sobre a que nível
-    da árvore de Grupo Mercadológico o "código do grupo" se refere — ver
-    seção 6.
+    fica pra fase de implementação).
+    **Nível da árvore — FECHADA (2026-07-30)**: "código do grupo" em
+    `gruposweb` sempre se refere ao **último nível** (nó folha) da árvore
+    de Grupo Mercadológico — nunca um nó intermediário/pasta de nível
+    superior. Ou seja, cada aba do Web Convidado corresponde a uma
+    categoria "final" da árvore, não a um agrupamento de nível mais alto
+    que ainda teria subcategorias por baixo.
 15. **Geração automática de QR Code na tela de Conexões.** Quando a
     conexão "Web Convidado" for criada, o sistema deve gerar o QR Code
     correspondente **na mesma tela** (Conexões), sem passo manual
@@ -214,9 +227,126 @@ de cadastro/login tradicional.
     campo: `convidado_web`.** O usuário reforçou explicitamente que esse
     campo **precisa ser persistido** (coluna real no banco, não
     calculado/derivado) — mesmo padrão de persistência já exigido pra
-    `grupo_web`/`gruposweb`. Tabela exata onde `convidado_web` vai morar
-    (a mesma tabela de módulos já usada pelas outras flags citadas acima)
-    fica pra confirmar/conferir na fase de implementação.
+    `grupo_web`/`gruposweb`.
+    **Motivo do escopo global — CONFIRMADO (2026-07-30)**: "esse é um
+    módulo global. Não só do bar. Pois futuramente terá checkout." —
+    o módulo não é pensado como uma feature exclusiva do segmento
+    Bar/restaurante; é um catálogo/vitrine genérico que **qualquer**
+    segmento de negócio pode usar, e a justificativa explícita é que o
+    checkout (carrinho/compra, já citado como escopo futuro na seção 6)
+    vai se aplicar a esse universo mais amplo, não só a comanda de
+    bar/mesa. Reforça — não substitui — a regra 17 original.
+    **Tabela de persistência — resposta do usuário (2026-07-30)**: "Por
+    enquanto somente exibição" — o usuário não fechou o nome exato da
+    tabela; o contexto da resposta é que essa é uma decisão de baixo risco
+    pra adiar, já que hoje o módulo inteiro é só leitura/exibição (ver
+    regra 18) — mesmo padrão de outras dúvidas técnicas já adiadas pra
+    fase de implementação nesta doc (ex.: `cod_grupo`/`cod_sub_grupo` do
+    Gestor de Documentos).
+    **Mecanismo de liberação (crivo) — CONFIRMADO (2026-07-30)**: "O
+    crivo é feito via configurações de módulos. Lá teremos Web Convidado.
+    Essa flag habilitada, é liberado esse recurso para o cliente." —
+    fecha a parte de ARQUITETURA da dúvida: `convidado_web` é mais um
+    item na tela **Módulos e Recursos** já existente (mesma lista de
+    `moduleOn("Cilindro")`/`moduleOn("servicos")`/etc. citada acima — no
+    código atual, essas flags moram em `controle_configuracao`, mas isso
+    ainda não foi confirmado literalmente pelo usuário pra esse campo
+    específico), com um item "Web Convidado" na listagem de módulos que,
+    marcado, libera o recurso pro cliente. **Só o nome exato da
+    tabela/coluna no schema segue em aberto** (detalhe de implementação,
+    ver seção 6) — a arquitetura do crivo (tela + flag booleana, mesmo
+    padrão dos outros módulos) está fechada.
+18. **[GLOBAL, NOVO] Web Convidado é somente-leitura — toda configuração é
+    feita no app principal (ERP), nunca no próprio Web Convidado —
+    CONFIRMADO (2026-07-30).** Respondendo à dúvida sobre o formato de
+    `gestor_documentos.referencia_texto`, o usuário esclareceu: "Configuração
+    é toda feita no app. Web convidado somente exibição." Isso não é só
+    sobre essa coluna específica — é um princípio geral de arquitetura do
+    módulo inteiro: `grupo_web`/`gruposweb` (regra 14), a foto/`referencia_texto`
+    do produto no Gestor de Documentos, e (por ora) `convidado_web` — tudo
+    isso é escrito/gerenciado pelas telas já existentes do ERP principal;
+    o Web Convidado nunca grava nada nessas tabelas, só lê o que já foi
+    configurado. Reforça a regra 8 (não há pedido feito pelo convidado) —
+    agora generalizado pra "nenhuma escrita de nenhum tipo", não só
+    ausência de pedido. Isso também implica que o Web Convidado, quando
+    implementado, não precisa entender/validar o FORMATO de
+    `referencia_texto` (ex.: se é `P`+`codigo_int` ou outra convenção) —
+    só precisa ler o valor já gravado pelo Gestor de Documentos e usá-lo
+    como veio, sem nenhuma lógica própria de geração/parsing.
+19. **[NOVO] O preço exibido deve considerar os recursos de configuração
+    de preço já existentes no Cadastro de Produtos — CONFIRMADO
+    (2026-07-30)**: "os recursos de configuração de preço, também deve
+    ser contemplado na visualização do Web Convidado." Ou seja, o
+    cardápio não pode simplesmente mostrar `pecas.p_venda` cru — precisa
+    levar em conta as regras de precificação que já existem no sistema:
+    **Preço por Quantidade** (`pecas_preco_qtd`) e **Variações de Preços/
+    Promoção** (`pecas_promocao`, incluindo o período opcional dias da
+    semana/data/hora já implementado — ver CLAUDE.md > "Produto
+    Completo").
+    **Sem carrinho — CONFIRMADO (2026-07-30)**: "O preço exibido... levará
+    em conta as configurações de Preço por Quantidade/Promoção. Não
+    haverá na primeira etapa carrinho de compra. Somente exibição." —
+    ou seja, como o cliente não escolhe quantidade nesta fase, não existe
+    "quantidade selecionada" pra escalonar o Preço por Quantidade contra
+    — o preço mostrado é resolvido sem depender de uma quantidade
+    escolhida pelo cliente (presumivelmente a faixa de menor quantidade/
+    qtd=1, já que é o preço-base do produto, mas o mecanismo exato de
+    qual faixa mostrar quando há mais de uma cadastrada **ainda não foi
+    detalhado literalmente** — fica pra fase de implementação, sem
+    assumir). Promoção (dia/data/hora) já não depende de quantidade
+    escolhida pelo cliente do mesmo jeito, então essa parte é direta:
+    aplica quando o momento do acesso cai dentro do período configurado.
+    **Produto m² (Metro Quadrado) — RESPONDIDO, exclusão por produto, não
+    por empresa (2026-07-30)**: "produto m² precisa de um especialista
+    para compor o preço final. Mas não impede dos outros produtos dessa
+    empresa entrar na exibição do Web Convidado." Fecha a dúvida: produto
+    m² fica de fora da precificação automática do cardápio (não tem preço
+    "pronto" sem dimensão informada por um humano) — mas isso NÃO exclui
+    a empresa inteira do módulo, só aquele(s) produto(s) específico(s).
+    **Aparição na listagem — FECHADA (2026-07-30)**: "todos os Produtos
+    Web aparecem na listagem." Ou seja, produto m² com `Produto_web=true`
+    aparece normalmente no cardápio (mesmo critério de qualquer outro
+    produto, regra 6) — a exclusão da regra acima é só do cálculo de
+    área/preço final, nunca da listagem em si.
+    **Preço exibido pra produto m² — FECHADA (2026-07-30)**: "aparece o
+    preço de venda" — ou seja, `pecas.p_venda` (o preço-base cadastrado,
+    o mesmo lido pra qualquer produto normal), sem calcular nenhuma área.
+    Não há mais nenhuma exceção especial pra m² na exibição: o produto
+    aparece na listagem (regra acima) com o preço de venda cadastrado
+    (esta regra) — trata-se do mesmo campo já definido na regra 4
+    (`p_venda`), sem lógica adicional. **Justificativa do usuário**: "pois
+    a descrição do produto já vai informar que é m2" — não precisa de
+    nenhum indicador/badge visual extra (tipo "por m²") no cardápio, já
+    que a própria descrição cadastrada do produto (regra 4) já deixa isso
+    claro pro cliente. Fecha por completo a regra 19 — nenhuma dúvida
+    residual sobre precificação m² no Web Convidado.
+20. **[NOVO] "Cardápio" só é o rótulo/apresentação quando o módulo Bar
+    está ativo — CORREÇÃO IMPORTANTE (2026-07-30)**: o usuário corrigiu um
+    texto de ajuda do app (Modo Didático, Cadastro de Produtos) que dizia
+    "aparecer no cardápio do Web Convidado" — errado, porque presume Bar
+    sempre ativo. **Regra real**: "A listagem de produtos Web, só é
+    cardápio se o módulo bar estiver ativo, caso contrário é uma listagem
+    de Produtos Web." Ou seja, a apresentação do Web Convidado tem DOIS
+    modos, decididos pelo módulo Bar (`controle_configuracao.Bar`, já
+    existente e independente da flag `convidado_web` — reforça a regra 17,
+    "módulo global, não só do bar"):
+    - **Bar ativo**: apresentação estilo "cardápio" (a referência visual
+      BAIXO BRISA BISTRÔ da seção 1 — abas de categoria, cards com foto/
+      nome/descrição/preço, linguagem de restaurante/bar).
+    - **Bar inativo**: apresentação genérica "Listagem de Produtos Web" —
+      mesmos dados (produtos, grupos, preço), mas sem a apresentação/
+      linguagem de cardápio de restaurante (empresas de outros ramos —
+      ex.: loja, oficina — também podem ativar `convidado_web` sem serem
+      um bar/restaurante, coerente com o motivo do escopo global já
+      registrado na regra 17: futuro checkout pra qualquer segmento).
+    **Correção já aplicada no app**: o texto de ajuda (Modo Didático) do
+    Cadastro de Produtos foi corrigido pra "'Produto Web' libera este
+    produto para aparecer na listagem Web para convidados" — texto
+    genérico, sem presumir "cardápio". **Esta regra 20 é só o registro de
+    negócio pra fase de implementação do Web Convidado em si** — nenhuma
+    tela nova foi construída agora, só o texto de ajuda do Cadastro de
+    Produtos (que já existe) foi ajustado pra não prometer algo que só é
+    verdade condicionalmente.
 
 ## 4. Grupos mercadológicos / dados envolvidos
 
@@ -408,38 +538,39 @@ desses códigos contra o catálogo `GESTOR_DOC_GRUPO_*` no código.
 
 ## 6. Dúvidas em aberto
 
-- **Nível hierárquico ao qual `grupo_web`/`gruposweb` se aplica**: a
-  árvore de Grupo Mercadológico (screenshot da regra 14) é hierárquica —
-  vários níveis, pastas dentro de pastas (ex.: "RESTAURANTE" na raiz,
-  "Bebidas" como subpasta dentro dela). O "código do grupo" gravado em
-  `gruposweb` pode ser de **qualquer nó da árvore, em qualquer
-  profundidade** (ou seja, dá pra marcar tanto um grupo de topo quanto um
-  subgrupo bem aninhado como aparecendo direto nas abas do Web
-  Convidado)? Ou só nós de um nível específico (ex.: só filhos diretos da
-  raiz) podem virar aba/grupo no cardápio? Isso afeta como
-  `codigo do grupo` deve ser interpretado/relacionado com `niveis`.
+- ~~Nível hierárquico ao qual `grupo_web`/`gruposweb` se aplica~~ —
+  **FECHADA (2026-07-30)**: sempre o último nível (nó folha) da árvore de
+  Grupo Mercadológico. Ver regra 14, seção 3.
 - Confirmar o nome exato do campo `aplicação` no banco (`pecas.aplicação`
   foi citado, mas ainda não conferido ao vivo) — e confirmar também
   `pecas.Produto_web` (nome/tipo exatos da flag da regra 6) e a(s)
   coluna(s) exata(s) de logo/nome fantasia em `controle` (regra 10.2).
-- Em qual tabela exatamente o novo campo `convidado_web` (regra 17) vai
-  ser persistido — presumivelmente a mesma tabela de módulos já usada por
-  `Cilindro`/`emite_mdfe`/`servicos`, mas isso ainda não foi conferido
-  contra o schema/código real (fica pra fase de implementação, sem
-  assumir agora).
+- ~~Em qual tabela exatamente o novo campo `convidado_web` (regra 17) vai
+  ser persistido~~ — **arquitetura FECHADA (2026-07-30)**: mais um item
+  booleano na tela **Módulos e Recursos** já existente, mesmo padrão de
+  `Cilindro`/`emite_mdfe`/`servicos` — "o crivo é feito via configurações
+  de módulos... essa flag habilitada, libera o recurso pro cliente" (ver
+  regra 17, seção 3). **Só resta o detalhe técnico**: o nome exato da
+  tabela/coluna no schema (presunção é `controle_configuracao`, mesma
+  tabela das outras flags de módulo já citadas, mas isso ainda não foi
+  confirmado literalmente pelo usuário nem contra o schema real) — fica
+  pra fase de implementação, não bloqueia mais a análise de negócio.
 - **Confirmar `cod_grupo`/`cod_sub_grupo` reservados pra "Produto -
   Imagem" no Gestor de Documentos** — negócio já confirma
   `cod_grupo=4`/`cod_sub_grupo=11` = Produtos/Imagens (reforçado por
   print com destaque em 2026-07-11), falta só bater esses números contra
   o catálogo `GESTOR_DOC_GRUPO_*` no código na fase de implementação
   (detalhe técnico, não bloqueia mais a análise de negócio).
-- **Confirmar formato/significado de `gestor_documentos.referencia_texto`**
-  usado pra vincular o documento ao produto (exemplo real: `P10324`) — é
-  prefixo fixo `P` + `codigo_int` do produto? Ou outra convenção? Também
-  confirmar o nome completo da última coluna do print, que aparece
-  cortada ("comput...", presumivelmente `computador`). (Nota: o nome do
-  arquivo em si, diferente do `referencia_texto`, já foi esclarecido como
-  convenção livre — ver seção 4.)
+- ~~Confirmar formato/significado de `gestor_documentos.referencia_texto`~~
+  — **FECHADA na prática (2026-07-30)**: não é o Web Convidado que gera
+  ou precisa interpretar esse valor — "Configuração é toda feita no app.
+  Web convidado somente exibição." (ver regra 18, seção 3). O módulo só
+  lê o que o Gestor de Documentos já gravou, sem lógica própria de
+  parsing/geração — o formato exato (`P`+`codigo_int` ou outra convenção)
+  vira um detalhe interno do Gestor de Documentos, irrelevante pra esta
+  implementação. Ainda não confirmado, mas também não bloqueia mais nada
+  aqui: o nome completo da última coluna do print que aparece cortada
+  ("comput...", presumivelmente `computador`).
 - **[GLOBAL] Preenchimento de `PATH_NUVEM` (upload pro Blob) pra foto de
   produto — ADIADA (2026-07-11)**: já esclarecido que não existe um
   "fluxo grade" separado — é a mesma tabela/registro, só com `PATH_NUVEM`
@@ -455,12 +586,32 @@ desses códigos contra o catálogo `GESTOR_DOC_GRUPO_*` no código.
   exatamente "produto de grade" neste sistema (aplica a produtos de
   bar/restaurante, ou é conceito de outro ramo, ex.: confecção/varejo com
   tamanho/cor)?
-- Carrinho/pedido mínimo/tempo de entrega são escopo futuro confirmado —
-  quando esse futuro chegar, isso vai significar que o convidado passa a
-  fazer pedido de verdade (criando um Pedido de Venda no sistema) ou é
-  algum outro tipo de interação (ex: só enviar a lista pro WhatsApp do
-  estabelecimento)? Não precisa responder agora — registrando a pergunta
-  pra quando a fase futura for discutida.
+- Carrinho/pedido mínimo/tempo de entrega são escopo futuro — **agora
+  com nome confirmado: "checkout" (2026-07-30, regra 17)** — mas o
+  mecanismo exato segue em aberto: quando esse futuro chegar, isso vai
+  significar que o convidado passa a fazer pedido de verdade (criando um
+  Pedido de Venda no sistema) ou é algum outro tipo de interação (ex: só
+  enviar a lista pro WhatsApp do estabelecimento)? Não precisa responder
+  agora — registrando a pergunta pra quando a fase futura for discutida.
+  Vale notar que checkout, por definição, é uma escrita de dados — quando
+  essa fase chegar, o princípio "somente-leitura" da regra 18 deixa de
+  valer pra essa parte específica do fluxo (não pro resto do módulo).
+- ~~Como exibir o preço considerando Preço por Quantidade/Promoção~~ —
+  **RESPONDIDA em espírito (2026-07-30)**: sem carrinho, não há
+  quantidade escolhida pra escalonar (ver regra 19). **Detalhe técnico
+  ainda em aberto** (não bloqueia mais a análise de negócio): qual faixa
+  de `pecas_preco_qtd` exibir quando o produto tem mais de uma cadastrada
+  — a de menor quantidade (qtd=1, o preço-base), ou outra lógica? Fica
+  pra fase de implementação. Promoção com restrição de dia/hora segue
+  direta: aplica quando o momento do acesso cai dentro da janela
+  configurada (recalculado a cada carregamento da página) — isso não foi
+  contestado pelo usuário.
+- ~~Produto m² entra na regra 19?~~ — **FECHADA POR COMPLETO (2026-07-30)**:
+  aparece normalmente na listagem (mesmo critério de qualquer produto
+  Web) e exibe `pecas.p_venda` (preço-base cadastrado), sem calcular
+  nenhuma área nem precisar de indicador visual extra — a descrição do
+  produto já deixa claro que é m². Nenhuma dúvida residual.
+
 ## 7. Decisões já confirmadas
 
 - O acesso é via QR Code, sem cadastro do cliente.
@@ -554,6 +705,49 @@ desses códigos contra o catálogo `GESTOR_DOC_GRUPO_*` no código.
   só exibe fotos já existentes. **Dependência entre módulos**: sem o
   Cadastro de Produtos (upload) implementado, não há como colocar fotos
   novas no sistema hoje — nenhum dos dois módulos resolve isso sozinho.
+- **Módulo é global, não exclusivo de Bar — DECISÃO REFORÇADA (regra 17,
+  2026-07-30)**: motivo explícito é o futuro checkout, que vai se aplicar
+  a qualquer segmento de negócio, não só comanda de bar/mesa.
+- **Mecanismo do crivo de liberação — DECISÃO FECHADA (regra 17,
+  2026-07-30)**: `convidado_web` é um item booleano na tela **Módulos e
+  Recursos** já existente, mesmo padrão de todo outro módulo do sistema
+  (`Cilindro`/`emite_mdfe`/`servicos`/etc.) — flag marcada libera o
+  recurso "Web Convidado" pro cliente. Só o nome exato da tabela/coluna
+  no schema segue em aberto (detalhe de implementação).
+- **[GLOBAL, NOVO] Web Convidado é somente-leitura — DECISÃO FECHADA
+  (regra 18, seção 3)**: toda configuração (`grupo_web`/`gruposweb`, foto
+  de produto/`referencia_texto`, e por ora `convidado_web`) é feita
+  inteiramente pelas telas já existentes do ERP principal; o módulo nunca
+  escreve nessas tabelas, só lê o que já está configurado. Isso permanece
+  válido até a fase de checkout (futura), quando parte do fluxo passa a
+  envolver escrita.
+- **Nível da árvore de Grupo Mercadológico pra `gruposweb` — DECISÃO
+  FECHADA (2026-07-30)**: sempre o último nível (nó folha), nunca um nó
+  intermediário. Ver regra 14, seção 3.
+- **Formato de `gestor_documentos.referencia_texto` — não é mais uma
+  dúvida bloqueante (2026-07-30)**: decorrência direta da regra 18 —
+  o Web Convidado só lê o valor já gravado, sem precisar gerar/entender
+  esse formato.
+- **Preço exibido considera Preço por Quantidade/Promoção, sem carrinho —
+  DECISÃO FECHADA em espírito (regra 19, 2026-07-30)**: como não há
+  quantidade escolhida pelo cliente (fase atual é só vitrine), a
+  precificação escalonada não depende de input do cliente. Detalhe de
+  qual faixa exibir quando há mais de uma cadastrada fica pra
+  implementação.
+- **Produto m² fica fora da precificação automática do cardápio, mas não
+  exclui a empresa/outros produtos — DECISÃO FECHADA (regra 19,
+  2026-07-30)**: "produto m² precisa de um especialista para compor o
+  preço final" — exclusão é por produto, não por estabelecimento.
+- **Todos os Produtos Web aparecem na listagem — DECISÃO FECHADA (regra
+  19, 2026-07-30)**: inclusive produto m² (que fica de fora só do preço
+  calculado automaticamente, não da listagem) — a exclusão da regra
+  acima nunca é "some do cardápio", só "não tem preço pronto".
+- **Preço exibido pra produto m² é `pecas.p_venda` cru, sem indicador
+  visual extra — DECISÃO FECHADA, regra 19 encerrada por completo
+  (2026-07-30)**: "aparece o preço de venda... pois a descrição do
+  produto já vai informar que é m2" — mesmo campo/exibição de qualquer
+  produto normal, a descrição cadastrada já comunica o contexto m² pro
+  cliente, sem precisar de tratamento visual especial.
 
 ## Histórico de atualizações
 
@@ -775,3 +969,64 @@ desses códigos contra o catálogo `GESTOR_DOC_GRUPO_*` no código.
   Produtos for implementada ("veremos no momento da tela de produtos") —
   não é mais uma dúvida ativa da fase de análise do Web Convidado, só
   fica registrada como pendência pra quando aquela tela for construída.
+- 2026-07-30 (rodada 31) — Usuário respondeu 4 pontos de uma vez: (1)
+  reforçou que o módulo é GLOBAL, não exclusivo de Bar, porque
+  futuramente terá checkout (regra 17 ampliada); (2) tabela de
+  `convidado_web` — não fechou o nome, respondeu "por enquanto somente
+  exibição" (mantido em aberto, seção 6, com o novo contexto); (3)
+  FECHADA a dúvida do nível da árvore de Grupo Mercadológico pra
+  `gruposweb` — sempre o último nível (nó folha), nunca intermediário
+  (regra 14); (4) esclarecido que o formato de
+  `gestor_documentos.referencia_texto` não é uma preocupação do Web
+  Convidado — "configuração é toda feita no app, Web Convidado somente
+  exibição" — generalizado como nova regra 18 [GLOBAL]: o módulo inteiro
+  é somente-leitura, toda escrita/configuração acontece no ERP principal,
+  até a fase futura de checkout.
+- 2026-07-30 (rodada 32) — Usuário detalhou o mecanismo do crivo de
+  liberação (dúvida deixada em aberto na rodada 31): "O crivo é feito via
+  configurações de módulos. Lá teremos Web Convidado. Essa flag
+  habilitado, é liberado esse recurso para o cliente." FECHA a
+  arquitetura da regra 17 — `convidado_web` é mais um item booleano na
+  tela Módulos e Recursos já existente, mesmo padrão de todo outro módulo
+  do sistema. Resta só o nome exato da tabela/coluna no schema (detalhe
+  de implementação, não bloqueia mais a análise de negócio).
+- 2026-07-30 (rodada 33) — Nova regra 19: o preço exibido no cardápio
+  precisa considerar os recursos de configuração de preço já existentes
+  no Cadastro de Produtos (Preço por Quantidade, Variações de Preços/
+  Promoção), não só `p_venda` cru. Registradas 2 dúvidas novas (seção 6):
+  como exibir preço escalonado por quantidade sem carrinho, e se produto
+  m² (Metro Quadrado) entra nessa regra dado que seu preço depende de
+  dimensão só informada na hora da venda. Nesta mesma rodada, o usuário
+  também autorizou implementar desde já (fora da fase de análise) um
+  recurso adjacente no Cadastro de Produtos: modal "Dias da Semana"
+  (tabela nova `Web_DiasSemana`) — ver CLAUDE.md > "Produto Completo" pro
+  registro da implementação em si (fora do escopo desta doc, que é só
+  análise de negócio do módulo Web Convidado como um todo).
+- 2026-07-30 (rodada 34) — Usuário respondeu as 2 dúvidas da rodada 33:
+  (1) preço escalonado sem carrinho — confirmado que a precificação
+  (Preço por Quantidade/Promoção) é considerada mesmo sem o cliente
+  escolher quantidade (fase 1 é só exibição, sem carrinho); detalhe de
+  qual faixa exibir quando há mais de uma cadastrada fica pra
+  implementação; (2) produto m² — FECHADA: fica de fora da precificação
+  automática ("precisa de um especialista para compor o preço final"),
+  mas isso é uma exclusão POR PRODUTO, não exclui a empresa nem os outros
+  produtos do Web Convidado. Resta só o detalhe de UI de como o produto
+  m² aparece (ou não) na listagem — ver seção 6.
+- 2026-07-30 (rodada 35) — FECHADA a última parte da dúvida do produto
+  m²: "todos os Produtos Web aparecem na listagem" — inclusive m², que só
+  fica de fora do preço calculado automaticamente, nunca da listagem em
+  si. Resta só o detalhe visual (implementação): o que aparece no lugar
+  do preço nesse caso.
+- 2026-07-30 (rodada 36) — FECHA por completo a regra 19: "aparece o
+  preço de venda" pra produto m² (mesmo `pecas.p_venda` de qualquer
+  produto normal, sem calcular área), e "pois a descrição do produto já
+  vai informar que é m2" — não precisa de indicador visual extra, a
+  descrição cadastrada já comunica isso. Nenhuma dúvida residual sobre
+  precificação m² no Web Convidado.
+- 2026-07-30 (rodada 37) — Nova regra 20: "cardápio" só é o rótulo/
+  apresentação do Web Convidado quando o módulo Bar está ativo — sem Bar,
+  é uma "Listagem de Produtos Web" genérica (mesmos dados, sem estilo de
+  restaurante). Motivado por uma correção do usuário a um texto de ajuda
+  do app (Cadastro de Produtos) que presumia "cardápio" incondicional —
+  texto já corrigido pra "listagem Web para convidados", genérico. Seção
+  1 (Visão Geral) atualizada com nota de leitura.

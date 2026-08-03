@@ -12,7 +12,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 
-from models.schemas import PedidoCompletoSaveRequest, ItemSaveRequest, FecharRequest, DescontoGeralRequest
+from models.schemas import (
+    PedidoCompletoSaveRequest, ItemSaveRequest, FecharRequest, DescontoGeralRequest,
+    DividirPedidoRequest, PedidoEntregueRequest,
+)
 from services import itens_service, pedido_completo_service, descontos_service, log_auditoria_service
 
 router = APIRouter()
@@ -101,13 +104,90 @@ async def cancelar_pedido_completo(pedido: int, req: FecharRequest, request: Req
     return result
 
 
+# ---------- Faturar/Reabrir/Distribuir/Entregue — mesmas funções do Pedido
+# Bar (`pedidos_service`, mesma tabela `pedido_venda`), só com
+# tela="PEDIDO_COMP" pra checar a permissão certa (ver
+# `pedido_completo_service.py` e "as funções do Pedido Bar" em CLAUDE.md/
+# memória do projeto). Pedido explícito do usuário, 2026-07-20 — traz ao
+# Pedido Geral tudo que o Pedido Bar já tinha, exceto Taxa de Serviço. ----------
+@router.post("/pedido-completo/{pedido}/faturar")
+async def faturar_pedido_completo(pedido: int, req: FecharRequest, request: Request):
+    result = await pedido_completo_service.faturar_pedido_completo(req, pedido)
+    if result.get("success"):
+        situacao_antes = result.get("situacao_antes") or "F"
+        descricao = f"Pedido Completo {pedido} faturado (comanda {result.get('comanda')})"
+        if situacao_antes == "A":
+            descricao += " — fechado automaticamente antes de faturar"
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO_COMP", comando="SITUACAO",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido), descricao=descricao,
+            campos_alterados=[{"campo": "situacao", "antes": situacao_antes, "depois": "PG"}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/pedido-completo/{pedido}/reabrir")
+async def reabrir_pedido_completo(pedido: int, req: FecharRequest, request: Request):
+    result = await pedido_completo_service.reabrir_pedido_completo(req, pedido)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO_COMP", comando="SITUACAO",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido), descricao=f"Pedido Completo {pedido} reaberto",
+            campos_alterados=[{"campo": "situacao", "antes": "F", "depois": "A"}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/pedido-completo/{pedido}/dividir")
+async def dividir_pedido_completo(pedido: int, req: DividirPedidoRequest, request: Request):
+    result = await pedido_completo_service.dividir_pedido_completo(req, pedido)
+    if result.get("success"):
+        novos = result.get("novos_pedidos") or []
+        descricao = f"Pedido Completo {pedido} dividido em {len(novos)} pedido(s): {', '.join(str(n) for n in novos)}"
+        if result.get("original_cancelado"):
+            descricao += " (pedido original cancelado, ficou sem itens)"
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO_COMP", comando="DIVIDIR",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido), descricao=descricao,
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/pedido-completo/{pedido}/entregue")
+async def toggle_entregue_completo(pedido: int, req: PedidoEntregueRequest, request: Request):
+    result = await pedido_completo_service.toggle_entregue_completo(req, pedido)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO_COMP", comando="ENTREGUE",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido),
+            descricao=f"Pedido Completo {pedido} marcado como {'entregue' if req.entregue else 'não entregue'}",
+            campos_alterados=[{"campo": "pedido_entregue", "depois": req.entregue}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
 # ---------- itens do pedido completo ----------
-# Listagem/edição/exclusão são idênticas ao Pedido rápido (mesma tabela) —
-# reaproveitadas direto de itens_service. Só a inclusão usa a resolução rica
-# + expansão de kit (pedido_completo_service.add_item_completo).
+# Exclusão é idêntica ao Pedido rápido (mesma tabela) — reaproveitada direto
+# de itens_service. Inclusão usa a resolução rica + expansão de kit
+# (pedido_completo_service.add_item_completo). Edição usa
+# `pedido_completo_service.update_item_completo` (não mais `itens_service.
+# update_item` — passou a reconhecer item m² e recalcular a área ao editar
+# dimensões, ver PENDENCIAS.md > "Metro Quadrado"; item sem dimensão segue
+# o mesmo caminho de antes). Listagem usa
+# `pedido_completo_service.list_itens_completo`, que por sua vez chama a MESMA
+# função do Bar por dentro e só acrescenta o número de série vinculado (campo
+# extra que o Bar não lê) — não duplica a query base, ver docstring lá.
 @router.get("/pedido-completo/{pedido}/itens")
 async def list_itens(pedido: int, servidor: str, banco: str):
-    return await itens_service.list_itens(servidor, banco, pedido)
+    return await pedido_completo_service.list_itens_completo(servidor, banco, pedido)
 
 
 @router.post("/pedido-completo/{pedido}/itens")
@@ -116,11 +196,12 @@ async def add_item(pedido: int, req: ItemSaveRequest, request: Request):
     if result.get("success"):
         codautos = result.get("codautos") or []
         campos = log_auditoria_service.diff_campos(None, _depois_item(req), CAMPOS_ITEM)
-        desc = (
-            f"Kit '{req.produto}' expandido em {len(codautos)} item(ns) no pedido {pedido}"
-            if result.get("kit")
-            else f"Item '{req.produto}' incluído no pedido {pedido} (cod {codautos[0] if codautos else '?'})"
-        )
+        if result.get("kit"):
+            desc = f"Kit '{req.produto}' expandido em {len(codautos)} item(ns) no pedido {pedido}"
+        elif result.get("clinica_split"):
+            desc = f"Serviço '{req.produto}' desdobrado em {len(codautos)} sessão(ões) agendável(is) no pedido {pedido}"
+        else:
+            desc = f"Item '{req.produto}' incluído no pedido {pedido} (cod {codautos[0] if codautos else '?'})"
         await log_auditoria_service.registrar_log(
             req.servidor, req.banco, tela="PEDIDO_COMP", comando="ADD_ITEM",
             usuario=req.usuario_codigo, classe=req.classe,
@@ -133,7 +214,7 @@ async def add_item(pedido: int, req: ItemSaveRequest, request: Request):
 @router.put("/pedido-completo/{pedido}/itens/{codauto}")
 async def update_item(pedido: int, codauto: int, req: ItemSaveRequest, request: Request):
     antes = await log_auditoria_service.get_row_by_pk(req.servidor, req.banco, "pedido_venda_prod", "codauto", codauto)
-    result = await itens_service.update_item(req, pedido, codauto)
+    result = await pedido_completo_service.update_item_completo(req, pedido, codauto)
     if result.get("success"):
         d = _depois_item(req)
         d["p_normal"] = float(req.valor_unitario or 0)

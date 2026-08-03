@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
-} from "react-native";
+import { ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 
 import { usePermissions } from "@/src/permissions";
 import { useAuditContext } from "@/src/hooks/useAuditContext";
@@ -198,6 +198,69 @@ function SectionTitle({ children }: { children: string }) {
   return <Text style={styles.sectionTitle}>{children}</Text>;
 }
 
+// Conteúdo do ícone único de Ajuda ("Modo Didático" — CLAUDE.md, regra 4).
+// Reaproveita o mesmo componente `AjudaPedidoModal` já usado, de forma
+// genérica, por outras telas fora do módulo Pedido (ver `gestor-comandas.tsx`).
+const TAXAS_AJUDA_ITENS: HelpItem[] = [
+  {
+    titulo: "Taxas NFe/NFSe × Taxas NFCe",
+    texto: "Estas abas gravam em duas tabelas diferentes: 'Taxas NFe/NFSe' é a taxa usada na Nota Fiscal e Nota de Serviço; 'Taxas NFCe' é a taxa usada no Cupom Fiscal Eletrônico. Alguns campos (Simples Nacional, Consumidor Final, Protocolo ST, Tipo IPI, DIFAL, Alíq. Créd. Simples Nacional) só existem na aba NFe/NFSe.",
+    icon: { lib: "ion", name: "swap-horizontal-outline" },
+  },
+  {
+    titulo: "Filtros",
+    texto: "Restringe a lista de taxas já cadastradas por Tipo de Movimentação, UF de destino e Código de ICMS. Só aparecem opções que já têm pelo menos uma taxa cadastrada.",
+    icon: { lib: "ion", name: "filter-outline" },
+  },
+  {
+    titulo: "Nova Taxa (botão +)",
+    texto: "Abre o formulário para cadastrar uma nova combinação de UF, CFOP, Código de ICMS e Tipo de Movimentação.",
+    icon: { lib: "ion", name: "add" },
+  },
+  {
+    titulo: "Excluir (ícone de lixeira)",
+    texto: "Remove a taxa cadastrada daquela linha. Não pode ser desfeito.",
+    icon: { lib: "ion", name: "trash-outline" },
+    cor: colors.error,
+  },
+  {
+    titulo: "Simples Nacional",
+    texto: "Marca que esta taxa se aplica a empresas optantes pelo Simples Nacional. Faz parte da combinação que identifica a taxa — a mesma UF/CFOP/Código de ICMS/Tipo de Movimentação pode ter uma taxa para Simples Nacional e outra para os demais regimes.",
+    icon: { lib: "ion", name: "business-outline" },
+  },
+  {
+    titulo: "Motivo da Desoneração",
+    texto: "Só precisa ser preenchido quando a Alíquota ICMS Desonerado está informada — indica, na lista oficial da NFe, o motivo da desoneração daquele imposto.",
+    icon: { lib: "ion", name: "remove-circle-outline" },
+  },
+  {
+    titulo: "Grupo de ICMS para UF de Destino (DIFAL)",
+    texto: "Usado quando a venda é para consumidor final localizado em outro estado. Define quanto do ICMS fica com o estado de origem e quanto fica com o estado de destino da mercadoria.",
+    icon: { lib: "ion", name: "swap-vertical-outline" },
+  },
+  {
+    titulo: "CST/ClassTrib e Consultar ClassTrib",
+    texto: "CST e ClassTrib identificam, na tabela nacional da Reforma Tributária, como o IBS/CBS incide sobre esta operação. O botão 'Consultar ClassTrib' busca nessa tabela os percentuais de redução e os grupos de tributação monofásica já definidos oficialmente para o CST/ClassTrib escolhido, preenchendo os campos abaixo automaticamente.",
+    icon: { lib: "ion", name: "search-outline" },
+  },
+  {
+    titulo: "Grupo Tributação (Monofásica)",
+    texto: "Indica se o produto tem cobrança única de IBS/CBS em algum ponto da cadeia (ex.: combustíveis, cigarros) — Padrão, Retenção, Retido ou Diferimento. Marcar o grupo libera as alíquotas AdRem correspondentes; ao desmarcar, os valores digitados são apagados.",
+    icon: { lib: "ion", name: "layers-outline" },
+  },
+  {
+    titulo: "Grupo Diferimento / Grupo Redução (IBS/CBS Estado e Município)",
+    texto: "Diferimento posterga parte do imposto para uma etapa futura da cadeia; Redução diminui o valor devido. Os percentuais só ficam liberados para edição quando o grupo correspondente está marcado, e são apagados ao desmarcar.",
+    icon: { lib: "ion", name: "trending-down-outline" },
+  },
+  {
+    titulo: "Gravar",
+    texto: "Salva a taxa. A combinação de UF, CFOP, Código de ICMS e Tipo de Movimentação (mais Simples Nacional/Consumidor Final na aba NFe/NFSe) não pode se repetir entre duas taxas.",
+    icon: { lib: "ion", name: "checkmark" },
+    cor: colors.success,
+  },
+];
+
 // Cadastro/Tabelas Auxiliares > Taxas (tabela `taxas`). Legado: FrmManTaxas
 // ("Manutenção de Taxas"). A tabela mais complexa desta leva: ~80 campos de
 // alíquotas/regras fiscais, chave de negócio (destino+cfop+cod_icms+tipo_mov+
@@ -276,6 +339,7 @@ export default function TaxasScreen() {
   const [form, setForm] = useState<TaxaForm>(emptyForm());
   const [saving, setSaving] = useState(false);
   const [consultandoClasstrib, setConsultandoClasstrib] = useState(false);
+  const [ajudaOpen, setAjudaOpen] = useState(false);
 
   const setField = (k: string, v: string | boolean) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -582,12 +646,15 @@ export default function TaxasScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="taxas-screen">
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
-          <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
-        </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
+        <IconButtonWithTooltip
+          icon="chevron-back" label="Voltar" onPress={() => router.back()}
+          size={24} color={colors.onBrandPrimary} style={styles.back} tooltipAlign="left" testID="taxas-voltar"
+        />
         <Text style={styles.headerTitle}>Taxas</Text>
-        <View style={{ width: 40 }} />
+        <IconButtonWithTooltip
+          icon="information-circle-outline" label="Ajuda" onPress={() => setAjudaOpen(true)}
+          size={22} color={colors.onBrandPrimary} style={styles.back} testID="taxas-ajuda"
+        />
       </View>
 
       <ScrollView contentContainerStyle={[styles.scroll, styles.scrollWeb]}>
@@ -643,9 +710,10 @@ export default function TaxasScreen() {
                 </Text>
               </Pressable>
               {canDel ? (
-                <Pressable onPress={() => remove(it)} hitSlop={8} testID={`taxas-del-${it.sequencia}`}>
-                  <Ionicons name="trash-outline" size={20} color={colors.error} />
-                </Pressable>
+                <IconButtonWithTooltip
+                  icon="trash-outline" label="Excluir" onPress={() => remove(it)}
+                  size={20} color={colors.error} testID={`taxas-del-${it.sequencia}`}
+                />
               ) : null}
             </View>
           )) : null}
@@ -653,10 +721,20 @@ export default function TaxasScreen() {
       </ScrollView>
 
       {canSave ? (
-        <Pressable onPress={openNew} style={styles.fab} testID="taxas-novo">
-          <Ionicons name="add" size={28} color="#fff" />
-        </Pressable>
+        <View style={styles.fabWrap}>
+          <IconButtonWithTooltip
+            icon="add" label="Nova taxa" onPress={openNew}
+            size={28} color="#fff" style={styles.fabBtn} testID="taxas-novo"
+          />
+        </View>
       ) : null}
+
+      <AjudaPedidoModal
+        visible={ajudaOpen}
+        onClose={() => setAjudaOpen(false)}
+        titulo="Taxas"
+        itens={TAXAS_AJUDA_ITENS}
+      />
 
       <Modal visible={formOpen} transparent animationType="slide" onRequestClose={() => setFormOpen(false)}>
         <Pressable style={styles.modalBg} onPress={() => setFormOpen(false)}>
@@ -766,6 +844,7 @@ export default function TaxasScreen() {
               {variante === "nfe" ? (
                 <>
                   <SectionTitle>Grupo de ICMS para UF de Destino (DIFAL)</SectionTitle>
+                  <Text style={styles.hint}>Preencha apenas quando a venda for para consumidor final localizado em outro estado — define quanto do ICMS fica com o estado de origem e quanto fica com o estado de destino.</Text>
                   <View style={styles.rowFields}>
                     <NumField form={form} setField={setField} campo="aliquota_interestadual" label="Alíquota Interestadual %" placeholder="Ex.: 12,00" />
                     <NumField form={form} setField={setField} campo="aliquota_interna_destino" label="Alíquota Interna Destino %" placeholder="Ex.: 18,00" />
@@ -778,6 +857,7 @@ export default function TaxasScreen() {
               ) : null}
 
               <SectionTitle>Reforma Tributária (IBS / CBS / IS)</SectionTitle>
+              <Text style={styles.hint}>Novos tributos da Reforma Tributária (IBS estadual/municipal, CBS federal e o Imposto Seletivo) que substituem gradualmente ICMS/ISS/PIS/COFINS. Preencha só se esta operação já estiver na fase de transição obrigatória.</Text>
               <Chk form={form} setField={setField} campo="INFORMA_CBS_IBS" label="Informa CBS/IBS" />
 
               <Text style={styles.subSectionTitle}>Imposto Seletivo (IS)</Text>
@@ -834,6 +914,7 @@ export default function TaxasScreen() {
               </View>
 
               <Text style={styles.subSectionTitle}>Grupo Tributação (Monofásica) e Alíquotas AdRem</Text>
+              <Text style={styles.hint}>Marque o grupo correspondente só se o produto tiver tributação monofásica de IBS/CBS (ex.: combustíveis, cigarros). Use "Consultar ClassTrib" acima para preencher os valores oficiais automaticamente.</Text>
               <ChkRow form={form} setField={setField} campo="GTRIBREGULAR" label="Tributação Regular" />
               <ChkRow form={form} setField={setField} campo="gMonoPadrao" label="Monofásico Padrão">
                 <NumField form={form} setField={setField} campo="ALQT_ADREM_PADRAO_IBS" label="AdRem IBS %" decimais={4} />
@@ -922,7 +1003,9 @@ const styles = StyleSheet.create({
   rowTitle: { fontSize: 14, fontWeight: "600", color: colors.onSurface },
   rowSub: { fontSize: 11, color: colors.muted, marginTop: 2 },
   empty: { textAlign: "center", color: colors.muted, marginTop: 24 },
-  fab: { position: "absolute", right: 20, bottom: 28, width: 56, height: 56, borderRadius: 28, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center", elevation: 4 },
+  fabWrap: { position: "absolute", right: 20, bottom: 28 },
+  fabBtn: { width: 56, height: 56, borderRadius: 28, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center", elevation: 4 },
+  hint: { fontSize: 11, color: colors.muted, marginTop: 2, marginBottom: spacing.xs, fontStyle: "italic" },
   modalBg: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.4)",

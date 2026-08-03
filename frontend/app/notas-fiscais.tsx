@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
-} from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -497,7 +495,6 @@ export default function NotasFiscaisScreen() {
           <Pressable onPress={() => router.back()} hitSlop={12} testID="notas-fiscais-back">
             <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
           </Pressable>
-          <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
           <Text style={styles.headerTitle} numberOfLines={1}>Notas Fiscais</Text>
           {can("NOTAS_FISCAIS.GRAVAR") ? (
             <Pressable onPress={novaNota} style={styles.saveBtn} testID="notas-fiscais-nova">
@@ -536,7 +533,17 @@ export default function NotasFiscaisScreen() {
               <View style={styles.rowFields}>
                 <View style={styles.colNarrow}>
                   <Text style={styles.label}>Data Entrada/Saída de</Text>
-                                    <WebDateField value={fDataMovDe} onChange={setFDataMovDe} testID="nf-filtro-data-mov-de" />
+                  <WebDateField
+                    value={fDataMovDe}
+                    onChange={(v) => {
+                      setFDataMovDe(v);
+                      if (v) setFDataMovAte(v);
+                    }}
+                    testID="nf-filtro-data-mov-de"
+                    onSubmitEditing={() => {
+                      document.querySelector<HTMLInputElement>('[data-testid="nf-filtro-data-mov-ate"]')?.focus();
+                    }}
+                  />
                 </View>
                 <View style={styles.colNarrow}>
                   <Text style={styles.label}>até</Text>
@@ -568,7 +575,17 @@ export default function NotasFiscaisScreen() {
                 </View>
                 <View style={styles.colNarrow}>
                   <Text style={styles.label}>Data NF de</Text>
-                                    <WebDateField value={fDataNfDe} onChange={setFDataNfDe} testID="nf-filtro-data-nf-de" />
+                  <WebDateField
+                    value={fDataNfDe}
+                    onChange={(v) => {
+                      setFDataNfDe(v);
+                      if (v) setFDataNfAte(v);
+                    }}
+                    testID="nf-filtro-data-nf-de"
+                    onSubmitEditing={() => {
+                      document.querySelector<HTMLInputElement>('[data-testid="nf-filtro-data-nf-ate"]')?.focus();
+                    }}
+                  />
                 </View>
                 <View style={styles.colNarrow}>
                   <Text style={styles.label}>até</Text>
@@ -631,7 +648,6 @@ export default function NotasFiscaisScreen() {
         <Pressable onPress={() => setView("lista")} hitSlop={12} testID="notas-fiscais-form-back">
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
         <Text style={styles.headerTitle} numberOfLines={1}>
           {editing ? `Nota Fiscal #${codigo}` : "Nova Nota Fiscal"}
         </Text>

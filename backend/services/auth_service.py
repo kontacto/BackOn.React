@@ -228,7 +228,7 @@ def _sql_login_sync(payload: LoginRequest) -> LoginResponse:
         failed_query = query_funcionarios if step == "query_funcionarios" else query_usuarios
         return LoginResponse(
             success=False,
-            message=f"Erro de banco: {e}",
+            message=friendly_db_error(e),
             error_step=step,
             error_line=line,
             error_code_line=code,
@@ -245,7 +245,7 @@ def _sql_login_sync(payload: LoginRequest) -> LoginResponse:
         failed_query = query_funcionarios if step == "query_funcionarios" else query_usuarios
         return LoginResponse(
             success=False,
-            message=f"Erro ao consultar usuário: {e}",
+            message=friendly_db_error(e),
             error_step=step,
             error_line=line,
             error_code_line=code,

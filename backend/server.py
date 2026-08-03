@@ -29,12 +29,13 @@ from starlette.middleware.cors import CORSMiddleware  # noqa: E402
 
 from db import mongo  # noqa: E402
 from routes import (  # noqa: E402
-    afericao_abastecimento, auth, bomba, bordero, cilindro, clientes, combustivel, combustivel_meta, contatos,
-    controle, controle_config, controle_sistema, custo_combustivel, descontos, entrada_saida_caixa, equipamentos,
-    estoque_combustivel, fechamento_turno, financeiro, fornecedores, funcionarios, gestor_documentos, ilha,
-    impressao, log_auditoria, lookups, margem_lucro, misc, mov_encerrante, notas_fiscais, os, pedido_completo, pedidos,
-    permissoes, produto_completo, produtos, produtos_compostos, produtos_niveis, reabertura_turno, relatorios,
-    servicos, tabelas_aux, tanque, tanque_estoque, tanque_nf, telemarketing, usuarios, veiculos, viagem, whatsapp,
+    afericao_abastecimento, agenda, auth, bancos, bomba, bordero, cilindro, clientes, combustivel, combustivel_meta, comanda, conta_func, contas, contatos,
+    contratos, controle, controle_config, controle_sistema, cotacao_compra, curva_abc, custo_combustivel, descontos,
+    entrada_saida_caixa, equipamentos, estoque_combustivel, fechamento_turno, financeiro, fornecedores, funcionarios,
+    geracao_boletos, gestao_compras, gestor_documentos, ilha, impressao, inventario, layout, log_auditoria, lookups, margem_lucro, misc, modificadores, movimentacao_produtos,
+    mov_encerrante, notas_fiscais, os, os_completo, pedido_completo, pedido_compra, pedidos, permissoes, produto_completo, produtos,
+    produtos_compostos, produtos_niveis, projetos, reabertura_turno, relatorios, requisicao, retifica, servicos, tabelas_aux, tanque,
+    tanque_estoque, tanque_nf, telemarketing, usuarios, veiculos, viagem, whatsapp,
 )
 
 app = FastAPI()
@@ -51,7 +52,12 @@ api_router.include_router(produtos_niveis.router)
 api_router.include_router(log_auditoria.router)
 api_router.include_router(pedidos.router)
 api_router.include_router(pedido_completo.router)
+api_router.include_router(agenda.router)
+api_router.include_router(layout.router)
 api_router.include_router(os.router)
+api_router.include_router(os_completo.router)
+api_router.include_router(projetos.router)
+api_router.include_router(retifica.router)
 api_router.include_router(whatsapp.router)
 api_router.include_router(descontos.router)
 api_router.include_router(controle.router)
@@ -69,8 +75,22 @@ api_router.include_router(entrada_saida_caixa.router)
 api_router.include_router(contatos.router)
 api_router.include_router(equipamentos.router)
 api_router.include_router(cilindro.router)
+api_router.include_router(comanda.router)
+api_router.include_router(movimentacao_produtos.router)
+api_router.include_router(inventario.router)
+api_router.include_router(modificadores.router)
+api_router.include_router(requisicao.router)
+api_router.include_router(gestao_compras.router)
+api_router.include_router(curva_abc.router)
+api_router.include_router(cotacao_compra.router)
+api_router.include_router(pedido_compra.router)
+api_router.include_router(contratos.router)
 api_router.include_router(viagem.router)
 api_router.include_router(bordero.router)
+api_router.include_router(bancos.router)
+api_router.include_router(contas.router)
+api_router.include_router(conta_func.router)
+api_router.include_router(geracao_boletos.router)
 api_router.include_router(telemarketing.router)
 api_router.include_router(notas_fiscais.router)
 api_router.include_router(usuarios.router)

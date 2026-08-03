@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -60,11 +60,22 @@ export default function FinanceiroScreen() {
         hint: "Movimentação e previsão de caixa",
         icon: "swap-vertical-outline",
         route: "/fluxo-caixa",
-        // FLUXO_CAIXA é um MENU (guarda o Plano de Contas dentro), não uma TELA —
-        // menus não têm ação "Abrir Tela" própria, então a visibilidade do tile
-        // segue a permissão das telas filhas (mesmo padrão do tile "Tabelas
-        // Auxiliares" em cadastros.tsx).
-        visible: can("PLANO_CONTAS.ABRIR"),
+        // FLUXO_CAIXA é um MENU (guarda Plano de Contas/Centro de Custo/Contas
+        // dentro), não uma TELA — menus não têm ação "Abrir Tela" própria,
+        // então a visibilidade do tile segue a permissão das telas filhas
+        // (mesmo padrão do tile "Tabelas Auxiliares" em cadastros.tsx).
+        visible: can("PLANO_CONTAS.ABRIR") || can("CENTRO_CUSTO.ABRIR") || can("CONTAS.ABRIR") || can("CONTA_FUNC.ABRIR"),
+      },
+      {
+        key: "cobrancas",
+        label: "Cobranças",
+        hint: "Bancos para cobrança (boleto/CNAB/API) e demais telas do módulo",
+        icon: "business-outline",
+        route: "/cobrancas",
+        // COBRANCAS não é uma TELA própria — some da lista se nenhuma das
+        // telas filhas do hub estiver liberada, mesmo padrão do tile
+        // "Contratos" em transacoes.tsx.
+        visible: can("BANCOS.ABRIR") || can("GERACAO_BOLETOS.ABRIR") || can("RETORNO_BANC.ABRIR"),
       },
     ],
     [can]
@@ -75,8 +86,7 @@ export default function FinanceiroScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="financeiro-screen">
       <View style={styles.header}>
-        <Image source={require("../../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
-        <Text style={styles.headerTitle}>Financeiro</Text>
+      <Text style={styles.headerTitle}>Financeiro</Text>
         <View style={styles.headerLogoSpacer} />
       </View>
 

@@ -4,8 +4,8 @@ from typing import Optional
 from fastapi import APIRouter, Request
 
 from models.schemas import (
-    OSListRequest, OSSaveRequest, OSItemSaveRequest, DescontoGeralRequest, FecharRequest, FormaPagSimplesRequest,
-    FormaPagamentoAddRequest, FormaPagamentoUpdateRequest, FormaPagamentoDeleteRequest,
+    OSListRequest, OSSaveRequest, OSItemSaveRequest, DescontoGeralRequest, FecharRequest, FaturarOSRequest,
+    FormaPagSimplesRequest, FormaPagamentoAddRequest, FormaPagamentoUpdateRequest, FormaPagamentoDeleteRequest,
 )
 from services import os_service, os_itens_service, log_auditoria_service, forma_pagamento_service
 
@@ -101,6 +101,31 @@ async def fechar_os(codigo: int, req: FecharRequest, request: Request):
             usuario=req.usuario_alteracao, classe=req.classe,
             referencia=str(codigo), descricao=f"O.S. {codigo} fechada",
             campos_alterados=[{"campo": "situacao", "antes": "A", "depois": "F"}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+def _descricao_faturamento(codigo: int, result: dict, prefixo: str = "O.S.") -> str:
+    partes = []
+    if result.get("comanda"):
+        partes.append(f"comanda {result['comanda']}")
+    if result.get("comanda_garantia"):
+        partes.append(f"comanda garantia {result['comanda_garantia']}")
+    sufixo = f" ({', '.join(partes)})" if partes else ""
+    return f"{prefixo} {codigo} faturada{sufixo}"
+
+
+@router.post("/os/{codigo}/faturar")
+async def faturar_os(codigo: int, req: FaturarOSRequest, request: Request):
+    result = await os_service.faturar_os(req, codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS", comando="FATURAR",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo),
+            descricao=_descricao_faturamento(codigo, result),
+            campos_alterados=[{"campo": "situacao", "antes": result.get("situacao_antes"), "depois": "PG"}],
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

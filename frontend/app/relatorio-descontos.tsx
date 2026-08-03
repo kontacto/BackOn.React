@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
-} from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -14,6 +12,7 @@ import { exportReportPdf } from "@/src/utils/export-report";
 import { fetchEmpresaHeader, EmpresaHeader } from "@/src/utils/print-report-header";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_MAX_WIDTH, WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 
 type Conn = { servidor: string; banco: string; api: string };
 type PedidoRow = {
@@ -116,12 +115,18 @@ export default function RelatorioDescontosScreen() {
   const [vendedor, setVendedor] = useState<string | number | null>(null);
   const [clienteFiltro, setClienteFiltro] = useState<string>("");
   const [codigoFiltro, setCodigoFiltro] = useState<string>(pedidoParam ? String(pedidoParam) : "");
+  // Filtro "Projeto" — Gestor de Projetos Fase 4 (recurso extra, sem
+  // equivalente no legado). Só filtra a origem Pedido (`/api/relatorios/
+  // descontos-margem` já suporta `projeto`) — a origem O.S. não tem esse
+  // filtro ainda (`_relatorio_os_desc_margem_sync` não foi tocado nesta
+  // rodada, fora do escopo pedido).
+  const [projetoFiltro, setProjetoFiltro] = useState<string>("");
   const [origem, setOrigem] = useState<"all" | "P" | "OS">(pedidoParam ? "P" : "all");
 
+  const feedback = useFeedback();
   const [loading, setLoading] = useState(false);
   const [vendedores, setVendedores] = useState<VendedorGroup[]>([]);
   const [totais, setTotais] = useState<Totais | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [exporting, setExporting] = useState(false);
   const [empresa, setEmpresa] = useState<EmpresaHeader | null>(null);
@@ -133,7 +138,7 @@ export default function RelatorioDescontosScreen() {
       if (!s) { router.replace("/login"); return; }
       const conns = await listConnections();
       const c = conns.find((x) => x.empresa === s.empresa);
-      if (!c) { setError("Conexão não encontrada."); return; }
+      if (!c) { feedback.showError("Conexão não encontrada."); return; }
       const cc = { servidor: c.servidor, banco: c.banco, api: c.api };
       setConn(cc);
       try {
@@ -157,9 +162,8 @@ export default function RelatorioDescontosScreen() {
     if (!conn) return;
     const di = override?.di ?? dataIni;
     const df = override?.df ?? dataFim;
-    if (!di || !df) { setError("Informe o período."); return; }
+    if (!di || !df) { feedback.showError("Informe o período."); return; }
     setLoading(true);
-    setError(null);
     try {
       const base = conn.api.replace(/\/+$/, "");
       const qsBase = `servidor=${encodeURIComponent(conn.servidor)}` +
@@ -169,9 +173,12 @@ export default function RelatorioDescontosScreen() {
       const codNum = parseInt(codigoFiltro, 10);
       const hasCod = Number.isFinite(codNum) && codNum > 0;
 
+      const projNum = parseInt(projetoFiltro, 10);
+      const hasProj = Number.isFinite(projNum) && projNum > 0;
       const fetchPed = async () => {
         let url = `${base}/api/relatorios/descontos-margem?${qsBase}${vendQs}${cliQs}`;
         if (hasCod) url += `&pedido=${codNum}`;
+        if (hasProj) url += `&projeto=${projNum}`;
         return (await fetch(url)).json();
       };
       const fetchOS = async () => {
@@ -183,16 +190,16 @@ export default function RelatorioDescontosScreen() {
       let result: RelResult;
       if (origem === "P") {
         const j = await fetchPed();
-        if (!j?.success) { setError(j?.message || "Falha ao gerar relatório."); setVendedores([]); setTotais(null); return; }
+        if (!j?.success) { feedback.showError(j?.message || "Falha ao gerar relatório."); setVendedores([]); setTotais(null); return; }
         result = { vendedores: tagOrigem(j.vendedores || [], "P"), totais: j.totais || null };
       } else if (origem === "OS") {
         const j = await fetchOS();
-        if (!j?.success) { setError(j?.message || "Falha ao gerar relatório."); setVendedores([]); setTotais(null); return; }
+        if (!j?.success) { feedback.showError(j?.message || "Falha ao gerar relatório."); setVendedores([]); setTotais(null); return; }
         result = { vendedores: tagOrigem(j.vendedores || [], "OS"), totais: j.totais || null };
       } else {
         const [jp, jo] = await Promise.all([fetchPed(), fetchOS()]);
         if (!jp?.success && !jo?.success) {
-          setError(jp?.message || jo?.message || "Falha ao gerar relatório.");
+          feedback.showError(jp?.message || jo?.message || "Falha ao gerar relatório.");
           setVendedores([]); setTotais(null); return;
         }
         result = mergeReports(jp?.success ? jp : null, jo?.success ? jo : null);
@@ -203,11 +210,11 @@ export default function RelatorioDescontosScreen() {
       result.vendedores.forEach((g) => { exp[g.vendedor] = true; });
       setExpanded(exp);
     } catch (e) {
-      setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+      feedback.showError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setLoading(false);
     }
-  }, [conn, dataIni, dataFim, vendedor, codigoFiltro, clienteFiltro, origem]);
+  }, [conn, dataIni, dataFim, vendedor, codigoFiltro, clienteFiltro, projetoFiltro, origem, feedback.showError]);
 
   // busca automática quando vier de um pedido específico (usa range amplo, sem depender do state)
   useEffect(() => {
@@ -229,7 +236,6 @@ export default function RelatorioDescontosScreen() {
   const handleExport = useCallback(async () => {
     if (!totais) return;
     setExporting(true);
-    setError(null);
     try {
       await exportReportPdf({
         titulo: headerTitle,
@@ -239,11 +245,11 @@ export default function RelatorioDescontosScreen() {
         empresa,
       });
     } catch (e) {
-      setError(`Falha ao exportar: ${e instanceof Error ? e.message : String(e)}`);
+      feedback.showError(`Falha ao exportar: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setExporting(false);
     }
-  }, [totais, vendedores, headerTitle, pedidoParam, dataIni, dataFim, empresa]);
+  }, [totais, vendedores, headerTitle, pedidoParam, dataIni, dataFim, empresa, feedback.showError]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="relatorio-descontos-screen">
@@ -251,7 +257,6 @@ export default function RelatorioDescontosScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backBtn} testID="relatorio-back">
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle} numberOfLines={1}>{headerTitle}</Text>
         {totais ? (
           <Pressable
@@ -336,6 +341,16 @@ export default function RelatorioDescontosScreen() {
               style={styles.input}
               testID="rel-pedido"
             />
+            <Text style={styles.fieldLabel}>Projeto (nº, opcional — só filtra Pedidos)</Text>
+            <TextInput
+              value={projetoFiltro}
+              onChangeText={(v) => setProjetoFiltro(v.replace(/\D/g, ""))}
+              keyboardType="number-pad"
+              placeholder="Nº do Projeto"
+              placeholderTextColor={colors.muted}
+              style={styles.input}
+              testID="rel-projeto"
+            />
             <Pressable
               onPress={buscar}
               disabled={loading}
@@ -352,13 +367,6 @@ export default function RelatorioDescontosScreen() {
           </View>
         ) : loading ? (
           <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 24 }} />
-        ) : null}
-
-        {error ? (
-          <View style={styles.errorBox} testID="rel-error">
-            <Ionicons name="alert-circle-outline" size={16} color={colors.error} />
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
         ) : null}
 
         {totais ? (
@@ -471,11 +479,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 13, marginTop: spacing.sm,
   },
   searchBtnText: { color: colors.onBrandPrimary, fontWeight: "600", fontSize: 15 },
-  errorBox: {
-    flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#fdecea",
-    padding: spacing.sm, borderRadius: radius.sm,
-  },
-  errorText: { color: colors.error, fontSize: 12, flex: 1 },
   totaisCard: {
     backgroundColor: colors.brandTertiary, borderRadius: radius.md, padding: spacing.md,
     borderWidth: 1, borderColor: colors.border,

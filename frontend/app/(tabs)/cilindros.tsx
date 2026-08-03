@@ -11,7 +11,7 @@
 // conforme as fases seguintes forem implementadas (não linkar card pra
 // tela que ainda não existe).
 import { useMemo } from "react";
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -67,8 +67,7 @@ export default function CilindrosScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="cilindros-screen">
       <View style={styles.header}>
-        <Image source={require("../../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
-        <Text style={styles.headerTitle}>Painel de Cilindros</Text>
+      <Text style={styles.headerTitle}>Painel de Cilindros</Text>
         <View style={styles.headerLogoSpacer} />
       </View>
 

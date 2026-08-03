@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  ActivityIndicator, Alert, Image, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
-} from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -469,7 +467,6 @@ export default function FornecedoresScreen() {
           <Pressable onPress={() => setFormOpen(false)} style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]} hitSlop={12} testID="fornecedores-form-back-button">
             <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
           </Pressable>
-          <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
           <Text style={styles.headerTitle} numberOfLines={1}>{editingCodigoInt ? `Fornecedor #${editingCodigoInt}` : "Novo Fornecedor"}</Text>
           {canSave ? (
             <Pressable onPress={save} disabled={saving} style={({ pressed }) => [styles.saveBtn, (pressed || saving) && { opacity: 0.7 }]} hitSlop={8} testID="fornecedores-salvar">
@@ -847,7 +844,6 @@ export default function FornecedoresScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.iconBtn}>
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
         <Text style={styles.headerTitle}>Fornecedores</Text>
         <View style={{ width: 40 }} />
       </View>

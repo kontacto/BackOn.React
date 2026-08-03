@@ -4,13 +4,18 @@
 //   • Usuário master (KONTACTO) → acesso total a TODAS as ações/telas de
 //     permissão de GRUPO (`can()` sempre true), independente de classe. [GLOBAL].
 //   • Módulos ligados/desligados (Configurações > Módulos e Recursos) valem
-//     para TODO usuário igual, inclusive master — `moduleOn()` NUNCA
-//     bypassa por master. Corrigido 2026-07-15 (pedido explícito do
-//     usuário: "só aparece os módulos selecionados, independente do
-//     usuário" — revoga o bypass de módulo que existia antes pro master;
-//     o master continua sendo o ÚNICO que consegue ABRIR a tela "Módulos e
-//     Recursos" pra configurar os módulos, mas isso é gate por `isKontacto`
-//     em `configuracoes.tsx`, não por `moduleOn()` aqui).
+//     para TODO usuário igual, inclusive master — nem `moduleOn()` nem a
+//     checagem de `disabledTelas` dentro de `can()` bypassam por master.
+//     Corrigido 2026-07-15 pra `moduleOn()` (pedido explícito do usuário:
+//     "só aparece os módulos selecionados, independente do usuário" —
+//     revoga o bypass de módulo que existia antes pro master) e corrigido
+//     2026-07-27 pra `can()` (o bypass de master ali ainda vinha ANTES da
+//     checagem de `disabledTelas`, deixando, por exemplo, telas de Pedido
+//     mutuamente exclusivas — "Pedido Bar" e "Pedido de Venda" — aparecerem
+//     juntas pro master mesmo com só uma delas ligada em Módulos e
+//     Recursos). O master continua sendo o ÚNICO que consegue ABRIR a tela
+//     "Módulos e Recursos" pra configurar os módulos, mas isso é gate por
+//     `isKontacto` em `configuracoes.tsx`, não por `moduleOn()`/`can()` aqui.
 //   • Modo ESTRITO (não-master): sem registro na tabela = bloqueado.
 //   • key no formato "TELA.COMANDO" (ex.: "CLIENTE.GRAVAR") ou "TELA" (abrir tela).
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
@@ -30,12 +35,23 @@ type PermState = {
 };
 
 // Mapa: módulo (coluna controle_configuracao) -> telas controladas.
-// Manter alinhado com backend services/controle_config_service.MODULE_TELAS.
+// Manter alinhado com backend services/controle_config_service.MODULE_TELAS
+// (estava desatualizado até 2026-07-27 — faltavam Posto, Cilindro e
+// MODIFICADORES sob Bar, então essas telas nunca ficavam bloqueadas aqui
+// mesmo com o módulo desligado).
 const MODULE_TELAS: Record<string, string[]> = {
   Pedido_venda: ["PEDIDO_COMP"],
-  Bar: ["PEDIDO"],
+  Bar: ["PEDIDO", "MODIFICADORES"],
   Clientes: ["CLIENTE"],
   servicos: ["SERVICO", "TIPO_SERVICO"],
+  Posto: [
+    "POSTO_BOMBA", "POSTO_ENCERR", "POSTO_AFERICAO", "POSTO_FEC_TURNO",
+    "POSTO_REA_TURNO", "POSTO_META", "POSTO_COMBUST", "POSTO_ESTOQUE",
+    "POSTO_CUSTO", "POSTO_ILHA", "POSTO_TANQUE", "POSTO_TQ_EST", "POSTO_TQ_NF",
+  ],
+  Cilindro: ["CILINDRO", "CIL_CLIENTE", "CILINDRO_SERIE", "BORDERO_CIL"],
+  contratos: ["TIPO_CONTRATO", "TIPO_REAJUSTE", "INDICE_REAJUSTE", "CONTR_PROD_DISP", "CONTRATO", "FATURAR_CONTR"],
+  Curva_abc: ["CURVA_ABC", "GESTAO_COMPRAS", "COTACAO_COMPRA", "PEDIDO_COMPRA"],
 };
 
 type PermContextValue = PermState & {
@@ -110,6 +126,13 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
           });
           // Ordem de Serviço: habilitada se Oficina OU Assistência estiver ligada.
           if (!(cfg.valores.Oficina || cfg.valores.Assistencia)) disabledTelas.add("OS");
+          // Pedido Geral (PEDIDO_COMP): habilitado se Pedido de Venda, Metro
+          // Quadrado ou Clínica estiver ligado — os 3 são variações da MESMA
+          // tela (ver SEGMENTOS_PEDIDO_EXCLUSIVOS no backend). Só "Pedido_venda"
+          // está mapeado em MODULE_TELAS acima, então reabre aqui quando é
+          // Metro Quadrado/Clínica que está ligado. Mesma correção espelhada
+          // em backend/services/permissoes_service.py::disabled_telas().
+          if (cfg.valores.metro_quadrado || cfg.valores.CLINICA) disabledTelas.delete("PEDIDO_COMP");
         }
       } catch {
         // sem flags → não desliga nada
@@ -140,12 +163,20 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
     (key: string) => {
       const k = (key || "").trim().toUpperCase();
       if (!k) return false;
-      // Master (KONTACTO) tem acesso total a todos os módulos e opções do
-      // sistema, independente de permissões — inclusive módulos desligados
-      // em Configurações > Módulos e Recursos. [GLOBAL], 2026-07-14.
-      if (state.isMaster) return true;
       const tela = k.split(".")[0];
+      // Módulo desligado (Configurações > Módulos e Recursos) bloqueia a
+      // tela pra TODO usuário, inclusive master — mesmo princípio já
+      // corrigido em `moduleOn()` (2026-07-15, ver comentário no topo do
+      // arquivo). Checado ANTES do bypass de master abaixo: master ignora
+      // permissão de GRUPO (classe), nunca módulo da empresa. Corrigido
+      // 2026-07-27 — antes disso o bypass de master vinha primeiro e
+      // deixava, por exemplo, "Pedido Bar" e "Pedido de Venda" (telas
+      // mutuamente exclusivas, ver SEGMENTOS_PEDIDO_EXCLUSIVOS no backend)
+      // aparecerem juntas pro master mesmo com só uma delas ligada.
       if (state.disabledTelas.has(tela)) return false;
+      // Master (KONTACTO) tem acesso total a toda permissão de GRUPO
+      // (classe), independente do que o grupo tiver liberado. [GLOBAL].
+      if (state.isMaster) return true;
       if (state.keys.has(k)) return true;
       // "CLIENTE" sem comando → considera permitido se houver "CLIENTE.ABRIR".
       if (!k.includes(".") && state.keys.has(`${k}.ABRIR`)) return true;

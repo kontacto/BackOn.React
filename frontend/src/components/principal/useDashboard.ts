@@ -1,5 +1,5 @@
 // Hook do Dashboard (tela principal): sessão, filtros e carga dos totais/pedidos.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFocusEffect, useRouter } from "expo-router";
 
 import {
@@ -8,8 +8,11 @@ import {
   setSituacaoFiltro as setSituacaoPref,
 } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
-import { apiGet } from "@/src/utils/api";
+import { apiGet, apiSend } from "@/src/utils/api";
 import { usePermissions } from "@/src/permissions";
+import { useAuditContext } from "@/src/hooks/useAuditContext";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
+import { ResumoProjetos } from "@/src/components/principal/ProjetosResumoCard";
 
 export type DashboardTotals = {
   pedidos: number; os: number; produtos: number; servicos: number; descontos: number; margem: number; margem_pct: number;
@@ -25,6 +28,30 @@ export type MovimentoItem = {
 
 const ZERO: DashboardTotals = { pedidos: 0, os: 0, produtos: 0, servicos: 0, descontos: 0, margem: 0, margem_pct: 0 };
 
+// Resumo dos 3 alertas de estoque (Controle do Sistema > aba Diversos) —
+// card na Tela Principal, só pra Gerente/Supervisor/Master. `ativo=false`
+// quando o módulo Curva ABC/Compras está desligado (card nem aparece
+// nesse caso). Cada tipo é `null` quando o toggle correspondente está
+// desligado em Controle do Sistema, ou `{count}` quando ligado. Pedido
+// explícito do usuário, 2026-07-20.
+export type ResumoAlertasEstoque = {
+  ativo: boolean;
+  minimo: { count: number } | null;
+  ressuprimento: { count: number } | null;
+  zerado: { count: number } | null;
+  // "Modo Didático" — true quando a Curva ABC/Estoques não é gerada ou
+  // reprocessada há mais de 6 meses (ou nunca foi rodada) — os valores de
+  // estoque mínimo/ressuprimento por trás destes alertas podem estar
+  // desatualizados. Pedido explícito do usuário, 2026-07-20.
+  curva_abc_desatualizada: boolean;
+  curva_abc_ultima_geracao: string | null;
+  // Quando o cache compartilhado (`alertas_estoque_cache`, back-end) foi
+  // gravado pela última vez — igual pra TODOS os usuários com acesso ao
+  // card, não por sessão/navegador. Pedido explícito do usuário,
+  // 2026-07-21 ("guarde o último resultado para todos os usuários").
+  atualizado_em: string | null;
+};
+
 export function pickFirst(obj: Record<string, unknown> | null | undefined, keys: string[]): string | null {
   if (!obj) return null;
   for (const k of keys) {
@@ -36,16 +63,41 @@ export function pickFirst(obj: Record<string, unknown> | null | undefined, keys:
 
 export function useDashboard() {
   const router = useRouter();
-  const { can, isManagerFuncao } = usePermissions();
+  const { can, isManagerFuncao, isMaster, moduleOn } = usePermissions();
+  const auditCtx = useAuditContext();
   const [session, setSessionState] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const feedback = useFeedback();
   const [totais, setTotais] = useState<DashboardTotals>(ZERO);
   const [movimento, setMovimento] = useState<MovimentoItem[]>([]);
   const [dashLoading, setDashLoading] = useState(false);
-  const [dashError, setDashError] = useState<string | null>(null);
   const [situacaoFiltro, setSituacaoFiltro] = useState<string>("");
   const [fantasia, setFantasia] = useState<string | null>(null);
+  const [alertasEstoque, setAlertasEstoque] = useState<ResumoAlertasEstoque | null>(null);
+  // Quando os alertas foram buscados pela última vez — mostrado sempre,
+  // mesmo desatualizado (o dado ainda é um alerta válido, só não é ao
+  // vivo). Pedido explícito do usuário, 2026-07-21.
+  const [alertasAtualizadoEm, setAlertasAtualizadoEm] = useState<Date | null>(null);
+  const [alertasCarregando, setAlertasCarregando] = useState(false);
+  // Card "Projetos" — Gestor de Projetos Fase 4 (recurso extra,
+  // 2026-08-02, confirmado explicitamente pelo usuário). Diferente do
+  // card de estoque acima, não usa cache compartilhado/"1x por sessão" —
+  // a consulta é barata, recarrega junto com o resto do dashboard.
+  const [resumoProjetos, setResumoProjetos] = useState<ResumoProjetos | null>(null);
+  // Cada consulta de alertas abre conexão nova com o banco, e a primeira
+  // query numa conexão nova custa vários segundos (medido: ~7s, mesmo pra
+  // uma tabela pequena — custo da conexão em si, não da query). Recarregar
+  // sozinho em todo foco da Tela Principal multiplicava esse custo a cada
+  // navegação. Agora só carrega automaticamente UMA vez por sessão do app
+  // — atualização seguinte é sempre por ação do usuário (botão "Atualizar"
+  // no card). Pedido explícito do usuário, 2026-07-21 ("retire o
+  // recarregamento automático").
+  const alertasAutoCarregadoRef = useRef(false);
+
+  // Fase 3 do Inventário (2026-07-23) — ver definição da função logo
+  // abaixo de `connFor` (precisa dela já declarada).
+  const rotinasAutomaticasInventarioRef = useRef(false);
 
   const handleSituacao = useCallback((value: string) => {
     setSituacaoFiltro(value);
@@ -71,6 +123,25 @@ export function useDashboard() {
     return conns.find((c) => c.empresa === s.empresa) || null;
   }, []);
 
+  // Fase 3 do Inventário (2026-07-23) — dispara as rotinas automáticas do
+  // legado (snapshot mensal + diário contábil, ver
+  // backend/services/inventario_service.py::executar_rotinas_automaticas)
+  // uma vez por sessão do app, silenciosamente — "primeiro acesso do dia/
+  // mês de QUALQUER usuário" (decisão já registrada em PENDENCIAS.md >
+  // Inventário, opção (a): sem Tarefa Agendada nem worker separado). O
+  // endpoint já é idempotente sozinho (reverifica se já rodou antes de
+  // fazer qualquer coisa), o ref acima só evita repetir a chamada de rede
+  // a cada foco da Tela Principal dentro da mesma sessão do app.
+  const dispararRotinasAutomaticasInventario = useCallback(async (s: Session) => {
+    try {
+      const conn = await connFor(s);
+      if (!conn) return;
+      await apiSend(conn, "/api/inventario/rotinas-automaticas", "POST", {});
+    } catch {
+      // silencioso — não é uma ação do usuário, não deve gerar toast nenhum
+    }
+  }, [connFor]);
+
   const loadEmpresa = useCallback(async (s: Session) => {
     try {
       const conn = await connFor(s);
@@ -82,6 +153,88 @@ export function useDashboard() {
     }
   }, [connFor]);
 
+  // Card de alertas de estoque — só carrega pra Gerente/Supervisor/Master
+  // (`isManagerFuncao`) E com a permissão `ALERTAS_ESTOQUE.ABRIR` concedida
+  // (catálogo, menu Compra) — as duas precisam estar de acordo, mesmo
+  // princípio de reforço já usado no gating por módulo ativo. Evita a
+  // chamada extra pros demais funcionários/grupos, que nunca veem o card.
+  // Pedido explícito do usuário, 2026-07-20 (card) e mesma sessão
+  // (permissão adicionada depois, a pedido do usuário, vendo a árvore de
+  // permissões do menu Compra).
+  const podeVerAlertasEstoque = isManagerFuncao && can("ALERTAS_ESTOQUE.ABRIR");
+  // Botão "Atualizar" só aparece com a permissão própria concedida (grava
+  // no cache compartilhado, visto por todo mundo — reforçada também no
+  // backend). Quem só tem ABRIR vê o card, mas não recalcula.
+  const podeAtualizarAlertasEstoque = podeVerAlertasEstoque && can("ALERTAS_ESTOQUE.ATUALIZAR");
+  // GET só lê o cache compartilhado no back-end (`alertas_estoque_cache`)
+  // — não recalcula nada, então `atualizado_em` vem do servidor (igual pra
+  // todo mundo com acesso ao card), não de `new Date()` local. Pedido
+  // explícito do usuário, 2026-07-21 ("guarde o último resultado para
+  // todos os usuários... teriam os resultados da última atualização").
+  const loadAlertasEstoque = useCallback(async (s: Session) => {
+    if (!podeVerAlertasEstoque) { setAlertasEstoque(null); return; }
+    setAlertasCarregando(true);
+    try {
+      const conn = await connFor(s);
+      if (!conn) return;
+      const j = await apiGet(conn, "/api/gestao-compras/alertas-estoque");
+      if (j?.success) {
+        setAlertasEstoque(j as ResumoAlertasEstoque);
+        setAlertasAtualizadoEm(j.atualizado_em ? new Date(j.atualizado_em) : null);
+      }
+    } catch {
+      // silencioso — card mantém o último valor carregado se a chamada falhar
+    } finally {
+      setAlertasCarregando(false);
+    }
+  }, [connFor, podeVerAlertasEstoque]);
+
+  // Atualização manual (botão "Atualizar" no card) — chama o endpoint que
+  // RECALCULA de verdade e grava no cache compartilhado, pra todo mundo
+  // com acesso ao card ver o mesmo resultado (não uma busca isolada por
+  // sessão/navegador). Diferente do GET automático acima, mostra erro
+  // visível se falhar (ação explícita do usuário, não uma carga silenciosa
+  // de fundo) e é gated pela permissão `ALERTAS_ESTOQUE.ATUALIZAR` (também
+  // reforçada no backend).
+  // Mesmo gating de "manager" do card de estoque, mais o módulo
+  // `gestor_projetos` ligado e a permissão `PROJETOS.ABRIR` (reaproveitada
+  // — nenhuma permissão nova, o card só reflete o que a tela de Projetos
+  // já mostraria pra esse usuário).
+  const podeVerResumoProjetos = isManagerFuncao && moduleOn("gestor_projetos") && can("PROJETOS.ABRIR");
+  const loadResumoProjetos = useCallback(async (s: Session) => {
+    if (!podeVerResumoProjetos) { setResumoProjetos(null); return; }
+    try {
+      const conn = await connFor(s);
+      if (!conn) return;
+      const j = await apiGet(conn, "/api/projetos-resumo");
+      if (j?.success) setResumoProjetos(j as ResumoProjetos);
+    } catch {
+      // silencioso — card só some se não carregar, não trava o resto do dashboard
+    }
+  }, [connFor, podeVerResumoProjetos]);
+
+  const reloadAlertasEstoque = useCallback(async () => {
+    if (!session || !podeVerAlertasEstoque) return;
+    setAlertasCarregando(true);
+    try {
+      const conn = await connFor(session);
+      if (!conn) return;
+      const j = await apiSend(conn, "/api/gestao-compras/alertas-estoque/atualizar", "POST", {
+        master: isMaster, ...auditCtx,
+      });
+      if (j?.success) {
+        setAlertasEstoque(j as ResumoAlertasEstoque);
+        setAlertasAtualizadoEm(j.atualizado_em ? new Date(j.atualizado_em) : new Date());
+      } else {
+        feedback.showError(j?.message || "Não foi possível atualizar os alertas de estoque.");
+      }
+    } catch {
+      feedback.showError("Falha de rede ao atualizar os alertas de estoque.");
+    } finally {
+      setAlertasCarregando(false);
+    }
+  }, [session, podeVerAlertasEstoque, connFor, isMaster, auditCtx, feedback]);
+
   useEffect(() => {
     (async () => {
       const saved = await getSituacaoPref();
@@ -92,21 +245,20 @@ export function useDashboard() {
   const loadDashboard = useCallback(
     async (s: Session, situacaoOverride?: string) => {
       setDashLoading(true);
-      setDashError(null);
       try {
         const conn = await connFor(s);
-        if (!conn) { setDashError("Conexão não encontrada."); return; }
+        if (!conn) { feedback.showError("Conexão não encontrada."); return; }
         let vendedorParam: string;
         if (canSeeAll) {
           vendedorParam = "all";
         } else {
           const own = s.funcionario?.codigo_int;
-          if (own === undefined || own === null) { setDashError("Vendedor não identificado na sessão."); return; }
+          if (own === undefined || own === null) { feedback.showError("Vendedor não identificado na sessão."); return; }
           vendedorParam = String(own);
         }
         const sit = situacaoOverride !== undefined ? situacaoOverride : situacaoFiltro;
         const j = await apiGet(conn, "/api/dashboard/me", { vendedor: vendedorParam, situacao: sit || undefined });
-        if (!j?.success) setDashError(j?.message || "Não foi possível obter os totais.");
+        if (!j?.success) feedback.showError(j?.message || "Não foi possível obter os totais.");
         setTotais(j?.totais || ZERO);
         const rawMov = Array.isArray(j?.movimento) ? j.movimento : (Array.isArray(j?.pedidos) ? j.pedidos : []);
         const normalizedMov: MovimentoItem[] = rawMov.map((m: any) => {
@@ -135,12 +287,18 @@ export function useDashboard() {
         });
         setMovimento(normalizedMov);
       } catch (e) {
-        setDashError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+        feedback.showError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
         setDashLoading(false);
       }
     },
-    [canSeeAll, connFor, situacaoFiltro]
+    // `feedback.showError` é referencialmente estável entre renders do
+    // FeedbackProvider (useCallback com deps fixas lá dentro) mesmo que o
+    // objeto `feedback` inteiro não seja — usar só o método específico na
+    // dependência evita recriar `loadDashboard` (e disparar o
+    // `useEffect([session, ..., loadDashboard])` abaixo em loop) toda vez
+    // que QUALQUER toast do app inteiro dispara.
+    [canSeeAll, connFor, situacaoFiltro, feedback.showError]
   );
 
   useFocusEffect(useCallback(() => { loadSession(); }, [loadSession]));
@@ -150,9 +308,18 @@ export function useDashboard() {
     if (session) {
       loadDashboard(session);
       loadEmpresa(session);
+      if (!alertasAutoCarregadoRef.current) {
+        alertasAutoCarregadoRef.current = true;
+        loadAlertasEstoque(session);
+      }
+      if (!rotinasAutomaticasInventarioRef.current) {
+        rotinasAutomaticasInventarioRef.current = true;
+        dispararRotinasAutomaticasInventario(session);
+      }
+      loadResumoProjetos(session);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, canSeeAll, loadDashboard, loadEmpresa]);
+  }, [session, canSeeAll, loadDashboard, loadEmpresa, loadAlertasEstoque, loadResumoProjetos, dispararRotinasAutomaticasInventario]);
 
   useEffect(() => {
     if (session) loadDashboard(session, situacaoFiltro);
@@ -176,9 +343,12 @@ export function useDashboard() {
   const classe = useMemo(() => pickFirst(session?.usuario, ["classe_descricao", "classe_label", "classe"]) || null, [session]);
 
   return {
-    session, loading, totais, movimento, dashLoading, dashError,
+    session, loading, totais, movimento, dashLoading,
     situacaoFiltro, handleSituacao,
     fantasia, canSeeAll, showTotais, showMargem, showDescontos,
     handleLogout, displayName, nomeGuerra, totalMovimento, classe,
+    alertasEstoque, alertasAtualizadoEm, alertasCarregando, reloadAlertasEstoque,
+    podeAtualizarAlertasEstoque,
+    resumoProjetos,
   };
 }

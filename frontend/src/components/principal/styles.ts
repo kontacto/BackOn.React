@@ -88,9 +88,7 @@ export const styles = StyleSheet.create({
     marginTop: spacing.lg, marginBottom: spacing.sm,
     textTransform: "uppercase", letterSpacing: 0.5,
   },
-  sectionSub: { fontSize: 13, color: colors.muted, marginBottom: spacing.md },
   sectionTitleWeb: { width: "100%", maxWidth: 920, alignSelf: "center" },
-  sectionSubWeb: { width: "100%", maxWidth: 920, alignSelf: "center" },
   tilesGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.md },
   tilesGridWeb: { gap: spacing.lg, marginBottom: spacing.sm, width: "100%", maxWidth: 920, alignSelf: "center" },
   tile: {
@@ -99,13 +97,22 @@ export const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border, minHeight: 92,
     justifyContent: "space-between",
   },
+  // Formatação reduzida do tile no web (pedido explícito do usuário,
+  // 2026-07-20) — largura fixa e compacta em vez de ~metade da tela,
+  // cabe mais de um por linha sem esticar. Sem `calc()` (não é um
+  // `DimensionValue` válido pro React Native — gerava erro de tipo;
+  // `gap` no `tilesGridWeb` já cuida do espaçamento entre tiles).
+  tileWeb: { width: 160, minHeight: 76, padding: spacing.sm },
   tileIcon: {
     width: 36, height: 36, borderRadius: radius.md,
     backgroundColor: colors.brandTertiary,
     alignItems: "center", justifyContent: "center", marginBottom: spacing.sm,
   },
+  tileIconWeb: { width: 26, height: 26, borderRadius: radius.sm, marginBottom: 6 },
   tileLabel: { fontSize: 14, fontWeight: "500", color: colors.onSurface },
   tileHint: { fontSize: 11, color: colors.muted, marginTop: 2 },
+  tileLabelWeb: { fontSize: 12.5 },
+  tileHintWeb: { fontSize: 10 },
   totalsRow: { flexDirection: "row", gap: spacing.sm },
   totalsRowWeb: { flexDirection: "row", gap: 12, width: "100%", maxWidth: 920, alignSelf: "center" },
   filterRow: { flexDirection: "row", marginTop: spacing.md },
@@ -140,6 +147,12 @@ export const styles = StyleSheet.create({
     borderLeftWidth: 4,
   },
   totalCardWeb: { minHeight: 92 },
+  // Formatação reduzida — os 4 cards de "Totais de Hoje" em uma única
+  // linha (pedido explícito do usuário, 2026-07-20), padding/fonte
+  // menores pra caber os 4 sem quebrar.
+  totalCardWebCompact: { minHeight: 62, padding: spacing.sm },
+  totalLabelWebCompact: { fontSize: 9.5 },
+  totalValueWebCompact: { fontSize: 16, marginTop: 2 },
   totalLabel: { fontSize: 11, color: colors.muted, textTransform: "uppercase", letterSpacing: 0.5 },
   totalValue: { fontSize: 22, fontWeight: "600", color: colors.onSurface, marginTop: 4 },
   pedidosHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
@@ -173,11 +186,4 @@ export const styles = StyleSheet.create({
   pedidoTotalLabel: { fontSize: 13, fontWeight: "600", color: colors.brandPrimary },
   pedidoTotalValue: { fontSize: 15, fontWeight: "700", color: colors.brandPrimary },
   empty: { textAlign: "center", color: colors.muted, paddingVertical: spacing.lg, fontSize: 13 },
-  errorBox: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    backgroundColor: "#fdecea", padding: spacing.sm, borderRadius: radius.sm,
-    marginBottom: spacing.sm,
-  },
-  errorBoxWeb: { width: "100%", maxWidth: 920, alignSelf: "center" },
-  errorText: { color: colors.error, fontSize: 12, flex: 1 },
 });

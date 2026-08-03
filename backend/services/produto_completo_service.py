@@ -187,6 +187,17 @@ def _get_produto_sync(servidor: str, banco: str, codigo_int: str) -> dict:
             return {"success": False, "message": "Produto não encontrado."}
         produto = _row_to_dict(row)
 
+        # Nome do fornecedor tratado como Fabricante/Distribuidor (aba Dados
+        # Principais) — resolvido à parte porque `pecas.fornecedor` só
+        # guarda o código, e a tela precisa exibir o nome (mecanismo de
+        # busca do campo, não digitação de código cru).
+        produto["fornecedor_nome"] = None
+        if produto.get("fornecedor"):
+            cur.execute("SELECT nome, fantasia FROM fornecedor WHERE codigo_int=%s", (produto["fornecedor"],))
+            frow = cur.fetchone()
+            if frow:
+                produto["fornecedor_nome"] = frow.get("fantasia") or frow.get("nome")
+
         cur.execute(
             "SELECT pf.fornecedor, pf.sequencia, f.nome FROM pecas_fornecedor pf "
             "LEFT JOIN fornecedor f ON f.codigo_int = pf.fornecedor WHERE pf.peca=%s ORDER BY pf.sequencia",
@@ -477,6 +488,287 @@ def _list_cores_grade_sync(servidor: str, banco: str, codigo_int: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Preço por Quantidade (`pecas_preco_qtd`) — botão "Preço por Quantidade" na
+# aba Dados Principais. Legado: `Geral\frmvalqtd.frm` (`Command39_Click` em
+# FrmManPec.frm chama `FrmValQtd`). Grid une a linha real da tabela com uma
+# linha sintética qtd=1 (preço base do produto, `pecas.p_venda`) — mesma
+# query do legado (`chama`), inclusive o efeito colateral de aparecer 2
+# linhas qtd=1 se o usuário gravar uma linha real com qtd=1 (o legado faz
+# isso, não é bug desta migração — ver "Não replicar truques VB6": aqui é
+# comportamento real replicado, não workaround de linguagem).
+# ---------------------------------------------------------------------------
+
+def _list_preco_qtd_sync(servidor: str, banco: str, codigo_int: str) -> dict:
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT qtd, p_venda FROM pecas_preco_qtd WHERE codigo_int=%s "
+            "UNION ALL SELECT 1 AS qtd, p_venda FROM pecas WHERE codigo_int=%s "
+            "ORDER BY qtd",
+            (codigo_int, codigo_int),
+        )
+        return {"success": True, "items": [_row_to_dict(r) for r in cur.fetchall()]}
+    except Exception as e:
+        return {"success": False, "message": f"Erro: {e}", "items": []}
+    finally:
+        conn.close()
+
+
+def _save_preco_qtd_sync(servidor: str, banco: str, codigo_int: str, qtd: float, p_venda: float) -> dict:
+    if not qtd or qtd <= 0:
+        return {"success": False, "message": "Defina a quantidade!"}
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT 1 AS ok FROM pecas_preco_qtd WHERE codigo_int=%s AND CAST(qtd AS NUMERIC(15,3))=%s",
+            (codigo_int, qtd),
+        )
+        if cur.fetchone():
+            cur.execute(
+                "UPDATE pecas_preco_qtd SET p_venda=%s WHERE codigo_int=%s AND CAST(qtd AS NUMERIC(15,3))=%s",
+                (p_venda, codigo_int, qtd),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO pecas_preco_qtd (codigo_int, qtd, p_venda) VALUES (%s,%s,%s)",
+                (codigo_int, qtd, p_venda),
+            )
+        conn.commit()
+        cur.close()
+        return {"success": True, "message": "Preço por quantidade gravado."}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao gravar: {e}"}
+    finally:
+        conn.close()
+
+
+def _delete_preco_qtd_sync(servidor: str, banco: str, codigo_int: str, qtd: float) -> dict:
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "DELETE FROM pecas_preco_qtd WHERE codigo_int=%s AND CAST(qtd AS NUMERIC(15,3))=%s",
+            (codigo_int, qtd),
+        )
+        conn.commit()
+        cur.close()
+        return {"success": True, "message": "Excluído."}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao excluir: {e}"}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Promoções (`pecas_promocao`) — botão "Variações de Preços" na aba Dados
+# Principais. Legado: `Geral\FrmValPro.frm` (`Command333_Click` chama
+# `FrmValPro`). `codigo_promocao` é auto-gerado como "{codigo_int}-{seq}"
+# quando não informado (mesma regra do legado) — confirmado que NENHUMA
+# outra tela do legado lê/agrupa por esse código entre produtos diferentes;
+# funciona hoje só como rótulo sequencial por produto, não uma promoção
+# real multi-produto (ver PENDENCIAS.md).
+#
+# Período (dias da semana / intervalo de data / intervalo de hora) — pedido
+# explícito do usuário, 2026-07-29, SEM precedente no legado (`FrmValPro`
+# só tinha quantidade/preço/código promoção) — colunas genuinamente novas,
+# não reaproveitamento de campo existente. Todos os 3 filtros são opcionais
+# e combináveis entre si (ex.: só dias da semana, só período de data, ou os
+# dois juntos + horário) — vazio/NULL em qualquer um deles significa "sem
+# restrição nesse critério".
+# ---------------------------------------------------------------------------
+
+def _ensure_promocao_periodo_cols(cur) -> None:
+    """Migração idempotente — mesmo padrão de `_ensure_qtd_pessoas_col`
+    (`pedido_common.py`): checa `sys.columns` e só faz ALTER TABLE se a
+    coluna ainda não existir, porque este backend atende múltiplas
+    empresas (um `servidor`+`banco` por conexão) sem executor de migração
+    central."""
+    for col, tipo in (
+        ("dias_semana", "NVARCHAR(20)"),
+        ("data_inicio", "DATE"),
+        ("data_fim", "DATE"),
+        ("hora_inicio", "NVARCHAR(5)"),
+        ("hora_fim", "NVARCHAR(5)"),
+    ):
+        cur.execute(
+            f"IF NOT EXISTS (SELECT 1 FROM sys.columns "
+            f"WHERE Name='{col}' AND Object_ID=Object_ID('pecas_promocao')) "
+            f"ALTER TABLE pecas_promocao ADD {col} {tipo} NULL"
+        )
+
+
+def _list_promocoes_sync(servidor: str, banco: str, codigo_int: str) -> dict:
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        _ensure_promocao_periodo_cols(cur)
+        cur.execute(
+            "SELECT sequencia, codigo_promocao, descricao_promocao, qtd, p_venda, "
+            "dias_semana, data_inicio, data_fim, hora_inicio, hora_fim "
+            "FROM pecas_promocao WHERE codigo_int=%s ORDER BY sequencia",
+            (codigo_int,),
+        )
+        return {"success": True, "items": [_row_to_dict(r) for r in cur.fetchall()]}
+    except Exception as e:
+        return {"success": False, "message": f"Erro: {e}", "items": []}
+    finally:
+        conn.close()
+
+
+def _save_promocao_sync(
+    servidor: str, banco: str, codigo_int: str, sequencia: Optional[int],
+    qtd: float, p_venda: float, codigo_promocao: str, descricao_promocao: str,
+    dias_semana: str = "", data_inicio: Optional[str] = None, data_fim: Optional[str] = None,
+    hora_inicio: str = "", hora_fim: str = "",
+) -> dict:
+    if not qtd or qtd <= 0:
+        return {"success": False, "message": "Defina a quantidade!"}
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        _ensure_promocao_periodo_cols(cur)
+        cod_promocao = (codigo_promocao or "").strip()
+        if not cod_promocao:
+            cur.execute("SELECT COUNT(*) AS n FROM pecas_promocao WHERE codigo_int=%s", (codigo_int,))
+            n = cur.fetchone()["n"]
+            cod_promocao = f"{codigo_int}-{n + 1}"
+        params = (
+            qtd, p_venda, cod_promocao, descricao_promocao.strip(),
+            dias_semana.strip() or None, data_inicio or None, data_fim or None,
+            hora_inicio.strip() or None, hora_fim.strip() or None,
+        )
+        if sequencia:
+            cur.execute(
+                "UPDATE pecas_promocao SET qtd=%s, p_venda=%s, codigo_promocao=%s, descricao_promocao=%s, "
+                "dias_semana=%s, data_inicio=%s, data_fim=%s, hora_inicio=%s, hora_fim=%s "
+                "WHERE sequencia=%s",
+                (*params, sequencia),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO pecas_promocao (codigo_int, qtd, p_venda, codigo_promocao, descricao_promocao, "
+                "dias_semana, data_inicio, data_fim, hora_inicio, hora_fim) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (codigo_int, *params),
+            )
+        conn.commit()
+        cur.close()
+        return {"success": True, "message": "Promoção gravada."}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao gravar: {e}"}
+    finally:
+        conn.close()
+
+
+def _delete_promocao_sync(servidor: str, banco: str, sequencia: int) -> dict:
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("DELETE FROM pecas_promocao WHERE sequencia=%s", (sequencia,))
+        conn.commit()
+        cur.close()
+        return {"success": True, "message": "Excluído."}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao excluir: {e}"}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Dias da Semana — Web Convidado (`Web_DiasSemana`) — botão ao lado do
+# checkbox "Produto Web" na aba Dados Principais, só habilitado quando
+# `pecas.Produto_web` está marcado. Configura em quais dias da semana este
+# produto aparece no cardápio do Web Convidado (módulo ainda em fase de
+# análise, ver WebConvidado.md — este cadastro específico foi liberado pro
+# usuário pra implementar desde já, 2026-07-30, "esse recurso já poderá ser
+# implementado agora"). Tabela NOVA, sem precedente no legado (Web
+# Convidado é módulo genuinamente novo deste projeto).
+#
+# Modelo: uma linha por (produto, dia) SELECIONADO — ausência de linha pra
+# um dia = produto não aparece naquele dia. Nenhum dia selecionado = mesmo
+# estado de "nunca configurado" (indistinguível de propósito — não há
+# necessidade de guardar "todos os dias" como caso especial: a ausência de
+# qualquer restrição é resolvida pela tela consumidora do Web Convidado,
+# fora de escopo desta rodada). Mesmo esquema de dia (0=domingo..6=sábado)
+# já usado em `pecas_promocao.dias_semana`/`DIAS_SEMANA_LABELS` no
+# frontend, pra manter consistência entre as duas features de "dias da
+# semana" deste módulo de produto.
+# ---------------------------------------------------------------------------
+
+_DDL_WEB_DIAS_SEMANA = """
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'Web_DiasSemana')
+BEGIN
+    CREATE TABLE Web_DiasSemana (
+        id INT IDENTITY(1,1) PRIMARY KEY,
+        codigo_int NVARCHAR(30) NOT NULL,
+        dia_semana SMALLINT NOT NULL
+    );
+END
+"""
+
+
+def _ensure_web_dias_semana_table(cur) -> None:
+    cur.execute(_DDL_WEB_DIAS_SEMANA)
+
+
+def _list_dias_semana_web_sync(servidor: str, banco: str, codigo_int: str) -> dict:
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        _ensure_web_dias_semana_table(cur)
+        cur.execute("SELECT dia_semana FROM Web_DiasSemana WHERE codigo_int=%s ORDER BY dia_semana", (codigo_int,))
+        dias = [int(r["dia_semana"]) for r in cur.fetchall()]
+        conn.commit()  # _ensure_web_dias_semana_table pode ter criado a tabela
+        cur.close()
+        return {"success": True, "dias": dias}
+    except Exception as e:
+        return {"success": False, "message": f"Erro: {e}", "dias": []}
+    finally:
+        conn.close()
+
+
+def _save_dias_semana_web_sync(servidor: str, banco: str, codigo_int: str, dias: list) -> dict:
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        _ensure_web_dias_semana_table(cur)
+        # Replace-all-on-save — mesmo padrão já usado pra telefones/
+        # endereços/contatos deste projeto (não há update/delete por linha).
+        cur.execute("DELETE FROM Web_DiasSemana WHERE codigo_int=%s", (codigo_int,))
+        dias_validos = sorted({int(d) for d in dias if 0 <= int(d) <= 6})
+        for d in dias_validos:
+            cur.execute("INSERT INTO Web_DiasSemana (codigo_int, dia_semana) VALUES (%s,%s)", (codigo_int, d))
+        conn.commit()
+        cur.close()
+        return {"success": True, "message": "Dias da Semana gravados."}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao gravar: {e}"}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Wrappers async
 # ---------------------------------------------------------------------------
 
@@ -502,3 +794,43 @@ async def criar_itens_grade(servidor: str, banco: str, codigo_int: str, combinac
 
 async def list_cores_grade(servidor: str, banco: str, codigo_int: str) -> dict:
     return await asyncio.to_thread(_list_cores_grade_sync, servidor, banco, codigo_int)
+
+
+async def list_preco_qtd(servidor: str, banco: str, codigo_int: str) -> dict:
+    return await asyncio.to_thread(_list_preco_qtd_sync, servidor, banco, codigo_int)
+
+
+async def save_preco_qtd(servidor: str, banco: str, codigo_int: str, qtd: float, p_venda: float) -> dict:
+    return await asyncio.to_thread(_save_preco_qtd_sync, servidor, banco, codigo_int, qtd, p_venda)
+
+
+async def delete_preco_qtd(servidor: str, banco: str, codigo_int: str, qtd: float) -> dict:
+    return await asyncio.to_thread(_delete_preco_qtd_sync, servidor, banco, codigo_int, qtd)
+
+
+async def list_promocoes(servidor: str, banco: str, codigo_int: str) -> dict:
+    return await asyncio.to_thread(_list_promocoes_sync, servidor, banco, codigo_int)
+
+
+async def save_promocao(
+    servidor: str, banco: str, codigo_int: str, sequencia: Optional[int],
+    qtd: float, p_venda: float, codigo_promocao: str, descricao_promocao: str,
+    dias_semana: str = "", data_inicio: Optional[str] = None, data_fim: Optional[str] = None,
+    hora_inicio: str = "", hora_fim: str = "",
+) -> dict:
+    return await asyncio.to_thread(
+        _save_promocao_sync, servidor, banco, codigo_int, sequencia, qtd, p_venda, codigo_promocao, descricao_promocao,
+        dias_semana, data_inicio, data_fim, hora_inicio, hora_fim,
+    )
+
+
+async def delete_promocao(servidor: str, banco: str, sequencia: int) -> dict:
+    return await asyncio.to_thread(_delete_promocao_sync, servidor, banco, sequencia)
+
+
+async def list_dias_semana_web(servidor: str, banco: str, codigo_int: str) -> dict:
+    return await asyncio.to_thread(_list_dias_semana_web_sync, servidor, banco, codigo_int)
+
+
+async def save_dias_semana_web(servidor: str, banco: str, codigo_int: str, dias: list) -> dict:
+    return await asyncio.to_thread(_save_dias_semana_web_sync, servidor, banco, codigo_int, dias)

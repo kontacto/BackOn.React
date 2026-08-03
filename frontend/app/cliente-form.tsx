@@ -1,18 +1,5 @@
 import { useState } from "react";
-import {
-  ActivityIndicator,
-  Image,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -50,13 +37,24 @@ export default function ClienteFormScreen() {
     // sai direto pra lista (mesma intenção do botão original: nunca abrir
     // a tela cheia do pedido). Pedido explícito do usuário, 2026-07-18.
     criar_pedido?: string;
+    // Mesmo padrão acima, clonado pra Agenda (2026-07-28): veio do modal de
+    // Atendimento (grade semanal) sem achar o cliente buscado — o
+    // profissional/data/hora/serviço já foram escolhidos antes de cair
+    // aqui, então ao Gravar já dá pra criar o agendamento avulso direto.
+    criar_agendamento?: string;
+    agenda_funcionario?: string;
+    agenda_data?: string;
+    agenda_hora?: string;
+    agenda_servico?: string;
   }>();
   const editing = !!params.codigo;
   const codigo = params.codigo ? parseInt(String(params.codigo), 10) : null;
   const criarPedidoAoGravar = params.criar_pedido === "1";
+  const criarAgendamentoAoGravar = params.criar_agendamento === "1";
 
   const [tipoModalVisible, setTipoModalVisible] = useState(false);
   const [criandoPedido, setCriandoPedido] = useState(false);
+  const [criandoAgendamento, setCriandoAgendamento] = useState(false);
 
   const f = useClienteForm({
     editing,
@@ -88,6 +86,38 @@ export default function ClienteFormScreen() {
     }
   };
 
+  const criarAgendamentoParaCliente = async (codigoCliente: number) => {
+    if (!f.conn) { router.back(); return; }
+    setCriandoAgendamento(true);
+    try {
+      const usuarioCod = isMaster ? -2 : (usuarioCodigo ?? -2);
+      const j = await apiSend(f.conn, "/api/agenda/avulso", "POST", {
+        funcionario: params.agenda_funcionario ? parseInt(String(params.agenda_funcionario), 10) : null,
+        data: params.agenda_data ? String(params.agenda_data) : null,
+        hora_ini: params.agenda_hora ? String(params.agenda_hora) : null,
+        servico: params.agenda_servico ? String(params.agenda_servico) : null,
+        cliente: codigoCliente,
+        classe, master: isMaster, usuario_alteracao: usuarioCod, plataforma: Platform.OS,
+      });
+      if (!j?.success) {
+        f.showToast(j?.message || "Cliente gravado, mas falhou ao criar o agendamento.", "error");
+      } else {
+        f.showToast(`Agendamento #${j.agendamento?.codagenda} criado.`, "success");
+      }
+    } catch (e) {
+      f.showToast(`Cliente gravado, mas falhou ao criar o agendamento: ${e instanceof Error ? e.message : String(e)}`, "error");
+    } finally {
+      setCriandoAgendamento(false);
+      router.replace({
+        pathname: "/agenda",
+        params: {
+          funcionario: params.agenda_funcionario || "",
+          data: params.agenda_data || "",
+        },
+      });
+    }
+  };
+
   // Cadastro rápido edita apenas o primeiro endereço (cadastro completo, web-only,
   // expõe a lista inteira com incluir/excluir).
   const endereco = f.enderecos[0];
@@ -116,7 +146,6 @@ export default function ClienteFormScreen() {
         >
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
         <Text style={styles.headerTitle} numberOfLines={1}>
           {editing ? `Cliente #${codigo}` : "Novo Cliente"}
         </Text>
@@ -125,18 +154,19 @@ export default function ClienteFormScreen() {
             onPress={() =>
               f.handleSave((savedCodigo) => {
                 if (criarPedidoAoGravar && savedCodigo) criarPedidoParaCliente(savedCodigo);
+                else if (criarAgendamentoAoGravar && savedCodigo) criarAgendamentoParaCliente(savedCodigo);
                 else router.back();
               })
             }
-            disabled={f.saving || criandoPedido}
+            disabled={f.saving || criandoPedido || criandoAgendamento}
             style={({ pressed }) => [
               styles.saveBtn,
-              (pressed || f.saving || criandoPedido) && { opacity: 0.7 },
+              (pressed || f.saving || criandoPedido || criandoAgendamento) && { opacity: 0.7 },
             ]}
             hitSlop={8}
             testID="cliente-form-save-button"
           >
-            {f.saving || criandoPedido ? (
+            {f.saving || criandoPedido || criandoAgendamento ? (
               <ActivityIndicator color={colors.onBrandPrimary} size="small" />
             ) : (
               <>

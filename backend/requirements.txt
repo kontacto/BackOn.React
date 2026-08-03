@@ -130,3 +130,5 @@ charset-normalizer==3.4.9
 isodate==0.7.2
 requests==2.34.2
 urllib3==2.7.0
+signxml==5.1.0
+lxml==6.1.1

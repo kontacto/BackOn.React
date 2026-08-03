@@ -10,7 +10,7 @@
 // relatorios) — só a barra visual dele é escondida no web (`tabBarStyle:
 // display:none`) pra não duplicar este componente.
 import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter, usePathname } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 
@@ -154,6 +154,35 @@ export default function Sidebar() {
       style={[styles.sidebar, { width: collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED }]}
       testID="app-sidebar"
     >
+      {/* Logo — único lugar do app que mostra a marca agora (retirado do
+          cabeçalho de cada tela, pedido explícito do usuário 2026-07-30).
+          Telas sem sidebar (`HIDDEN_ON` acima — splash/login/connections/
+          perfil-usuario) mantêm seu próprio logo local, já que não têm
+          este menu pra herdar dele. Versão colorida (fundo claro) — a
+          `kontacto-logo.png` usada nos cabeçalhos antigos é branca, feita
+          pra fundo escuro, e ficaria invisível aqui. Expandido mostra a
+          marca completa (~6:1, não cabe legível nos 56px do menu
+          recolhido); recolhido troca pro ícone circular (`kontacto-icon.png`,
+          mesmo "K" da marca, formato quadrado — cabe no menu estreito). */}
+      <View style={styles.logoWrap}>
+        {!collapsed ? (
+          <Image
+            source={require("../../assets/images/kontacto-logo-color.png")}
+            style={styles.logo}
+            resizeMode="contain"
+            accessibilityLabel="Kontacto Sistemas"
+            testID="sidebar-logo"
+          />
+        ) : (
+          <Image
+            source={require("../../assets/images/kontacto-icon.png")}
+            style={styles.logoIcon}
+            resizeMode="contain"
+            accessibilityLabel="Kontacto Sistemas"
+            testID="sidebar-logo-icon"
+          />
+        )}
+      </View>
       <Pressable
         onPress={toggleCollapsed}
         style={[styles.collapseBtn, collapsed && styles.collapseBtnCollapsed]}
@@ -214,6 +243,20 @@ const styles = StyleSheet.create({
     // tela").
     zIndex: 20,
   },
+  logoWrap: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  // Proporção real do arquivo (~6:1, bem mais largo que alto) — 150x25
+  // preenche quase toda a largura útil do menu expandido (188px - padding)
+  // sem estourar.
+  logo: { width: 150, height: 25 },
+  // Ícone quadrado (1:1) — cabe nos 56px do menu recolhido com folga pro padding.
+  logoIcon: { width: 32, height: 32 },
   collapseBtn: {
     alignSelf: "flex-end",
     width: 28,

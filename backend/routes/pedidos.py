@@ -7,7 +7,7 @@ from models.schemas import (
     PedidosListRequest, PedidoSaveRequest, ItemSaveRequest, FecharRequest,
     TaxaServicoRequest, PedidoEntregueRequest, FormaPagSimplesRequest,
     FormaPagamentoAddRequest, FormaPagamentoUpdateRequest, FormaPagamentoDeleteRequest,
-    DividirPedidoRequest, QtdPessoasRequest,
+    DividirPedidoRequest, QtdPessoasRequest, TipoPedidoRequest,
 )
 from services import pedidos_service, itens_service, log_auditoria_service, forma_pagamento_service
 
@@ -208,6 +208,22 @@ async def set_qtd_pessoas(pedido: int, req: QtdPessoasRequest, request: Request)
             req.servidor, req.banco, tela="PEDIDO", comando="GRAVAR",
             usuario=req.usuario_alteracao, classe=req.classe,
             referencia=str(pedido), descricao=f"Pedido {pedido}: qtd. de pessoas definida como {req.qtd_pessoas}",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/pedidos/{pedido}/tipo")
+async def set_tipo_pedido(pedido: int, req: TipoPedidoRequest, request: Request):
+    """Painel de Pedidos — troca do Tipo (Mesa/Comanda/Balcão/Entrega/Fiado)
+    arrastando o card entre colunas, fora do fluxo normal de Gravar (ver
+    `pedidos_service._set_tipo_pedido_sync`)."""
+    result = await pedidos_service.set_tipo_pedido(req, pedido)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PEDIDO", comando="GRAVAR",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(pedido), descricao=f"Pedido {pedido}: tipo alterado para código {result.get('tipo')}",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

@@ -74,8 +74,9 @@ export default function ProdutosScreen() {
   const params = useLocalSearchParams<{ pedido?: string; tipo?: string; origem?: string }>();
   const selectPedido = params.pedido ? parseInt(String(params.pedido), 10) : null;
   const selecting = !!selectPedido;
-  // Origem "completo" = aberta a partir do Pedido Completo (web) — grava via
-  // /api/pedido-completo (resolução de produto mais rica + kits), não
+  // Origem "completo" = aberta a partir do Pedido Geral (web, ex-"Pedido
+  // Completo") — grava via /api/pedido-completo (resolução de produto mais
+  // rica + kits, endpoint mantém o nome antigo por enquanto), não
   // /api/pedidos (pré-venda rápida). Mesma tabela, endpoint diferente.
   const completo = params.origem === "completo";
   const itensBasePath = completo ? "/api/pedido-completo" : "/api/pedidos";
@@ -280,7 +281,6 @@ export default function ProdutosScreen() {
         >
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>
           {selecting
             ? `Adicionar ao Pedido #${selectPedido}`

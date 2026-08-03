@@ -6,6 +6,1303 @@ inteira antes de continuar — não reanalisar do zero.
 
 ---
 
+## Modificadores
+
+**Status: 🟡 Fase 1 (cadastro) implementada e testada ao vivo (2026-07-23)**
+— cadastro genuinamente novo, **sem equivalente no legado VB6** ("não
+possui tabela", pedido explícito do usuário). Uma Categoria de Modificador
+(ex.: "Ponto da Carne") agrupa vários Modificadores (ex.: "Mal passado"),
+associável a Produto e/ou Serviço, pra abrir um seletor na hora da venda
+quando o item incluído tiver modificador associado — **Fase 2 (seleção na
+venda) implementada só no Pedido Bar**, ver subseção própria mais abaixo.
+
+### Módulo gateado por "Bar" (2026-07-23, user-directed)
+
+**"colocar o modificador ligado ao módulo de Pedido Bar. Só aparecerá para
+esse módulo ativo em configurações"** — todo o módulo Modificadores (não só
+a Fase 2) só funciona/aparece com `controle_configuracao.Bar` ligado, mesmo
+mecanismo já usado por `servicos`/`contratos`/`Curva_abc` ("Regra de Módulo
+Ativo — Gating por Entidade (Backend)" em CLAUDE.md):
+
+- **Backend**: `pedido_common._modulo_bar_ativo(cur)` (mesmo padrão de
+  `_modulo_contratos_ativo`), checado no topo de TODAS as 7 funções `_*_sync`
+  de `modificadores_service.py` (list/get/save/delete categoria, list/get
+  completo por-item, associar por-item) — bloqueia com
+  `"Módulo Bar está desativado — fale com o administrador em Configurações >
+  Módulos e Recursos."`. 7 testes novos em `TestModuloBarGating`
+  (`test_modificadores_service.py`), helper `_patch` do arquivo ganhou
+  parâmetro `modulo_bar_ativo` (default `True`, pra não precisar tocar nos
+  outros 14 testes já existentes).
+- **Catálogo de permissões**: `MODIFICADORES` adicionado a
+  `controle_config_service.MODULE_TELAS["Bar"]` (`["PEDIDO", "MODIFICADORES"]`)
+  — a tela some da árvore de Permissões (e `can("MODIFICADORES.*")` passa a
+  retornar `False` via `disabled_telas`) junto com "Pedido Bar" quando o
+  módulo é desligado.
+- **Frontend**: `app/modificadores.tsx` ganhou o guard
+  `if (!moduleOn("Bar")) return <LockedView .../>` (mesmo padrão de
+  `contrato-tipo.tsx` etc.); tile em `tabelas-auxiliares.tsx` ganhou
+  `moduleOn("Bar") &&` na condição `visible`; a aba "Modificadores" em
+  `produto-completo.tsx`/`servicos.tsx` só entra no array `TABS`/passa no
+  filtro quando `moduleOn("Bar")` também é verdadeiro (além da regra já
+  existente de precisar do registro salvo).
+- **Não gateado de novo** (já implícito): o seletor de modificador dentro
+  de `AddItemModal.tsx` (Fase 2) só ativa com `tela === "PEDIDO"`, que por
+  si só só é alcançável com o módulo Bar ligado (mesma amarração
+  `MODULE_TELAS["Bar"] = ["PEDIDO", ...]`) — nenhum check redundante de
+  `moduleOn("Bar")` foi adicionado lá.
+
+### Escopo confirmado com o usuário (via AskUserQuestion, 2026-07-23)
+
+1. **Onde a seleção aparece na venda** (Fase 2, futura): Pedido Bar +
+   Pedido Geral + O.S., todos os pontos de inclusão de item de pré-venda.
+2. **Acréscimo/Desconto do modificador**: valor FIXO em R$, não percentual.
+3. **Campos do modificador**: só Nome + Acréscimo + Desconto + Situação
+   (Ativo/Desativado) — sem Custo/SKU/ícone de visibilidade (esses
+   apareciam nas telas de referência anexadas pelo usuário, de um sistema
+   de terceiros usado só como inspiração visual, não como especificação a
+   replicar literalmente).
+4. **Faseamento**: Fase 1 = só cadastro (Categorias + Modificadores +
+   associação com Produto/Serviço, nos 2 sentidos). Fase 2 = integração
+   com a tela de venda, ainda não iniciada.
+
+### Modelo de dados (3 tabelas novas, migração idempotente)
+
+- `modificador_categoria` (codigo IDENTITY, nome, `obrigatorio` BIT,
+  `selecao_multipla` BIT — "Apenas um"/"Vários").
+- `modificador` (codigo IDENTITY, `categoria` FK, nome, acrescimo
+  NUMERIC(15,2), desconto NUMERIC(15,2), situacao 'A'/'D').
+- `modificador_categoria_item` — associação N:N, com `tipo` ('P'=Produto/
+  'S'=Serviço) + `codigo` — **discriminador necessário porque Produto
+  (`pecas.codigo_int`) e Serviço (`servicos.codigo`) são tabelas
+  DIFERENTES neste sistema** (confirmado em `servicos_service.py` — Serviço
+  não é uma linha de `pecas`, tabela própria).
+
+### Backend
+
+`backend/models/modificadores.py` + `backend/services/
+modificadores_service.py` (CRUD de categoria com replace-all pros
+modificadores e associações filhas, mesmo padrão já usado pra telefones/
+endereços/contatos do Cliente) + `backend/routes/modificadores.py`
+(registrado em `server.py`). Endpoints:
+- `GET/POST /api/modificadores/categorias`, `GET/DELETE /api/modificadores/
+  categorias/{codigo}` — CRUD principal.
+- `GET/POST /api/modificadores/por-item/{tipo}/{codigo}` — associação "pelo
+  outro lado" (a partir de Produto Completo/Serviços), reaproveitada pelo
+  retrofit no frontend.
+- Busca de produto/serviço pro modal de associação reaproveita o endpoint
+  JÁ EXISTENTE `GET /api/produtos-servicos` (não foi criado um endpoint de
+  busca novo — DRY).
+
+Permissão nova `MODIFICADORES` (Cadastros > Tabelas Auxiliares,
+ABRIR/GRAVAR/EXCLUIR padrão). Log de auditoria em Gravar/Excluir da tela
+principal (tela=MODIFICADORES). O retrofit em Produto Completo/Serviços
+(endpoint `por-item`) não loga auditoria própria ainda — decisão de
+escopo pra não alongar mais esta rodada, considerar se fizer sentido
+depois.
+
+**Exclusão em cascata sem bloqueio**: como a Fase 2 (venda) não existe
+ainda, nenhum pedido/item pode referenciar um modificador hoje — excluir
+uma categoria apaga modificadores + associações em cascata livremente.
+**Quando a Fase 2 for implementada, isso precisa passar a bloquear** (ou
+pelo menos avisar) se houver histórico de uso, mesmo princípio de "Delete
+guards required" já usado no resto do sistema.
+
+### Frontend
+
+- `frontend/app/modificadores.tsx` — tela principal (lista de categorias +
+  modal de edição com modificadores aninhados + modal de associação de
+  Produto/Serviço, busca reaproveitando `/api/produtos-servicos`). Tile
+  novo em Tabelas Auxiliares (`tabelas-auxiliares.tsx`).
+- `frontend/src/components/ModificadoresSection.tsx` — componente
+  compartilhado (mesmo espírito de `GestorDocumentosSection.tsx`) pro
+  retrofit "associação pelo outro lado". **Correção 2026-07-23, user-
+  directed** ("colocar o botão dos modificadores"): não fica mais dentro
+  da aba Anexos — ganhou aba PRÓPRIA ("Modificadores", ícone
+  `options-outline`, mesmo ícone do tile em Tabelas Auxiliares) tanto em
+  `produto-completo.tsx` quanto em `servicos.tsx`, mesmo padrão de
+  "Anexos" já ser uma aba de verdade nessas 2 telas — a aba em si já é o
+  "botão" que o usuário pediu. Trava até o registro ser salvo pelo menos
+  uma vez (mesma regra "relacionados travados até o pai existir"); em
+  Serviços a aba nem aparece na lista antes disso (mesmo filtro já usado
+  pra Anexos), em Produto Completo a aba aparece mas mostra "Grave o
+  produto para vincular modificadores." até lá. Não duplica a lógica de
+  associação entre as 2 telas.
+- **Botão "Adicionar" (2026-07-23, user-directed)**: ao lado de
+  "Gerenciar", pra criar uma categoria de modificador nova SEM sair pra
+  Tabelas Auxiliares ("assim não precisamos abrir o cadastro do modificador
+  em tabelas auxiliares toda vez que precisarmos incluir um novo"). O modal
+  de edição de categoria foi extraído de `app/modificadores.tsx` pro
+  componente compartilhado `frontend/src/components/
+  ModificadorCategoriaModal.tsx` (props `api/servidor/banco` + `codigo`
+  nulo=nova — mesmo padrão de props de `ModificadoresSection.tsx`, usa
+  `fetch()` cru, não `apiGet`/`apiSend`) — reaproveitado tanto pela tela
+  principal quanto por este botão novo, evita duplicar ~250 linhas de
+  formulário. Ao gravar, a categoria nova já é automaticamente associada
+  ao produto/serviço atual (`handleNovaCategoriaSaved` chama o mesmo
+  endpoint `por-item` que "Gerenciar" usa, com a lista de associadas +1).
+  **Gated pela permissão `MODIFICADORES.GRAVAR`** (não a permissão do
+  produto/serviço que gate "Gerenciar") — pedido explícito do usuário
+  ("Use a mesma permissão do Modificador atual para liberar o incluir").
+- Testado ao vivo contra `GERDELL`/`BARESTELA`: criar categoria com 2
+  modificadores + 1 produto associado → listar → editar (3 modificadores,
+  muda pra "Vários") → replace-all confirmado (códigos novos) → consultar
+  pelo lado do produto (`por-item`) → excluir categoria → cascata
+  confirmada (modificadores e associações removidos junto) → log de
+  auditoria confirmado nas 3 operações (Cadastro/Alteração/Exclusão). 13
+  testes unitários (mockados) — todos passando.
+- **Não testado ao vivo num navegador de verdade** (mesma limitação já
+  documentada noutros módulos desta sessão — sem ferramenta de automação
+  de browser neste ambiente); só validado via `curl` direto contra a API.
+
+### Fase 2 (venda) — implementada SÓ no Pedido Bar (2026-07-23)
+
+**Status: 🟢 Pedido Bar implementado e com testes de backend passando.
+Pedido Geral e O.S. AINDA NÃO — pedido explícito do usuário: "faça somente
+em Pedidos Bar. Depois faremos nas outras pré-venda".** Não presumir esse
+próximo passo sozinho quando retomar — só estender pras outras telas
+quando o usuário pedir.
+
+Layout NÃO seguiu literalmente as capturas de tela do app de delivery de
+terceiros que o usuário tinha anexado como referência visual (sem "badge
+verde Concluído"/progresso) — foi construído no mesmo estilo visual já
+usado no resto do sistema (cards com borda, badge Obrigatório/Opcional,
+checkbox ou radio conforme "Vários"/"Apenas um"), mais simples que a
+referência.
+
+Respostas às perguntas que estavam em aberto (decididas durante a
+implementação, sem precisar perguntar de novo — julgamento de engenharia
+dentro do escopo já confirmado):
+- **Momento em que o seletor abre**: dentro da própria tela "Confirmar
+  Item" de `AddItemModal.tsx` (depois de escolher o produto, antes de
+  Adicionar) — não é uma tela/modal separada. O botão "+" de adição rápida
+  (sem passar por "Confirmar Item") é interceptado: se o produto tem
+  categoria de modificador associada, vira um `pickProduto` normal em vez
+  de adicionar direto, forçando a passagem pela seleção.
+- **Obrigatório sem seleção**: bloqueia a inclusão — `handleConfirmar`
+  computa `categoriasObrigatoriasFaltando` e mostra
+  `fb.showError("Selecione uma opção em: ...")` sem chamar
+  `it.handleAddItem`. A categoria com pendência também mostra um aviso
+  inline ("Selecione uma opção.") no próprio card.
+- **Onde o acréscimo/desconto entra**: ajusta o preço unitário do item
+  principal (mesmo mecanismo de Desc./Acrésc. já existentes em
+  `AddItemModal.tsx`), **não** vira uma linha própria no pedido — somado
+  em cima do que o usuário já digitou manualmente nesses campos
+  (`usePedidoItens.handleAddItem` ganhou um parâmetro opcional `extra:
+  {acrescimoExtra, descontoExtra, complementoExtra}`, que o `usePedidoItens`
+  soma ao valor manual antes de mandar pro backend — nenhum endpoint novo
+  de item foi necessário, `POST /api/pedidos/{id}/itens` já aceita
+  desconto/acrescimo).
+- **Modificador Desativado**: desaparece — o backend já filtra
+  `situacao='A'` no novo endpoint (ver abaixo), nunca chega no frontend.
+
+**Backend**: novo endpoint `GET /api/modificadores/por-item/{tipo}/{codigo}/
+completo` (`modificadores_service.get_modificadores_completo_por_item` →
+`_get_modificadores_completo_por_item_sync`) — diferente do `por-item` já
+existente (que só devolve `{codigo,nome}`, usado pelo retrofit em Produto
+Completo/Serviços), este devolve as categorias com `obrigatorio`/
+`selecao_multipla` e os modificadores aninhados (nome/acrescimo/desconto),
+só os com `situacao='A'`. 1 teste unitário novo cobrindo isso (14 no total
+no arquivo agora).
+
+**Frontend**: tudo em `frontend/src/components/pedido/AddItemModal.tsx` +
+um parâmetro novo em `usePedidoItens.ts`'s `handleAddItem` — **gated por
+`tela === "PEDIDO"`** (`modificadoresOn`), então Pedido Geral
+(`tela="PEDIDO_COMP"`) e O.S. (que nem usa este componente, ver abaixo)
+ficam com o comportamento de antes, sem nenhuma chamada extra à API. Ao
+selecionar um produto (`selProd` muda), busca as categorias associadas;
+card por categoria com badge Obrigatório/Opcional + Vários, checkbox
+(Vários) ou radio (Apenas um) por modificador, valor +/- ao lado de cada
+um. O preview de preço ("Preço líquido unit."/"Total do item") já soma os
+modificadores selecionados ANTES de confirmar. Nomes dos modificadores
+selecionados são concatenados (", ") e anexados ao Complemento do item
+(`" | "` como separador se o usuário também digitou algo à mão) — é isso
+que sai impresso como "Obs" no ticket do item do Bar
+(`ReciboPedidoModal.tsx` já lê `item.complemento`, nenhuma mudança
+necessária lá).
+
+**`PainelPedidoCard.tsx`'s botão "+ Item" — gap fechado no mesmo dia
+(2026-07-23)**: reportado ao vivo pelo usuário (produto "PICANHA NA PEDRA
+REFEIÇÃO" com modificadores associados, adicionado via "+" do card, pulava
+direto pra impressão do item sem perguntar o modificador). Confirmado via
+`AskUserQuestion` que o usuário queria a mesma regra aplicada aqui também.
+Implementado replicando (não compartilhando) o padrão de `AddItemModal.tsx`
+— mesmo princípio arquitetural já usado neste card (CLAUDE.md > "Painel de
+Pedidos": evitar instanciar hook/componente maior por card):
+- `iniciarAddProduto(p)` substitui a chamada direta a `quickAddItem` no "+"
+  da lista de busca — chama `buscarModificadoresProduto` (mesmo endpoint
+  `GET /api/modificadores/por-item/{tipo}/{codigo}/completo`); sem
+  categoria associada, comportamento idêntico a antes (`quickAddItem`
+  direto); com categoria, abre uma tela de confirmação DENTRO do mesmo
+  modal "Adicionar item" (não é um modal novo) com os cards de
+  categoria/modificador (checkbox/radio, badge Obrigatório/Opcional —
+  mesmo visual de `AddItemModal.tsx`, `modStyles` duplicado, não
+  exportado/compartilhado).
+- `handleConfirmarModificadores` valida `categoriasObrigatoriasFaltando`
+  antes de confirmar (mesmo bloqueio de `AddItemModal.tsx`), soma
+  acréscimo/desconto dos modificadores selecionados e concatena os nomes
+  no `complemento`.
+- `quickAddItem` ganhou parâmetro opcional `extra: {acrescimoExtra,
+  descontoExtra, complementoExtra}` (mesmo formato de
+  `usePedidoItens.handleAddItem`) e passou a devolver `boolean` (sucesso) —
+  a tela de confirmação só fecha e volta pra lista em caso de sucesso,
+  senão o usuário pode corrigir e tentar de novo sem perder a seleção.
+- Pedido Geral (`pedido-geral.tsx`) e O.S. (`os-form.tsx`, implementação de
+  item independente, nem usa `AddItemModal` — ver `handleSaveItem`/
+  `itemModal`) continuam de fora, pra quando o usuário pedir
+  explicitamente.
+- **Não testado ao vivo num navegador de verdade** (mesma limitação já
+  documentada noutros módulos desta sessão) — só `tsc --noEmit` confirmado
+  sem novos erros vs. baseline; o fluxo do seletor em si (checkbox/radio,
+  bloqueio de obrigatório, soma no preço, texto no Complemento) ainda não
+  passou por um teste manual na tela, nem no `AddItemModal.tsx` original
+  nem nesta extensão ao card.
+
+---
+
+## Emissão Fiscal Real (NFC-e/NF-e/NFS-e)
+
+**Status: 🟡 Fases 1 e 3 implementadas 2026-07-21 (NFC-e e NFS-e síncronas), Fases 2 e 4 pendentes.**
+Migração de `FrmTraImpNFE.frm` ("Impressão de Nota Fiscal" — a segunda tela
+principal do sistema, depois do Gestor de Comandas). Plano completo em
+`C:\Users\carlo\.claude\plans\velvet-roaming-sparrow.md`. Decisão do usuário,
+não presumida: reimplementar em Python puro a lógica fiscal hoje na DLL
+VB.NET `Backon_Controllers.Nfe` (não chamar via COM-interop), melhorando o
+que fizer sentido — não um port 1:1.
+
+**Estado de referência da DLL/form no momento do port** (pra comparação
+futura, quando a equipe VB.NET terminar a atualização em andamento):
+`Backon.Controllers/NFe.vb` e `FrmTraImpNFE.frm` rastreados/colados
+2026-07-21. `GeraNFe` não calcula alíquota (só monta/assina/transmite
+valores já resolvidos); a resolução de tributação real está inteira no VB6
+(`SitTribut()`), portada aqui. `ImprimeDanfe` depende de
+`PrintPreviewDialog` + `biopdf.PDFUtil` (COM de terceiros) — não portável,
+fica pra Fase 4 (DANFCe em HTML). `EmiteNFSe` não existe na DLL — é
+orquestração VB6 local ainda não localizada.
+
+### Fase 1 — Motor de emissão de NFC-e (modelo 65), síncrona — ✅ implementada
+- **`backend/services/nfe_fiscal_common.py`** (novo) — extraído de
+  `nfe_cancelamento_service.py`: `carregar_certificado_sync`, `assinar_xml`,
+  `montar_envelope_soap`, `transmitir`, `extrair_tag`, `resolver_endpoint`,
+  `IBGE_POR_UF`, `UFS_SVRS`. `nfe_cancelamento_service.py` foi refatorado
+  pra usar este módulo comum (wrappers finos, mesmos nomes de sempre — os
+  17 testes de cancelamento continuam passando sem alteração).
+- **`backend/services/nfe_emissao_service.py`** (novo):
+  - `_resolver_tributacao_sync`/`_gerar_tentativas_tributacao` — porta
+    fiel de `SitTribut()` (cascata de fallback: simples_nacional →
+    consumidor_final → UF="XX" → protocolo_st, replicada explicitamente
+    como lista de tentativas, não um loop compacto, pra ficar auditável
+    contra a fonte). **Achado não-óbvio confirmado na fonte**: a query de
+    `taxas` não filtra pelo CFOP do item — só EXCLUI `cfop = 
+    CFOP_Cupom_Fiscal`; e a variável "CSN" do VB6 na verdade começa
+    valendo `NaoContribuinte`, não `Cliente_Simples_Nacional` (só no
+    fallback de UF="XX" é que usa o valor "real"). Documentado no código,
+    não é engano do port.
+  - `montar_chave_acesso`/`_dv_modulo11` — algoritmo público (mod-11) de
+    chave de acesso de 44 dígitos.
+  - `montar_url_qrcode` — algoritmo público do QR Code da NFCe (MOC 2.00).
+  - `_montar_xml_nfce`/`_montar_envelope_autorizacao` — layout NFe 4.00.
+    **Não validado contra o XSD oficial da SEFAZ** — a ordem de tags segue
+    o layout público conhecido, mas precisa de validação formal antes de
+    qualquer transmissão real (nem mesmo em homologação).
+  - `emitir_nfce_sync` — orquestrador (assina, transmite, interpreta
+    `cStat`). Endpoints só do grupo SVRS (mesma limitação do cancelamento).
+  - `backend/services/comanda_service.py::_emitir_nfce_comanda_sync` —
+    integra tudo: valida permissão/situação/duplicidade, resolve cliente
+    (não-contribuinte/simples nacional/consumidor final), resolve
+    tributação por item, chama o orquestrador, grava `n_fiscal`+
+    `comanda_nfce`+`comanda_nf`, incrementa `controle_aux.numero_nfce`.
+  - Rota `POST /api/comandas/{comanda}/emitir-nfce`, ação
+    `ALTERAR_COMANDA.EMITIR_NF` no catálogo de permissões.
+  - **Frontend**: card "Nota Fiscal" em `alterar-comanda.tsx` — mostra o
+    documento já emitido, ou botão "Emitir NFC-e" quando ainda não há
+    nenhum (só com a comanda faturada e permissão). Modo Didático
+    atualizado.
+  - **38 testes unitários novos** (`test_nfe_emissao_service.py` +
+    adições em `test_comanda_service.py`) — 749 no total na suíte,
+    **nunca contra certificado real nem rede real** (mesmo compromisso do
+    cancelamento — só certificado autoassinado em memória + `transmitir`
+    sempre mockada).
+- **Não validado ao vivo contra BD_PAJE nem contra o SEFAZ** (nem
+  homologação) — essa conexão tem o certificado real de um cliente em
+  produção (CNPJ 49680039000196, confirmado ao vivo via
+  `SELECT cgc FROM controle`) e emitir uma NFC-e de verdade teria
+  consequência fiscal real. Só leituras de schema (`SELECT`/
+  `INFORMATION_SCHEMA`) foram feitas contra essa conexão nesta fase.
+- **Gap real descoberto ao investigar a Fase 3 (corrigido no mesmo dia)**:
+  uma comanda desta empresa pode misturar item de produto e de serviço
+  (ex.: peça + mão de obra de alinhamento numa auto center — confirmado ao
+  vivo contra `BD_PAJE`, item `SALD`="ALINHAMENTO DIANTEIRO" existe em
+  `movimentacao` de comandas reais). A query de itens da Fase 1
+  (`_emitir_nfce_comanda_sync`) usava `LEFT JOIN pecas` — incluiria o item
+  de serviço na NFC-e também, com colunas de tributação vazias,
+  corrompendo o documento. Corrigido pra `JOIN` (inner) — itens de serviço
+  agora só entram pela NFS-e (Fase 3).
+- **Limitação conhecida, não resolvida**: `comanda_service._get_doc_fiscal_
+  sync` devolve só o PRIMEIRO documento encontrado (NFC-e > NFS-e > NF >
+  Cupom), não uma lista. Numa comanda mista que já emitiu um dos dois
+  documentos, o card "Nota Fiscal" (`alterar-comanda.tsx`) mostra esse
+  documento e ainda oferece o botão do outro tipo (o botão consulta o
+  backend, que valida duplicidade por tipo de forma independente) — mas se
+  os DOIS já foram emitidos, a tela só mostra um deles. Resolver de
+  verdade exige mudar a resposta de `get_doc_fiscal` de objeto único pra
+  lista — não feito nesta rodada por ser uma tela nova (baixo risco/baixa
+  urgência), registrar se o usuário topar uma comanda mista de verdade.
+
+### Fase 2 — NF-e (modelo 55), lote assíncrono — 🔴 não iniciada
+Reaproveita quase tudo da Fase 1, precisa de `_consultar_recibo_sync`
+(`NFeRetAutorizacao4`) já que a autorização de NF-e não é sempre síncrona.
+
+### Fase 3 — NFS-e (DPS Nacional/Sefin Nacional) — ✅ implementada (só o caminho nacional)
+`EmiteNFSe` foi localizado em `Geral\NFSe.bas` (linha 795, 2026-07-21) — não
+está na DLL, é orquestração VB6 pura. Revelou escopo maior do que o
+esperado: a rotina branca em **4 caminhos** conforme
+`Dados_Controle_Configuracao.Sefin_Nacional` e o código do município:
+1. **Sefin Nacional / DPS** — padrão nacional unificado novo.
+2. São Gonçalo (3304904) — webservice próprio (`EnviarSaoGoncalo`).
+3. Nova Iguaçu (3303500) — GINFES (`nota_ny.EnviarLoteRpsEnvio`).
+4. ABRASF genérico por município — qualquer outro, via `NFSeDPS`.
+
+**Decisão do usuário via `AskUserQuestion` (2026-07-21)**: implementar só
+o caminho (1) por enquanto — é o padrão que a lei está unificando
+nacionalmente. **Correção do próprio usuário, mesmo dia**: os caminhos
+(2)-(4) (São Gonçalo, Nova Iguaçu/GINFES, ABRASF genérico) **não estão
+obsoletos nem sendo descontinuados** — Nova Iguaçu especificamente
+"continua existindo" (uso ativo real) — a decisão de escopo foi só
+priorizar o caminho nacional primeiro, não presumir que os outros vão
+sumir. Caminhos (2)-(4) **não implementados nesta rodada**, registrados
+aqui como pendência futura caso a empresa precise emitir NFS-e num
+município que ainda usa um desses caminhos específicos (ou em paralelo ao
+nacional, conforme o município).
+
+- **`backend/services/nfe_fiscal_common.py`** — nova função
+  `transmitir_json_mtls` (POST JSON + TLS mútuo — o ADN troca mensagens em
+  JSON, não SOAP/XML puro como o SEFAZ, mas ainda exige o certificado do
+  contribuinte como client cert da conexão TLS; confirmado ao vivo: toda
+  URL `adn.nfse.gov.br/**`, inclusive só pra ver a documentação Swagger,
+  devolve HTTP 496 "certificado exigido").
+- **`backend/services/nfse_emissao_service.py`** (novo):
+  - `montar_id_dps` — Id de 45 posições do elemento `infDPS`
+    ("DPS"+cLocEmi(7)+tpInsc(1)+inscriçãoFederal(14)+série(5)+nDPS(15)).
+    **Diferente da chave de 44 dígitos NF-e/NFC-e** — não tem dígito
+    verificador próprio, é só concatenação posicional; a chave de acesso
+    real da NFS-e (50 posições) é devolvida pelo próprio ADN na resposta,
+    não calculada aqui.
+  - `_montar_xml_dps` — layout `<DPS><infDPS>` do padrão nacional
+    (`prest`/`toma`/`serv`/`valores`).
+  - Assinatura reaproveita `nfe_fiscal_common.assinar_xml` tal qual (mesmo
+    RSA-SHA256 + C14N + enveloped da Fase 1 — confirmado ser também o
+    padrão real do DPS Nacional, não só uma modernização arbitrária desta
+    vez).
+  - `emitir_nfse_sync` — orquestrador: monta/assina a DPS, empacota
+    (gzip+base64, campo `dpsXmlGZipB64`), envia por JSON+mTLS pro ADN
+    (`sefin.nfse.gov.br/SefinNacional/nfse`), interpreta `chaveAcesso`/
+    `nfseXmlGZipB64` da resposta.
+  - `backend/services/comanda_service.py::_emitir_nfse_comanda_sync` —
+    integra tudo: valida permissão/módulo `sefin_nacional`/situação/
+    duplicidade, resolve itens de SERVIÇO (`JOIN servicos`, não `pecas` —
+    mesma comanda pode ter os dois tipos misturados, ver achado acima),
+    resolve código de município (ver limitação abaixo), chama o
+    orquestrador, grava `n_fiscal` (`situacao_nfse`)+`comanda_nf` (`tipo=2`
+    — **valor já usado em dados reais de produção**, confirmado ao vivo
+    contra `BD_PAJE`, não inventado nesta sessão), incrementa
+    `controle_aux.numero_DPS`.
+  - Rota `POST /api/comandas/{comanda}/emitir-nfse`, ação
+    `ALTERAR_COMANDA.EMITIR_NFSE` no catálogo de permissões (separada de
+    `EMITIR_NF` — documento fiscal diferente, grupo pode ter uma sem a
+    outra).
+  - **Frontend**: card "Nota Fiscal" em `alterar-comanda.tsx` ganhou o
+    botão "Emitir NFS-e" ao lado do "Emitir NFC-e" (ver limitação de
+    exibição registrada acima). Modo Didático atualizado.
+  - **21 testes unitários novos** (`test_nfse_emissao_service.py` + adições
+    em `test_comanda_service.py`) — mesmo compromisso do resto do pacote:
+    nunca contra certificado real nem rede real.
+- **Limitação real, sem solução no schema atual**: não existe tabela de
+  município (IBGE) neste banco — `controle` só guarda `cidade` (texto
+  livre) + `uf`. `_resolver_cod_municipio_ibge` (`comanda_service.py`) é
+  uma tabela-semente pequena (hoje só "RIO DE JANEIRO"/RJ → 3304557, a
+  cidade confirmada da empresa testada) — qualquer empresa fora dela
+  bloqueia com mensagem clara em vez de adivinhar um código errado.
+  Resolver de verdade exige uma tabela de municípios IBGE própria (ou um
+  novo campo em `controle_aux`) — fora do escopo desta fase.
+- **`cTribNac` (Código de Tributação Nacional, 6 dígitos) aproximado por
+  `servicos.cod_lista_servico`** (a lista LC116 antiga) — o padrão
+  nacional tem uma tabela própria nova de códigos, sem mapeamento
+  cadastrado neste app ainda. Funciona como "melhor aproximação
+  disponível", mas **não confirmado contra a tabela oficial de cTribNac**
+  — revisar se o ADN rejeitar por código de serviço inválido.
+- **Fontes técnicas do padrão nacional (não confirmadas contra o PDF
+  oficial — a ferramenta de leitura de PDF não extraiu o conteúdo técnico
+  do manual `gov.br/nfse` nesta sessão)**: XML de exemplo real do PoC
+  oficial (`github.com/nfe/poc-nfse-nacional`), formato de request/response
+  JSON e composição das chaves via relatos técnicos públicos de
+  integradores (tabnews.com.br/Crazynds, tabnews.com.br/CesarMasserati).
+  **Revalidar contra o Anexo I do manual oficial (`LeiautesRN_DPS_
+  NFSe-SNNFSe`) antes de qualquer transmissão real, mesmo em homologação**
+  — CLAUDE.md §12.
+- **Nunca testado contra o ADN real** (nem produção restrita) — exigiria
+  certificado ICP-Brasil genuíno + cadastro prévio no ambiente nacional,
+  fora do alcance desta sessão. Mesma ressalva de segurança da Fase 1: a
+  conexão de teste (`BD_PAJE`) tem certificado real de cliente em
+  produção, nunca usado pra chamada real.
+- **Caminhos (2)-(4) do `EmiteNFSe` original (São Gonçalo/Nova Iguaçu/
+  ABRASF genérico) não implementados** — decisão explícita do usuário
+  (ver acima). Retomar só se a empresa precisar emitir NFS-e num município
+  que ainda não aderiu ao padrão nacional.
+
+### Fase 4 — DANFE/DANFCe em HTML — 🟡 DANFCe/DANFSe implementados (2026-07-21), DANFE (NF-e modelo 55) pendente
+Melhoria deliberada (não port 1:1): o legado usa `PrintPreviewDialog` +
+driver COM de impressora virtual de terceiros (`biopdf.PDFUtil`), inviável
+num backend. Substituído por HTML (reaproveitando `printHtml.ts`) — o
+botão "Reimprimir documento fiscal" em `gestor-comandas.tsx` (só ali; o
+card "Nota Fiscal" de `alterar-comanda.tsx` não tem reimpressão, só emitir)
+agora monta um fac-símile visual de verdade pra NFC-e e NFS-e, em vez da
+lista de campos crus de antes. Pedido explícito do usuário, com exemplo
+real de DANFSe v2.0 colado (PDF) pra referência de layout.
+
+- **DANFCe**: `nfe_emissao_service.parse_nfce_xml_para_exibicao(xml)` —
+  parseia o XML assinado já gravado em `comanda_nfce.xml` na emissão (é o
+  XML que o próprio sistema montou, `lxml`+namespace, não um schema de
+  terceiro adivinhado) — devolve itens/emit/dest/qrcode estruturados.
+  `frontend/src/utils/danfeFacsimile.ts::buildDanfceHtml`.
+- **DANFSe**: como a emissão de NFS-e nunca foi validada contra o ADN real
+  (Fase 3 acima), não há XML de resposta confiável pra parsear — emitente/
+  tomador/serviço são **resolvidos de novo no backend** na hora da
+  reimpressão (mesmas fontes da emissão: `controle`/`cliente`/
+  `movimentacao`+`servicos`), não lidos de um snapshot gravado. Se a
+  empresa/cliente mudar depois da emissão original, o fac-símile reflete o
+  dado ATUAL, não o transmitido — gap conhecido, aceitável pra uma
+  reimpressão (não é o documento fiscal oficial em si, que seria o XML/PDF
+  devolvido pelo ADN). `numero_dps`/`serie_dps` passaram a ser gravados em
+  `n_fiscal.num_nf`/`serie_nf` na emissão (reaproveitando as colunas
+  genéricas, mesmo padrão já usado noutras unificações) especificamente
+  pra viabilizar essa reimpressão sem precisar reabrir XML nenhum.
+  `frontend/src/utils/danfeFacsimile.ts::buildDanfseHtml`.
+- **Correção 2026-07-21, mesmo dia — fonte real da impressão de NFS-e
+  encontrada e conferida**: o usuário apontou o módulo real
+  `Geral\Mdl_Imp_XML.bas::DanfeNFSE` (linha 726), a rotina de impressão
+  oficial da NFS-e (chamada por `EmiteNFSe` via `Call DanfeNFSE(Comanda)`
+  quando `Sefin_Nacional=True`). Achados confirmados direto na fonte:
+  - **A seção "TRIBUTAÇÃO IBS/CBS" no sistema real IMPRIME LITERALMENTE
+    "-" em todo campo**, mesmo já tendo lido as variáveis do XML
+    (`CST`, `cClassTrib`, `pIBSUF`, `vIBSUF`, `pIBSMun`, `vIBSMun`,
+    `vIBSTot`, `pCBS`, `pAliqEfetCBS`, `vCBS` etc.) — confirmado pelo
+    próprio usuário: é trabalho em andamento na versão VB6/VB.NET agora,
+    ainda não preenchido nem lá. **Revertida a versão "simulada" que eu
+    tinha colocado antes de achar essa fonte** (pedido anterior do
+    usuário, "simule com preenchimento dos campos", foi feito sem essa
+    informação) — `buildIbsCbsHtml` agora mostra "-" em todo campo,
+    igual ao sistema real hoje. Quando a equipe terminar essa parte no
+    VB6/VB.NET, revisitar esta seção (mesmo processo de sincronização do
+    CLAUDE.md §12) — não presumir que `CalculaIBSCBS`
+    (`Geral\mdl_proc.bas`, linha 36432) já alimenta esses campos hoje.
+  - **Tabela `dps` — tentativa de migrar pra ela foi revertida no mesmo
+    dia, pedido explícito do usuário**: `DanfeNFSE` (a rotina de
+    IMPRESSÃO) lê de `dps` (`SELECT * FROM comanda, dps WHERE
+    comanda.comanda = dps.comanda`, colunas confirmadas ao vivo contra
+    `BD_PAJE`: `comanda`, `num_dps`, `serie_dps`, `data_dps`, `hora_dps`,
+    `valor_total`, `situacao`, `STATUS`, `chave_acesso_dps`,
+    `chave_acesso_nfse`, `numnfse`, `XML_NFSE`, `path_xml_nfse`,
+    `PDF_NFSE`/`PDF_DANFE_NFSE`) — a partir disso eu tinha migrado
+    `_emitir_nfse_comanda_sync`/`_get_doc_fiscal_sync` pra gravar/ler de
+    `dps` em vez de `n_fiscal`+`comanda_nf`. **Corrigido pelo usuário na
+    sequência**: "tudo, absolutamente tudo de nota fiscal no sistema gira
+    em torno das tabelas n_fiscal e comanda_nf" — a função central
+    `GravaNFE` (`Geral\ModNF.bas`, linha 7468) confirma isso, grava em
+    `N_FISCAL`/`n_fiscal_itens`. `dps` é lida pela rotina de impressão,
+    mas **não é a tabela central de gravação** — `_emitir_nfse_comanda_
+    sync`/`_get_doc_fiscal_sync` foram revertidos pra `n_fiscal`+
+    `comanda_nf` (tipo=2), como estavam antes desta exploração. Lição
+    registrada: ver `feedback_flag_guesses_before_executing` (memória) —
+    daqui pra frente, avisar explicitamente ANTES de agir quando algo for
+    inferido de uma tabela nova encontrada, não só depois de já ter
+    implementado.
+  - **Achado real ainda em aberto, não resolvido**: nos exemplos reais de
+    `dps.chave_acesso_dps` vistos ao vivo (ex.:
+    `33045572249680039000196000000000000126027055475005`, 50 caracteres),
+    o formato **não bate** com o Id de 45 caracteres prefixado "DPS" que
+    a documentação pública (PoC oficial, relatos de integradores)
+    descreve — nem no comprimento nem no prefixo. `montar_id_dps`
+    continua implementada conforme a documentação pública (não
+    alterada), mas **não confere com o dado real observado** — decisão do
+    usuário ("manter tudo como está"): não tentar adivinhar o formato
+    exato a partir de só 2-3 amostras; registrar como pendência aberta
+    até haver fonte melhor (o código VB.NET que monta essa chave, ou
+    confirmação direta).
+  - **QR Code confirmado real**: `https://www.nfse.gov.br/ConsultaPublica/
+    ?tpc=1&chave=<ChaveAcesso>` (linha 799 do módulo) — não implementado
+    ainda no fac-símile Python (`buildDanfseHtml` não mostra QR nem link
+    de consulta hoje), fica pra próxima passada.
+  - Layout de campos da fonte real (EMITENTE/TOMADOR/SERVIÇO PRESTADO)
+    confere com o que eu já tinha montado a partir da documentação
+    pública — sem mudança necessária aí.
+- **DANFE (NF-e modelo 55) segue sem fac-símile** — Fase 2 (NF-e) em si
+  também não foi implementada ainda (lote assíncrono), então não há XML
+  de NF-e pra parsear ainda.
+- Achado colateral corrigido de passagem: `_get_doc_fiscal_sync` tratava
+  qualquer linha de `comanda_nf` (independente de `tipo`) como NF genérica
+  — agora checa `tipo = 2` (NFS-e) explicitamente ANTES da checagem
+  genérica, senão uma comanda com NFS-e emitida aparecia rotulada só como
+  "NF" crua.
+
+**Contingência (modo offline) fora de escopo** em todas as fases — gap
+conhecido, registrar se algum dia for pedido.
+
+## Totais por Forma de Pagamento — Gestor de Comandas
+
+**Adicionado 2026-07-21, user-directed.** Card "Totais" (`gestor-comandas.tsx`)
+ganhou duas coisas, pedido explícito do usuário: (1) total "Sem Pagamento
+Lançado" — soma de `valor_venda` das comandas sem NENHUMA linha em
+nenhuma das 8 tabelas de forma de pagamento (mesmo critério já usado no
+Fechamento de Caixa, `fechamento_caixa_service._pedidos_faturados_sem_
+forma_pagamento_sync` — não confundir com "Sem Documento", que é sobre
+documento FISCAL, não pagamento); (2) quebra "Por Forma de Pagamento" —
+soma real lançada (não o valor da comanda) em cada uma das 8 tabelas,
+ordenada decrescente por valor, usando os mesmos rótulos de
+`fechamento_caixa_service.TIPO_LABEL` (reaproveitado, não duplicado).
+Implementado em `_list_comandas_sync` (`comanda_service.py`) via
+subqueries correlacionadas por tipo — mesmo estilo já usado ali pras
+outras colunas derivadas (num_nfce, num_nf, atendente_nome etc.).
+
+---
+
+## Gestor de Comandas
+
+**Status: 🟡 em andamento (Fases 0-2 implementadas 2026-07-21, Fase 3 pendente).**
+Migração de `FrmConCupom.frm` ("Consulta de Vendas" → "Gestor de Comandas")
+e `FrmAltComNV.frm` ("Alteração de Vendas" → "Alterar Comandas"). Plano
+completo em `C:\Users\carlo\.claude\plans\velvet-roaming-sparrow.md`
+(aprovado pelo usuário) — ler antes de retomar.
+
+Regra global que motivou o pacote: toda venda finalizada no sistema
+(Pré-Venda de O.S., Pedido de Venda, Faturar Contratos) vira um registro
+em `comanda` — Gestor de Comandas é o relatório sobre essa tabela.
+
+### Fase 0 — Faturar O.S. (pré-requisito) — ✅ concluída
+`os_service.py::_faturar_os_sync`/`faturar_os` + rota
+`POST /api/os/{codigo}/faturar` + ação `OS.FATURAR`. Exige a O.S. já
+Fechada (diferente do Pedido Bar, que fecha-e-fatura junto). Botão
+"Faturar O.S." em `os-form.tsx`. Testado (`test_os_service.py`).
+
+### Fase 1 — Gestor de Comandas (busca/relatório) — ✅ concluída
+- **Backend**: `models/comanda.py`, `services/comanda_service.py`
+  (`_list_comandas_sync`, `_get_doc_fiscal_sync`), `routes/comanda.py`
+  (`POST /api/comandas`, `GET /api/comandas/{comanda}/doc-fiscal`).
+  Permissão `COMANDA` (ABRIR/IMPRIMIR/EXPORTAR) em Transações.
+  38 testes em `tests/unit/test_comanda_service.py` (cobre todos os
+  filtros + reimpressão de doc fiscal).
+- **Frontend**: `app/gestor-comandas.tsx` — filtros dentro de um
+  `AccordionSection` recolhível (mesmo padrão de `pedidos.tsx`), período
+  sempre nascendo em "hoje", demais filtros (com/sem nota, ordenação)
+  persistidos por empresa+banco via `comandasFilters.ts`. Totais no topo
+  da lista (Total Geral/ECF/NFCe/NF/Sem Documento). Cada linha: número da
+  comanda e referência de Pré-Venda são clicáveis (abrem Alterar Comanda /
+  Pedido/O.S. de origem), mais os ícones equivalentes ao lado (mesmos
+  destinos, dois caminhos pro mesmo lugar). Ícone de reimpressão do doc
+  fiscal (Nota/NFCe/Cupom) quando vinculado — reimprime os DADOS
+  armazenados (protocolo, chave, valores), não é uma via fac-símile do
+  documento oficial (este backend não tem gerador de DANFE/cupom real,
+  mesma ressalva de `notas_fiscais_service.py`). Excel (`exportSheetsToXlsx`)
+  e Impressão (`print-report-header.ts`, sem mostrar o filtro escolhido).
+  Ícone de Ajuda/Modo Didático no cabeçalho. Card "Gestor de Comandas" em
+  `transacoes.tsx`.
+
+### Fase 2 — Alterar Comandas (Gravar / vendedor por item / Forma de Pagamento) — ✅ concluída, Números de Série pendente
+- **Backend**: `comanda_service.py::_get_comanda_sync` (cabeçalho+itens+
+  formas de pagamento já lançadas+vínculos), `_save_comanda_sync` (Gravar:
+  área/atendente/atendente_dav/cliente/paga_comissao),
+  `_alterar_vendedor_item_sync` (troca vendedor de 1 item, com opção de
+  aplicar aos demais itens do vendedor anterior),
+  `_alterar_forma_pagamento_sync` (só lançamentos de Cartão/Débito ainda
+  não conciliados — campo real confirmado ao vivo é `transf_receber`,
+  não existe `flag_transf_caixa` nessas duas tabelas — troca só dentro da
+  mesma modalidade). Permissão `ALTERAR_COMANDA` (ABRIR/GRAVAR/FORMA_PAG/
+  NUM_SERIE/CANCELAR — as duas últimas ainda sem implementação por trás).
+  Rotas em `routes/comanda.py`. 38 testes cobrindo as 4 funções (parte do
+  mesmo arquivo de testes da Fase 1).
+- **Frontend**: `app/alterar-comanda.tsx` — só acessível a partir de um
+  botão em cada linha do Gestor de Comandas (pedido explícito do usuário,
+  não é uma rota solta). Cabeçalho com campos numéricos simples (código de
+  área/atendente/atendente_dav/cliente) — **limitação conhecida**: não usa
+  picker de busca (SelectField/ClientSearchModal), só código digitado
+  diretamente; considerar trocar por busca de verdade se o usuário achar o
+  código cru pouco usável na prática. Modal de troca de vendedor por item.
+  Modal de troca de forma de pagamento (busca `GET /api/forma-pagamento-
+  completo`, filtra pelo `tipo` do lançamento). Ícone de Ajuda/Modo
+  Didático no cabeçalho.
+- **Números de Série — ✅ concluído 2026-07-21.** `comanda_service.py`
+  ganhou `_list_num_serie_comanda_sync`/`_add_num_serie_comanda_sync`/
+  `_remove_num_serie_comanda_sync` (rotas `GET/POST /api/comandas/
+  {comanda}/num-serie`, `DELETE .../num-serie/{sequencia}`) — reaproveita
+  a tabela auxiliar `pecas_num_serie` já gerenciada em Tabelas Auxiliares/
+  Números de Série (`FrmManNDS`, `tabelas_aux_service.py`) e os endpoints
+  de busca de produto/disponibilidade já existentes (`/tabelas/num-serie/
+  produtos`, `/tabelas/num-serie`) em vez de duplicar essa lógica. Vínculo
+  é por COMANDA (`comanda_num_serie`), não por item/`movimentacao`
+  específico — confirmado pelo schema (a tabela não tem FK pra
+  `movimentacao`). Vincular marca `pecas_num_serie.disponivel=0`;
+  desvincular volta pra `1`. **Validado ao vivo contra BD_PAJE**
+  (autorizado pelo usuário — "banco é cópia do cliente"): inserida 1 linha
+  descartável em `pecas_num_serie` (`num_serie='TESTE-NDS-001'`), rodado
+  o fluxo completo listar→vincular→listar→desvincular→listar contra a
+  comanda real 43856 via as funções de serviço reais (não mockadas), e a
+  linha de teste foi apagada ao final — nenhum dado residual deixado.
+  10 testes unitários adicionais em `test_comanda_service.py` (FakeCursor,
+  não tocam banco real). Frontend: seção "Números de Série" em
+  `alterar-comanda.tsx` com lista + modal de vincular (busca produto →
+  lista disponíveis → toque vincula) — reaproveita `AppModal` no mesmo
+  padrão dos outros dois modais da tela.
+
+### Fase 3 — Cancelar Comanda — ✅ concluída 2026-07-21 (com escopo financeiro conscientemente reduzido)
+`services/nfe_cancelamento_service.py` (cancelamento fiscal REAL junto ao
+SEFAZ, evento 110111, grupo SVRS/17 UFs incl. RJ, `signxml` RSA-SHA256,
+SOAP 1.2, TLS mútuo com o certificado real da empresa) foi integrado a
+`comanda_service._cancelar_comanda_sync`: quando a comanda tem NF/NFCe
+vinculada com `protocolo_sefaz` preenchido e situação ativa, o
+cancelamento chama de verdade o SEFAZ antes de reverter qualquer coisa
+localmente; se o SEFAZ recusar (ou a chamada falhar), o cancelamento
+inteiro é bloqueado sem tocar em nada (nem estoque, nem financeiro) — a
+checagem de bloqueio financeiro roda ANTES dessa chamada irreversível,
+pra nunca cancelar no SEFAZ e só depois descobrir que o resto está
+bloqueado. Sem protocolo (documento nunca emitido de verdade), só marca
+`situacao='C'` localmente, sem chamar o SEFAZ. **Nunca testado contra o
+SEFAZ real nem contra dados reais** (mesma ressalva de sempre — só
+certificado autoassinado/rede mockada nos testes).
+
+**Descoberta que mudou o escopo original da reversão financeira**:
+confirmado ao vivo (schema real) que `duplicata_receber`/
+`duplicata_rec_venc`/`receber`/`previsoes` **não têm nenhuma coluna/FK de
+volta pra `comanda`** — só as 8 tabelas `comanda_*` (`transf_receber`,
+bit) sabem se aquele pagamento já foi "conciliado"/transferido pro
+financeiro. Sem essa ligação, apagar linhas em `duplicata_receber` etc.
+seria adivinhar qual linha pertence a qual comanda — violaria a regra de
+nunca implementar em cima de suposição. **Decisão tomada**: se QUALQUER
+lançamento de pagamento da comanda já tem `transf_receber=1`, o
+cancelamento inteiro é bloqueado com mensagem clara pedindo ajuste manual
+no financeiro; só quando nenhum foi conciliado ainda é que os 8
+lançamentos (`comanda_dinheiro`/`cheque`/`cartao`/`debito`/`duplicata`/
+`ticket`/`vale`/`financiado`) são apagados normalmente. Mais conservador
+que o texto original do plano (que previa apagar diretamente linhas de
+`duplicata_receber`/`contas.saldo_atual`) — decisão de segurança, não uma
+simplificação por preguiça.
+
+**Implementado**: reversão de estoque (`pecas.qtd += qtd`, nunca mexe em
+`reservado`/`reservado_os` de novo — já foram liberados no Faturar;
+`movimentacao.Estornado=1`, não DELETE físico — a coluna já existia
+pronta, confirmado ao vivo), reversão de `pedido_venda`/`COMANDA_PED` e
+`os`/`COMANDA_OS` (volta pra situação Fechado, não Cancelado — dá pra
+reabrir/corrigir e faturar de novo), liberação de números de série
+(`pecas_num_serie.disponivel=1`), zerar a comanda (`situacao='C',
+valor_venda=0, acrescimo=0, desconto=0`) e `INSERT INTO cancelamento`
+(schema confirmado: `comanda, cupom, usuario, data, hora, motivo`).
+21 testes unitários cobrindo cada bloqueio e cada branch fiscal — a maior
+cobertura do pacote inteiro, como o plano original pedia.
+
+**Frontend**: botão "Cancelar" (ícone, cabeçalho — só aparece se a
+comanda ainda não está cancelada) abre modal de confirmação com motivo
+obrigatório (≥15 caracteres, mesma regra do backend), mensagem de erro
+com 5s de exibição quando bloqueado (regra global de mensagem
+grande/importante). Modo Didático explica a ação.
+
+**Cancelamento com devolução parcial não foi portado** (decisão já
+registrada no plano) — só o "caminho normal" (nenhum item devolvido
+antes) foi implementado.
+
+**Não validado ao vivo contra BD_PAJE** (diferente de Números de Série) —
+decisão deliberada: cancelar mexe em estoque/situação/pagamentos de uma
+comanda HISTÓRICA REAL, mutação bem mais arriscada e difícil de desfazer
+com segurança do que a inserção puramente aditiva testada em Números de
+Série. A cobertura de testes unitários (com nomes de coluna já
+confirmados ao vivo no schema) foi considerada suficiente sem esse risco
+adicional.
+
+**Bloqueio de nota de serviço com série específica** (mencionado no plano
+original, item 1 de `CmdCancel_Click`) não foi implementado — não havia
+fonte VB6 suficientemente clara nesta sessão pra confirmar a regra exata;
+registrar como gap conhecido, não presumir o comportamento.
+
+---
+
+## Movimentações
+
+**Status: 🟢 implementado (2026-07-18)** — Card "Movimentações" em
+Transações (`app/(tabs)/transacoes.tsx`) abre o hub `app/movimentacoes.tsx`
+com dois cards, ambos com tela real: **Movimentação de Produtos** e
+**Requisição**.
+
+### Movimentação de Produtos — ✅ implementada 2026-07-18
+
+Legado: `frmEntPro.frm` ("Movimentação de Produtos", colado completo pelo
+usuário). Lançamento manual avulso de entrada/saída de estoque, fora do
+fluxo de Pedido/O.S./Notas Fiscais. Toda linha gravada por esta tela usa
+`movimentacao.serie_nf='MV'` (convenção já em uso ao vivo no banco de
+testes antes mesmo desta migração — 53 linhas históricas). Schema
+(`movimentacao`, `pecas`, `tipo_mov`) conferido ao vivo em
+`GERDELL`/`BARESTELA` antes de implementar.
+
+- **Backend**: `services/movimentacao_produtos_service.py` +
+  `routes/movimentacao_produtos.py` + `models/movimentacao_produtos.py`.
+  18 testes unitários (`tests/unit/test_movimentacao_produtos_service.py`).
+  Tela `MOV_PRODUTOS` no catálogo de permissões com ações próprias
+  (`ABRIR`/`GRAVAR`/`EXCLUIR` — sem Imprimir/Exportar, não existem no
+  form original).
+- **Frontend**: `app/movimentacao-produtos.tsx` — formulário (Data,
+  Tipo de Movimentação, Código do Produto com busca "Ajuda" +
+  auto-preenchimento de descrição/preço/estoque no blur, Quantidade,
+  Preço Unitário, Nº Nota Fiscal, Série fixa "MV") + botão "Incluir" +
+  modal "Consultar" (filtros de período/tipo/produto + exclusão por
+  linha).
+- **Decisões conscientes em relação ao `.frm` original** (ver docstring
+  de `movimentacao_produtos_service.py` para o detalhe completo de cada
+  uma — não re-derivar do zero numa sessão futura):
+  1. **"Alterar" não foi portado** — o próprio legado desabilita essa
+     ação incondicionalmente (`CmdAltera_Click`: mostra aviso e sempre
+     sai, sem exceção).
+  2. **"Excluir" foi mantido HABILITADO**, com reversão de estoque —
+     `CmdApaga_Click` do legado mostra o mesmo aviso de "função
+     desabilitada", mas o `Exit Sub` que a desabilitaria de fato está
+     **comentado** no código-fonte colado pelo usuário; a exclusão
+     acontece na prática. Decisão baseada em precedente já existente
+     neste mesmo backend (`notas_fiscais_service.py` já apaga linhas de
+     `movimentacao` e reverte estoque do mesmo jeito) — não foi uma
+     suposição cega, mas vale confirmar com o usuário se algum dia isso
+     for questionado.
+  3. **Filtro "código começa com P ou A" do Consultar** — não replicado;
+     no schema atual `pecas.codigo_int` é 100% prefixo 'P' (conferido ao
+     vivo) e nenhum outro service do backend usa esse filtro.
+  4. **Faixa de quantidade -32767..32767** do `Critica()` do legado — era
+     limite de tipo Integer/Single do VB6; as colunas atuais são
+     `real`/`float`. Não replicado (ver "Não replicar truques VB6" no
+     CLAUDE.md).
+  5. **Baixa automática de ingredientes via tabela `receita`** quando
+     tipo='E50' e `ModFatPedido` é 6 ou 41 — feature de Ficha Técnica
+     amarrada a um "modelo de pedido" legado sem equivalente na
+     arquitetura nova; tabela `receita` não foi citada pelo usuário no
+     escopo desta tela. **Fora de escopo, não implementado.**
+
+### `FrmManMov` — fora de escopo, tela client-exclusive
+
+O usuário colou também `FrmManMov.frm` (mesma caption "Movimentação de
+Produtos", mas um form muito maior: grid de itens acumulados numa "C.I."
+antes de confirmar, import/export de arquivo texto entre lojas, aprovação
+de "Requisição" em lote com `Grid4`/`Check2-4` por situação
+Aberta/Fechada/Cancelada, impressão dedicada). O usuário identificou
+explicitamente que **este form é usado exclusivamente por um cliente** —
+não é a base desta migração (`frmEntPro.frm` é). Mantido apenas como
+referência caso esse cliente específico peça a funcionalidade completa de
+CI em lote no futuro — não re-derivar dele sem pedido explícito.
+
+### Requisição — ✅ implementada 2026-07-18
+
+Legado: `FrmManReq.frm` ("Requisição...", colado completo pelo usuário —
+**não** `FrmManMov`, que continua sendo o form client-exclusive de C.I. em
+lote, fora de escopo). Pedido interno de produtos/serviços, com
+fechamento (baixa de estoque + grava `movimentacao` tipo `S07`/serie
+`RQ`), reabertura (devolve estoque) e cancelamento. Schema (`requisicao`,
+`rec_prod`, mais leitura/escrita em `pecas`/`servicos`/`movimentacao`)
+conferido ao vivo em `GERDELL`/`BARESTELA` antes de implementar
+(`requisicao` estava com 0 linhas nesse banco de teste).
+
+- **Backend**: `services/requisicao_service.py` +
+  `routes/requisicao.py` + `models/requisicao.py`. 27 testes unitários
+  (`tests/unit/test_requisicao_service.py`). Tela `REQUISICAO` no
+  catálogo de permissões com ações próprias (`ABRIR`/`GRAVAR`/`EXCLUIR`/
+  `FECHAR`/`REABRIR`/`CANCELAR`/`IMPRIMIR`).
+- **Frontend**: `app/requisicao.tsx` — cabeçalho (Nº/Situação/Data/
+  Usuário somente-leitura + Descrição editável enquanto Aberta), inclusão
+  de item (produto OU serviço, com busca "Ajuda" + auto-preenchimento de
+  preço/estoque no blur, aviso — não bloqueio — quando qtd > estoque),
+  lista de itens com exclusão por linha, botões Fechar/Reabrir/Cancelar/
+  Imprimir (reaproveita `print-report-header.ts` + `printHtml.ts`, mesmo
+  padrão de impressão já usado no resto do app) e modal "Consultar" com
+  filtros de situação/período/descrição.
+- **Descoberta importante ao rastrear o `.frm`**: o fluxo de autorização
+  em 2 etapas do legado (`Frame6`/`Grid_Prod_Man`/`Command19`, variável
+  `Autoriza` 1/2/3) é **código morto** — `PrepGrid_Prod_Man` é definida
+  mas nunca chamada por nenhum botão ativo; o botão real "Fechar"
+  (`Command14`) chama `FechaRequisicao` direto, sem passar por nenhuma
+  etapa de autorização (o parâmetro `QtdReq` da sub nem é usado no corpo
+  dela). Não implementado porque não roda nem no legado hoje — não é uma
+  "regra de negócio perdida", é uma feature abandonada em código morto.
+- **Fora de escopo, documentado no topo de `requisicao_service.py`**:
+  NFe de Requisição/Devolução (`requisicao_config_nfe`,
+  `FrmTraNFe.ImportaRequisicao` — esta migração ainda não emite NFe em
+  lugar nenhum); vínculo com O.S. (`os_requisicao`, campo "Documento
+  vinculado" do cabeçalho — a tela O.S. Completa desta migração também
+  não existe ainda); vínculo com Projeto (`ExisteDAVProjeto` — não há
+  Gestor de Projetos ligado a Requisição aqui); "senha superior" quando
+  qtd > estoque (sem infra de senha de gerente — virou confirm no
+  frontend, não bloqueia); "Gerar Planilha"/Excel da lista (não pedido
+  explicitamente; Cilindros > Borderô já tem o padrão via SheetJS se for
+  pedido depois); edição de Descrição depois que a requisição já tem
+  itens (o `Command12` "Gravar" do cabeçalho do legado permite isso via
+  um botão dedicado — nesta versão a Descrição só é editável enquanto
+  Situação = Aberta, sem um botão de salvar isolado; escopo reduzido
+  conscientemente, fácil de estender se pedido).
+
+---
+
+## Gestão de Compras
+
+**Status: 🟢 MÓDULO COMPLETO (2026-07-18)** — Ressuprimento, Curva ABC e
+Estoques, Cotação de Compra e Pedido de Compra implementados e
+validados. Único ponto realmente pendente é o envio de Cotação por
+e-mail (infra de SMTP nova, deliberadamente fora de escopo) e testes
+manuais na UI (só validação via curl/testes unitários até agora). Leia
+esta seção inteira antes de mexer de novo neste módulo, não repita
+perguntas já respondidas pelo usuário abaixo.**
+
+**Atualizado 2026-07-19**: todo o submenu Transações > Compra passou a ser
+gateado por `controle_configuracao.Curva_abc` (coluna legada "Curva ABC",
+já existia na tabela), pedido explícito do usuário ("o módulo Compras
+deve ser habilitado em Configurações > Módulo Curva ABC" — não existe um
+flag "Compras" separado, o flag legado dessa área inteira é literalmente
+`Curva_abc`). `_modulo_curva_abc_ativo(cur)` (`pedido_common.py`), checado
+no topo de todas as funções `_*_sync` dos 4 services (`curva_abc_service.
+py`: 2, `gestao_compras_service.py`: 3, `cotacao_compra_service.py`: 11,
+`pedido_compra_service.py`: 11 — 27 pontos ao todo). `MODULE_TELAS` mapeia
+`Curva_abc` → `CURVA_ABC`/`GESTAO_COMPRAS`/`COTACAO_COMPRA`/
+`PEDIDO_COMPRA`. Frontend: `moduleOn("Curva_abc")` explícito nas 5 telas
+(`gestao-compras.tsx` + `curva-abc.tsx` + `gestao-compras-ressuprimento.
+tsx` + `cotacao-compra.tsx` + `pedido-compra.tsx`) e no card "Gestão de
+Compras" de `transacoes.tsx`. Mesmo racional de "Contratos" acima
+(`moduleOn` explícito, não só `can()`, por causa do bypass de master em
+`disabledTelas`).
+
+### Pedido original do usuário
+
+Card novo em Transações → "Gestão de Compras", com 3 sub-telas espelhando
+o submenu legado "Transações > Compra" do MDI VB6:
+
+1. **Pedido de Compra** (`FrmPedCom.frm`)
+2. **Curva ABC Estoques** (`FrmCurvaABC.frm`)
+3. **Gestão de Compras** (form precisou ser localizado na árvore —
+   confirmado que é `FrmGesCom.frm`, pasta `Geral`)
+
+`FrmGesCom.frm` tem uma aba "Cotação" que o usuário confirmou estar **vazia
+no legado** (`Tab(1).ControlCount = 0` no `.frm` bruto — não é artefato de
+renderização, nunca foi construída) e pediu para eu desenvolver essa aba do
+zero, "com as informações e lógica que conseguir, afim de viabilizar a
+cotação no gestor de compra junto aos fornecedores", usando como base um
+conjunto de anotações manuscritas que o usuário colou (projeto futuro de
+"Mapa de Cotação" — comparação de cotações entre fornecedores).
+
+### Pivô de prioridade (decisão do usuário, meio da conversa)
+
+Depois do pedido inicial acima, o usuário redirecionou o escopo
+explicitamente:
+
+> "a ideia era pegar os resultados com a Curva ABC, Mostrar alguns
+> filtros, painel com as últimas compras, hoje o cliente precisa de um
+> relatório do que precisa comprar, porque pedido de compra em si os
+> clientes já aboliram, depois que temos a opção de importar o xml da
+> nota fiscal de entrada."
+
+Ou seja: **Pedido de Compra foi abandonado pelos clientes reais** desde que
+a importação de XML de NF de entrada existe (essa importação em si **ainda
+não foi construída** nesta migração — é trabalho futuro, não confundir com
+"já existe"). O que o cliente precisa de verdade é um **relatório de
+ressuprimento**: o que precisa comprar, baseado na Curva ABC + posição de
+estoque + últimas compras.
+
+Perguntei explicitamente via pergunta de múltipla escolha e o usuário
+confirmou:
+
+- **Prioridade 1**: Gestão de Compras (relatório de Ressuprimento) +
+  Curva ABC e Estoques — construir agora, com telas reais.
+- **Prioridade 2 (adiado)**: Pedido de Compra — só placeholder por
+  enquanto.
+- **Prioridade 3 (adiado)**: aba Cotação — não construir ainda.
+- Confirmou também que eu deveria **investigar `FrmCotacao.frm`** antes de
+  assumir que ele é a base da Cotação de Compra.
+
+### Investigação de `FrmCotacao.frm` — CONCLUÍDA, não é o form certo
+
+`FrmCotacao.frm` (5297 linhas, "Cadastro de Cotações") foi checado via
+`Form_Load` e uso de tabelas SQL (`orcamento`, `orc_produto`, `comanda`,
+`cliente`) — é um form de **orçamento/cotação de VENDA para cliente**, não
+tem nenhuma relação com cotação de COMPRA junto a fornecedor. **Confirmado
+irrelevante** para a aba Cotação do Gestor de Compras. As anotações
+manuscritas do usuário sobre "Mapa de Cotação" continuam sendo o único
+material de referência para uma futura implementação dessa aba — não há
+form VB6 legado equivalente para rastrear campo-a-campo; será preciso
+desenhar do zero quando for retomado.
+
+### Diretrizes de UX dadas pelo usuário para este módulo (aplicar em toda
+tela nova aqui, e não só aqui — são reforços de regras já no CLAUDE.md)
+
+- "aplicar em todas as telas formatação de redução dos campos e botões.
+  Reaproveitamento de espaços agrupando os campos um do lado do outro,
+  para minimizar o tamanho da tela." — campos/botões compactos, agrupados
+  lado a lado (regra já em CLAUDE.md, reforçada aqui explicitamente pro
+  módulo de Compras).
+- "um dos problemas da gestão de compras é que as telas é classificada
+  como difícil de ser usada. quero que quebre essa percepção criando algo
+  intuitivo e com informações em placeholder, tooltip e design intuitivo."
+- "quero que a tela ensine o usuário a utilizá-lo. dando informações como
+  se fosse um guia" — telas devem ter um tom de guia/tutorial embutido
+  (texto explicativo curto, tooltips, placeholders informativos), não só
+  formulário cru.
+- "mensagens não técnica voltado para usuários final" — reforço da regra
+  já existente (`friendly_db_error`, ver CLAUDE.md).
+- "automatize o máximo os componentes de ligação, curva x gestor x pedido
+  x fornecedores x entrada de nota fiscal(à ser desenvolvida)" — quer
+  cruzamento automático entre Curva ABC, Gestão de Compras (Ressuprimento),
+  Pedido, Fornecedores e a futura importação de NF de entrada. **Achado
+  ao investigar**: nem `notas-fiscais.tsx` nem `fornecedores.tsx` aceitam
+  hoje um parâmetro de deep-link (`?codigo=...`) para abrir direto um
+  registro — nenhum dos dois tem `useLocalSearchParams` lendo esse tipo de
+  parâmetro. Pra viabilizar link direto do painel de Ressuprimento pro
+  cadastro do fornecedor (por exemplo), essas duas telas precisariam
+  ganhar suporte a abrir já num registro específico — **não implementado
+  ainda, é o próximo passo natural depois que Ressuprimento e Curva ABC
+  estiverem prontos**, considerar perguntar ao usuário antes de expandir
+  escopo dessas duas telas existentes.
+
+### ✅ Já implementado (backend 100% pronto e testado)
+
+- **Permissões** (`backend/services/permissoes_service.py`): menu
+  `TRANSACOES > COMPRA` com 3 telas —
+  ```python
+  _menu("COMPRA", "Compra", [
+      _tela("PEDIDO_COMPRA", "Pedido de Compra", ACOES_PEDIDO_COMPRA),
+      _tela("CURVA_ABC", "Curva ABC e Estoques", ACOES_CURVA_ABC),
+      _tela("GESTAO_COMPRAS", "Gestão de Compras", ACOES_GESTAO_COMPRAS),
+  ]),
+  ```
+  `ACOES_GESTAO_COMPRAS = [ABRIR, IMPRIMIR, EXPORTAR]` (relatório
+  puro, sem Gravar). `ACOES_CURVA_ABC = [ABRIR, GERAR, REPROCESSAR,
+  IMPRIMIR, EXPORTAR]`. `ACOES_PEDIDO_COMPRA = ACOES_PADRAO` (reservado
+  pro dia em que a tela real for construída).
+
+- **Gestão de Compras / Ressuprimento** — `services/gestao_compras_service.py`
+  + `routes/gestao_compras.py` (sem log de auditoria — é relatório
+  read-only) + `tests/unit/test_gestao_compras_service.py` (13 testes).
+  - `GET /api/gestao-compras/curvas` — lista valores distintos de
+    `pecas.curva_abc`/`curva_abc_fin` já gravados (pra popular combos de
+    filtro).
+  - `GET /api/gestao-compras/ressuprimento` — lista de produtos com
+    filtros: curva ABC (qtd), curva ABC (financeira), fornecedor (via
+    subselect em `pecas_fornecedor`), nível (reaproveita
+    `_nivel_clause()` já existente em `margem_lucro_service.py`, **não
+    duplicado**), abaixo do mínimo / abaixo do ressuprimento / acima do
+    máximo (checkboxes), ordenação configurável (`ORDER_MAP`). Calcula
+    `prev_dia`/`prev_mes` (previsão de dias/meses até faltar, baseado em
+    `cmm`/consumo médio mensal já gravado em `pecas`):
+    ```python
+    cmm_diario = cmm / 30
+    prev_dia = int(qtd / cmm_diario) if cmm_diario and qtd >= 0 else 0
+    prev_mes = int(qtd / cmm) if cmm and qtd >= 0 else 0
+    ```
+  - `GET /api/gestao-compras/ressuprimento/{codigo_int}/ultimas-compras`
+    — junta `n_fiscal` + `n_fiscal_itens` + `fornecedor`, filtro
+    `nf.mov='E01' AND nf.situacao='A'` (**decisão**: substitui o
+    `Tipo_Nf=0` ambíguo do legado pela convenção já usada em
+    `notas_fiscais_service.py`, `situacao='A'` = nota ativa/não
+    cancelada — não re-questionar essa escolha numa sessão futura, já foi
+    decidida por consistência com o resto do backend).
+
+- **Curva ABC e Estoques** — `services/curva_abc_service.py` +
+  `routes/curva_abc.py` (COM log de auditoria — só as 2 ações de
+  escrita) + `models/curva_abc.py` + `tests/unit/test_curva_abc_service.py`
+  (17 testes, incluindo um caso numérico completo verificando os valores
+  exatos).
+  - `POST /api/curva-abc/gerar` — recalcula `pecas.curva_abc`/
+    `curva_abc_fin` + `percent_abc`/`percent_abc_fin` pra um período,
+    tipo (financeira = `SUM(qtd*p_unit)` / quantidade = `SUM(qtd)`) e
+    faixas de curva (lista de `{curva: "A", percentual: 50}...`, soma
+    tem que dar exatamente 100). Fonte de vendas: `movimentacao` +
+    `comanda` (join `serie_nf='CM' AND situacao='PG'` — a mesma
+    convenção "vendas canônicas" já usada em `fechamento_caixa_service.py`
+    e `margem_lucro_service.py`). Classificação é **por quantidade de
+    ITENS proporcional à faixa configurada**, não pelo corte clássico
+    80/20 por valor acumulado — rastreado com precisão de
+    `FrmCurvaABC.frm`'s `Command4_Click` (ex.: 4 itens, faixa A=50% →
+    `max(1, int(50*4/100))=2` itens ficam com A, o resto fica com a
+    próxima faixa). Antes de gravar, reseta `pecas.curva_abc[_fin]`
+    (escopo afetado) pra letra seguinte à última faixa configurada
+    (ex.: faixas até "C" → reset usa "D"), preservando produtos fora do
+    escopo do relatório.
+  - `POST /api/curva-abc/reprocessar-estoques` — recalcula
+    `consumo_medio_mensal`/`estoque_minimo`/`estoque_ressuprimento`/
+    `estoque_maximo` por produto, com 4 checkboxes independentes
+    (atualizar mínimo/ressuprimento/máximo/consumo — só grava as colunas
+    marcadas). Fórmulas exatas (replicadas literalmente do legado, ver
+    teste `test_calcula_com_prazo_direto_na_peca`):
+    ```python
+    meses = _numero_de_meses(data_ini, data_fim)   # mínimo 1
+    cmm = int(total_vendido / meses)                # mínimo... não força mínimo 1 aqui, só se total>0
+    cmm_diario = cmm / 30
+    tempo_reposicao = pecas.prazo_fornecedor  # ou, se nulo, MAX(fornecedor.prazo_pgto) via pecas_fornecedor
+    estoque_minimo_novo = int(cmm * grau_atendimento / 100)
+    estoque_ressuprimento_novo = int(cmm_diario * tempo_reposicao + estoque_minimo_novo)
+    estoque_maximo_novo = int(estoque_minimo_novo + cmm_diario) * tempo_reposicao
+    ```
+    **Decisão consciente**: `intervalo_ressuprimento` do legado NÃO foi
+    portado — é uma variável calculada no `.frm` original mas nunca lida
+    na fórmula final (dead code), não re-adicionar sem confirmar que
+    alguma fórmula legada realmente a usa.
+
+- **server.py**: routers `gestao_compras` e `curva_abc` já importados e
+  incluídos (`api_router.include_router(gestao_compras.router)` /
+  `curva_abc.router`, logo depois de `requisicao.router`).
+
+- **Frontend — navegação/hub**:
+  - `frontend/app/(tabs)/transacoes.tsx` — card "Gestão de Compras"
+    adicionado (`route: "/gestao-compras"`, visível se `can("PEDIDO_COMPRA.ABRIR")
+    || can("CURVA_ABC.ABRIR") || can("GESTAO_COMPRAS.ABRIR")`).
+  - `frontend/app/gestao-compras.tsx` — hub web-only com 3 cards
+    (Gestão de Compras → `/gestao-compras-ressuprimento`, Curva ABC e
+    Estoques → `/curva-abc`, Pedido de Compra → `/pedido-compra`), mesmo
+    padrão visual de `movimentacoes.tsx`.
+  - `frontend/app/pedido-compra.tsx` — `ComingSoonScreen` placeholder,
+    web-only, com mensagem explicando o motivo do adiamento (clientes já
+    abandonaram + apontando pra Gestão de Compras/futura importação XML).
+
+### ✅ Concluído nesta rodada (2026-07-18)
+
+1. **`frontend/app/gestao-compras-ressuprimento.tsx`** — implementada.
+   Bloco-guia no topo explicando o relatório; filtros compactos e
+   agrupados (chips de Curva ABC Qtd/Fin, seletor de Fornecedor via modal
+   de busca, seletor de Nível via `NiveisModal.tsx` reaproveitado sem
+   duplicar, 3 chips Abaixo do Mínimo/Ressuprimento/Acima do Máximo cada
+   um com tooltip via hover, ordenação por chips); lista compacta de
+   resultado com badge de situação (Crítico/Repor/Excesso/OK) e resumo de
+   contagem no topo; toque no item abre modal "Últimas Compras"; ações
+   Imprimir (`print-report-header.ts`+`printHtml.ts`, reaproveitados) e
+   Gerar Planilha (`exportSheetsToXlsx`, reaproveitado). Sem log de
+   auditoria (relatório read-only, mesmo padrão dos demais). Validado ao
+   vivo contra `GERDELL`/`BARESTELA` (`GET /api/gestao-compras/curvas` e
+   `/ressuprimento` responderam corretamente).
+
+2. **`frontend/app/curva-abc.tsx`** — implementada, duas seções/cards
+   independentes como planejado: **Gerar Curva ABC** (período De/Até com
+   a regra global de repetir data inicial→final, chips Por Quantidade/Por
+   Valor, filtro de Nível opcional via `NiveisModal`, grid editável de
+   faixas com indicador visual de soma — vermelho/verde — pré-preenchido
+   com um padrão sugerido A=20/B=30/C=50 pra já dar um ponto de partida
+   ao usuário, botão Gerar com `showConfirm` avisando que a classificação
+   atual será sobrescrita, resultado listado com badge de curva por
+   produto) e **Processar Atualização de Estoques** (período De/Até
+   próprio, Grau de Atendimento com tooltip explicando o conceito, filtro
+   de Nível próprio, 4 chips de seleção do que atualizar, resultado
+   mostrando anterior→atual de cada campo). Cada seção tem um bloco-guia
+   próprio no topo explicando a ação em linguagem de negócio. **Validado
+   ao vivo** contra `GERDELL`/`BARESTELA` via `POST /api/curva-abc/gerar`
+   — atenção: esse teste **gravou de verdade** a classificação
+   `curva_abc`/`percent_abc` em ~339 produtos reais dessa base de teste
+   compartilhada (não é destrutivo — só reclassifica um campo de
+   relatório que já é recalculado por design toda vez que a tela roda —
+   mas fica registrado aqui porque alterou dados pré-existentes, não
+   apenas linhas de teste descartáveis).
+
+3. **Typecheck final**: `npx tsc --noEmit` limpo nas 2 telas novas — 11
+   erros no total do projeto, todos pré-existentes (o mesmo baseline de
+   antes desta rodada, ver `feedback_...` sobre `colors.background`),
+   nenhum erro novo introduzido.
+
+4. **Backend reiniciado** (duplicidade de processos na porta 8081
+   detectada e encerrada antes do relaunch, mesmo problema recorrente já
+   documentado) — rotas novas confirmadas respondendo ao vivo.
+
+### ✅ Cotação de Compra — implementada 2026-07-18
+
+Construída do zero a partir de anotações manuscritas do usuário
+("Compras Mapa de Cotação", datado 03/05/2013) que estavam anexadas como
+fotos no histórico da sessão — **recuperadas diretamente do arquivo
+`.jsonl` da conversa** (extraídas via script, sem precisar pedir ao
+usuário pra reenviar nada) quando ele pediu pra continuar a aba Cotação
+numa sessão já compactada. Sem `.frm` de referência — a aba "Cotações" de
+`FrmGesCom.frm` nunca foi desenvolvida no legado (`Tab(1).ControlCount=0`,
+confirmado antes desta sessão).
+
+**Escopo confirmado com o usuário via pergunta direta** antes de
+implementar (2 decisões que as anotações não resolviam sozinhas):
+- Ao marcar o fornecedor vencedor de um item, o sistema **só registra a
+  decisão** — não gera um Pedido de Compra formal (essa tela continua
+  parada/placeholder nesta migração).
+- **Envio da cotação por e-mail como planilha anexa** (pedido explícito
+  nas anotações) ficou **fora desta rodada** — não existe nenhuma
+  infraestrutura de envio de e-mail real no backend hoje (só campos de
+  configuração SMTP salvos em Controle do Sistema, nunca usados pra
+  enviar) — fica pra decidir depois.
+
+**Fluxo implementado**: cria-se uma Cotação com um ou mais produtos a
+cotar (situação Aberta) → lança-se manualmente a resposta de cada
+fornecedor consultado por item (valor, marca, prazo, condição de
+pagamento — a solicitação em si continua sendo feita fora do sistema,
+por telefone/e-mail/WhatsApp) → marca-se o fornecedor vencedor por item
+(destaque visual, ★) → Finaliza-se a cotação (situação Finalizada;
+Reabrir/Cancelar disponíveis, mesmo vocabulário A/F/C de Requisição).
+Nenhuma escrita em estoque/movimentação — é puramente decisão de compra.
+
+- **Backend**: `services/cotacao_compra_service.py` — **3 tabelas novas**
+  (não existem no schema legado, criadas sob demanda via
+  `_ensure_tables(cur)`, mesmo padrão `IF NOT EXISTS ... CREATE TABLE` já
+  usado em `services/whatsapp/repository.py`): `cotacao_compra`
+  (cabeçalho), `cotacao_compra_item` (produto+qtd a cotar, mais
+  `fornecedor_vencedor`/`valor_vencedor` quando decidido),
+  `cotacao_compra_resposta` (resposta de cada fornecedor por item). Busca
+  de produto (`_find_produto_sync`) já devolve as referências que as
+  anotações pediam antes de cotar ("Autorização de Cotação"): custo
+  médio, estoque atual, e a última compra registrada (data/valor,
+  reaproveitando a mesma query de `n_fiscal`/`n_fiscal_itens` já usada em
+  `gestao_compras_service.py`). `routes/cotacao_compra.py` +
+  `models/cotacao_compra.py`. Tela `COTACAO_COMPRA` no catálogo de
+  permissões (`ABRIR`/`GRAVAR`/`EXCLUIR`/`VENCEDOR`/`FINALIZAR`/
+  `REABRIR`/`CANCELAR`/`IMPRIMIR`), dentro do menu `COMPRA`. 36 testes
+  unitários novos (`tests/unit/test_cotacao_compra_service.py`) — 688
+  testes no total do backend, todos passando.
+- **Frontend**: `app/cotacao-compra.tsx` — mesmo padrão visual/compacto
+  de Requisição (cabeçalho + inclusão de item com hint de custo
+  médio/estoque/última compra + lista de itens, cada um com suas
+  respostas aninhadas: menor preço destacado, vencedor com fundo verde e
+  ★, botões Marcar Vencedor/Excluir por resposta) + modal Consultar +
+  Imprimir (comparativo por item, reaproveitando `print-report-header.ts`/
+  `printHtml.ts`). Bloco-guia no topo explicando o fluxo em linguagem não
+  técnica. Card "Cotação de Compra" adicionado ao hub
+  `gestao-compras.tsx`. Validado ao vivo contra `GERDELL`/`BARESTELA`
+  (incluir item + consultar + excluir item + cancelar, dados 100%
+  descartáveis já que as tabelas são novas desta sessão).
+- **Fora de escopo, documentado no topo do service**: envio de e-mail;
+  geração de Pedido de Compra; grid de compras/produtos no cadastro do
+  Fornecedor (pedido pelas anotações, mas pertence a `fornecedores.tsx`,
+  não a esta tela); campo de % de atraso/pontualidade do fornecedor
+  (depende de um Pedido de Compra real que não existe); tela de Alçada de
+  compra (aprovação por comprador/grupo de produtos — feature grande e
+  separada). Duas notas soltas nas anotações manuscritas (status de
+  pedido do cliente tipo "Aprovação de Crédito"; e-mail no cadastro do
+  funcionário) foram deixadas de fora por não parecerem ser sobre Cotação
+  de compra — provavelmente de outro projeto/anotação misturada na mesma
+  leva de fotos.
+
+### ✅ Curva ABC — presets de período (6/12/24 meses) — 2026-07-18
+
+Pedido do usuário: junto do rótulo "Gerar Curva ABC" (e, por extensão
+confirmada, também "Processar Atualização de Estoques"), 3 chips de
+atalho de período — 6/12/24 meses, calculados a partir de hoje — além de
+uma trava de **período mínimo de 6 meses** quando o usuário prefere digitar
+as datas manualmente (motivo: período curto demais dá uma classificação/
+consumo médio pouco confiável, sujeito a picos pontuais — confirmado com
+o usuário). Implementado **só no frontend** (`app/curva-abc.tsx`,
+`monthsBetween`/`isoMinusMonths`/`PERIODO_PRESETS`) — o backend
+(`curva_abc_service.py`) não foi alterado e continua aceitando qualquer
+período (a trava de 6 meses é orientação de UX, não regra de negócio
+travada no backend; se o usuário pedir reforço no backend depois, é
+replicar a mesma lógica de `_numero_de_meses`). Clicar num chip preenche
+De/Até direto; editar manualmente uma das datas limpa a seleção do chip
+(mostra que o período agora é customizado). Corrigido de passagem: a
+linha "Tipo de classificação" ficava desalinhada verticalmente das datas
+ao lado por causa de `rowFields`'s `alignItems: "flex-end"` — trocado
+para `flex-start` (afeta as 2 únicas ocorrências de `rowFields` neste
+arquivo, ambas só com coluna label+campo, sem botão solto que dependesse
+do alinhamento por baixo).
+
+### ✅ Pedido de Compra — implementada 2026-07-18
+
+**Decisão revertida**: originalmente adiado (ver histórico acima — "os
+clientes já aboliram Pedido de Compra"), o usuário pediu explicitamente
+pra retomar depois de Cotação de Compra pronta. `FrmPedCom.frm` (a versão
+completa, ~5.600 linhas) foi recuperado do histórico da sessão e
+rastreado por completo antes de implementar — achados importantes que não
+devem ser re-rastreados numa sessão futura:
+
+- **Tabelas `pedido`/`pedido_itens` já existem no schema** (confirmado ao
+  vivo em `GERDELL`/`BARESTELA`, 0 linhas) — são as mesmas tabelas usadas
+  pelas variantes Revenda/ValPorto/KIFESTA do `.frm` (não há cópia na
+  pasta `Geral`, mas o schema bate). Não são criadas por esta migração,
+  só usadas como já estavam.
+- **`pedido_itens.SEQUENCIA_PEDIDO_ITENS`** (IDENTITY) é o PK real de
+  cada linha — `codigo`+`codigo_int` não é chave única (o legado permite
+  o mesmo produto lançado mais de uma vez).
+- **Situação**: `A` Aberto/Em Aprovação, `F` Aprovado, `C` Rejeitado —
+  mesmo vocabulário A/F/C de Requisição e Cotação de Compra.
+  **Divergência consciente do texto literal do legado**: o botão
+  "Aprovar Pedido" (`Command21_Click`) grava `situacao='F'`, mas a
+  `MsgBox` de confirmação do próprio `.frm` ainda diz "Pedido fechado com
+  sucesso" — nome antigo do botão, nunca atualizado no texto. Usei o
+  sentido real do botão (Aprovar), não a mensagem obsoleta. Mesma coisa
+  pro "Rejeitar Pedido" (`Command9_Click`, grava `situacao='C'`).
+  `R`/`RP` (recebido parcial/total) existem na tabela mas **nenhum botão
+  deste `.frm` os aciona** — pertencem a uma tela de recebimento de
+  mercadoria que este form não tem e que esta migração não implementa
+  ainda (fica pra quando a importação de XML de NF de entrada existir).
+- **"Excluir Pedido" não foi portado** — no próprio `.frm` esse botão
+  está `Visible = 0 'False`, nunca aparece pro usuário (código morto,
+  confirmado direto na declaração do controle).
+- **"Rateio Desp/Desc"** (ratear frete/seguro/despesas/desconto
+  proporcionalmente entre os itens) e **"Importar DAV"** (importar itens
+  de um Pedido de Venda/Orçamento/O.S. existente, via `pedido_venda_prod`/
+  `orc_produto`/`os_produto`) **não foram portados** — Orçamento nem
+  existe nesta migração, e Importar DAV depende de integrações que as
+  telas "Completo" ainda não têm.
+- **Composição fiscal completa por item foi incluída** — decisão
+  explícita do usuário via pergunta direta (2026-07-18, "já com
+  composição fiscal completa" em vez de só Qtd+Preço): Base/Valor de
+  ICMS, IPI (com alíquota), ICMS-ST, ISS, mais frete/seguro/despesas/
+  desconto — mesmas colunas do schema legado. Fica dentro de um
+  `AccordionSection` colapsado por padrão ("Impostos e Custos Adicionais
+  (opcional)"), pra não pesar o caso comum de só Qtd+Preço.
+- `qtd_barra`/`qtd_tijuca` (colunas existentes na tabela) **não usadas**
+  — nomes de filial de um cliente específico antigo (gambiarra, não
+  regra de negócio geral — ver "Não replicar truques VB6"). `frete_fora`/
+  `tipo_pedido`/`enviado`/`exportado` também não usados, sem regra de
+  negócio clara documentada no trecho do `.frm` disponível.
+- **"Histórico do pedido"** implementado como log textual simples,
+  append-only, na coluna `pedido.resumo` (`_append_resumo` no service) —
+  só o texto exibido na tela; quem fez o quê já é coberto pelo log de
+  auditoria padrão.
+
+**Backend**: `services/pedido_compra_service.py` + `routes/pedido_compra.py`
++ `models/pedido_compra.py`. Tela `PEDIDO_COMPRA` no catálogo de
+permissões com ações próprias (`ABRIR`/`GRAVAR`/`EXCLUIR`/`APROVAR`/
+`REJEITAR`/`REABRIR`/`IMPRIMIR` — substituindo o `ACOES_PADRAO` genérico
+que estava reservado). 39 testes unitários novos
+(`tests/unit/test_pedido_compra_service.py`) — 727 testes no total do
+backend.
+
+**Frontend**: `app/pedido-compra.tsx` substituiu o `ComingSoonScreen`
+placeholder. Cabeçalho completo (Fornecedor via busca com autofill de
+Prazo a partir de `fornecedor.prazo_pgto`, Pedido Fornecedor, Prazo,
+Forma de Pagamento, Transportadora, Previsão de Entrega, Aos Cuidados,
+Tipo de Frete CIF/FOB, Obs., Histórico do pedido em `AccordionSection`),
+itens com edição inline (toque no item abre o mesmo formulário de
+inclusão preenchido, "Salvar Alterações" no lugar de "Incluir"),
+Aprovar/Rejeitar/Reabrir, Consultar (situação/período/termo), Imprimir
+(reaproveita `print-report-header.ts`/`printHtml.ts`) e **Anexos** via
+`GestorDocumentosSection` — grava como anexo do **Fornecedor**
+(`GESTOR_DOC_GRUPO_FORNECEDOR=2`), sub-grupo "Pedidos de Compra"
+resolvido dinamicamente via `POST /api/gestor-documentos/sub-grupos`
+(get-or-create) na primeira abertura — **não hardcoded** como o
+`GESTOR_DOC_SUBGRUPO_PEDIDO=2` do Pedido Bar (aquele já existia no
+legado com ID conhecido; este sub-grupo é novo, então o ID pode variar
+por banco de dados).
+
+Validado ao vivo contra `GERDELL`/`BARESTELA` (rotas GET respondendo
+corretamente) — **não há fornecedor cadastrado nessa base de teste**, o
+fluxo completo de criar pedido→incluir item→aprovar não pôde ser
+exercitado ponta-a-ponta ao vivo (só via os 39 testes unitários com
+mocks). Considerar testar manualmente numa base com fornecedores reais.
+
+### 🔴 Ainda pendente
+
+1. **Deep-link entre telas** (item "automatize o máximo os componentes de
+   ligação") — avaliar com o usuário se vale a pena adicionar suporte a
+   `?codigo=...`/`?fornecedor=...` em `notas-fiscais.tsx` e
+   `fornecedores.tsx` pra permitir que o painel de "Últimas Compras" do
+   Ressuprimento/Cotação e o Anexos do Pedido de Compra linkem direto pro
+   registro. Não iniciado.
+
+2. **Envio de Cotação por e-mail** — confirmado fora de escopo por
+   enquanto; retomar só se o usuário pedir explicitamente, já que envolve
+   construir infraestrutura de SMTP real nova.
+
+3. **Teste manual na UI** (abrir Ressuprimento, Curva ABC, Cotação e
+   Pedido de Compra no navegador, exercitar os fluxos de ponta a ponta)
+   — ainda não feito nesta rodada, só validação de contrato via curl
+   direto nas rotas + typecheck limpo + testes unitários.
+
+---
+
 ## Fechamento de Caixa
 
 **Status: 🟢 implementado (2026-07-16)**, com uma correção de arquitetura
@@ -703,9 +2000,123 @@ extraído do rastreio real do `.frm`)
   suporte a Amazon S3 que existia no legado (`TRAY_TIPO_BLOB=1`) não foi
   replicado (nenhuma credencial S3 existe neste app). Se um cliente
   precisar de S3 de verdade, é trabalho novo, não só "ligar uma flag".
-- NCM/CEST são campos de texto livre — o legado abre uma tela dedicada de
-  busca (`FrmCesNCM`) que não foi migrada. Baixa prioridade, mas registrar
-  aqui caso o usuário peça depois.
+- **NCM/CEST são campos de texto livre** — o legado abre uma tela dedicada
+  de busca (`FrmCesNCM`, via `Command31_Click` em `FrmManPec.frm`) contra
+  as tabelas `NCM`/`NCM_CEST`, que não foi migrada. Confirmado 2026-07-29
+  ao tentar reaproveitar essa busca pro Cadastro de Produtos: **nenhuma
+  rota de backend existe pra `NCM`/`NCM_CEST`** ainda (`backend/routes` não
+  tem `/ncm`/`/cest`) — é preciso criar o lookup do zero (endpoint +
+  provavelmente popular a tabela `NCM` com a tabela oficial da Receita, que
+  tem milhares de linhas — não é uma tabela auxiliar pequena tipo
+  Origem/Unidade de Medida). Ícone de busca já adicionado no campo NCM
+  (`produto-completo.tsx`, ao lado de "Classificações Fiscais") mas mostra
+  "ainda não disponível" — mesma UX de "Variações de Preços"/"Preço por
+  Quantidade". Baixa prioridade, mas registrar aqui caso o usuário peça
+  depois — não é um esquecimento, é escopo genuinamente maior que os
+  outros lookups já portados.
+- **Botão de busca "CST IPI" é código morto no próprio legado** — o botão
+  com tooltip "Códigos de CST de IPI" (`Command8`, ao lado de CST IPI
+  Entrada/Saída/Enquadramento em `FrmManPec.frm`) **não tem nenhum
+  `Command8_Click` implementado** no form (confirmado por busca — só
+  `Command7_Click`/`Command9_Click` existem) e nenhum `FrmCstIpi` existe no
+  projeto. Ou seja, mesmo no VB6 o botão nunca funcionou. Por isso os 3
+  campos (`cst_ipi_entrada`/`cst_ipi_saida`/`ENQUADRAMENTO_IPI`) foram
+  portados como texto livre simples, SEM ícone de busca — replicar o botão
+  morto seria pior que não ter nada (usuário clicaria esperando algo
+  acontecer). Se o usuário pedir busca aqui no futuro, é feature nova, não
+  um gap de migração.
+- **🟢 Preço por Quantidade / Variações de Preços (Promoções) implementados,
+  2026-07-29** — os 2 ícones da aba Dados Principais/card Preços
+  ("Preço por Quantidade" e "Variações de Preços") que antes mostravam
+  "ainda não disponível" agora abrem modais reais. Rastreados em
+  `Geral\frmvalqtd.frm` (`pecas_preco_qtd`, colunas `codigo_int/qtd/
+  p_venda`) e `Geral\FrmValPro.frm` (`pecas_promocao`, colunas `sequencia/
+  codigo_int/qtd/p_venda/codigo_promocao/descricao_promocao`) — nenhuma
+  cópia dessas telas existe em `Kontacto\`, só em `Geral\`. Backend:
+  `produto_completo_service.py` (`list/save/delete_preco_qtd`,
+  `list/save/delete_promocao`) + rotas em `routes/produto_completo.py`
+  (`/produto-completo/{codigo}/preco-qtd`, `/produto-completo/{codigo}/
+  promocoes`, ambos com sub-rota `/excluir`). Frontend:
+  `PrecoQtdModal`/`PromocaoModal` em `produto-completo.tsx`.
+  - **"Código Promoção" NÃO é um agrupador multi-produto real** — confirmado
+    no rastreio: é auto-gerado como `"{codigo_int}-{sequência}"` quando
+    deixado em branco, e a grid do legado filtra só por `codigo_int` —
+    nenhuma outra tela do Kontacto lê/agrupa por esse código entre produtos
+    diferentes. Funciona hoje só como rótulo sequencial por produto. Se o
+    usuário pedir "promoção que baixa o preço de vários produtos juntos"
+    no futuro, isso é feature NOVA (schema/regra que não existe no
+    legado), não uma correção de algo mal portado.
+  - **Preço por Quantidade (`pecas_preco_qtd`) segue NÃO aplicado
+    automaticamente** — no legado, é consumida por `frmtraorcnv.frm`/
+    `frmmanpedEPAtuacao.frm` (telas de orçamento/pedido aplicam o preço
+    escalonado por quantidade), mas o Pedido Bar/Geral desta migração
+    ainda não aplicam esse preço ao incluir item — só o cadastro foi
+    portado. Se o usuário pedir "o pedido já aplica o preço por quantidade
+    sozinho", é trabalho novo (mesmo padrão do que foi feito pra Promoção
+    logo abaixo — provavelmente dá pra reaproveitar boa parte do mesmo
+    mecanismo, `_preco_promocional`/`verificarPromocao`/endpoint
+    `preco-promocional`), registrar como pendência própria quando pedido.
+  - Sem validação de duplicidade/faixa ascendente em nenhuma das duas
+    (mesmo comportamento do legado — só valida quantidade > 0).
+  - **🟢 Extensão 2026-07-29, user-directed, SEM precedente no legado**:
+    `pecas_promocao` ganhou período opcional e combinável — dias da semana
+    (`dias_semana`, string "0,1,2..6" onde 0=domingo), intervalo de data
+    (`data_inicio`/`data_fim`, `DATE`) e intervalo de hora (`hora_inicio`/
+    `hora_fim`, `NVARCHAR(5)` "HH:MM"). Colunas criadas via migração
+    idempotente (`_ensure_promocao_periodo_cols`, mesmo padrão de
+    `_ensure_qtd_pessoas_col` em `pedido_common.py`) — não existiam no
+    legado, `FrmValPro.frm` só tinha quantidade/preço/código promoção.
+    Tudo em branco = sem restrição nesse critério (comportamento anterior
+    preservado).
+  - **🟢 Aplicação automática no Pedido implementada, 2026-07-30,
+    user-directed** ("aplicar as regras de dias/período/hora da Promoção
+    ao incluir item no Pedido geral e bar e futuros pedidos que
+    criarmos"). Escopo: só `pecas_promocao` (Variações de Preços) — Preço
+    por Quantidade continua pendente, ver item acima. Centralizado pra
+    cobrir automaticamente qualquer Pedido futuro que reaproveite o mesmo
+    hook/helper, não só Bar/Geral:
+    - Backend: `pedido_common._preco_promocional(cur, codigo_int, qtd)` —
+      resolve a linha de `pecas_promocao` aplicável agora (checa
+      dias_semana/data_inicio-fim/hora_inicio-fim, todos opcionais e
+      combináveis; entre várias que batem no período, prefere a de maior
+      `qtd`, mesmo critério de tier de Preço por Quantidade — decisão
+      desta implementação, sem precedente no legado pra desempate). Novo
+      endpoint `GET /api/produtos/{codigo}/preco-promocional?qtd=`
+      (`produtos_service.preco_promocional`) — usado pelo frontend, não
+      pelo próprio `_add_item_sync`/`_add_item_completo_sync` (ver decisão
+      de design abaixo).
+    - **Decisão de design**: o preço promocional é uma SUGESTÃO automática
+      no campo "Valor unitário" do "Confirmar Item", não um valor travado
+      no backend — o atendente continua podendo digitar por cima, igual a
+      qualquer outro preço no sistema hoje (não existe precedente de campo
+      de preço travado nesta migração). Por isso a aplicação mora no
+      FRONTEND (`usePedidoItens.ts`: `verificarPromocao`, chamada ao
+      escolher o produto e de novo — debounce 400ms — sempre que a
+      quantidade muda; só reescreve o campo se o valor atual ainda for o
+      último sugerido automaticamente, `autoValorRef`, pra nunca
+      sobrescrever um valor que o atendente já editou manualmente), não no
+      backend — `_add_item_sync`/`_add_item_completo_sync` não foram
+      alterados. Aviso visual "Promoção aplicada: <descrição>" no
+      `AddItemModal.tsx` quando ativo (`promoStyles.badge`).
+    - Cobertura: `AddItemModal.tsx`/`usePedidoItens.ts` (fluxo "Confirmar
+      Item" — Pedido Bar `pedido-form.tsx`, Pedido Geral `pedido-geral.tsx`,
+      e o picker `produtos.tsx`, todos via o mesmo hook) E o quick-add "+"
+      de `usePedidoItens.quickAddItem`/`PainelPedidoCard.tsx` (atalho de
+      1 clique do Painel de Pedidos, Bar) — os dois caminhos de inclusão
+      de item batem na mesma checagem, pra não dar preço diferente pro
+      mesmo produto+quantidade só por ter sido incluído por um atalho
+      diferente.
+    - **Fora do escopo desta rodada**: O.S. (`os-form.tsx` não usa
+      `usePedidoItens`, tem fluxo próprio — não tocado, usuário só pediu
+      Pedido); e-mail/qualquer notificação de promoção ativa; qualquer
+      indicação de promoção na tela de BUSCA de produto (antes de
+      escolher) — só aparece depois de escolhido, no "Confirmar Item".
+    - **Não testado ao vivo** (sem promoção com período cadastrada em
+      nenhuma conexão de teste disponível nesta sessão) — revisar
+      timezone/relógio do servidor SQL (`GETDATE()`, base de todo o
+      cálculo de dia/hora) antes de confiar em produção se algo parecer
+      errado (ex.: promoção "hoje das 18h-22h" não aparecendo/aparecendo
+      fora de hora).
 - Múltiplos códigos de barra por produto (`codbarra_auxiliar`) não
   migrados — só um campo de código de barras, como no screenshot do
   usuário. Fora de escopo por ora (usuário não pediu).
@@ -714,6 +2125,14 @@ extraído do rastreio real do `.frm`)
   existir numa instalação específica, não bloqueia a exclusão por isso) —
   revisitar se algum cliente relatar exclusão indevida de produto com
   movimentação real que essa lista não cobriu.
+- **Tipo Preço (`politica_preco`) só configura, não executa** (adicionado
+  2026-07-29, user-directed) — campo virou combobox "Entrada"/"Controlado"
+  na aba Dados Principais, explicado pelo usuário: "Entrada" recalcula o
+  preço do produto automaticamente a cada entrada no Recebimento de
+  Produto; "Controlado" mantém o preço manual. **O Recebimento de
+  Produto/entrada de estoque em si ainda não foi migrado** — quando for,
+  checar esse campo e implementar o recálculo automático condicionado a
+  ele (não implementado ainda, é só a configuração).
 
 ### Ajustes 2026-07-14 (mesmo dia, retomado após o usuário testar a tela)
 
@@ -769,7 +2188,25 @@ extraído do rastreio real do `.frm`)
 
 ## Transações
 
-**Status: 🟡 Pedido Completo Fase A implementada (2026-07-15); O.S. Completa e Fases B-F ainda não iniciadas.**
+**Status: 🟡 Pedido Geral (ex-Pedido Completo) Fases A e B implementadas
+(núcleo + número de série + m² + Clínica/Agenda); O.S. Completa e Fases
+C-F do Pedido Geral ainda não iniciadas.**
+
+**Atualização 2026-07-20, user-directed**: "Pedido Completo" foi renomeado
+**"Pedido Geral"** — arquivo/rota `pedido-completo.tsx`/`/pedido-completo`
+viraram `pedido-geral.tsx`/`/pedido-geral` (permissão `PEDIDO_COMP` e
+endpoints de backend `/api/pedido-completo/...` continuam com o nome
+antigo por enquanto, decisão à parte). A lista deixou de ser compartilhada
+com o Pedido Bar: `pedidos.tsx` agora é exclusiva do Bar, e uma tela nova
+`pedido-lista.tsx` passou a ser a lista compartilhada de toda versão de
+Pedido fora do segmento Bar (hoje só o Geral, mas pensada pra futuras
+versões — "vamos ter 2 ou mais versões de tela de Pedido", cada uma
+podendo ganhar sua própria versão mobile simplificada mais adiante). Ver
+CLAUDE.md > "Transações Screens Strategy" > "Atualização 2026-07-20" pro
+detalhe completo. **As menções a "Pedido Completo"/`pedido-completo.tsx`
+no restante desta seção (histórico anterior a 2026-07-20) não foram
+reescritas** — refletem o nome vigente na época de cada entrada; ler
+como "Pedido Geral" mentalmente ao revisitar.
 
 Pedido de origem: usuário pediu (mensagem `[Global]`) uma nova opção
 "Transações" no menu vertical (web-only), contendo as versões **completas**
@@ -1176,8 +2613,13 @@ não tentar tudo de uma vez:
   kits) + Fechar/Cancelar. Já é uma tela funcional de pedido completo
   sem os módulos condicionais.
 - **Fase B** (módulos condicionais reaproveitando o padrão `FrmNDS`):
-  `controla_num_serie` primeiro (é o que desbloqueia a unificação do
-  Cilindro), depois módulo m², depois módulo Clínica.
+  `controla_num_serie` — 🟢 **implementado 2026-07-27** (ver seção "Pedido
+  Geral — Fase B: número de série" abaixo; é o que desbloqueia a
+  unificação do Cilindro); módulo m² — 🟢 **precificação implementada
+  2026-07-30** (rateio/impressão completa/etiquetas ficam pra depois, ver
+  seção "Pedido Geral — Metro Quadrado" abaixo); módulo Clínica — 🟢
+  **Agenda completa implementada 2026-07-28** (ver seção própria abaixo).
+  Fase B está completa nos 3 sub-módulos originalmente previstos.
 - **Fase C**: Desconto/Rateio (com a cadeia de aprovação por senha de
   gerente) + Promoção.
 - **Fase D**: Fiscal (`SitTribut`) — só após confirmar com o usuário as
@@ -1189,6 +2631,839 @@ não tentar tudo de uma vez:
 - **Cilindro** entra dentro da Fase B, reaproveitando exatamente o padrão
   `controla_num_serie`/modal, conforme já decidido em CLAUDE.md > "Pedido
   de Cilindro — Unificação com Pedido de Venda Geral".
+
+### Pedido Geral — Metro Quadrado / Clínica: módulo registrado (2026-07-27); comportamento de precificação m² 🟢 implementado (2026-07-30)
+
+**Pedido do usuário**: "Os módulos Clinica e Metro Quadrado são variações
+do Pedido de Venda. Usa a mesma tela com características próprias" —
+confirmado que, junto com Bar/Cilindro/Pedido de Venda, formam um grupo de
+**5 segmentos mutuamente exclusivos** da mesma tela "Pedido Geral"
+(`pedido-geral.tsx`, tela `PEDIDO_COMP`). Registro do módulo (mutua
+exclusividade em Módulos e Recursos + `PEDIDO_COMP` habilitado se qualquer
+um dos 3 estiver ligado) implementado 2026-07-27. Pedido explícito do
+usuário: "não mexer no pedido de Bar" (reforçado de novo em 2026-07-30,
+"Pedidos bar não contempla m2") — nada em `pedidos.tsx`/`pedido-form.tsx`/
+`itens_service.py` foi tocado em nenhuma das duas rodadas.
+
+#### Precificação m² — implementada, 2026-07-30, user-directed ("aplique a Fase B do módulo Metro Quadrado")
+
+Duas dúvidas de negócio que travavam a Fase B foram resolvidas nesta
+sessão lendo o código-fonte VB6 diretamente (`mdl_proc.bas`,
+`frmmanpedfor.frm`, `FrmGerCon.frm`):
+
+- **Heurística "nome da empresa contém TELA" liga Metro Quadrado —
+  NÃO portada.** Achada em `frmmanpedfor.frm:11785-11805`, no mesmo bloco
+  de hacks hardcoded por nome de empresa específica (`"KLIFER"`,
+  `"NUCLEO"`, `"CAPRIXO"`, `"GUERENGASES"`) — patch de instalação de um
+  cliente, não regra de negócio (ver "Não replicar truques VB6").
+- **As "6 áreas mínimas por tipo de preço" não são 6 valores de área
+  diferentes** (suposição errada do rastreio original, corrigida agora) —
+  são 6 **flags booleanas** (`m2_area_minima_padrao/modelado/engenharia/
+  modelado_engenharia/comum_lapidacao/comum_sem_lapidacao`), cada uma
+  decidindo só **se** aquele tipo de preço aplica o piso de área mínima
+  **compartilhado** (`metro_quadrado_minima_metragem`, default 0,25).
+  Achado extra: essa configuração inteira (as 6 flags + o piso + o flag
+  "controla cabeça de chapa") **já estava implementada em Controle do
+  Sistema** (`controle-sistema.tsx:1003-1012`) antes desta sessão — só
+  nunca tinha sido consumida por nenhuma tela de venda.
+
+**Decisão de arquitetura** (documentada com mais detalhe no código): o
+total de uma linha m² no legado é `qtd_pedida × AreaPreco(...) × p_venda`
+(3 fatores, repetidos em ~25 pontos diferentes do `.frm` — grade,
+fechamento, impressão, rateio). Este app centraliza o total do item em UM
+lugar só (`_item_total`/`_recalc_pedido_total`, `qtd × p_venda`). Em vez
+de replicar a fórmula de 3 fatores por todo o sistema, a área é calculada
+uma vez ao incluir o item e **dobrada dentro do preço unitário**
+(`p_normal = preço_do_tipo × área_calculada`) — `area_venda` continua
+sendo gravada na linha, mas só como dado de auditoria/exibição, nunca
+como multiplicador ativo em nenhuma conta.
+
+**Implementado**:
+- `pedido_common.py`: `_arredonda_pbox`/`_area_preco` (réplica de
+  `ArredondaPBox`/`AreaPreco`, `mdl_proc.bas:11969`/`12004` — os dois
+  ramos, com e sem "controla cabeça de chapa"), `_trunca3` (mesmo idioma
+  de `_trunca2` já usado em `inventario_service.py`),
+  `_modulo_metro_quadrado_ativo` (não bloqueia como os outros módulos —
+  só decide se o item entra pelo caminho m² ou pelo normal, réplica do
+  `Else` do legado), `_config_m2` (lê os 8 campos de `controle_aux`),
+  `TIPOS_PRECO_M2` (os 6 tipos: índice, rótulo, coluna de preço em
+  `pecas`, flag de área mínima correspondente).
+- `pedido_completo_service._add_item_completo_sync`: quando
+  `pecas.uni` do produto é M2/ML/M3 **e** o módulo está ligado, exige
+  `tipo_preco_m2`+`comprimento`+`largura`, resolve o preço pela coluna do
+  tipo escolhido (`p_venda`/`p_sugestao`/`p_garantia`/`p_sugerido`/
+  `preco_base`/`preco_lista` — só oferece tipos com valor > 0, mesmo
+  filtro do legado), calcula a área e grava `p_normal`/`p_venda` já
+  multiplicados, mais `comprimento`/`largura`/`area_venda`/
+  `comprimento_chapa`/`largura_chapa` na linha (colunas legadas de
+  `pedido_venda_prod` — **assumidas existentes, não confirmadas contra um
+  schema real nesta sessão**, mesma suposição que já funcionou pra
+  `cod_num_serie`). `_list_itens_completo_sync` enriquecida com essas 3
+  dimensões (mesmo padrão do Nº de Série, sem duplicar a query base).
+- Novos endpoints: `GET /produtos/{codigo}/tipos-preco-m2` (tipos
+  disponíveis pro produto) e `GET /produtos/{codigo}/preco-m2-preview`
+  (preview do valor calculado, reaproveita `_area_preco`/`_config_m2` —
+  usado pelo frontend enquanto o usuário digita, pra não duplicar a
+  matemática em JS).
+- `ItemSaveRequest` ganhou `tipo_preco_m2`/`comprimento`/`largura`/
+  `comprimento_chapa`/`largura_chapa` (todos opcionais).
+- **Frontend** (`usePedidoItens.ts`/`AddItemModal.tsx`/`ItemList.tsx` —
+  compartilhados por Bar e Geral, mas o comportamento só ativa quando
+  `unidade` do produto é M2/ML/M3 **e** a tela é `PEDIDO_COMP`, mesmo
+  padrão do Nº de Série com `isPedidoComp`/`exigeNumSerie`): "Confirmar
+  Item" troca o campo "Valor unitário" (digitação livre) por um seletor
+  de tipo de preço (rádio, com o preço de cada um) + campos Comprimento/
+  Largura (e Comprimento/Largura de Chapa, só visíveis se
+  `vidro_controla_cabeca_chapa` vier ligado) + preview ao vivo (debounce
+  300ms) da área calculada e do valor final. Produto m² não pode pular
+  pelo atalho "+" de adição rápida (precisa passar por "Confirmar Item"),
+  mesma regra do Nº de Série. `ItemList.tsx` mostra "· C x L m" na
+  descrição compacta do item quando presente. Modo Didático
+  (`AJUDA_PEDIDO_GERAL_ITENS`) ganhou item explicando os campos.
+- Testes: `TestArredondaPBox`/`TestTrunca3`/`TestAreaPreco` (puros, em
+  `test_services.py`) + `TestAddItemCompletoM2` (6 casos, em
+  `test_pedido_completo_service.py`) — 1182 testes de backend passando
+  (excluindo as 67 falhas pré-existentes de Gestão de Compras, não
+  relacionadas). `tsc --noEmit` sem novos erros nos arquivos tocados.
+
+#### Itens que ficaram de fora — completados na rodada seguinte (2026-07-30, mesmo dia, user-directed "pode implementar o que ficou de fora")
+
+- **🟢 `AreaEstoque` vs `AreaPreco` (baixa de estoque)** — implementado.
+  `_area_estoque` (réplica de `AreaEstoque`, `mdl_proc.bas:12103` — área
+  bruta, sem arredondamento nem piso) somada a `pedido_common.py`.
+  `_fechar_pedido_itens` agora baixa `qtd_pedida × área_estoque` pra item
+  m² (`comprimento`/`largura` gravados), continua baixando só por
+  `qtd_pedida` pra item normal — sem mudança. 2 testes novos
+  (`TestFecharPedidoItensEstoqueM2`, `test_pedido_common_forma_pagamento.py`,
+  usando monkeypatch em `_fecha_fpag_dav`/`_mover_estoque` pra isolar só a
+  lógica de estoque).
+- **🟢 Rateio/Desconto Geral — checkbox "aceita desconto"** — implementado,
+  mas **generalizado pra TODO item, não só m²**: o rateio proporcional já
+  usado por `_aplicar_desconto_geral_sync` (`p_normal × qtd`, base do peso
+  de cada item) na real já incide corretamente sobre o valor de m² (que já
+  vem com a área dobrada no `p_normal`, ver decisão de arquitetura acima)
+  — **não precisou de um "passo extra" pra m² como a suposição original
+  desta seção presumia**, o `DESCONTO_ANTERIOR`/pulo de arredondamento do
+  legado era só um artefato da fórmula de 3 fatores que este app não
+  replica. O que faltava de verdade era `pecas.aceita_desconto` não ser
+  respeitado pelo Desconto Geral (só bloqueava desconto de ITEM avulso,
+  nunca o geral) — corrigido: item com `aceita_desconto=False` fica de
+  fora da base e nunca recebe desconto no rateio geral, pra qualquer
+  Pedido/produto, não só m². 5 testes novos (`test_descontos_service.py`,
+  novo arquivo — não havia nenhum teste unitário de
+  `_aplicar_desconto_geral_sync` antes).
+- **🟢 Impressão — dimensão no recibo** — `ReciboPedidoModal.tsx` mostra
+  "C x L m" tanto no recibo completo (`it.itens.forEach`) quanto no ticket
+  de item único (impressão automática por Finalidade). `ItemPrintData`
+  ganhou `comprimento`/`largura` opcionais. **Não** foram recriados os
+  formatos de impressão específicos do legado (48-col/Vidro A4) — só o
+  recibo já existente (`ReciboPedidoModal`) ganhou a informação, que é o
+  único mecanismo de impressão de pedido que existe nesta migração hoje.
+- **🟢 Editar item m² já incluído** — implementado. Nova
+  `pedido_completo_service._update_item_completo_sync` (rota PUT do Pedido
+  Geral passou a chamar essa em vez de `itens_service.update_item`, que
+  continua servindo o Pedido Bar sem mudança) — reconhece item m²
+  (`comprimento`/`largura` não-nulos na linha atual) e recalcula a área ao
+  editar; item normal segue exatamente o comportamento antigo. **O tipo de
+  preço usado originalmente não é persistido em nenhuma coluna** (mesmo
+  comportamento do legado, resolvido e descartado na hora) — o atendente
+  sempre reescolhe o tipo ao reabrir "Editar Item" num item m² (comprimento/
+  largura vêm pré-preenchidos, tipo não). Frontend:
+  `EditItemModal.tsx`/`usePedidoItens.ts` ganharam o mesmo seletor de tipo
+  + preview do "Confirmar Item", só que sem os campos de chapa (Comprimento/
+  Largura de Chapa) — simplificação deliberada da edição, os avançados
+  continuam editáveis só reincluindo o item. 4 testes novos
+  (`TestUpdateItemCompletoM2`).
+- **🔴 Botão "Etiquetas" — investigado, NÃO implementado.** Achado ao
+  rastrear `Command21_Click` (`frmmanpedfor.frm:7771`, botão Caption
+  "&Etiquetas", Tag "Emitir Etiquetas" — confirmado que é o botão certo):
+  **o handler inteiro está comentado no código-fonte legado** (`Sub
+  Command21_Click() ' ... tudo comentado ... End Sub` — literalmente vazio
+  em produção, clicar nesse botão hoje no VB6 não faz nada). O botão que
+  de fato imprime alguma coisa é outro, `Command24_Click`, que chama
+  `Imp_Etiq` — mas isso está ligado a `Frame9`/campos `Etiq(0..2)` com
+  máscara de DATA ("  /  /    "), sugerindo uma etiqueta de
+  validade/fabricação (rastreabilidade), não uma etiqueta de dimensão m²
+  como a pendência original presumia — nunca confirmado porque `Imp_Etiq`
+  em si não foi localizado/lido. **Não implementado por falta de regra
+  real a portar** (mesmo princípio de "Nunca implementar regra de negócio
+  em cima de suposição") — se o usuário quiser uma etiqueta de item m²
+  mesmo assim, é uma feature NOVA (sem precedente funcional no legado),
+  precisa de decisão explícita sobre o conteúdo/formato antes de
+  implementar, não uma migração.
+
+  **📌 Pendência registrada — Etiqueta de item m², 2026-07-30,
+  user-directed** ("coloque etiqueta de item m² como pendência m2"):
+  fica como pendência própria do módulo Metro Quadrado, não fechada nem
+  descartada — só bloqueada até o usuário decidir o conteúdo/formato,
+  já que não há regra do legado pra copiar (ver achado acima). Perguntas
+  em aberto antes de implementar:
+  - Conteúdo da etiqueta: código do produto, descrição, dimensão
+    (comprimento x largura), valor unitário, algo mais (nº do pedido,
+    cliente, data)?
+  - Tamanho físico/formato de impressão (etiqueta pequena tipo impressora
+    térmica de código de barras, ou papel comum)?
+  - Uma etiqueta por peça (repete `qtd_pedida` vezes) ou uma por item de
+    pedido, independente da quantidade?
+  Quando o usuário responder, implementar reaproveitando
+  `src/utils/printHtml.ts` (mesmo padrão de `ReciboPedidoModal.tsx`, ver
+  "Impressão via iframe, não CSS hide" no CLAUDE.md) — endpoint de dados já
+  existe (`GET /api/pedidos/{pedido}/itens` já traz `comprimento`/
+  `largura`/`area_venda` por item), não precisa de rota nova, só o
+  componente de impressão em si.
+
+**Não testado ao vivo** (sem conexão com módulo Metro Quadrado disponível
+nesta sessão, em nenhuma das duas rodadas) — primeiro passo ao retomar:
+confirmar que `comprimento`/`largura`/`area_venda`/`comprimento_chapa`/
+`largura_chapa` realmente existem em `pedido_venda_prod` num schema real,
+depois um ciclo completo (produto m² → Confirmar Item → tipo+dimensões →
+preview → gravar → Fechar → conferir baixa de estoque por área → Editar
+Item → reabrir pedido → conferir valor e "Detalhe" na grade e no recibo
+impresso).
+
+**Implementado agora**:
+- `SEGMENTOS_PEDIDO_EXCLUSIVOS` (`controle_config_service.py` e
+  `modulos-recursos.tsx`) passou de 3 para 5 itens: `Bar`, `Cilindro`,
+  `Pedido_venda`, `metro_quadrado`, `CLINICA` (colunas já existentes em
+  `controle_configuracao`, já estavam na lista `CAMPOS` — só não entravam
+  no grupo exclusivo nem no gating de tela).
+- `disabled_telas()` (`permissoes_service.py`) e o espelho no frontend
+  (`permissions/index.tsx`) corrigidos: como `MODULE_TELAS` só consegue
+  expressar "E" (desliga a tela se QUALQUER módulo mapeado estiver off),
+  adicionada uma correção explícita — `PEDIDO_COMP` só fica no
+  `disabledTelas` se **nenhum** dos 3 (Pedido_venda/metro_quadrado/CLINICA)
+  estiver ligado, igual ao padrão já usado pra O.S. (Oficina OU
+  Assistência). Sem essa correção, `PEDIDO_COMP` ficaria sempre desabilitado
+  quando Metro Quadrado ou Clínica fosse o módulo ativo (só "Pedido_venda"
+  está mapeado em `MODULE_TELAS`).
+- Esse gap foi descoberto porque o bug original relatado pelo usuário
+  (master vendo "Pedido Bar" e "Pedido de Venda" juntos no menu Transações
+  mesmo com só um módulo ligado) revelou que `can()` bypassava
+  `disabledTelas` pro master — corrigido antes desta mudança (ver commit/
+  sessão do mesmo dia, `frontend/src/permissions/index.tsx`).
+
+**Rastreio campo-a-campo do `frmmanpedfor.frm` (`Geral\frmmanpedfor.frm` —
+única cópia populada na árvore; `Kontacto\frmmanpedfor.frm` é 0 bytes),
+pronto pra quando a Fase B for retomada — não re-derivar do zero:**
+
+Ambos os flags (`Dados_Controle_Configuracao.Clinica` /
+`.Metro_Quadrado`) são membros de `Type_Controle_Configuracao`
+(`mdl_proc.bas`), carregados uma vez por sessão de `controle_configuracao`.
+
+**Clínica** — 16 ocorrências no form, resumo por efeito:
+1. **Impressão usa relatório totalmente diferente**: `ImprimeClinicaPed35`
+   (`mdl_proc.bas:26770`) no lugar de `ImprimePed35`/`ImprimeFotoPed35`
+   quando Clínica está ligada.
+2. **Itens de Serviço (código começa com "S") não agrupam quantidade**:
+   ao incluir um serviço com Qtd > 1, em vez de 1 linha com
+   `qtd_pedida=N`, o legado insere **N linhas separadas** (`For QTDCLINICA
+   = 1 To Campo(4)`), cada uma com `qtd_pedida=1` — pra permitir agendar
+   cada unidade individualmente depois. Fora de Clínica, é sempre 1 linha
+   só (comportamento atual do Pedido Geral, correto pra manter).
+3. **Botões extras no cabeçalho, escondidos fora de Clínica**: "Layouts"
+   (`Command77`, abre `FrmPreLay` — seletor de layout de impressão
+   genérico) e "Agendar" (`Command78`, abre `FrmMarAge` — tela de
+   agendamento, consulta `servicos`/`especialidades` dos itens do
+   pedido).
+4. **Colunas extras na grade**: "Agendamento" e "Profissional" (grid cols
+   17/18) só aparecem em Clínica — populadas ao reabrir um pedido salvo
+   via JOIN `AGENDA`/`AGENDA_PEDIDO`/`FUNCIONARIOS` (data/hora + 
+   `nome_guerra` do profissional), com a linha pintada de verde se
+   `SITUACAO_ATENDIMENTO = "ATENDIDO"` ou vermelho caso contrário.
+5. Checkbox de impressão `Check17` ("Não imprimir unitários") some
+   quando Clínica está ligada (única diferença de opções de impressão).
+
+**Metro Quadrado (m²/vidro)** — duas variáveis em jogo: o flag global
+(`Dados_Controle_Configuracao.Metro_Quadrado`, da tabela) e uma cópia
+local no form (`Metro_Quadrado`, `Dim` de módulo) que combina o flag
+global **OU** uma heurística por nome da empresa (`InStr(UCase(fantasia),
+"TELA")` — cliente do ramo de vidro/tela cujo nome contém "TELA" liga o
+modo mesmo com o flag desligado; não confirmado se essa heurística deve
+ser portada ou é gambiarra pontual de um cliente específico — perguntar
+antes de assumir).
+1. **Campos Comprimento/Largura só ficam editáveis em m²**: ao selecionar
+   um produto cuja unidade (`pecas.uni`) é `M2`/`ML`/`M3`, os campos
+   ficam visíveis sempre mas só `.Enabled` quando Metro Quadrado está
+   ligado.
+2. **Seletor de 6 tipos de preço por m²**: ao escolher um produto m² com
+   o módulo ligado, abre uma lista (`ListPrecos`) com 6 opções — Padrão,
+   Modelado Comum, Engenharia, Comum (S/Lapidação), Modelado Engenharia,
+   Comum (C/Lapidação) — cada uma lendo uma coluna de preço distinta de
+   `pecas` (`p_venda`, `p_sugestao`, `p_garantia`, `p_sugerido`,
+   `preco_base`, `preco_lista`) **e** sua própria área mínima faturável
+   configurada (`m2_area_minima_padrao`, `m2_area_minima_modelado`, etc.
+   — variáveis globais não localizadas ainda, provavelmente em
+   `controle`/`controle_aux`).
+3. **Precificação sempre por área calculada, nunca pela quantidade
+   digitada** — `AreaPreco(comprimento, largura, area_minima, tipo_
+   arredondamento, comprimento_chapa, largura_chapa)` (`mdl_proc.bas:
+   12004`) é a função central; quando Metro Quadrado está ligado, o
+   arredondamento respeita tamanhos padrão de chapa de vidro (quebras em
+   1.8/2.4/3.21m — ver função `ArredondaPBox`, não localizada nesta
+   passada). Fora de m², é `trunca3(comprimento*largura)` puro.
+4. **Coluna "Localização" da grade vira "Detalhe"** (mostra a dimensão
+   `(largura x comprimento)` calculada em vez do texto de
+   localização/estoque) quando Metro Quadrado está ligado.
+5. **Checkbox extra**: "Incidir Somente nos produtos que aceitam
+   desconto" (`Check77`) só visível (e pré-marcada) em modo m² — usada no
+   fechamento por valor total (rateio) pra decidir quais itens recebem o
+   ajuste de desconto.
+6. **Botão "Etiquetas" (`Command21`)** só visível em modo m² — impressão
+   de etiquetas por item.
+7. **Passo extra no rateio de desconto** (`Command37_Click`, "Fechar por
+   Valor Total"): em modo m², roda um `UPDATE` de
+   `DESCONTO_ANTERIOR=DESCONTO` e recarrega o pedido (`ChamaPedido`) antes
+   de calcular o rateio proporcional — passo que não existe fora de m².
+   E, dentro do próprio rateio (`Descontos:`), o passo final de "aplicar
+   diferença de arredondamento no primeiro item" é pulado inteiramente em
+   modo m² (`If Metro_Quadrado Then Return`) — o arredondamento já é
+   tratado dentro do `AreaPreco`.
+8. Impressão: `Metro_Quadrado` é passado como parâmetro `M2` pras mesmas
+   funções de impressão do Clínica (`ImprimePed35`, `ImprimeVidroA4`,
+   etc.) — controla se o relatório mostra a dimensão calculada em vez de
+   texto de garantia/localização.
+
+**Dúvidas em aberto pra quando a Fase B for retomada** (não assumir,
+perguntar antes de portar):
+- A heurística "nome da empresa contém TELA" liga Metro Quadrado — portar
+  como regra real, ou é gambiarra de um cliente específico do legado (ver
+  "Não replicar truques VB6" no CLAUDE.md)?
+- Onde ficam configuradas as 6 áreas mínimas por tipo de preço
+  (`m2_area_minima_*`) — que tabela/tela as define hoje no legado?
+- `ArredondaPBox` (arredondamento pra tamanho padrão de chapa) precisa ser
+  localizada/traçada antes de portar o cálculo m² fiel.
+
+### Pedido Geral — Fase B: Clínica (Agendamento) — 🟢 Agenda completa implementada, 2026-07-28
+
+**Status atualizado (mesmo dia, sessão seguinte)**: o usuário pediu
+explicitamente o escopo COMPLETO ("faça ser completo então"), superando a
+escolha anterior de "núcleo enxuto" — grade semanal visual, agendamento
+avulso (cliente novo + serviço, direto da grade), Situação do Atendimento
+(13 estados), Revisão/Garantia, Descartáveis, Hora Chegada/Saída, Troca de
+Profissional (com autorização de gerente/supervisor/master), Anexos
+(Gestor de Documentos), Motor de Formulário Dinâmico (Cadastro de Layout +
+Preenchimento) e Faturar avulso (1 forma de pagamento, reaproveitando a
+estrutura de Forma de Pagamento existente) — tudo implementado. Ver "Agenda
+completa — implementado" logo abaixo pro detalhe; a subseção "Núcleo
+enxuto" original fica registrada por trás dela como histórico (tudo que
+ela cobria continua funcionando, apenas foi ampliado). Resto desta seção
+é o rastreio VB6 que fundamentou a implementação.
+
+#### Agenda completa — implementado (2026-07-28, mesma sessão)
+
+- **Backend**: `agenda_service.py` reescrito por completo —
+  `_list_grade_sync` (grade semanal, réplica de `MontaHorarios`, um dia por
+  vez com slots livre/ocupado/pausa/ausente), `_verificar_garantia_sync`
+  (Revisão/Garantia via `servicos.prazo_garantia`/`tipo_garantia` — 1=Anos,
+  2=Dias, 3=Horas, 4=Meses, 5=Km, réplica de `RetornaGarantia`,
+  `mdl_proc.bas:13468`; Km não é validável por data, só sinaliza),
+  `_salvar_agendamento_sync` ampliado (situação/revisão/descartáveis/horas,
+  cobre tanto o fluxo vinculado a um item de Pedido quanto o avulso — agora
+  aceita `codagenda` pra reagendar um avulso já existente também),
+  `_trocar_profissional_sync` (filtra por `controla_agenda=1` +
+  especialidade + revalida disponibilidade no novo profissional),
+  `_faturar_avulso_sync` (bloqueia se vinculado a Pedido/O.S. ou já
+  faturado; usa o novo tipo `DAV_AGE` em `pedido_common.py` —
+  `_ensure_agenda_forma_pag_tables` cria as 8 tabelas `agenda_dinheiro`/
+  `agenda_cheque`/etc. sob demanda —, reaproveita `_fecha_fpag_dav` sem
+  alteração, grava `comanda`+`movimentacao`(S01)+`agenda_comanda`, réplica
+  reduzida de `GeraComanda` sem emissão fiscal). `_list_profissionais_agenda_sync`
+  ganhou `servico` opcional — sem serviço, lista TODO profissional com
+  `controla_agenda=1` (usado pelo seletor da grade, que precisa listar
+  profissionais antes de qualquer serviço estar em contexto).
+- **Motor de Formulário Dinâmico**: novo `services/layout_service.py` +
+  `routes/layout.py` — CRUD de `layout`/`layout_campos` (só o modo "grade de
+  campos", `estilo_layout=0`; RTF livre fora de escopo), `layout_tipo_campo`
+  como lookup, e Possíveis/Preenchidos/Preencher sobre `layout_entidade`/
+  `layout_preenchido` (`FrmPreLay2.frm`, 82% comentado no legado, usado como
+  especificação funcional — decisão explícita do usuário). Pra Agenda
+  (`entidade=8`, sem coluna própria em `layout`), Possíveis é resolvido por
+  junção com `layout_servico`/`layout_profissional` do agendamento. Achado e
+  corrigido durante os testes: `_save_layout_sync` tinha um bug real (não
+  um teste mal escrito) — a coluna `profissional` nunca entrava no dict de
+  flags gravados, porque `_ENTIDADE_COLUNA` (usado tanto pra montar esse
+  dict quanto pro mapeamento entidade→coluna genérico) não inclui 8/Agenda
+  nem, por tabela, a própria coluna `profissional`; toda chamada a
+  `_save_layout_sync` quebrava com `KeyError: 'profissional'`. Corrigido
+  computando a lista de colunas do dict separadamente
+  (`_ENTIDADE_COLUNA.values() + ["profissional"]`).
+- **Faturar avulso**: forma de pagamento "GARANTIA"/"REVISÃO" já cadastrada
+  na tabela `forma_pagamento` (confirmado por screenshot do usuário) cobre
+  o caso de atendimento marcado Revisão/Garantia (valor zerado, forma
+  "GARANTIA" fecha o Faturar sem cobrança) — não foi necessário nenhum
+  mecanismo especial de "faturamento gratuito".
+- **`ItemRow.agendamento`/enriquecimento em `_list_itens_completo_sync`**
+  ganhou `codagenda` (antes só data/hora/profissional/situação) — necessário
+  pro botão Trocar Profissional (`POST /api/agenda/{codagenda}/trocar-profissional`)
+  e pra Anexos/Layouts (`referencia`/`codentidade`), que precisam do código
+  do agendamento, não só do item de pedido.
+- **Frontend**:
+  - `AgendarModal.tsx` (item vinculado a Pedido) ampliado com Situação (13
+    estados, `SelectField`), checkbox Revisão/Garantia + botão "Verificar
+    garantia" (`GET /api/agenda/garantia`), Descartáveis (valor+obs), Hora
+    Chegada/Saída, e 3 ícones novos no cabeçalho do modal (`IconButtonWithTooltip`):
+    Anexos, Formulários (Layouts) e Trocar Profissional (abre um seletor
+    inline de novo profissional + `AuthorizationSlide` antes de confirmar).
+    Sem Faturar aqui — item vinculado a Pedido sempre fatura pelo próprio
+    Pedido.
+  - Novo `frontend/src/components/agenda/` — `AnexosAgendamentoModal.tsx`
+    (clone de `AnexosPedidoModal.tsx`, `cod_grupo=1`/`cod_sub_grupo=16`,
+    ver pendência de confirmação abaixo), `LayoutPreenchimentoModal.tsx`
+    (Possíveis/Preenchidos + grade de campos texto-livre, campo calculado
+    exibido desabilitado/sem resolução ao vivo — fora de escopo), e
+    `AtendimentoAvulsoModal.tsx` (superset do `AgendarModal.tsx` — busca de
+    Serviço, busca de Cliente com "Cadastrar novo cliente" via
+    `criar_agendamento=1` em `cliente-form.tsx`, e o botão Faturar
+    completo com lista de forma de pagamento, mesmo padrão visual do
+    "Faturar" do Painel de Pedidos).
+  - `cliente-form.tsx` ganhou o clone exato do padrão `criar_pedido=1`:
+    `criar_agendamento=1` + `agenda_funcionario`/`agenda_data`/
+    `agenda_hora`/`agenda_servico` — ao Gravar um cliente novo vindo desse
+    fluxo, cria o agendamento avulso na hora (`POST /api/agenda/avulso`) e
+    volta pra `/agenda`.
+  - Nova tela `frontend/app/agenda.tsx` — seletor de Profissional +
+    navegação de semana (Anterior/Hoje/Próxima) + grade (linhas=horário,
+    colunas=dia da semana, células livre/ocupado/pausa/ausente, clique
+    abre `AtendimentoAvulsoModal` em modo novo ou edição). Modo Didático
+    (ícone "i" no cabeçalho, `AjudaPedidoModal` reaproveitado com conteúdo
+    próprio).
+  - Nova tela `frontend/app/layout-cadastro.tsx` — Cadastro de Layout
+    completo (lista + form com checkboxes de entidade + gestão de Campos
+    por layout, tudo num único modal por simplicidade — sem tela separada
+    de campos). Web-only, tela compacta sem abas (mesmo padrão de
+    `fornecedores.tsx`).
+  - `transacoes.tsx` ganhou o card "Agenda" (`moduleOn("CLINICA") &&
+    can("AGENDA.ABRIR")`, rota `/agenda`).
+- **Permissões + auditoria**: telas `AGENDA` (ações
+  ABRIR/GRAVAR/TROCAR_PROF/FATURAR/ANEXOS/LAYOUTS) e `LAYOUT`
+  (ABRIR/GRAVAR/EXCLUIR) no catálogo, dentro de TRANSACOES/TABAUX
+  respectivamente. Toda rota de escrita de `routes/agenda.py` e
+  `routes/layout.py` grava em `log_auditoria` (`tela="AGENDA"`/`"LAYOUT"`,
+  comandos `AGENDAR`/`GRAVAR`/`TROCAR_PROF`/`FATURAR`/`EXCLUIR` —
+  `TROCAR_PROFISSIONAL` teve que ser encurtado pra `TROCAR_PROF` por causa
+  do limite real da coluna `permissoes.comando nvarchar(15)`, achado pela
+  própria asserção de `_tela()` em `permissoes_service.py`).
+- **Testes**: `test_agenda_service.py` reescrito do zero (38 testes —
+  grade, garantia, salvar avulso e via-pedido, trocar profissional,
+  faturar avulso, listar profissionais com/sem serviço). Novo
+  `test_layout_service.py` (19 testes — CRUD de layout/campos, Possíveis
+  genérico e Agenda, Preenchidos, get/preencher novo e existente). Suíte
+  completa: 1084 passando (fora as 67 falhas pré-existentes de Gestão de
+  Compras/Cotação/Curva ABC/CNAB Itaú, confirmadas não relacionadas —
+  dependem só de `_modulo_curva_abc_ativo`, não tocado nesta rodada).
+  `tsc --noEmit` limpo em todos os arquivos tocados (os mesmos 12 erros
+  pré-existentes em arquivos não relacionados continuam, confirmados
+  inalterados antes/depois).
+- **Não testado ao vivo** (sem conexão de teste disponível nesta sessão) —
+  nenhum fluxo desta rodada (grade, avulso, troca de profissional,
+  garantia, layouts, faturar avulso) foi exercitado contra um banco real.
+
+#### Pendências abertas (não bloqueiam, registradas por completude)
+
+- ~~Confirmar `cod_sub_grupo=16` (Anexos da Agenda, grupo Cliente) contra uma
+  conexão de teste real~~ — **✅ confirmado pelo usuário, 2026-07-28**:
+  `cod_sub_grupo=16` está correto (valor do código-fonte VB6), não o `14`
+  visto antes contra um banco de teste diferente. `AnexosAgendamentoModal.tsx`
+  segue como está, sem alteração necessária.
+- **Integração com O.S. Assistência Técnica** — o backend já é genérico
+  (`AGENDA`/`AGENDA_PEDIDO`/`AGENDA_OS`, a mesma tabela `AGENDA` já suporta
+  o vínculo `AGENDA_OS`), mas não há tela "O.S. Completa" neste app pra
+  ligar ainda (ver "Transações Screens Strategy" no CLAUDE.md — só o
+  scaffolding existe). Repetir o mesmo padrão de
+  `pedido_completo_service.py`'s enriquecimento de `agendamento` quando essa
+  tela for construída.
+- **Motor de Layout**: modo RTF livre (`estilo_layout=1`, editor de texto
+  com tags tipo `[[Nome do Cliente]]`), impressão do preenchimento,
+  comparação/"Análise" entre preenchimentos, foto por webcam, e resolução
+  AO VIVO de campo calculado (soma/subtração/multiplicação/divisão entre 2
+  campos — hoje aparece desabilitado com aviso em vez de calcular errado)
+  — todos fora desta rodada.
+- `tipo_garantia=5` (Km) não é validável automaticamente por data — Agenda
+  não rastreia odômetro, só sinaliza "não verificável" no
+  `GET /api/agenda/garantia`.
+- Nenhum fluxo foi testado ao vivo contra um banco real (ver acima).
+
+---
+
+#### Núcleo enxuto — implementado (histórico, 2026-07-28, sessão anterior — superado pelo escopo completo acima)
+
+Escopo "núcleo enxuto" (escolhido pelo usuário via `AskUserQuestion`, entre 3
+opções — réplica completa da grade de Agenda ficou fora NAQUELE momento)
+implementado antes do pedido de escopo completo, no mesmo dia: desdobramento
+de item de Serviço em N linhas + fluxo de Agendar (modal, sem grade semanal
+de disponibilidade, validado no backend) + colunas Agendamento/Profissional
+na listagem + impressão. Tudo isso continua funcionando — foi ampliado, não
+substituído.
+
+#### Núcleo enxuto — implementado
+
+- **Backend**: `pedido_common._modulo_clinica_ativo` (clone de
+  `_modulo_servicos_ativo`, lê `controle_configuracao.CLINICA`). Novo
+  `services/agenda_service.py` + `routes/agenda.py`
+  (`GET /api/agenda/profissionais`, `GET/POST /api/agenda/item/{codauto}`,
+  `POST /api/agenda/item/{codauto}/cancelar`) — módulo desacoplado de
+  `pedido_completo_service.py` (Agenda é conceito genérico no legado).
+  `AgendarItemRequest` novo em `models/schemas.py`. Nova ação
+  `PEDIDO_COMP.AGENDAR` em `ACOES_PEDIDO_COMP`.
+  `pedido_completo_service._add_item_completo_sync` ganhou o branch de
+  desdobramento (item de Serviço + Clínica ativa → N linhas, `qtd_pedida=1`
+  cada, mesmo padrão de código já usado pro branch de kit — nenhuma
+  duplicação da lógica de desconto/custo). `_list_itens_completo_sync`
+  enriquecida com `item.agendamento` (mesmo padrão do `num_serie`).
+  `funcionarios_service.py` ganhou `Controla_Agenda` (coluna
+  `FUNCIONARIOS.CONTROLA_AGENDA` já existia no banco, nunca exposta por
+  nenhuma tela nossa até agora — sem ela nenhum profissional apareceria
+  elegível).
+- **Simplificações deliberadas** (vs. o legado completo, ver "Fora de
+  escopo" mais abaixo): sem cliente avulso (sempre o cliente do próprio
+  pedido); sem lifecycle de 13 estados de `SITUACAO_ATENDIMENTO` — só
+  "Confirmado" (ao agendar/reagendar) e "Desistência" (ao cancelar);
+  `SITUACAO_CAIXA` sempre 'A' (sem faturamento avulso via Agenda); campo
+  "Revisão" não portado (propósito desconhecido no legado); grade semanal
+  de disponibilidade substituída por validação sob demanda no backend
+  (disponibilidade/pausa/ausência/capacidade de encaixe), retornando
+  mensagem de erro clara se o horário escolhido não servir.
+- **Frontend**: `pedido/types.ts`'s `ItemRow.agendamento`. `usePedidoItens.ts`
+  ganhou `agendarItem`/`setAgendarItem` (busca profissionais elegíveis ao
+  abrir), `salvarAgendamento`/`cancelarAgendamento`, `master` como novo
+  parâmetro (mesmo padrão de `classe` já existente). Novo
+  `AgendarModal.tsx` (tier "confirmação pontual", 420px) — Profissional
+  (`SelectField`) + Data/Hora (`WebDateField`). `ItemList.tsx`: tag
+  `calendar-outline` por linha de Serviço (mesmo padrão visual do
+  `imprimirItemTag`) + texto "· Agendado: DD/MM às HH:MM (Fulano)" na
+  descrição do item, ambos gated por
+  `tela==="PEDIDO_COMP" && moduleOn("CLINICA")`. `ReciboPedidoModal.tsx`
+  (preview JSX + `buildHtml`) mostra a mesma informação por linha ao
+  imprimir. `AjudaPedidoModal`/Modo Didático do Pedido Geral ganhou a
+  entrada "Agendar". `funcionario-completo.tsx` ganhou o switch "Controla
+  Agenda" (Cadastro de Funcionários).
+- **Testes**: `backend/tests/unit/test_agenda_service.py` (novo — 15
+  testes: elegibilidade de profissional, disponibilidade/pausa/ausência,
+  capacidade de encaixe, criar/reagendar/cancelar) +
+  `TestAddItemCompletoClinica`/`TestListItensCompletoEnriquecidoAgendamento`
+  em `test_pedido_completo_service.py`. 1103 testes de backend passando
+  (excluindo as 67 falhas pré-existentes de Gestão de Compras, não
+  relacionadas). `tsc --noEmit` limpo nos arquivos tocados (erros
+  pré-existentes em outros arquivos não relacionados, confirmados
+  inalterados). Backend confirmado importando/registrando as 3 rotas novas
+  sem erro (`python -c "import server"`).
+- **Não testado ao vivo** (sem conexão de teste com o módulo Clínica
+  disponível nesta sessão) — fluxo completo (ligar módulo → marcar
+  "Controla Agenda" + especialidade/horário num funcionário → cadastrar
+  Serviço com especialidade → incluir no Pedido Geral com qtd>1 → conferir
+  N linhas → Agendar uma linha → conferir coluna/impressão → Cancelar
+  Agendamento) fica pendente de validação manual na próxima sessão com
+  acesso a uma conexão de teste.
+
+#### Fora de escopo daquela rodada — TODOS implementados na rodada seguinte (ver "Agenda completa" acima)
+
+- ~~Grade semanal de disponibilidade (calendário visual `FrmMarAge2.frm`).~~
+  ✅ `app/agenda.tsx`.
+- ~~Troca de profissional pós-agendamento~~ ✅ `_trocar_profissional_sync` +
+  `AuthorizationSlide`. ~~motor de Layouts (formulário dinâmico
+  `FrmPreLay.frm`)~~ ✅ `layout_service.py` (modo grade de campos; RTF livre
+  segue fora). ~~foto por webcam~~ continua fora (não pedido). ~~Excel/
+  impressão da própria agenda~~ continua fora (não pedido). ~~Faturamento
+  avulso via Agenda~~ ✅ `_faturar_avulso_sync`.
+- Dúvidas do rastreio abaixo (filtro de `controla_agenda` em Troca de
+  Profissional — **respondida: SIM**, confirmado pelo usuário; par grupo/
+  sub-grupo de Anexos da Agenda — **respondida e confirmada: `cod_grupo=1`/
+  `cod_sub_grupo=16`**, validado contra conexão de teste real) foram todas
+  respondidas e confirmadas nesta sessão.
+
+---
+
+**Rastreio VB6 original (fundamentou a implementação acima):**
+
+**Status: 🟡 rastreio VB6 completo, implementação não iniciada.** Feito via 2
+subagentes em paralelo + arquivos colados diretamente pelo usuário
+(`FrmAtende.frm`, e o conteúdo real de `FrmMarAge2.frm` sob o nome
+`FrmMarAge2.txt`). Escolhido pelo usuário via `AskUserQuestion` como o
+primeiro sub-módulo de Clínica a atacar (dos 2 restantes — Clínica e Metro
+Quadrado — Clínica foi escolhido por não ter dúvidas de negócio bloqueantes,
+diferente de Metro Quadrado que tem 3 perguntas em aberto, ver seção acima).
+
+#### Mapa de arquivos — achado crítico, corrige suposição inicial
+
+- **`FrmMarAge.frm` (o arquivo com esse nome) está órfão/morto** — nenhum
+  `.vbp` da árvore o referencia (`Form=` nunca aponta pra ele), e sua `Sub
+  Chama()` (sem parâmetro) não bate com o call site real
+  (`FrmMarAge.chama Agenda_PreVenda.Codigo`, 1 argumento). É uma revisão
+  anterior do formulário, com "criar/confirmar agendamento" embutido no
+  próprio form.
+- **`FrmMarAge2.frm`** (mesmo `Attribute VB_Name = "FrmMarAge"` do arquivo
+  órfão — é a revisão nova da MESMA classe) é o que roda em produção de
+  fato. Nele, a lógica de criar/editar UM agendamento específico foi
+  extraída pra um terceiro form.
+- **`FrmAtende.frm`** ("Marcação de Atendimento") — não estava no escopo
+  original pedido, mas é indispensável: é onde o INSERT/UPDATE real de
+  `AGENDA` acontece. `FrmMarAge2.frm` nunca grava em `AGENDA` diretamente,
+  só abre `FrmAtende` (`Agenda_Click`, col=1 → `IniciaAtendimento` /
+  col=2 → `CarregaAtendimento`).
+- **`FrmPreLay.frm`** (689 linhas) é o form real do botão "Layouts"
+  (`Command77`) — **não** `FrmPreLay2.frm` (3605 linhas, órfão, não
+  referenciado por ninguém além do próprio `.vbp`, apesar de mais completo).
+
+#### Botão "Agendar" (Command78) — o que ele realmente abre e faz
+
+`Command78_Click` (`frmmanpedfor.frm:10945`) valida pedido não-cancelado +
+ao menos 1 item de Serviço com especialidade vinculada, seta só
+`Agenda_PreVenda.Codigo = <número do pedido>` e chama
+`FrmMarAge.chama Agenda_PreVenda.Codigo` → `CarregaPedido(Pedido)` (o
+mesmo código para O.S. é `CARREGAOS`, ramo decidido por `Agenda_PreVenda.Tipo`).
+
+**Fluxo completo** (grid da Agenda → clique numa célula → `FrmAtende` →
+volta e vincula):
+
+1. `CarregaPedido` popula um grid `PedidoItens` — 1 linha por item de
+   Serviço do pedido (`JOIN servicos`), já mostrando Data/Hora/Profissional
+   se algum agendamento já existe pra aquele item (via `AGENDA_PEDIDO`+
+   `AGENDA`+`FUNCIONARIOS`).
+2. Clicar numa linha de `PedidoItens` monta a lista de profissionais
+   habilitados pra aquela especialidade e desenha o grid `Agenda`
+   (calendário semanal por profissional) via `Command1_Click`/`MontaHorarios`.
+3. `MontaHorarios` monta 1 linha por slot de horário (baseado em
+   `funcionarios_horarios.disp_ini/disp_fim` + intervalo), cruzando:
+   - **Ausência** (`funcionarios_ausencias`, por período de datas+hora) →
+     slot vermelho, bloqueado.
+   - **Pausa** (`funcionarios_horarios.pausa_ini/pausa_fim`) → slot
+     vermelho, bloqueado.
+   - **Ocupação existente** (`AGENDA` daquele funcionário+data+hora, exceto
+     `situacao_atendimento='Desistência'`) → colore conforme capacidade.
+   - **Capacidade de encaixe**: `funcionarios_horarios.encaixe` = quantos
+     agendamentos além de 1 cabem no mesmo slot; excedente bloqueia
+     completamente ("Não é permitido fazer novos agendamentos neste mesmo
+     horário!").
+4. Clicar numa célula **livre** (col=1) → bloqueia se o item já tem
+   agendamento ("Já existe agendamento para este item! Só são permitidas
+   alterações"); senão abre `FrmAtende.IniciaAtendimento(funcionario, data,
+   hora, 0)` — modo criação, com Cliente/Serviço/Valor pré-travados (vêm do
+   item do pedido).
+5. Clicar numa célula **ocupada** (col=2) → abre
+   `FrmAtende.CarregaAtendimento(codagenda)` — modo edição; bloqueia edição
+   se `SITUACAO_ATENDIMENTO='Atendido'` sem permissão elevada
+   (`Command120.Enabled`/`PermissoesAgendamento`).
+6. `FrmAtende.Command3_Click` ("Gravar") faz o INSERT/UPDATE real em
+   `AGENDA` (ver schema abaixo), revalida capacidade de encaixe,
+   seta `Agenda_PreVenda.CodAgenda` e fecha (`Unload Me`).
+7. **O vínculo final acontece em `Form_Activate` de `FrmMarAge2`** (disparado
+   ao `FrmAtende` fechar e o foco voltar): apaga vínculo anterior daquele
+   item (`DELETE FROM AGENDA_PEDIDO WHERE CODPEDIDO=<codauto>`), insere o
+   novo (`INSERT INTO AGENDA_PEDIDO(CODPEDIDO, CodAgenda)`, onde
+   `CODPEDIDO` — apesar do nome — guarda `pedido_venda_prod.codauto`, o
+   ITEM, não o número do pedido/header), e propaga
+   `UPDATE pedido_venda_prod SET data_servico=<agenda.data>,
+   executor_agenda=<agenda.funcionario> WHERE codauto=<codauto>` — **são
+   exatamente essas 2 colunas que `frmmanpedfor.frm` lê pras colunas
+   "Agendamento"/"Profissional" da grade em modo Clínica** (confirma o
+   achado anterior).
+
+#### Regras de negócio reais a portar
+
+1. Item de pedido só pode ter 1 agendamento ativo por vez; reagendar apaga
+   o vínculo antigo antes de criar o novo.
+2. Capacidade de encaixe por profissional/dia/slot (`funcionarios_horarios.
+   encaixe`), validada tanto na criação quanto na alteração do agendamento.
+3. Disponibilidade cruza `funcionarios_horarios` (expediente+pausa, por dia
+   da semana) e `funcionarios_ausencias` (períodos de férias/afastamento).
+4. Profissional só é oferecido se `FUNCIONARIOS.controla_agenda=1`,
+   `situacao='A'`, e vinculado via `FUNCIONARIO_ESPECIALIDADES` à
+   especialidade do serviço sendo agendado.
+5. `SITUACAO_ATENDIMENTO` (13 estados livres — Aguardando, Em Atendimento,
+   Atendido, Desistência, Não Confirmado, Confirmado, Avaliação, Avaliado,
+   Chamando, Ausente, Medicar, Medicado, Encaminhar, Encaminhado — texto
+   livre, sem tabela de lookup): "Atendido" bloqueia edição sem permissão
+   elevada; **"Desistência" desfaz o vínculo** — zera
+   `pedido_venda_prod.data_servico`/`executor_agenda` e apaga a linha de
+   `AGENDA_PEDIDO`, liberando o item pra reagendar do zero.
+6. Data mínima = hoje, só na criação (edição de agendamento já passado é
+   permitida).
+7. Valor default do atendimento sugerido de `servicos.valor_hora`, editável.
+8. Campo "Descartáveis" (consumíveis do atendimento,
+   `AGENDA.AGENDA_dESCARTAVEL`/`AGENDA_OBS_DESCARTAVEL`) auto-sugerido de
+   `produtos_compostos` (BOM do serviço), só no atendimento NOVO.
+9. **Desdobramento em N linhas** (`frmmanpedfor.frm:8241-8280`, dentro de
+   `Command1_Click` — o mesmo botão "Gravar" do cabeçalho também inclui o
+   item digitado, não existe botão "Incluir Item" separado neste form):
+   quando `Left(Campo1,1)="S"` (código do produto = Serviço) e Clínica
+   ativo, insere N linhas de `pedido_venda_prod` (uma por unidade de
+   quantidade digitada), cada uma com `qtd_pedida=1` — **sem exceção
+   encontrada** (busca ampla por flag "agendável"/"não agendável" em
+   `servicos` não achou nada). O loop **não grava nada em `AGENDA`/
+   `AGENDA_PEDIDO`** — só cria as linhas "vazias"; o agendamento real
+   (passo 1-7 acima) é feito depois, via "Agendar". Motivo de negócio
+   confirmado: 1 linha (`codauto`) = 1 sessão agendável = 1 slot de agenda
+   — a impressão (ver abaixo) depende exatamente dessa granularidade.
+10. **Impressão** (`ImprimeClinicaPed35`, `mdl_proc.bas:26770`) é um fork
+    quase idêntico de `ImprimePed35` (não um relatório totalmente
+    diferente, como a suposição inicial registrada antes deste rastreio
+    dizia) — mesma estrutura, com blocos `If Clinica Then` já embutidos em
+    ambas as funções. Quando o item é Serviço e Clínica ativo, a tabela de
+    itens ganha 2 colunas extras "Data"/"Profissional", buscadas ao vivo
+    por linha via `AGENDA`/`AGENDA_PEDIDO`/`FUNCIONARIOS` (mesmo JOIN do
+    passo 7) — funciona porque cada linha tem seu próprio `codauto`/
+    agendamento individual, graças ao desdobramento do item 9.
+
+#### Correção ao rastreio anterior — botão "Layouts" NÃO é sobre impressão
+
+O `FrmPreLay` (real, ver mapa de arquivos acima) é um **motor de formulário
+dinâmico genérico** (perguntas/respostas configuráveis por template,
+compartilhado por Cliente/Fornecedor/Funcionário/Produto/Serviço/O.S./
+Agenda/Pedido — não exclusivo de Clínica), mais próximo de uma "ficha de
+anamnese" do que de um seletor de layout de impressão. **Confirmado que não
+afeta a impressão do pedido em nada** — zero ocorrências de
+`layout_preenchido`/`layout_entidade` em `ImprimePed35`/`ImprimeClinicaPed35`.
+O que é exclusivo de Clínica é só a **visibilidade do botão** (`Command77`),
+gateado pelo mesmo `Dados_Controle_Configuracao.Clinica` do botão "Agendar".
+Tabelas: `layout`, `layout_campos`, `layout_tipo_campo`, `layout_entidade`,
+`layout_preenchido` (schema completo no relatório do subagente, sessão
+2026-07-28).
+
+#### Schema de `AGENDA` (INSERT real em `FrmAtende.frm`)
+
+`AGENDA_OBS_DESCARTAVEL, AGENDA_dESCARTAVEL, funcionario, cliente,
+cliente_nome, cliente_telefone, data, hora_ini, hora_fim, servico, obs,
+valor, revisao, encaixe, data_agenda, hora_agenda, usuario_agenda,
+situacao, HORA_CHEGADA, HORA_SAIDA, SITUACAO_ATENDIMENTO, SITUACAO_CAIXA,
+VALOR_ORIGINAL, DESCONTO, acrescimo` — `cliente=0` + `cliente_nome`/
+`cliente_telefone` preenchidos = cliente avulso (não cadastrado, texto
+livre). `encaixe` é calculado pelo código (não digitado). `situacao` (não
+confundir com `SITUACAO_ATENDIMENTO`) sempre grava `'A'`, não usado em mais
+nada encontrado. `SITUACAO_CAIXA` ('A'/'P'/'R' = Aberto/Pago/Revisão) é
+atualizado por um fluxo de **Faturar avulso do agendamento** (`FrmAtende`'s
+`Command111`/`GeraComanda`) — independente do Faturar do Pedido, bloqueado
+se o agendamento já está vinculado a uma pré-venda (exatamente o nosso
+caso — ver "Fora de escopo provável" abaixo).
+`AGENDA_PEDIDO(CODAGENDA, CODPEDIDO)` — `CODPEDIDO` guarda o `codauto` do
+ITEM, não o pedido; `AGENDA_OS(CODAGENDA, CODOS)` mesma ideia com
+`os_produto.cod_os_prod`.
+
+#### Dúvidas em aberto (não implementar sem confirmar)
+
+1. ~~`TrocaFuncionario` (troca de profissional de um agendamento já feito,
+   `FrmMarAge2.frm:4751`) não filtra por `controla_agenda=1`~~ — **✅
+   respondida pelo usuário, 2026-07-28: SIM, filtrar por
+   `controla_agenda=1`** (o legado não filtrar ali foi tratado como bug do
+   legado, não regra a replicar). Implementado em
+   `_trocar_profissional_sync` (`agenda_service.py`).
+2. ~~`Command39_Click` (Anexos) usa `GestorDocumentos.Grupo=0`/`.sub_grupo=
+   "AGENDAMENTOS"` (string), mas a query que CONTA anexos no mesmo arquivo
+   usa `cod_grupo=1 AND cod_sub_grupo=16` (numérico)~~ — **✅ respondida e
+   confirmada, 2026-07-28: `cod_grupo=1`/`cod_sub_grupo=16`** (usuário
+   escolheu o valor do código-fonte VB6 e confirmou contra conexão de
+   teste real). Implementado em `AnexosAgendamentoModal.tsx`.
+3. ~~Campo "Revisão" (`AGENDA.revisao`) — propósito real desconhecido~~ —
+   **✅ respondida pelo usuário, 2026-07-28**: se o cliente já fez o mesmo
+   serviço antes (combinação `servicos.prazo_garantia`/`tipo_garantia` —
+   1=Anos, 2=Dias, 3=Horas, 4=Meses, 5=Km, `RetornaGarantia`,
+   `mdl_proc.bas:13468`), pode refazê-lo gratuitamente dentro do prazo
+   contado da data de execução (termo "Revisão" na Clínica, "Garantia" na
+   Assistência Técnica — mesmo campo, rótulo depende do módulo).
+   Implementado em `_verificar_garantia_sync`/`GET /api/agenda/garantia`.
+4. Não há limite superior encontrado pra quantidade antes do loop de
+   desdobramento rodar (pedir 500 sessões geraria 500 linhas sem aviso) —
+   vale um limite de sanidade na porta, ou replicar sem limite?
+5. Heurísticas ainda em aberto de Metro Quadrado (ver seção acima) — não
+   duplicadas aqui.
+
+#### Fora de escopo provável (a confirmar, não presumir) — status atualizado 2026-07-28
+
+- ~~**Faturar avulso de agendamento**~~ — **✅ implementado**: o usuário
+  pediu explicitamente o agendamento avulso (criado direto da grade
+  semanal, sem vir de um Pedido) com Faturar próprio, 1 forma de pagamento,
+  reaproveitando a estrutura de Forma de Pagamento existente. Ver
+  `_faturar_avulso_sync`/`AtendimentoAvulsoModal.tsx`. Continua bloqueado
+  (fatura só pelo Pedido) quando o agendamento tem vínculo real com um
+  Pedido/O.S. — regra preservada.
+- ~~**Motor de Layouts**~~ — **✅ implementado** (modo "grade de campos";
+  RTF livre segue fora de escopo). Ver `layout_service.py`/
+  `layout-cadastro.tsx`.
+- **Foto via webcam do cliente** (`Command24/26/27` de `FrmMarAge2`,
+  APIs Win32 `WM_CAP_*`) — mesmo padrão de decisão já usado em Produto
+  Completo/Tray (sem infra de webcam no stack atual).
+- **Exportar Excel** (`CriaPlanilhaExcel`, automação COM) e **Imprimir
+  agenda** (`Sub Imprime`) da própria tela de Agenda — não rastreados em
+  detalhe (fora do foco "regra de agendamento"); se pedidos, seguem o
+  padrão já usado no projeto (xlsx/SheetJS, preview+`window.print()`), não
+  automação COM.
+
+### Pedido Geral — Fase B: número de série (`controla_num_serie`) — 🟢 implementado 2026-07-27
+
+Primeiro sub-módulo da Fase B (ver plano acima), escolhido explicitamente
+pelo usuário via `AskUserQuestion` ("Fase B — número de série primeiro").
+Clona o mesmo padrão já usado pelo legado (`CmbNDS`/`FrmNDS` em
+`frmmanpedfor.frm`): produto com `pecas.controla_num_serie=1` bloqueia a
+inclusão do item até o usuário escolher um número de série disponível em
+`pecas_num_serie` (tabela/tela já existentes em Tabelas Auxiliares >
+Números de Série — nenhuma tabela nova foi criada). Reforça "não mexer no
+Pedido Bar" — `pedidos.tsx`/`pedido-form.tsx`/`itens_service.py` não
+foram tocados; a extensão vive inteiramente no lado `PEDIDO_COMP`.
+
+**Backend**:
+- `schemas.py`'s `ItemSaveRequest` ganhou `cod_num_serie: Optional[int] =
+  None` (FK opcional pra `pecas_num_serie.codigo`) — ignorado pelo fluxo
+  do Bar, que nunca lê esse campo.
+- `pedido_completo_service._add_item_completo_sync`: quando
+  `prod["controla_num_serie"]`, força `qtd=1` (mesma regra do legado — um
+  número de série = uma unidade), exige `req.cod_num_serie` (mensagem
+  clara se faltar), valida que o número de série pertence ao produto E
+  está `disponivel=1` antes de gravar. INSERT do item passou a incluir a
+  coluna `cod_num_serie`.
+- Nova função `_list_itens_completo_sync` (+ wrapper async
+  `list_itens_completo`): reaproveita `itens_service._list_itens_sync`
+  (mesma função do Bar, sem duplicar) e só ENRIQUECE o resultado com
+  `item["num_serie"]` (texto do número de série, via JOIN
+  `pedido_venda_prod.cod_num_serie → pecas_num_serie`) quando existir —
+  decisão de não tocar o service compartilhado do Bar. `routes/
+  pedido_completo.py`'s rota de listar itens agora chama esse wrapper em
+  vez de `itens_service.list_itens` diretamente.
+- `produtos_service._list_produtos_servicos_sync` (busca de produto
+  compartilhada Bar+Geral) passou a incluir `controla_num_serie` no
+  SELECT e no dict de resposta — necessário pro frontend saber quando
+  exigir o seletor, sem endpoint novo.
+- **Decisão consciente, não assumida**: `pecas_num_serie.disponivel` NÃO
+  é zerado no momento de incluir o item no pedido — só a validação de
+  disponibilidade é feita na inclusão. Espelha o mesmo padrão já usado
+  pelo vínculo Cilindro↔Cliente (grava o vínculo, não "reserva" a linha).
+  Se precisar revisitar (ex.: dois pedidos simultâneos podendo escolher o
+  mesmo número de série antes de qualquer um fechar), fica registrado
+  aqui como ponto em aberto.
+- Testes: `test_pedido_completo_service.py` ganhou
+  `TestAddItemCompletoNumSerie` (3 casos: exige seleção, valida
+  disponibilidade/pertencimento, grava com sucesso) e
+  `TestListItensCompletoEnriquecido` (2 casos) — 33 testes no arquivo,
+  todos passando.
+
+**Frontend** (componentes compartilhados por Pedido Bar E Pedido Geral,
+mas o comportamento só ativa quando `controla_num_serie` vem `true` do
+produto escolhido — o Bar nunca teria um produto assim hoje, já que essa
+característica é do universo Cilindro/produto serializado, mas os
+componentes em si (`AddItemModal.tsx`/`usePedidoItens.ts`/`ItemList.tsx`)
+são os mesmos dos dois lados, então a extensão ficou nesses arquivos
+compartilhados em vez de bifurcar por `tela`):
+- `pedido/types.ts`: `ItemRow.num_serie?: string`,
+  `ProdutoServico.controla_num_serie?: boolean`.
+- `usePedidoItens.ts`: novo state `selNumSerie`/`setSelNumSerie`
+  (resetado ao trocar de produto/reabrir o modal); `handleAddItem` força
+  `qtd=1` e bloqueia sem `selNumSerie` quando o produto exige, inclui
+  `cod_num_serie` no POST.
+- `AddItemModal.tsx`: busca `GET /api/tabelas/num-serie?...&codigo_int=`
+  (mesmo endpoint já existente da tela de Números de Série) filtrando só
+  `disponivel`, mostra lista de seleção (estilo rádio) na etapa "Confirmar
+  Item", esconde o stepper de Quantidade quando o produto exige número de
+  série, desabilita "Adicionar" até uma opção ser escolhida, e roteia
+  produto serializado direto pra etapa de confirmação (nunca pelo atalho
+  "+" de adição rápida).
+- `ItemList.tsx`: mostra "· Nº Série: XXXX" na descrição compacta do item
+  quando presente.
+- `pedido-geral.tsx`: novo item "Número de Série" em
+  `AJUDA_PEDIDO_GERAL_ITENS` (Modo Didático).
+
+**Não verificado ao vivo** — sem acesso a navegador/DB nesta sessão;
+testes unitários (`pytest`) e checagem de tipos (`tsc --noEmit`) passaram
+limpos, mas o fluxo completo (escolher produto serializado → seletor →
+gravar → reabrir pedido → ver Nº Série no item) ainda precisa de um teste
+manual na tela antes de considerar esta sub-fase 100% fechada.
 
 ---
 
@@ -1695,9 +3970,45 @@ como referência solta do cliente quanto pra guardar o vínculo de divisão.
   precisa ser declarado explicitamente pelo chamador).
   - Valida: pedido existe e está Aberto; cada `codauto` pertence ao pedido;
     `qtd>0`; soma pedida por item não excede a quantidade original; Taxa de
-    Serviço (`S002`) não pode ser movida manualmente (é recalculada
-    automaticamente em cada pedido resultante via
-    `sincroniza_taxa_servico_apos_alteracao`, já existente).
+    Serviço (`S002`) não pode ser movida manualmente.
+  - **Taxa de Serviço distribuída proporcionalmente — REGRA EXCLUSIVA DO
+    PEDIDO BAR (2026-07-24, user-directed)**: se o pedido original (Pedido
+    Bar, `tela="PEDIDO"`) já tinha uma linha `S002` lançada, CADA pedido
+    novo também recebe sua própria linha `S002` — 10% do subtotal que foi
+    movido pra ele (`_recalc_valor_taxa_servico`, mesma fórmula já usada em
+    `_add_taxa_servico_sync`). O pedido original continua tendo a sua taxa
+    recalculada sobre o que sobrou (via `sincroniza_taxa_servico_apos_alteracao`,
+    já existente). **Correção de um gap real**: antes desta mudança,
+    `sincroniza_taxa_servico_apos_alteracao` era chamada pro pedido novo
+    também, mas é um no-op quando não existe ainda uma linha `S002` naquele
+    pedido (só ATUALIZA uma linha existente, nunca cria) — na prática a
+    taxa "desaparecia" da parte movida pro pedido novo.
+  - **Correção no mesmo dia, user-directed**: "o rateio da taxa s002 só se
+    aplica pro pedido Bar. Para o pedido Geral tem que ser listado tudo
+    Produtos e serviço, e só aplica pro pedido novo aquilo que for
+    informado" — no **Pedido Geral** (`tela="PEDIDO_COMP"`), nada do
+    parágrafo acima se aplica: `S002` NÃO é bloqueado de seleção manual
+    (`rateio_automatico_taxa = tela == "PEDIDO"` controla isso), nenhuma
+    linha é criada/recalculada automaticamente em nenhum dos pedidos
+    resultantes — se o usuário incluir `S002` num grupo, ela é movida pelo
+    mesmo laço genérico de itens (com a quantidade/valor exatos
+    informados, igual qualquer produto/serviço comum); se não incluir,
+    nada acontece com ela no pedido novo. O flag de "pedido esvaziado só
+    com taxa sobrando" (auto-cancelamento) também respeita essa distinção:
+    no Bar, `S002` sozinha não conta como "item real" restante (comporta-
+    mento de sempre); no Geral, `S002` conta como item real igual
+    qualquer outro (não tem tratamento especial lá).
+  - **Frontend**: `DividirPedidoModal.tsx` (compartilhado pelas 2 telas)
+    só tira `S002` da lista de itens divisíveis quando `basePath ===
+    "/api/pedidos"` (Pedido Bar) — pro Pedido Geral (`basePath ===
+    "/api/pedido-completo"`), a lista mostra TODOS os produtos e serviços,
+    inclusive `S002` se presente.
+  - 4 testes novos cobrindo os 2 comportamentos, um por tela
+    (`test_taxa_servico_distribuida_proporcionalmente_no_pedido_novo`/
+    `test_sem_taxa_servico_no_original_pedido_novo_nao_ganha_taxa` pro
+    Bar; `test_pedido_geral_permite_dividir_s002_manualmente`/
+    `test_pedido_geral_sem_taxa_selecionada_nao_gera_rateio_automatico`
+    pro Geral).
   - Cada pedido novo copia cliente/vendedor/área/forma de pagamento/
     localização do original; `num_ped_cliente` = nº do pedido original.
   - Item com quantidade restante ~0 no original é excluído (`DELETE`); com
@@ -1759,12 +4070,16 @@ explicitamente nesta rodada (rebatismo + gating + guarda de cliente). Não
 implementado, registrado aqui pra não implementar em cima de suposição
 (regra "Gestão de Pendências entre Telas", CLAUDE.md §10):
 
-- **Painel "Pedidos Abertos"** — a tela real de Bar não é um formulário
-  único como `pedido-form.tsx`/`pedido-completo.tsx`; é uma grade/lista de
-  comandas/mesas com pedido em aberto, cada uma abrindo pro
-  detalhe/inclusão de item. Isso é uma tela nova, não uma variação do
-  Pedido Mobile existente — `pedido-form.tsx` hoje é um formulário
-  single-record, sem esse painel de mesas.
+- ~~**Painel "Pedidos Abertos"**~~ — **✅ implementado, 2026-07-17** (achado
+  ao revisar as pendências de Pedido em 2026-07-30, esta entrada estava
+  desatualizada): virou o "Painel de Pedidos" (`app/pedidos.tsx`, gated
+  `moduleOn("Bar")`) — colunas dinâmicas por tipo (Mesa/Comanda/Balcão/
+  Entrega/Fiado), totalizadores, cards ricos (`PainelPedidoCard.tsx`) com
+  ações rápidas (Abrir/+Item/Faturar/Imprimir), "Novo Pedido" por coluna.
+  Ver CLAUDE.md > "Painel de Pedidos" pro detalhe completo — não é mais um
+  gap, a pergunta #1 de "Perguntas em aberto" logo abaixo também já foi
+  respondida na prática (reaproveitou `pedidos.tsx`, visão específica pro
+  Bar, não virou tela separada).
 - **Faturar / Gerar Comanda** — 🟢 **implementado 2026-07-16, só a parte
   não-fiscal** (decisão explícita do usuário via pergunta direta, ver
   "Perguntas em aberto" #2 abaixo). Botão "Faturar Pedido" ao lado de
@@ -1814,11 +4129,11 @@ implementado, registrado aqui pra não implementar em cima de suposição
 
 ### Perguntas em aberto
 
-1. O painel "Pedidos Abertos" (mesas/comandas em aberto) deve reaproveitar
-   a lista já existente `pedidos.tsx` (com um filtro/visão específica pro
-   segmento Bar) ou é uma tela nova e completamente separada? `pedidos.tsx`
-   hoje é uma lista genérica de registros de `pedido_venda` — não tem
-   noção de "mesa"/"comanda" como agrupamento visual.
+1. ~~O painel "Pedidos Abertos" (mesas/comandas em aberto) deve reaproveitar
+   a lista já existente `pedidos.tsx`~~ — **respondida na prática,
+   2026-07-17**: sim, reaproveitou `pedidos.tsx` (visão em colunas
+   específica pro Bar via `moduleOn("Bar")`), não virou tela separada. Ver
+   "Painel de Pedidos" em CLAUDE.md.
 2. ~~A emissão de NFC-e no fechamento da comanda é escopo desta migração
    agora, ou fica pra uma fase fiscal separada~~ — **respondido
    2026-07-16**: por enquanto NÃO, só a parte não-fiscal do Faturar
@@ -2906,14 +5221,18 @@ de verdade, preservando o `codigo` — seguro porque nada referencia
 
 ### Perguntas em aberto / gaps conhecidos (nenhum bloqueia o uso da tela)
 
-1. **`FrmConCli2.frm`** (seletor de cliente via F2 no legado) não foi
-   fornecido. `contatos.cliente` já era texto livre no legado (nvarchar,
-   nunca validado contra a tabela `cliente`) — a tela nova reaproveita
-   `ClientSearchModal`/`GET /api/clientes/find/search` (já usado em
-   Pedido/O.S.) pra escolher um nome existente, mas não trava o campo a
-   um cliente cadastrado (fiel ao legado). Se o `FrmConCli2.frm` real
-   aparecer depois, vale conferir se há alguma regra adicional não
-   coberta aqui.
+1. **`FrmConCli2.frm`** (seletor de cliente via F2 no legado) — **correção
+   2026-08-02**: ao rastrear o Gestor de Projetos (que também o chama via
+   F2), localizado em `Geral\FrmConCli2.frm` (2510 linhas) — não é mais
+   "nunca fornecido", só ainda não foi lido em detalhe/comparado contra o
+   que esta tela implementa. `contatos.cliente` já era texto livre no
+   legado (nvarchar, nunca validado contra a tabela `cliente`) — a tela
+   nova reaproveita `ClientSearchModal`/`GET /api/clientes/find/search`
+   (já usado em Pedido/O.S.) pra escolher um nome existente, mas não
+   trava o campo a um cliente cadastrado (fiel ao legado). Se Contatos (ou
+   outra tela que use F2 pra cliente) for retomada, ler
+   `Geral\FrmConCli2.frm` de verdade antes de assumir que o comportamento
+   atual já cobre tudo.
 2. **`CHAMA2()`** — sub declarada no `.frm` fornecido, mas sem nenhum
    call site visível no código recebido (provavelmente chamada de dentro
    do `FrmConCli2.frm`, que não temos). Parece existir pra auto-preencher
@@ -3210,3 +5529,4319 @@ resposta.
 e Pedido Completo (web) — mesmo padrão de `AnexosPedidoModal.tsx` se aplica
 direto quando pedirem (O.S. usaria sub-grupo "Ordens de Serviço",
 `cod_sub_grupo=4`, já confirmado ao vivo).
+
+---
+
+## Contratos
+
+**Status: 🟡 Fase A implementada (2026-07-19)** — Cadastros auxiliares +
+Contrato completo (dados, itens, centro de custo, reajuste de valor,
+acréscimo/desconto, encerramento) + Rateio de Centro de Custo. **Faturar
+Contratos implementado 2026-07-20** (Faturar + Recibo — ver seção própria
+abaixo); Nota Fiscal/Boleto (dentro de Faturar Contratos) e **Envio de
+Cobrança** (remessa bancária/e-mail em massa) continuam fora de escopo.
+
+**Atualizado 2026-07-19 (mesmo dia)**: o módulo inteiro passou a ser
+gateado por `controle_configuracao.contratos` (coluna legada, já existia
+na tabela — não precisou de migração), pedido explícito do usuário ("o
+módulo Contrato deve ser habilitado em Configurações Módulo"). Mesmo
+padrão de `_modulo_servicos_ativo`/Serviços: `_modulo_contratos_ativo(cur)`
+em `pedido_common.py`, checado no topo de **todas as 21** funções
+`_*_sync` de `contratos_service.py` (list/get/save/delete de tudo — Tipo
+de Contrato, Tipo de Reajuste, Índices de Reajuste, Produtos Disponíveis,
+Contrato, Itens, Centro de Custo, Reajuste, Acréscimo/Desconto, resolver
+de produto, consulta ao BACEN). `MODULE_TELAS` em
+`controle_config_service.py` + cópia local em `frontend/src/permissions/
+index.tsx` mapeiam `contratos` → as 5 telas do catálogo de permissões.
+Frontend: `moduleOn("contratos")` explícito em todas as 7 telas
+(`contratos.tsx` + os 6 arquivos `contrato-*.tsx`) e no card "Contratos"
+de `transacoes.tsx` — `moduleOn` explícito e não só `can()` porque master
+bypassa `disabledTelas` dentro de `can()`, mas o toggle de módulo vale
+igual pra todo mundo (ver "Master Has Full Permission" no CLAUDE.md).
+"Contratos" já aparecia automaticamente em Configurações > Módulos e
+Recursos (a tela é 100% data-driven a partir de `CAMPOS`), não precisou de
+mudança lá.
+
+**Registrada em**: 2026-07-19, a partir do pedido do usuário: "crie em
+Transações o card Contratos. Dentro desse card, teremos 6 cards: Tipo de
+Contrato(frmmantpc.frm), Tipo de Reajuste(frmmanrea.frm), Indices de
+Reajuste(frmmanind.frm), Produtos Disponíveis(frmcompdi.frm),
+Contratos(frmmanContra.frm), Faturar Contratos(frmfatContrato2.frm), Envio
+de Cobrança(frmenvcob.frm)." — 6 `.frm` colados na íntegra pelo usuário.
+Faseamento (Fase A agora / Faturar+Envio depois) e fonte do índice de
+reajuste (API do Banco Central, não cadastro manual) confirmados via
+`AskUserQuestion` antes de implementar, dada a diferença brutal de
+complexidade entre as 5 telas de cadastro/contrato e as 2 telas de
+faturamento (que envolvem geração de NF-e, boleto com layout por banco,
+arquivo de remessa bancária CNAB 240/400, e envio de e-mail em massa —
+motores inteiros, não telas de formulário simples).
+
+### O que já foi analisado e implementado (Fase A)
+
+**Backend** — `backend/services/contratos_service.py` +
+`backend/routes/contratos.py` (registrado em `server.py`), permissões em
+`permissoes_service.py` sob `TRANSACOES > CONTRATOS` (`TIPO_CONTRATO`,
+`TIPO_REAJUSTE`, `INDICE_REAJUSTE`, `CONTR_PROD_DISP`, `CONTRATO` — este
+último com ações próprias `ITENS`/`CENTRO_CUSTO`/`REAJUSTE`/`CRED_DEB`/
+`ENCERRAR`, sem `IMPRIMIR` porque a impressão do contrato pertence ao
+mesmo motor de Faturar Contratos deixado pra depois). Auditoria via
+`log_auditoria_service` em todo GRAVAR/EXCLUIR, mesmo padrão de
+`routes/tabelas_aux.py`.
+
+- **Tipo de Contrato / Tipo de Reajuste / Índices de Reajuste**
+  (`tipo_contrato`, `prazo_reajuste`, `indice_reajuste` — codigo smallint
+  MAX+1, descricao): cadastros simples, réplica exata do padrão
+  `tabelas_aux_service._*_tipo_cliente_sync`. Guarda de exclusão real
+  (bloqueia se `contratos.tipo_contrato`/`tipo_reajuste`/`indice_reajuste`
+  referenciar o código).
+- **Produtos Disponíveis** (`contratos_produtos_disponiveis` — produto PK,
+  preco, qtd, qtd_alocada, situacao, obs): réplica de `FrmConPDI.frm`.
+  `qtd=0` = ilimitado (mesma regra do legado). Resolver de produto próprio
+  (`_resolve_produto_contrato_sync`), cascata Cilindro → Equipamentos →
+  Peças (codigo_int/codigo_fab/codigo_bar) → Serviços — **não existia** um
+  resolver compartilhado cobrindo essas 4 tabelas no restante do backend
+  (`pedido_common._resolve_produto` só cobre peças/serviços), então foi
+  escrito de novo, escopo próprio deste módulo. Guarda de exclusão nova
+  (não existe no VB6 original, mas seguindo a regra padrão do projeto de
+  nunca excluir registro com dependência ativa): bloqueia se
+  `qtd_alocada > 0`.
+- **Contratos** (`contratos` + `contratos_produtos` +
+  `contratos_centro_custo` + `contratos_preco` + `contratos_cred_deb`):
+  CRUD completo do cabeçalho do contrato, réplica campo-a-campo das
+  validações de `Command14_Click` (mês reajuste 1-12, dia vencimento
+  1-31, tipo contrato/reajuste/índice/cobrança/periodicidade obrigatórios,
+  descrição NF obrigatória). Sub-recursos:
+  - **Itens**: inclusão/edição/exclusão com a mesma regra de
+    disponibilidade do legado (`Campo_LostFocus(12)`/`Command9_Click` —
+    `qtd=0` na disponibilidade = ilimitado, senão bloqueia sem saldo) e a
+    mesma tripla de efeitos colaterais (`contratos_produtos_disponiveis.
+    qtd_alocada`, `pecas.qtd`/`estoque_cli`, `equipamentos.cliente`).
+    **Decisão consciente, diferente do legado**: a checagem de
+    disponibilidade também roda ao EDITAR um item (o VB6 só checa ao
+    incluir — `If Not alteracao Then` pula a checagem na edição), pra
+    nunca permitir estourar o saldo por edição; ver comentário em
+    `_save_item_contrato_sync`.
+  - **Centro de Custo**: lançamento manual (upsert por
+    contrato+centro_custo) e exclusão. **Não implementado**: o botão
+    "Rateio Centro Custo" (`Command29_Click`/`Acerta_Contrato_Custo`) que
+    divide o valor do contrato automaticamente entre os centros de custo
+    já lançados — não achado no trecho de código colado pelo usuário
+    (chamada referenciada, corpo da função não veio no `.frm`), então não
+    foi implementado; lançamento continua 100% manual por enquanto.
+  - **Alteração de Preço (Reajuste de Valor)**: grava histórico em
+    `contratos_preco` + atualiza `contratos.valor_atual`/`valor_ant`/
+    `ultimo_reajuste`/`historico`, mesma regra de bloqueio do legado
+    (`Command24_Click`: valor novo igual ao atual não é permitido).
+  - **Acréscimo/Desconto** (`contratos_cred_deb`): mesma validação do
+    legado (`Command32_Click` — ano/mês obrigatórios, item obrigatório só
+    pra Acréscimo, resolvido contra Peças/Serviços). **Não replicado do
+    VB6** (era um "ano mínimo 2007" hardcoded, claramente um resquício de
+    quando o sistema entrou em produção, não uma regra de negócio real —
+    ver "Não replicar truques VB6" no CLAUDE.md): trocado por uma faixa
+    plausível de ano (2000–2100).
+  - **Excluir/Encerrar Contrato**: só permitido com `situacao='A'`,
+    reverte estoque/alocação/vínculo de equipamento de todos os itens
+    (`_reverter_estoque_itens_sync`, réplica de `Command10_Click`/
+    `Command19_Click`).
+- **Reajuste automático por índice (IGPM/IPCA) — feature NOVA, sem
+  equivalente no VB6** (que só permite digitar valor/percentual na mão):
+  `GET /contratos/indice-reajuste/{codigo}/bacen?data_inicial&data_fim`
+  consulta a API pública do Banco Central (SGS,
+  `api.bcb.gov.br/dados/serie/bcdata.sgs.{serie}/dados`, sem
+  autenticação — mesmo princípio já usado no app pra ViaCEP). Séries
+  verificadas 2026-07-19 via busca na web: IGP-M (FGV) = série 189, IPCA
+  (IBGE) = série 433 — ambas de variação MENSAL, não acumulada; o
+  percentual acumulado do período é calculado compondo (juros compostos)
+  as variações mensais publicadas no intervalo pedido, não somando. Só
+  funciona quando `indice_reajuste.descricao` é literalmente "IGPM"/
+  "IGP-M"/"IPCA" (case-insensitive) — qualquer outro índice cadastrado
+  (ex.: "ESPECIAL" visto no print do usuário) cai num aviso pedindo
+  percentual manual, sem quebrar o fluxo. **Nunca aplica sozinho** — só
+  preenche os campos de sugestão na tela, o usuário confirma antes de
+  gravar.
+- **Bug real encontrado e corrigido durante a própria implementação**
+  (não é uma pendência, registro só pra quem for mexer aqui de novo):
+  `_aplicar_alocacao_sync` só atualizava `equipamentos.cliente` ao
+  ALOCAR, nunca ao REVERTER — excluir/editar um item de equipamento
+  deixava `equipamentos.cliente` vinculado pra sempre ao cliente antigo
+  do contrato. Corrigido fazendo a função sempre gravar o `cliente`
+  recebido (o chamador decide: cliente do contrato ao alocar, `_vcodcli_
+  sync` — cliente "da própria empresa" — ao reverter).
+
+**Frontend** — hub `app/contratos.tsx` (mesmo padrão de
+`app/movimentacoes.tsx`), aberto por um novo card "Contratos" em
+`app/(tabs)/transacoes.tsx`. Telas:
+- `app/contrato-tipo.tsx` / `contrato-tipo-reajuste.tsx` /
+  `contrato-indice-reajuste.tsx` — clones diretos de `app/tipo-cliente.tsx`
+  (lista + FAB + modal simples).
+- `app/contrato-produtos-disponiveis.tsx` — lista + modal com resolução de
+  produto no blur (mesmo `resolver-produto` do backend).
+- `app/contrato-lista.tsx` — lista de contratos (busca + chips de
+  situação Todos/Ativo/Encerrado).
+- `app/contrato-completo.tsx` — tela cheia compacta (o legado não tem
+  TabStrip, só Frames que aparecem/somem por botão — mesmo padrão já
+  usado em Fornecedores/Cilindros: Itens/Centro de Custo/Alteração de
+  Preço/Acréscimo-Desconto viram botão + slide modal em vez de aba).
+  Botão "Consultar índice no Banco Central" dentro do modal de Alteração
+  de Preço já pré-preenche percentual e novo valor sugeridos a partir da
+  resposta do backend.
+
+### Pontos de atenção / dívidas técnicas conhecidas
+
+1. ~~**Schema não validado ao vivo**~~ — ✅ **validado 2026-07-20** contra
+   `gibanweb.database.windows.net`/`BDREACTAPP` (conexão real, mesma usada
+   pelos e2e deste projeto). As 9 tabelas existem com exatamente os nomes/
+   tipos assumidos pelo código, exceto os pontos abaixo — corrigidos na
+   mesma sessão, com round-trip completo (criar → buscar → editar →
+   excluir contrato, itens, centro de custo, reajuste, acréscimo/desconto,
+   rateio) rodado contra dados descartáveis e removido ao final:
+   - **Bug real corrigido**: `_save_contrato_sync` validava os campos
+     obrigatórios com `if not dados.get(campo)` — como `tipo_cobranca=0`
+     ("Recibo", a primeira opção de `TIPO_COBRANCA_OPCOES`) é falsy em
+     Python, um contrato com Tipo de Cobrança "Recibo" **nunca conseguia
+     ser gravado** ("Defina o Tipo de Cobrança!"). Corrigido pra
+     `dados.get(campo) is None`.
+   - **Bug real corrigido**: `contratos_cred_deb.item` é `nvarchar(8)` no
+     banco real, mas `_resolve_item_cred_deb_sync` só devolvia a
+     descrição — o valor bruto digitado pelo usuário (que pode ser um
+     `Pecas.Codigo_Fab`, `nvarchar(40)`) era gravado sem normalização,
+     estourando "String or binary data would be truncated" (erro técnico
+     cru vazando pro usuário). Corrigido normalizando sempre pro código
+     canônico (`Codigo_Int`/`Servicos.Codigo`, sempre ≤8 chars) antes de
+     gravar.
+   - **Divergência de schema corrigida (ALTER, decisão do usuário)**:
+     `contratos.multa`/`desc_venc` eram `smallint` no banco, mas o
+     formulário (`keyboardType="decimal-pad"`) e a API tratam os dois como
+     percentual decimal — o SQL Server truncava silenciosamente (`2.5` →
+     `2`) sem erro nem aviso. Alterado para `float` (mesmo tipo de
+     `valor_inicial`/`valor_atual`/etc. na mesma tabela — `real` foi
+     testado primeiro mas gerava artefato de precisão de ponto flutuante
+     de precisão simples, ex. `3.7` virando `3.700000047683716`; `float`,
+     que é double precision, não tem esse problema). **Esse ALTER precisa
+     ser replicado em qualquer outro banco de empresa** que já tenha essas
+     tabelas criadas antes desta correção (2026-07-20) — não é algo que o
+     backend detecta/migra sozinho.
+   - Demais tabelas/colunas conferidas sem divergência: tipos, tamanhos de
+     nvarchar (inclusive `produto`/`Codigo_Int`/`numero_de_serie`, todos
+     cabendo dentro de `contratos_produtos.produto nvarchar(20)`),
+     nullability, colunas IDENTITY (`codigo`/`cc_auto`).
+2. ~~**Anexos (Gestor de Documentos) não integrado**~~ — ✅ implementado
+   2026-07-19: botão "Anexos" na tela de Contrato completo (habilitado
+   junto dos demais botões relacionados, exige contrato já gravado + um
+   cliente definido) abre `GestorDocumentosSection` num modal largo
+   (920px, mesmo padrão de `AnexosPedidoModal.tsx`, já que a seção precisa
+   de lista + preview lado a lado). Mesmo mapeamento documentado acima:
+   `cod_grupo=1` (Contrato não é entidade principal, é anexo do Cliente),
+   `cod_sub_grupo=5` ("Contratos", confirmado ao vivo em GERDELL/
+   BARESTELA), `referencia=contratos.codigo`.
+3. ~~**"Rateio Centro Custo" automático não implementado**~~ — ✅
+   **implementado 2026-07-20**. A rotina não estava em `FrmManContra.frm`
+   (o form principal, que foi o único `.frm` colado originalmente) — o
+   botão "Centro Custo" abre um modal filho, `Geral\FrmCustoContrato.frm`
+   ("Centro de Resultados Contratos..."), que tem seu próprio botão
+   "Rateio Valor" (`Command28`) chamando `Acerta_Contrato_Custo(Contrato)`,
+   definida em `Geral\mdl_proc.bas:2416`. Localizado via o `.vbp` do
+   projeto (não grep solto — ver "Nunca marcar uma rotina como 'não
+   implementada'..." no CLAUDE.md, regra nova escrita a partir deste
+   caso). Lógica replicada em
+   `contratos_service._rateio_centro_custo_sync`/rota
+   `POST /contratos/{codigo}/centro-custo/rateio`: soma o total já
+   lançado nos centros de custo do contrato, compara com
+   `contratos.valor_atual`, e redistribui a diferença
+   proporcionalmente ao peso de cada linha (só 1 centro de custo lançado:
+   joga o valor inteiro nele, sem rateio proporcional — mesma regra do
+   legado). Botão "Rateio Valor" adicionado no modal Centro de Custo de
+   `contrato-completo.tsx`, ao lado de um aviso (não bloqueio) quando o
+   total lançado diverge do valor atual. Testado ponta a ponta contra
+   banco real (1 cc e 2 ccs, rateio proporcional confirmado:
+   1000+500 → 666,67/333,33 mantendo a proporção original).
+   **Não replicado do legado** (ver "Não replicar truques VB6"): o
+   bloqueio de `Form_QueryUnload` ao fechar esse modal quando os valores
+   divergem estava condicionado a `Not
+   Dados_Controle_Configuracao.Cilindro` — um flag de módulo sem nenhuma
+   relação com Centro de Custo/Contratos, quase certamente resíduo de
+   copiar-colar de outra tela; a regra real (avisar da divergência) foi
+   preservada, o bloqueio condicionado ao flag errado não. `Acerta_Contrato_Prod`
+   (mesmo arquivo, linha 2457) é a rotina irmã de rateio pra
+   `contratos_produtos` (preço dos itens) — não pedida nem implementada
+   nesta rodada, registrar aqui caso seja pedida no futuro.
+4. **Reajuste automático cobre só IGPM/IPCA** — qualquer outro índice
+   cadastrado em "Índices de Reajuste" (o legado permite texto livre) não
+   tem correspondência com uma série do Banco Central; a tela avisa e
+   pede percentual manual, não é um erro/bloqueio.
+5. **Cliente do contrato**: campo de busca implementado de forma
+   simplificada (texto com código + botão "buscar" abrindo modal de busca
+   por nome/CPF/CNPJ via `/api/clientes/find/search`) — **não** reutiliza
+   `ClienteSection`/`ClientSearchModal` (componentes usados por Pedido/
+   O.S.) porque esses componentes são fortemente acoplados ao formato de
+   dados e ao fluxo de criação rápida de cliente do Pedido/O.S.; a tela de
+   Contrato tem um formato de tela diferente (full-page, não um card de
+   cabeçalho). Funciona, mas não é o padrão "Campo Cliente" documentado em
+   CLAUDE.md — considerar unificar se isso incomodar no uso real.
+
+### Faturar Contratos — implementado 2026-07-20 (Faturar + Recibo)
+
+**Status: 🟡 parcial** — motor de faturamento completo + geração de Recibo
+implementados; Nota Fiscal (emissão fiscal real) e Boleto (layout
+bancário) ficam de fora, ver "Não implementado" abaixo.
+
+**Fonte rastreada**: `Clauwan\FrmFatContrato2.frm` (2600 linhas) — achado
+via `.vbp` (`Clauwan\Kontacto.vbp` referencia `FrmFatContrato.frm` sem o
+"2"; nenhum `.vbp` referencia literalmente `FrmFatContrato2.frm`, mas os
+dois têm o mesmo conteúdo/modelo de dados — não é um form órfão/versão
+errada, conferido comparando `Geral\FrmFatContrato.frm` e
+`Clauwan\FrmFatContrato.frm`, ambos usam exatamente o mesmo modelo
+`comanda`/`Receber`/`Duplicata_*`). Ver CLAUDE.md > "Nunca marcar uma
+rotina como não implementada..." pro método usado (mesmo caso do Rateio de
+Centro de Custo, mesma sessão).
+
+**Decisão de arquitetura confirmada via `AskUserQuestion` (2026-07-20)**:
+faturar um Contrato grava fiel ao legado em `comanda`/`comanda_duplicata`/
+`comanda_contrato`/`comanda_os`/`movimentacao` + `Receber`/
+`Duplicata_Receber`/`Duplicata_Rec_Venc`/`Duplicata_Rec_Nf` — **não** em
+`pedido_venda`/`pedido_venda_duplicata` (a tabela que todo o resto deste
+app usa pra vendas/faturamento). Consequência real, comunicada ao usuário
+antes de implementar: um contrato faturado por esta tela **não aparece**
+no Painel de Pedidos, Fechamento de Caixa ou nos relatórios já migrados —
+só nas telas deste módulo (e nas equivalentes telas legadas de consulta a
+`comanda`/`Receber`, se algum dia forem migradas). Ambas as famílias de
+tabela (`comanda*` e `pedido_venda*`) existem e têm dados possíveis no
+banco real — confirmado ao vivo em `BDREACTAPP`.
+
+**Backend** — `contratos_service.py` (seção "Faturar Contratos", final do
+arquivo) + `routes/contratos.py`:
+- `GET /contratos/faturar/listar` — réplica de `Command2_Click`: filtra
+  contratos ativos por período de referência (ano/mês), contrato inicial/
+  final, tipo de cobrança (Recibo/NF/Boleto), "contratos não faturados"
+  (`NOT IN comanda_contrato` pro mês/ano). **Período "mês comercial de 30
+  dias"**: `inicio_periodo` = último dia do mês ANTERIOR (ex.: referência
+  Jan/2026 → 31/12/2025), `fim_periodo` = dia 30 do mês de referência
+  (nunca 31, mesmo em mês de 31 dias) — a mesma base do cálculo pró-rata
+  `valor/30`. **Pró-rata**: desconta 1/30 do `valor_atual` por dia em que
+  o contrato ficou fora do período (começou depois do início, ou
+  terminou/foi encerrado/venceu antes do fim) — réplica exata de
+  `Dia_Aux`/`VALOR_CONTRATO`, testada contra banco real (contrato
+  iniciado no meio do período: 900 → 450, exatamente 15 dias de desconto
+  em 30). **O.S. vinculada** (`contratos.fatura_os`): soma O.S. Fechadas
+  não faturadas do cliente (ou de quem "fatura para" ele, via
+  `cliente.faturar`) ao valor total faturado; O.S. Abertas aparecem só
+  informativamente, não entram no total. **Vencimento**: dia de
+  vencimento do contrato aplicado ao mês/ano de vencimento pedido
+  (decrementando o dia até achar uma data válida, ex. dia 31 num mês de
+  30), nunca antes da data de emissão (clampa nela se cair antes) —
+  testado.
+- `POST /contratos/faturar` — para cada contrato selecionado: `
+  _gerar_comanda_sync` (réplica de `GeraComanda` — cria `comanda`,
+  parcela(s) em `comanda_duplicata` usando `forma_pag_prazo` do contrato
+  se existir, senão parcela única na forma "CONTRATO" tipo 'DU'
+  auto-criada se não existir; grava `movimentacao` do serviço do
+  contrato; grava `comanda_contrato`; se `fatura_os`, agrupa as O.S.
+  Fechadas na mesma comanda, marca `os.situacao='PG'`, e deduz
+  `pecas.reservado_os` dos itens tipo peça) + `_transf_receber_sync`
+  (réplica simplificada de `Transf_Receber` — posta em `Receber` e
+  distribui em `Duplicata_Receber`/`Duplicata_Rec_Venc`/`Duplicata_Rec_Nf`,
+  seguindo um cronograma em `nf_vencimento` se existir, senão parcela
+  única na data de emissão). Cada contrato roda numa transação própria
+  (commit/rollback individual) — uma falha não aborta o lote inteiro,
+  mesmo espírito do "best-effort" já usado noutros lotes deste projeto.
+  **Achado/decisão registrada**: `CNF.Tipo_Mov = Tipo_Mov_Contrato` no
+  legado usa uma variável (`Tipo_Mov_Contrato`) **nunca declarada** em
+  nenhum `.frm`/`.bas` acessível (nem em `Geral`, nem em nenhum outro
+  business-line) — quase certamente resíduo morto do VB6 (variant vazio
+  implícito). Substituído por `Controle.tipo_mov_contrato_servico` (o
+  tipo de movimento mais próximo semanticamente já configurado pro
+  contrato) — **ajustar se o usuário identificar o valor real esperado**.
+- `POST /contratos/faturar/recibo` — réplica de `Recibo()` sem a
+  impressão física (VB6 `Printer`): devolve o conteúdo estruturado
+  (recebemos, valor, valor por extenso, referente, data, assinatura) pro
+  frontend imprimir via `printHtml` (mesmo padrão de `ReciboPedidoModal`).
+  Grava em `Recibos` + incrementa `Controle.Seq_Recibo`, testado.
+  **Valor por extenso reimplementado do zero** em português (não é porte
+  de `Extenso`/`PegaExtenso` do VB6 — essas funções fazem parsing de
+  string, `PegaExtenso` não foi localizada em nenhum `.bas` acessível;
+  mesmo resultado funcional: singular "Real"/"Centavo" vs plural, "e"
+  entre reais e centavos), testado com vários valores (`1.0` → "UM REAL",
+  `100.0` → "CEM REAIS", não "CENTO REAIS").
+- Permissão nova `FATURAR_CONTRATO` (`ABRIR`/`FATURAR`/`RECIBO`) sob
+  `TRANSACOES > CONTRATOS`, gateada pelo módulo `contratos` (mesmo
+  mecanismo das outras 5 telas). Auditoria em `FATURAR`/`RECIBO`.
+
+**Frontend** — `app/contrato-faturar.tsx` (novo, aberto pelo card "Faturar
+Contratos" em `contratos.tsx`): filtro (mês/ano referência, contrato
+inicial/final, tipos de cobrança, contratos não faturados, mês/ano de
+vencimento, data de emissão) → grid de contratos selecionáveis (marcar/
+desmarcar individual ou todos) com totalizador → "Faturar Selecionados" →
+resultado por contrato (sucesso/falha) com botão "Gerar Recibo" por
+contrato faturado com sucesso (abre a impressão via `printHtml`).
+
+**Testado ponta a ponta contra banco real** (`BDREACTAPP`, dados
+descartáveis): listar com/sem pró-rata, faturar (comanda/duplicata/
+movimentacao/comanda_contrato gerados corretamente), `Receber`/
+`Duplicata_Receber`/`Duplicata_Rec_Venc`/`Duplicata_Rec_Nf` postados
+corretamente, "contratos não faturados" excluindo corretamente um
+contrato já faturado no mês/ano, geração de Recibo com numeração
+sequencial e valor por extenso.
+
+**Não implementado nesta rodada** (confirmado escopo via
+`AskUserQuestion`):
+- **Nota Fiscal** (`EmiteNF` no legado — emissão fiscal real, provavelmente
+  via `Backon.Controllers.Nfe`, ver "Legacy VB6 Source Reference" no
+  CLAUDE.md) — motor de emissão fiscal completo, fora de escopo.
+- **Boleto** — layout específico por banco (Itaú, Bradesco, Banco do
+  Brasil, Santander, Sicredi, Sicoob, Inter, HSBC) + os campos de
+  `Duplicata_Rec_Venc` relacionados (banco_cedente/carteira/
+  numero_boleto/dados_remessa) já existem no schema mas não são
+  preenchidos por este backend ainda.
+- `CentroCustoContrato` (`n_fiscal_custo`) — distribuição de custo por
+  centro atrelada à emissão real de NF, não implementada (depende de NF
+  real existir).
+- **Envio de Cobrança** (`FrmEnvCob.frm`) — remessa bancária CNAB 240/400 +
+  e-mail em massa — continua inteiramente fora de escopo, própria
+  etapa de descoberta antes de estimar. **Ver seção própria "Bancos
+  (Cadastro de Cobrança)" logo abaixo** — análise feita 2026-07-23 sobre
+  se essa infraestrutura CNAB ainda faz sentido tal como no legado.
+
+---
+
+## Bancos (Cadastro de Cobrança / Boleto / CNAB)
+
+**Status: 🟢 Fase 1 (cadastro) implementada e testada ao vivo (2026-07-23)**
+— CRUD completo contra a tabela `bancos` já existente em GERDELL/BARESTELA
+(53 colunas confirmadas ao vivo via `INFORMATION_SCHEMA`, PK `cod`
+IDENTITY). Nenhum motor de emissão (CNAB ou API) foi implementado —
+só o cadastro dos parâmetros, como planejado. Módulo Financeiro,
+card "Cobranças" (pedido explícito do usuário — nome do card na tela,
+diferente do nome interno do módulo/pendência "Bancos"). Legado:
+`FrmManBan.frm`
+("Manutenção de Bancos para Cobrança") — parâmetros de carteira de cobrança
+usados tanto pra emitir boleto quanto pra gerar/ler arquivo CNAB de
+remessa/retorno. **Tabela de destino é `BANCOS` (plural)** — existe uma
+tabela antiga `BANCO` (singular) **em desuso no banco de dados**, não
+reaproveitar/confundir as duas (alerta explícito do usuário, 2026-07-23).
+
+### Análise da tela legada
+
+Os ~40 campos indexados (`Campo(0)`...`Campo(42)` + `Check1`) se agrupam em:
+
+1. **Identificação bancária**: código do banco (Febraban), agência+DV,
+   conta+DV, carteira, variação de carteira, código de transmissão,
+   contrato.
+2. **Emissão de boleto**: espécie doc, aceite, código cedente, tipo de
+   registro, emissão do boleto (banco/empresa emite), distribuição (quem
+   envia ao sacado), tarifa de cobrança, "nosso número" (`Numero_Boleto`),
+   mensagens do boleto (3 linhas), título do boleto.
+3. **Regras de cobrança (negócio real, não workaround)**: multa
+   (tipo/percentual/valor fixo + dias de incidência), mora diária, protesto
+   (dias + tipo/instrução), baixa automática (dias + tipo/código).
+4. **Infraestrutura de arquivo CNAB**: diretório local de remessa/retorno,
+   número/data da última remessa — **só existe por causa do modelo de
+   troca de arquivo-texto com o banco**, não é regra de negócio permanente
+   (mesmo princípio de "Não replicar truques VB6" do CLAUDE.md, aqui
+   aplicado ao protocolo bancário, não à linguagem VB6 em si).
+5. **`Check1` "Integração por API"** — campo novo, não indexado como os
+   demais (sinal de que a própria equipe VB6 já começou a migrar pra fora
+   do CNAB puro, de forma incremental por banco).
+
+### Decisão do usuário (via `AskUserQuestion`, 2026-07-23): implementar OS DOIS caminhos
+
+Não escolher um só. Palavras do usuário: "pensando nos recursos que API
+pode dar pro sistema novo — ter a opção garantida, depurada, funcionando
+tudo etc., e ter também essa mais evoluída, porém não testada, depurada,
+etc." Ou seja:
+
+- **CNAB tradicional (arquivo remessa/retorno)** — caminho "garantido":
+  replica os campos do legado (grupo 1-4 acima), mantém compatibilidade
+  com os contratos bancários que os clientes que já usam o VB6 já têm
+  hoje (não depende de recontratar nenhum provedor). É o que já roda em
+  produção pros clientes VB6 — migrar isso é baixo risco de regressão de
+  negócio, mas motor de geração/leitura de arquivo CNAB 240/400 por banco é
+  trabalho pesado (citado 3x em PENDENCIAS.md como "própria etapa de
+  descoberta antes de estimar").
+- **API/gateway moderno** — caminho "mais evoluído, mas não testado": banco
+  oferece REST + webhook (ou via gateway agregador tipo Asaas/StarkBank/
+  GerênciaNet) em vez de arquivo. Elimina o grupo 4 inteiro e reduz o
+  grupo 2. Precisa de credenciais de API por banco/conta (client_id/
+  secret ou token) — campo novo no cadastro, condicional ao
+  `Integração por API` ligado.
+- **O cadastro de `BANCOS` precisa suportar os dois modos por registro** —
+  o toggle "Integração por API" (já existente no legado) decide quais
+  campos aparecem/são obrigatórios: ligado → esconde o grupo 4 (arquivo) e
+  pede credenciais de API; desligado → mantém o formulário CNAB completo
+  (grupos 1-4), igual ao legado.
+
+### O que falta decidir/implementar (não iniciado)
+
+1. **Fase 1 (cadastro)** — CRUD da tela `Bancos` em si (grupos 1-3 sempre
+   presentes + grupo 4 condicional ao modo CNAB + credenciais condicionais
+   ao modo API), sem motor de emissão real ainda — mesmo faseamento já
+   usado em outros módulos grandes deste projeto (Modificadores,
+   Contratos): cadastro primeiro, motor depois.
+2. **Fase 2a (motor CNAB)** — geração de arquivo remessa + leitura de
+   retorno, layout por banco (Itaú, Bradesco, BB, Santander, Sicredi,
+   Sicoob, Inter, HSBC) — ainda sem escopo definido, precisa de rodada de
+   descoberta própria (qual layout logo de cara, quais bancos os clientes
+   atuais realmente usam).
+3. **Fase 2b (motor API)** — qual(is) banco(s)/gateway(s) especificamente
+   integrar primeiro — **não decidido ainda**, precisa de escolha do
+   usuário (API direta de um banco específico vs. gateway agregador) antes
+   de começar essa fase; nenhuma credencial de sandbox existe hoje pra
+   nenhum provedor (mesma ressalva já registrada pra Tray em "Produtos
+   (Cadastro Completo)" — não presumir infraestrutura de teste disponível).
+4. Guarda de exclusão: o legado bloqueia excluir um banco com títulos
+   associados em `duplicata_rec_venc` — **essa tabela não é a correta pro
+   sistema novo** (ver `project_faturamento_parcelas` na memória — as
+   tabelas certas são `pedido_venda_duplicata`/`os_duplicata`), então a
+   guarda de exclusão real vai precisar ser re-derivada contra o schema
+   novo quando a Fase 1 for implementada, não copiada literalmente do SQL
+   do legado.
+
+### Fase 1 (cadastro) — implementada 2026-07-23
+
+**Backend**: `backend/models/bancos.py` (`BancoSaveRequest`/
+`BancoDeleteRequest`) + `backend/services/bancos_service.py` (list/get/
+save/delete, sync + wrapper async, mesmo padrão de `modificadores_service.py`)
++ `backend/routes/bancos.py` (registrado em `server.py`). **Não roda
+nenhuma migração/DDL** — a tabela `bancos` já existe no schema (usada
+pelos clientes que ainda rodam o VB6), confirmado ao vivo (`INFORMATION_SCHEMA`)
+2026-07-23: 53 colunas, PK `cod` IDENTITY, único FK real
+`cartoes_configuracoes.cod_banco`. Permissão nova `BANCOS` (menu
+`FINANCEIRO`, ações padrão ABRIR/GRAVAR/EXCLUIR/IMPRIMIR/EXPORTAR).
+Auditoria em Gravar/Excluir (`tela="BANCOS"`).
+
+- **Campos do schema deliberadamente fora desta Fase 1** (existem na
+  tabela mas não têm mapeamento confirmado contra o `.frm` colado pelo
+  usuário — nunca assumir função de campo sem confirmação): `nome_remessa`,
+  `cod_carteira`, `Tarifa_Boleto` (distinta de `tarifa_cobranca`, que é a
+  usada), `certificado_digital`/`certificado_digital_auxiliar` (varbinary
+  — fica pra quando a Fase 2b escolher um provedor de API específico e
+  confirmar se ele exige certificado cliente). `remessa`/`data_remessa`
+  são só exibidos (somente leitura) — no legado `Campo(23)` é
+  `Enabled=False`, preenchido automaticamente pelo motor de remessa, nunca
+  pelo formulário manual.
+- **Campos numéricos sem rótulo amigável conhecido**: `tipo_cobranca`,
+  `tipo_multa`, `incidencia_multa`, `codigo_protesto`, `codigo_baixa`,
+  `tipo_registro`, `emissao_boleto`, `distribui_boleto`, `especie_doc` eram
+  preenchidos no legado por combos (`List1`..`List9`) cujo texto das opções
+  está no recurso binário `.frx`, não no `.frm` texto colado — sem esse
+  texto, esses campos ficam como código numérico simples na tela nova (sem
+  dropdown), com uma nota de ajuda explicando que são códigos definidos
+  pelo banco. **Se o `.frx` for decodificado no futuro (ou o usuário colar
+  a lista real de opções de algum desses combos), trocar por
+  `SelectField`s de verdade** — não é um limite arquitetural, só falta de
+  dado de origem.
+- **Delete guard** replica o do legado, com verificação adicional pela FK
+  real: bloqueia se `cartoes_configuracoes.cod_banco` referenciar o
+  registro, OU se `duplicata_rec_venc` tiver uma linha casando a
+  combinação de negócio `banco_cedente=codigo AND conta_cedente=conta
+  AND carteira=carteira` (join do legado, preservado fielmente — não é o
+  PK `cod`, ver docstring de `_delete_banco_sync`).
+- **Toggle "Integração por API"** (`integracao_api`, já existente no
+  schema/no `.frm` como `Check1`, não indexado como os outros campos):
+  desligado exige Diretório de Remessa/Retorno (CNAB); ligado exige nada
+  de arquivo, expõe 4 campos de credencial (`chave_api_1..4`, mapeados
+  pra `chave_api`/`chave_api_2/3/4` no schema — os nomes genéricos
+  "Chave/Token de API 1-4" evitam inventar rótulo específico de provedor,
+  já que a Fase 2b ainda não escolheu qual API/gateway integrar).
+- **Testado ao vivo contra GERDELL/BARESTELA** (round trip completo:
+  criar → buscar → editar → listar com busca → excluir; guarda de
+  exclusão testada nos dois caminhos — `cartoes_configuracoes` e
+  `duplicata_rec_venc`, cada um bloqueando e depois liberando a exclusão
+  após limpar a linha de teste). 20 testes unitários (mockados,
+  `test_bancos_service.py`) cobrindo validação/CRUD/guardas — todos
+  passando; suite completa do backend rodada, sem regressão nova
+  introduzida (falhas pré-existentes em `test_pedido_compra_service.py`
+  não relacionadas a este módulo).
+
+**Frontend**: `frontend/app/bancos.tsx` — tela única compacta sem abas
+(mesmo padrão de "Exception — compact single-view screens", precedente
+`fornecedores.tsx`/`cilindro-cadastro.tsx`, já que o `.frm` legado também
+não tem controle de aba): lista+busca+FAB "Novo" → formulário de tela
+cheia (Gravar no canto superior direito, ícone de Ajuda/Modo Didático com
+o texto de cada grupo de campo em linguagem de usuário final). Estado do
+formulário usa um objeto único (`BancoForm`) em vez de ~40 `useState`
+soltos — única diferença de padrão em relação a `fornecedores.tsx`,
+justificada pelo volume real de campos. Confirmação de exclusão usa
+`useFeedback().showConfirm` (não `Alert.alert`, que é no-op no web).
+Botões-ícone (Ajuda, Excluir) usam `IconButtonWithTooltip`. **Não testado
+ao vivo num navegador de verdade** (mesma limitação já documentada
+noutros módulos desta sessão) — só `tsc --noEmit` confirmado sem novos
+erros vs. baseline.
+
+**Reestruturado no mesmo dia, user-directed**: o card "Cobranças" em
+`app/(tabs)/financeiro.tsx` não abre `bancos.tsx` diretamente — abre um
+hub novo, `frontend/app/cobrancas.tsx` (mesmo padrão de
+`app/contratos.tsx`/`app/movimentacoes.tsx`: grid de cards, cada um uma
+tela do módulo), e é o hub que tem o card "Bancos" apontando pra
+`bancos.tsx`. Preparado pra outras telas do módulo de cobrança entrarem
+como cards adicionais no mesmo hub no futuro (Fase 2 CNAB/API, ou
+qualquer outra tela de cobrança) — não é uma tela avulsa 1:1. A
+visibilidade do tile "Cobranças" em `financeiro.tsx` segue a mesma regra
+de "Contratos" em `transacoes.tsx`: OR de todas as permissões ABRIR das
+telas filhas do hub (só `BANCOS.ABRIR` por enquanto).
+
+**Fase 2 (motores CNAB/API) continua não iniciada** — ver decisão de
+escopo acima (implementar os dois caminhos).
+
+### Fase 2a (motor CNAB) — implementada 2026-07-24, só Bradesco (237)
+
+**Status: 🟢 Remessa (CNAB240) + Retorno (CNAB400) implementados e testados
+ao vivo contra GERDELL/BARESTELA.** Decisão de escopo confirmada via
+`AskUserQuestion` antes de implementar: banco Bradesco primeiro (dos ~6
+bancos com layout no legado — Santander/033, Bradesco/237, Sicoob/756,
+Sicredi/748, Inter/077, BB/001 — todos com CNAB bem diferentes entre si,
+não dava pra fazer todos numa rodada); sem arquivo real de remessa/retorno
+disponível pro usuário validar; remessa+retorno juntos nesta rodada.
+
+**Fonte legada rastreada campo-a-campo** (não presumida —
+`C:\Desenv\VB6\SQLSERVER\Geral\IntegracaoBancaria.bas`, 6521 linhas,
+núcleo do motor bancário; `FrmGeraArqBan.frm`/`FrmImpRetBan.frm`/
+`FrmEnvCob.frm` são as telas que o chamam; todos referenciados pelo mesmo
+`Kontacto\backon.vbp`): `Gera_Header_240`/`Gera_Header_Lote_240`/
+`Gera_Segmento_P_240`/`Gera_Segmento_Q_240`/`Gera_Segmento_R_240`/
+`Gera_Trailer_Lote_240`/`Gera_Trailer_240` (ramos `Banco = "237"`),
+`GeraNossoNumero`, `Modulo_11_Bradesco`. As larguras de cada campo foram
+conferidas contra os `Type Header_Arquivo_240`/`Header_Lote_240`/
+`Segmento_P_240`/`Segmento_Q_240`/`Segmento_R_240`/`Trailer_Lote_240`/
+`Trailer_Arquivo_240` — cada registro soma exatamente 240 caracteres
+(padrão Febraban CNAB240), somado manualmente durante o rastreio E
+conferido de novo programaticamente nos testes (`len(linha) == 240`).
+
+**Backend**: `backend/services/cnab_bradesco_service.py` (novo, separado
+de `bancos_service.py` — motor de arquivo vs. cadastro CRUD são
+responsabilidades diferentes, mesmo princípio de `nfe_fiscal_common.py`
+separado dos services de emissão). Endpoints novos em
+`backend/routes/bancos.py`: `POST /api/bancos/{cod}/remessa` (gera e
+retorna o conteúdo do arquivo + nome sugerido) e
+`POST /api/bancos/{cod}/retorno` (recebe o conteúdo colado, processa,
+devolve resumo). Ações novas no catálogo de permissões (`ACOES_BANCOS`):
+`GERAR_REMESSA`/`IMP_RETORNO` (nome abreviado — `IMPORTAR_RETORNO`
+estourava o limite de 15 chars da coluna `permissoes.comando`). Auditoria
+em ambas as ações.
+
+- **Remessa**: busca títulos em aberto do banco
+  (`duplicata_rec_venc.situacao='A' AND banco_cedente=237`, join com
+  `duplicata_receber`+`cliente`+`cliente_end` — réplica da query de
+  `FrmGeraArqBan.frm:531`), gera "Nosso Número" sequencial por título
+  (réplica de `GeraNossoNumero`, incrementando `bancos.numero_boleto`),
+  monta Header Arquivo + Header Lote + (Segmento P + Segmento Q + Segmento
+  R se `Multa_Atraso_Pag > 0`) por título + Trailer Lote + Trailer
+  Arquivo, grava `bancos.remessa`/`numero_boleto`/`data_remessa`/
+  `nome_remessa` e marca `duplicata_rec_venc.transf_banco=1` por título
+  incluído (réplica fiel do legado). Nome do arquivo:
+  `CB<dd><mm><últimos 2 dígitos da remessa>.rem` (mesmo padrão de
+  `Gera_Txt_240`, ramo 237).
+- **Simplificação deliberada em relação ao legado** (registrada, não é
+  perda de regra): `FrmGeraArqBan.frm` deixa o usuário marcar/desmarcar
+  manualmente na grid quais títulos entram; aqui a remessa inclui
+  automaticamente todos os abertos ainda não enviados
+  (`transf_banco = 0` — filtro que o SQL do legado não tinha explícito
+  nessa query específica, dependia só da seleção manual). Evita reenviar
+  por engano um título já remetido.
+- **Retorno**: aceita o conteúdo colado (texto), lê registros CNAB400 tipo
+  1 nas posições Febraban padrão (Nosso Número 63-70, Ocorrência 109-110,
+  Data Ocorrência 111-116, Valor Principal 254-266, Juros 267-279,
+  Desconto 241-253) — mesmas posições do bloco "Confirmação de títulos
+  enviados" (`Option1`) de `FrmImpRetBan.frm`. Ocorrência `02` só confirma
+  (não altera nada); `06`/`09`/`17` dão baixa
+  (`duplicata_rec_venc.situacao='PG'`, grava `data_pag`/`valor_pag`/
+  `juros_pag`/`desconto_pag`/`ultima_mov_banco`), idempotente (título já
+  `'PG'` não conta de novo). Título não encontrado (numero_boleto+
+  banco_cedente+conta_cedente sem match) entra na lista `nao_encontrados`
+  do resumo, não bloqueia o resto do arquivo.
+- **Risco conhecido, não validado**: o usuário confirmou não ter nenhum
+  arquivo de retorno real do Bradesco pra testar — a implementação segue o
+  layout oficial Febraban CNAB400 (que bate com um dos dois blocos
+  encontrados no legado). **Existe um SEGUNDO bloco no mesmo
+  `FrmImpRetBan.frm`** (usado só no fluxo de anexo de e-mail,
+  `AnexoEmail_DblClick`) com posições DIFERENTES (Ocorrência em 90-91 em
+  vez de 109-110) — decisão consciente de seguir o primeiro bloco (bate
+  com o padrão Febraban documentado, mais confiável) e tratar o segundo
+  como bug/variação da função de e-mail, não como layout de banco
+  diferente — mas isso não foi confirmado com um arquivo real. **Testar
+  contra um retorno real do Bradesco antes de confiar em produção.**
+- **Campos do schema não tocados por esta fase** (mesma lista já registrada
+  na Fase 1, reafirmada): `cod_carteira`, `Tarifa_Boleto`,
+  `certificado_digital`/`certificado_digital_auxiliar` — nenhum deles
+  apareceu no rastreio do motor CNAB também, continuam fora de escopo.
+- **Testado ao vivo contra GERDELL/BARESTELA** (dados descartáveis, limpos
+  ao final): criado banco Bradesco de teste + cliente + endereço +
+  duplicata_receber + duplicata_rec_venc → gerada remessa (6 linhas, TODAS
+  com exatamente 240 caracteres, conta corrente/agência/carteira/CNPJ da
+  empresa conferidos no conteúdo) → confirmado `transf_banco=1` e
+  `numero_boleto` gravados → montada uma linha de retorno sintética
+  (ocorrência 06) → processada → confirmado `situacao='PG'` +
+  `data_pag`/`valor_pag` gravados. **Bug real encontrado e corrigido
+  durante esse teste**: a implementação inicial lia a chave errada
+  (`conta_corrente` em vez do nome real da coluna, `contacorrente`),
+  zerando o campo Conta Corrente no arquivo gerado — pego justamente
+  porque o teste ao vivo comparou o valor esperado (98765) contra o
+  conteúdo real, não só o comprimento da linha.
+- 24 testes unitários novos (`test_cnab_bradesco_service.py`, mockados) —
+  larguras de registro, `Modulo_11_Bradesco`, validações de remessa
+  (banco errado, API ligada, sem títulos), ocorrências de retorno (02, 06
+  não encontrado, 06 baixa, 06 idempotente). Suite completa do backend
+  rodada, sem regressão nova.
+- **Frontend**: botões "Gerar Remessa" (baixa o `.rem` gerado via Blob) e
+  "Processar Retorno" (modal com textarea pra colar o conteúdo + resumo do
+  resultado) adicionados em `bancos.tsx`, visíveis só quando o banco já
+  salvo é o Bradesco (código 237) e `integracao_api` está desligado. **Não
+  testado ao vivo num navegador** — só `tsc --noEmit` limpo.
+
+**Ainda fora de escopo (nesta etapa)**: Santander, Sicoob, Sicredi, BB —
+Inter foi implementado logo em seguida, ver abaixo. Fase 2b (motor API) nem
+começou, ainda sem provedor escolhido.
+
+### Fase 2a (motor CNAB) — Inter (077) implementado 2026-07-24
+
+**Status: 🟢 Remessa (CNAB400) + Retorno (CNAB400) implementados e
+VALIDADOS byte a byte contra arquivo real do Inter, colado pelo usuário no
+mesmo dia.** `backend/services/cnab_inter_service.py` (novo,
+mesmo padrão de módulo autocontido do Bradesco — não extraído um
+`cnab_common.py`, ver docstring do módulo). Dispatch por código Febraban do
+banco adicionado em `backend/routes/bancos.py` (`_motor_cnab`, escolhe
+`cnab_bradesco_service` ou `cnab_inter_service` a partir de
+`bancos_service.get_banco`) — os endpoints continuam os mesmos
+(`POST /api/bancos/{cod}/remessa` e `/retorno`), sem rota nova.
+
+**Diferença estrutural do Bradesco**: Inter usa CNAB400 puro (registro de
+largura fixa 400, sem lotes/segmentos — header + 1 registro por título +
+trailer), não CNAB240.
+
+**Achado importante durante o rastreio**: a tela `Geral/FrmGeraArqBan.frm`
+(usada pra rastrear o Bradesco) só chama as funções CNAB240 —
+`Gera_Header_400`/`Gera_Detalhe_400`/`Gera_Trailer_400`/`Gera_Txt_400`
+(as funções do Inter, em `IntegracaoBancaria.bas`) pareciam código morto a
+princípio (nenhum caller visível nessa tela, e o próprio `Gera_Detalhe_400`
+tem uma variável `X` calculada no layout Febraban genérico mas nunca usada,
+descartada em favor de um `INSERT` com posições totalmente diferentes,
+específicas do Inter — cheiro de código abandonado/inacabado). **Busca mais
+ampla encontrou o caller real**: `Kontacto/frmrelbol4.frm` (tela de emissão
+de boletos em PDF que também gera remessa quando uma opção `Check5` está
+marcada, dispatch por código do banco incluindo 77) — confirma que é código
+real/alcançável na linha de negócio Kontacto, não abandonado, só não
+cabeado na tela `Geral` usada pelo Bradesco. Segui o `INSERT` realmente
+executado (não a variável `X` descartada) — ver docstring do módulo pro
+detalhe completo desse achado.
+
+**Retorno tinha mais ambiguidade de posição do que o Bradesco no
+código-fonte legado, resolvida contra arquivo real no mesmo dia**: a função
+`Processa_Retorno_inter` (`Geral/FrmImpRetBan.frm`) monta um struct
+genérico (`Nosso_Numero` em 108, `Valor_Principal` em 254 etc.) que, olhando
+com atenção, não é o que a lógica de negócio realmente usa — os ramos
+`If Ocorrencia = "02"/"03"/"06"` usam outro conjunto de posições hardcoded
+separadamente. A implementação inicial seguiu esse segundo conjunto (nº do
+boleto em 71, valor do título em 125, valor pago em 160, data de pagamento
+em 173) por ser o que o código realmente executa — e o usuário colou um
+retorno real do Inter (8 títulos, ocorrências 02/06/07 misturadas) logo em
+seguida. **Resultado**: `Ocorrência` (90-91), `Valor_Título` (125-137),
+`Valor_Pago` (160-172) e `Data_Pagamento` (173-178) bateram exatamente com
+o arquivo real, sem precisar de ajuste — confirmando que seguir o código
+realmente executado (não o struct genérico) era o caminho certo. **Um erro
+real foi encontrado e corrigido**: a posição do Nosso Número (nosso próprio
+identificador, o que usamos pra casar com `duplicata_rec_venc.
+numero_boleto`) estava em 71-81 (copiada por engano da leitura ambígua do
+código-fonte) — o arquivo real mostrou que essa posição é na verdade um ID
+interno do BANCO, e o nosso próprio Nosso Número (o mesmo valor que
+gravamos na remessa) volta ecoado em 98-107. Corrigido em
+`cnab_inter_service.py`, com um teste de regressão novo
+(`test_arquivo_real_do_inter_2026_07_24` em `test_cnab_inter_service.py`)
+usando o conteúdo real colado pelo usuário como golden file. Ocorrência
+"07" também apareceu no arquivo real (não documentada em nenhum `ElseIf`
+do legado) — tratada como ignorada, mesmo comportamento do legado (nenhum
+ramo cobre esse código).
+
+A remessa (header+detalhe+trailer) gerada por `_montar_header_400`/
+`_montar_detalhe_400`/`_montar_trailer_400` bateu **byte a byte, sem
+nenhuma diferença**, contra um arquivo de remessa real (header+1 título+
+trailer) que o usuário também colou — validação forte de que o rastreio
+inicial da remessa (inclusive a decisão de seguir o `INSERT` real em vez da
+variável `X` descartada) estava correto desde o início.
+
+**Achado cross-banco durante o rastreio, NÃO implementado (nem aqui nem no
+Bradesco)**: a baixa real do legado (`Baixa_Titulo`, chamada pelo botão
+"Confirma Baixa dos Títulos Selecionados", compartilhado por todos os
+bancos que passam por `FrmImpRetBan.frm`) também incrementa
+`Duplicata_Receber.Parcelas_Pagas` e, quando todas as parcelas de uma
+duplicata estão pagas, marca `Duplicata_Receber.Situacao = 'PG'` — nenhuma
+das duas coisas está implementada em `cnab_bradesco_service.py` nem em
+`cnab_inter_service.py`; os dois só atualizam `duplicata_rec_venc`. Fica
+como pendência pros dois motores, não só o Inter.
+
+**Simplificação deliberada, para ficar simétrico ao Bradesco**: o legado
+não aplica a baixa direto durante a leitura do retorno — monta uma grade de
+revisão + tabela de staging `Boletos_Pendentes`, exigindo confirmação
+manual separada. Este projeto já decidiu pro Bradesco aplicar direto (colar
+→ processar → resumo, sem etapa de revisão), e o Inter segue a mesma
+decisão pelos mesmos motivos (contrato de API/frontend já construído nesse
+formato).
+
+- 23 testes unitários (`test_cnab_inter_service.py`, mockados, incluindo o
+  golden file real citado acima) — larguras de registro (header/detalhe/
+  trailer somam exatamente 400, e batem byte a byte com a remessa real),
+  validações de remessa (banco errado, API ligada, sem títulos, geração
+  com 1 título sintético), ocorrências de retorno (02 confirma, 06 não
+  encontrado, 06 baixa, 06 idempotente, ocorrência não mapeada ignorada,
+  cabeçalho inválido, CNPJ não confere, arquivo real completo). Suite
+  completa do backend rodada, sem regressão nova (as 66 falhas
+  pré-existentes de `test_pedido_compra_service.py` continuam as mesmas,
+  não relacionadas a este módulo).
+- **Frontend**: `bancos.tsx` — os botões "Gerar Remessa"/"Processar
+  Retorno" e os títulos das seções agora aparecem tanto pro Bradesco (237)
+  quanto pro Inter (077), com o rótulo do banco dinâmico. Não testado ao
+  vivo num navegador.
+- **O que AINDA falta validar**: mesmo com o parsing/geração de arquivo
+  100% conferido contra dado real, o fluxo de ESCRITA no banco (`UPDATE
+  duplicata_rec_venc` na baixa, marcação de `transf_banco`/`numero_boleto`
+  na remessa) só foi testado com cursor falso — nenhum round trip ao vivo
+  contra GERDELL/BARESTELA ainda (diferente do Bradesco, que teve isso
+  feito). Recomendo o mesmo teste ao vivo (criar banco Inter de teste +
+  cliente + duplicata, gerar remessa, processar o retorno real já validado
+  aqui trocando os números de referência pelos do teste, limpar) antes de
+  considerar essa fase pronta pra produção.
+
+### Fase 2a — Santander (033) e Banco do Brasil (001), só retorno, 2026-07-24
+
+**Status: 🟡 Retorno implementado e testado (mockado); remessa BLOQUEADA —
+decisão explícita do usuário.** Pedido do usuário foi implantar Itaú,
+Santander e BB juntos; rastreando os três, achei uma ambiguidade real no
+cabeçalho de remessa CNAB240 (`Gera_Header_240`, função COMPARTILHADA por
+todos os bancos CNAB240 desta fase, inclusive o Bradesco já implantado) —
+pelo menos três campos (`RazaoSocial`, `Nome_Banco`, um campo interno
+`Cnab_01`) são montados sem `Format()` de largura fixa, e a soma dos campos
+confirmados fecha 15 caracteres a menos que os 240 exigidos. Diferente do
+Bradesco (que teve round trip ao vivo validado, então essa mesma ambiguidade
+nunca foi tropeçada em teste real) e do Itaú/Inter (que tiveram arquivo real
+pra resolver a mesma classe de problema), Santander/BB não têm arquivo real
+disponível ainda. Perguntado ao usuário via `AskUserQuestion` — escolheu
+"aguardar arquivo real" em vez de chutar a largura. **Geração de remessa
+pros dois bancos fica pendente até aparecer um arquivo real** (mesmo
+caminho que resolveu Itaú/Inter nesta sessão).
+
+**Retorno é seguro e já está implementado** — `backend/services/
+cnab_santander_service.py` e `backend/services/cnab_bb_service.py`.
+Achado: `Retorno_Santander` e `Retorno_Bancodobrasil`
+(`Geral/FrmImpRetBan.frm`) são **funções idênticas** no legado (mesmo
+motor CNAB240 "Segmento T/U", leitura por posição fixa sem ambiguidade —
+arquivo que o banco gera, não um que nós montamos). Cada título vem em duas
+linhas consecutivas (Segmento T = identificação + ocorrência; Segmento U =
+valores/datas de pagamento) — implementado com um `titulo_atual` de estado
+entre as duas linhas. Mesma simplificação já usada em todos os motores
+desta fase (baixa aplicada direto no `POST /retorno`, sem o staging de duas
+etapas do legado). 17 testes unitários novos (`test_cnab_santander_service.py`
++ `test_cnab_bb_service.py`), todos passando.
+
+**Dispatch**: `routes/bancos.py` já resolve os dois bancos pelo código
+Febraban (033/001) — `POST /retorno` funciona normal; `POST /remessa`
+responde com uma mensagem clara de "ainda não implementado" (não um erro
+genérico) até a ambiguidade acima ser resolvida.
+
+### Fase 2a — Itaú (341), remessa+retorno completos, VALIDADO 2026-07-24
+
+**Status: 🟢 Remessa (CNAB400) + Retorno (CNAB400) implementados. Remessa
+validada byte a byte contra um arquivo real do Itaú colado pelo usuário no
+mesmo dia (dados reais de produção: cliente RACING LUB DO BRASIL IMP. EXP.,
+carteira 109, título de R$ 1.079,40 da JUNIOR E HUGO MOTO PECAS LTDA,
+vencimento 21/08/2026).** `backend/services/cnab_itau_service.py`.
+
+Mesma ambiguidade encontrada no cabeçalho CNAB240 (ver Santander/BB acima)
+apareceu no REGISTRO DE DETALHE CNAB400 do Itaú (`Gera_Detalhe_400`, ramo
+`Else` — usado por qualquer banco que não seja 748/Sicredi ou 077/Inter,
+os dois únicos com ramo próprio): 42 caracteres sem dono claro, dois campos
+sem `Format()`. Perguntado ao usuário — mesma resposta, "aguardar arquivo
+real". **O usuário colou o arquivo real de remessa do Itaú logo em
+seguida**, ainda na mesma resposta em que decidiu esperar por um arquivo —
+resolvendo a ambiguidade na hora:
+
+- `Carteira` é um parâmetro `Byte` (0-255) concatenado cru, sem `Format()`
+  — **largura variável**, não fixa. Carteira 109 (real) ocupa exatamente 3
+  caracteres, sem zero à esquerda. Implementado como `str(int(carteira))`.
+- `Documento` (`Format(Num_Duplicata, "#########0")`, sem zeros à
+  esquerda) na verdade ocupa exatamente **10 caracteres** — mesma largura
+  do campo "Documento" já usado pela leitura do PRÓPRIO retorno do Itaú
+  (`Trim(Mid(Registro, 117, 10))`), confirmando os 10 caracteres por dois
+  caminhos independentes.
+- De brinde, dois campos que eu ia deixar zerados por padrão também
+  bateram contra o arquivo real: `instrucao_1`/`instrucao_2`
+  (`bancos.instr_cobranca_1`/`instr_cobranca_2`, não hardcoded em zero) e
+  `juros_1_dia` (mesma fórmula `valor_boleto × bancos.mora_dia_pag / 100`
+  já usada pelo Inter/Bradesco — `mora_dia_pag=0.5` reproduziu exatamente
+  os R$ 5,40 de juros do título real).
+- Confirmado também: Nome/Logradouro/Bairro/Cidade do Itaú **não** passam
+  por `EscreveMatricial` (maiúsculas + sem acento) como Sicredi/Inter usam
+  — o arquivo real preserva acentuação ("PRAÇA DA BAN...").
+- Header e trailer (ramo `Else` de `Gera_Header_400`/`Gera_Trailer_400`)
+  bateram 100% desde a primeira tentativa, sem ajuste.
+
+**Achado de "bug" real do legado, replicado fielmente**: o campo
+`Codigo_inscricao` aparece duas vezes na string final (uma vez "da
+empresa", perto do início; outra vez "do cliente", perto do
+`numero_de_inscricao`) mas é a MESMA variável no código-fonte, reatribuída
+pro tipo do cliente antes de qualquer leitura — as duas ocorrências no
+arquivo real têm o MESMO valor ("02"), confirmando que a posição "da
+empresa" na prática sempre mostra o tipo do cliente. Replicado fielmente.
+
+**Retorno usa `Processa_Retorno`** (mesma função genérica do Sicredi/748,
+não implementado) — mesmo achado já registrado na seção do Inter acima:
+o struct genérico lê Nosso Número na posição 63, mas a lógica de negócio
+real (`ElseIf Ocorrencia = "06"`) usa a posição 86 — segui a posição 86.
+**Isso não foi replicado no Bradesco já implantado** — perguntei ao
+usuário se queria corrigir o Bradesco também; resposta: "todo banco tem
+seu layout próprio" — ou seja, não presumir que a correção vale pro
+Bradesco sem confirmação própria (o Bradesco nem passa por esse
+`Processa_Retorno` no legado). Bradesco não foi tocado.
+
+**O que ainda falta**: o RETORNO do Itaú não foi validado contra arquivo
+real (só a remessa foi) — mesmo risco residual que Bradesco/Santander/BB
+têm hoje. Nenhum round trip ao vivo contra GERDELL/BARESTELA ainda (só
+testes mockados, incluindo golden-file da remessa real —
+`test_cnab_itau_service.py`, 15 testes, todos passando).
+
+**Frontend**: `bancos.tsx` — Itaú entrou no mesmo grupo de "remessa
+completa" que Bradesco/Inter (botão "Gerar Remessa" visível); Santander/BB
+mostram só "Processar Retorno" (o botão de remessa fica oculto pra eles,
+já que ainda respondem "não implementado"). Não testado ao vivo num
+navegador.
+
+---
+
+## Geração de Boletos (2 abas: Geração/Envio + Importação Retorno)
+
+**Status: 🟡 Implementada 2026-07-24** — não testada ao vivo num
+navegador. Tela única em Financeiro > Cobranças
+(`frontend/app/geracao-boletos.tsx`, card único no hub `cobrancas.tsx`).
+
+**Unificação 2026-07-24, user-directed** ("todo o processamento de
+remessa e retorno é através da tela Geração de Boletos... pode colocar as
+2 telas em uma única tela de Geração de Boletos com 2 Abas: Geração/Envio
+e Importação Retorno"): a tela `frontend/app/retorno-bancario.tsx`
+("Importação do Arquivo de Retorno", ver histórico abaixo) foi **removida
+como arquivo/rota separada** — seu conteúdo virou a segunda aba
+("Importação Retorno") dentro de `geracao-boletos.tsx`. O card próprio
+"Importação do Arquivo de Retorno" saiu do hub `cobrancas.tsx`; o card
+"Geração de Boletos" agora fica visível se o usuário tiver
+`GERACAO_BOLETOS.ABRIR` **ou** `RETORNO_BANC.ABRIR` (as duas permissões
+continuam distintas — quem só tem uma delas abre a tela direto na aba
+correspondente e não vê a barra de abas, já que só há uma aba liberada
+pra ele). Backend/rotas/permissões (`GERACAO_BOLETOS`/`RETORNO_BANC`)
+**não mudaram** — só a camada de tela/hub foi consolidada.
+
+Melhorias aplicadas na mesma rodada da unificação:
+- **Banco**: primeiro item da lista já vem pré-selecionado ao carregar,
+  nas duas abas (evita 1 clique a mais no fluxo mais comum — só 1 banco
+  cadastrado na maioria das instalações).
+- **Conta** (aba Importação Retorno): pré-selecionada com a conta marcada
+  como `conta_principal_painel` (ver `project_contas_fluxo_caixa`),
+  buscada via `GET /api/contas-caixa` em vez do lookup genérico
+  `GET /api/contas` (que não expõe essa flag).
+- **Conteúdo do arquivo de retorno deixou de ser colável** — antes exigia
+  colar o texto do arquivo num `<textarea>`; agora é só um seletor de
+  arquivo nativo do sistema operacional (`<input type="file">` oculto,
+  acionado pelo botão "Selecionar Arquivo"): o usuário escolhe o arquivo
+  no explorador, e a leitura (`FileReader.readAsText`) + chamada ao
+  preview acontecem automaticamente em segundo plano, sem nenhum passo
+  manual de copiar/colar.
+- **Botões de ação movidos pra ANTES da lista**, nas 2 abas (user-directed
+  2026-07-25, a partir de um screenshot mostrando "Marcar Todos /
+  Desmarcar Todos / Baixar Títulos Selecionados") — antes ficavam depois
+  da grade (exigia rolar até o fim pra achar os botões numa lista longa);
+  agora ficam logo no topo do card, antes do cabeçalho da grade.
+
+**Seleção de títulos pra "Gerar Remessa" (2026-07-25, user-directed)** —
+antes desta mudança, "Gerar Remessa" sempre gerava a remessa com TODOS os
+títulos pendentes do banco, sem seleção de linha (ver "Simplificação
+deliberada" mais abaixo — motivo original: os motores CNAB não aceitavam
+uma lista específica). Corrigido:
+- A grade da aba Geração/Envio ganhou checkbox por linha, `Marcar Todos`/
+  `Desmarcar Todos` (mesmo padrão da aba Retorno) — ao clicar
+  "Selecionar", todos os títulos encontrados já vêm marcados por padrão
+  ("Padrão todos selecionados", pedido explícito do usuário).
+- **Os 3 motores de remessa implementados (Bradesco/Inter/Itaú) agora
+  aceitam uma lista opcional de `duplicata_rec_venc.codigo`** —
+  `_titulos_para_remessa_sync(cur, banco_febraban, titulos=None)` ganhou
+  um `AND drv.codigo IN (...)` condicional nos 3 arquivos
+  (`cnab_bradesco_service.py`/`cnab_inter_service.py`/
+  `cnab_itau_service.py`), thread­ado por `_gerar_remessa_sync` →
+  `gerar_remessa` (async) → `POST /api/bancos/{cod}/remessa` (novo campo
+  `titulos: Optional[List[int]]` em `GerarRemessaRequest`,
+  `models/bancos.py`). Santander/BB (remessa ainda não implementada)
+  também ganharam o parâmetro na assinatura só por compatibilidade de
+  dispatch genérico (a rota chama `motor.gerar_remessa(...)` igual pra
+  todo banco) — continuam retornando a mensagem de "não implementado",
+  ignorando o parâmetro.
+- **Frontend só envia a lista quando a grade já foi carregada**
+  (`itens.length > 0`) — se o usuário clicar direto em "Gerar Remessa"
+  sem antes clicar "Selecionar" (a grade nunca foi populada), o
+  comportamento antigo é preservado (`titulos: undefined` → todos os
+  títulos pendentes do banco, sem filtro) — decisão deliberada pra não
+  quebrar o atalho de quem já usava a tela assim. Com a grade carregada e
+  nenhuma linha marcada, bloqueia com "Selecione ao menos um título."
+  antes de chamar a API.
+- 2 testes novos em `test_cnab_bradesco_service.py` (mensagem específica
+  quando nenhum dos títulos selecionados está pendente + verificação de
+  que o `IN (...)` realmente entra na query) — suite completa (CNAB +
+  Cobranças) sem regressão, 140 testes passando.
+
+**Sub-seção original (Fase 1, aba Geração/Envio)**: baseada em
+`Kontacto/frmrelbol4.frm` ("Impressão de Boletas Bancárias"), colado pelo
+usuário via prints da tela legada.
+
+**Descoberta que definiu o escopo desta rodada**: o botão "Imprimir"
+(`Command2`, relabelado "Gerar Remessa para Registro" quando o checkbox
+"Gera Arquivo Remessa Bancária" está marcado) chama `Sub Boleto()`, que por
+sua vez chama `BoletoItau`/`BoletoBradesco`/`BoletoSantander`/`BoletoHSBC`/
+`BoletoSicoob`/`BoletoBancoDoBrasil` (todas em `IntegracaoBancaria.bas`,
+~500-600 linhas cada) e `BoletoInter` (arquivo próprio,
+`Kontacto/BancoInter.bas`) — mais `GeraPDF` (`Geral/mdl_proc.bas`). Cada
+uma dessas funções tem DUAS partes bem distintas:
+1. **Cálculo da linha digitável/código de barras** (dígito verificador,
+   fator de vencimento, módulo 10/11) — padrão Febraban documentado,
+   **portável** (mesmo tipo de trabalho já feito nos motores CNAB desta
+   sessão).
+2. **Desenho visual do boleto** (linhas, caixas, logo do banco, posição de
+   texto) — preso ao objeto `Printer` do VB6, impresso numa impressora PDF
+   virtual (**bioPDF** — `CreateObject("biopdf.PDFUtil")`, confirmado em
+   `GeraPDF`). **Sem equivalente direto num backend web/Python** — exigiria
+   reconstruir o layout inteiro do zero com uma biblioteca de PDF real
+   (ex.: reportlab) + geração de código de barras, motor que não existe
+   neste projeto hoje.
+
+Perguntado ao usuário via `AskUserQuestion` como proceder — escolheu
+"Localizar os módulos de boleto antes de decidir" (feito, achado acima) e,
+depois de ver o mapeamento, confirmou seguir com a Fase 1 reduzida (sem
+PDF/e-mail), deixando o motor de desenho como pendência separada.
+
+**Implementado (Fase 1)**:
+- Backend: `backend/services/geracao_boletos_service.py` — query de
+  títulos elegíveis replica `Command1_Click` (`frmrelbol4.frm:750`), join
+  `duplicata_receber`+`cliente`+`duplicata_rec_venc`, `situacao='A'`,
+  filtros (emissão de/até, vencimento de/até, duplicata, nº do boleto,
+  cliente por nome/fantasia, só sem boleto, somente registrados). Taxa
+  bancária/multa/mora na grade são **estimativas informativas** (mesma
+  fórmula já usada nos motores CNAB — `bancos.tarifa_cobranca` quando
+  `cliente.cobra_tarifa_bancaria`, `Multa_Atraso_Pag`/`mora_dia_pag` sobre
+  o valor) — o legado tinha um campo de override manual (`Campo(3)`) só
+  usado no fluxo de impressão, que não existe aqui. Rota
+  `POST /api/geracao-boletos/{cod_banco}/titulos`. Permissão nova
+  `GERACAO_BOLETOS` (menu FINANCEIRO, ações ABRIR/GERAR_REMESSA/EXPORTAR).
+  7 testes unitários, todos passando.
+- **"Gerar Remessa" reaproveita o endpoint genérico já existente**
+  (`POST /api/bancos/{cod}/remessa`, os 3 motores completos — Bradesco/
+  Inter/Itaú). **Superado 2026-07-25** (ver bloco "Seleção de títulos pra
+  'Gerar Remessa'" logo acima) — a limitação original ("os motores CNAB
+  não aceitam uma lista específica de títulos, gera sempre pra TODOS os
+  pendentes, sem seleção de linha") não existe mais: os 3 motores
+  aceitam um filtro opcional por `duplicata_rec_venc.codigo`, e a grade
+  ganhou checkbox por linha + Marcar/Desmarcar Todos, com todos marcados
+  por padrão. O comportamento "todos pendentes, sem filtro" só continua
+  ativo como fallback pra quem clica "Gerar Remessa" sem antes clicar
+  "Selecionar" (grade nunca carregada).
+- "Gerar Planilha" — exportação Excel real (reaproveita
+  `frontend/src/utils/export-xlsx.ts`, já usado pelo Borderô de
+  Cilindros) dos títulos atualmente na grade (já filtrados).
+
+**Fora de escopo desta rodada, registrado**: "Gerar PDF" (boleto com
+código de barras) e "Enviar por Email" (com o PDF anexado) — dependem do
+motor de desenho descrito acima. O SERVIÇO DE E-MAIL EM SI já está pronto
+e testado (ver seção "Serviço de E-mail de Cobrança" abaixo) — só falta o
+PDF pra anexar. "Somente registrados"/"Só duplicatas sem boleto" foram
+portados como filtros; o cruzamento com nota fiscal/comanda
+(`duplicata_rec_nf`/`n_fiscal`/`comanda_nf`, usado no legado só pra exibir
+"Comanda" na grade de impressão) não foi portado — não necessário pro
+fluxo de remessa/planilha.
+
+---
+
+## Aba Importação Retorno (dentro de Geração de Boletos)
+
+**Status: 🟡 Implementada 2026-07-24** (grade de revisão de baixas +
+aplicação seletiva) — não testada ao vivo num navegador. **Fundida em
+`frontend/app/geracao-boletos.tsx` no mesmo dia** (ver seção "Geração de
+Boletos" acima) — não é mais uma tela/rota própria
+(`retorno-bancario.tsx` foi removido). Baseada em `Geral/FrmImpRetBan.frm`,
+colado pelo usuário via prints da tela legada.
+
+Reaproveita os 5 motores de leitura de retorno já implementados na Fase 2a
+(Bradesco/Inter/Santander/BB/Itaú) — cada um ganhou uma função
+`_parse_linhas` extraída do `_processar_retorno_sync` já existente (mesma
+lógica, sem tocar no banco de dados), refatoração feita com testes
+completos rodados antes/depois de cada bank pra garantir zero regressão.
+Novo módulo compartilhado `backend/services/cobranca_retorno_service.py`
+faz o dispatch por banco + enriquece cada registro de baixa com dados de
+exibição (cliente, vencimento, valor do título — join
+`duplicata_rec_venc`+`duplicata_receber`+`cliente`).
+
+**Simplificação deliberada em relação ao legado**: só o fluxo de **baixa**
+(ocorrência 06/09/17 — a ação com impacto financeiro real, quita o título)
+vira uma grade selecionável linha a linha. **Confirmação (ocorrência
+02/03) vira só uma contagem-resumo**, não uma lista selecionável — nos
+bancos CNAB400 (Inter/Itaú), o registro de confirmação usa um
+identificador diferente (`AutoNumDRV`, uma referência interna) do que o
+usado pra achar o título na baixa (`Nosso Número`), e o parsing atual
+desses dois bancos não extrai esse identificador pro caso de confirmação
+(só usa pra CONTAR, replicando fielmente o que `_processar_retorno_sync`
+já fazia). Extrair isso pros bancos CNAB400 é trabalho adicional, não
+incluído nesta rodada. O botão "Confirmar Títulos Selecionados" e o campo
+`duplicata_rec_venc.registrado` (que o legado grava nesse fluxo,
+`Command5_Click`) também ficaram de fora por essa mesma razão.
+
+**Implementado**:
+- Backend: `backend/services/cobranca_retorno_service.py` —
+  `preview_retorno` (lê o arquivo, resolve cada título de baixa contra o
+  banco, sem gravar nada) e `aplicar_baixas` (réplica de `Baixa_Titulo`,
+  idempotente — título já `'PG'` conta como `ja_baixados`, não reaplica).
+  Rotas `POST /api/bancos/{cod}/retorno/preview` e `/aplicar`. Permissão
+  nova `RETORNO_BANC` ("Importar Retorno" — nome/tela abreviados pra caber
+  nos limites de `permissoes.tela`/`nome`, nvarchar(15)/(20)), ações
+  ABRIR/BAIXAR. 10 testes unitários novos
+  (`test_cobranca_retorno_service.py`), todos passando.
+- **Campo "Conta" opcional** (lookup `GET /api/contas-caixa`, pré-
+  seleciona a conta marcada como padrão do painel — ver seção "Geração de
+  Boletos" acima) — se selecionado, grava em qual conta de caixa/banco o
+  valor recebido entrou (`duplicata_rec_venc.conta`), mesmo comportamento
+  do parâmetro `Conta` de `Baixa_Titulo` no legado.
+- Frontend: grade com checkbox por linha (títulos já baixados aparecem
+  esmaecidos e não selecionáveis), Marcar/Desmarcar Todos, resumo de
+  confirmações/ignorados/não encontrados, ícone de Ajuda (Modo Didático),
+  arquivo escolhido via seletor nativo (não colado).
+
+**Correção 2026-07-24, mesmo dia, user-directed** ("tem que listar os
+títulos para importação. Possibilitar selecionar quais os títulos quero
+importar. Padrão todos selecionados") — achado ao testar ao vivo contra
+um arquivo de retorno real do Inter: quando um título do arquivo não
+casava com nenhum `duplicata_rec_venc` local, ele só entrava numa frase-
+resumo ("21 não encontrado(s): 2696, 2618, ...") — nenhuma linha aparecia
+na grade, sumindo da tela por completo (a seleção "todos marcados por
+padrão" já existia pros títulos ENCONTRADOS, mas ficava invisível quando
+0 títulos casavam). Corrigido:
+- `_preview_retorno_sync` (`cobranca_retorno_service.py`) agora também
+  devolve `itens_nao_encontrados` (lista de dicts, mesmo formato de
+  `itens_baixa` mas com `drv_codigo=None`/`cliente_nome=None`/
+  `vencimento=None`/`valor_titulo=None`, preenchido só com o que o
+  ARQUIVO trouxe — número do boleto, ocorrência, data/valor pago, juros,
+  desconto) — além do já existente `nao_encontrados` (lista de números
+  crus, mantida por compatibilidade/resumo). Novo campo `encontrado`
+  (bool) em ambas as listas, usado pelo frontend pra decidir o que é
+  selecionável.
+- Frontend: a grade agora mistura `itens_baixa` + `itens_nao_encontrados`
+  numa lista só — linhas não encontradas aparecem esmaecidas (mesmo
+  estilo de "já baixado"), rotuladas "(não encontrado)", sem checkbox
+  clicável (chave de seleção trocada de `drv_codigo` — sempre `null`
+  nessas linhas — pra `numero_boleto`, único por arquivo). Continuam sem
+  poder ser selecionadas/baixadas (não existe título local pra
+  atualizar) — a mudança é só torná-las VISÍVEIS pra conferência, não
+  torná-las acionáveis.
+- 1 teste novo (`test_bradesco_titulo_nao_encontrado`, estendido) +
+  suite completa sem regressão.
+
+**O que ainda falta**: nenhum round trip ao vivo contra GERDELL/BARESTELA
+ainda (só testes mockados) — recomendo testar com o mesmo retorno real do
+Inter já usado pra validar `cnab_inter_service.py` nesta sessão, trocando
+os números de referência pra bater com dados de teste. Ao testar, também
+vale investigar SE os "não encontrados" reais são um problema de dado de
+teste (título realmente não cadastrado nessa empresa) ou um bug de
+casamento (`numero_boleto`/`banco_cedente`/`conta_cedente` extraídos
+errado do arquivo) — a correção desta rodada só resolveu a VISIBILIDADE,
+não investigou a causa raiz de por que tantos títulos não casaram no
+teste ao vivo do usuário.
+
+---
+
+## Serviço de E-mail de Cobrança
+
+**Status: 🟢 Implementado e testado com envio real 2026-07-24.**
+`backend/services/email_cobranca_service.py` — motor novo, sem
+equivalente 1:1 no legado (o legado só tinha os campos de configuração
+"Email de Cobrança" em Controle do Sistema > aba Outros, nunca um envio de
+fato implementado — confirmado por busca no backend inteiro, `smtplib`
+não aparecia em nenhum lugar antes desta sessão).
+
+Lê a configuração já existente em `controle_aux`
+(`e_mail_COBRANCA`/`ident_COBRANCA`/`smtp_COBRANCA`/`porta_smtp_COBRANCA`/
+`login_COBRANCA`/`senha_COBRANCA`/`ssl_COBRANCA` — mesmos campos expostos
+em `frontend/app/controle-sistema.tsx`, aba Outros > Configuração de
+Emails > Email de Cobrança) e envia via `smtplib` puro, sem dependência de
+serviço externo. Detecção de criptografia por porta: 465 usa `SMTP_SSL`
+(SSL implícito), qualquer outra porta com `ssl_COBRANCA` ligado usa `SMTP`
++ `starttls()` (STARTTLS) — o único checkbox "Requer SSL" do legado cobria
+as duas convenções.
+
+**Validado com envio real** (2026-07-24, mesmo dia): o usuário forneceu as
+credenciais reais da conta `adm@kontacto.com.br` (Titan Email, SMTP
+`smtp.titan.email`, porta 587, STARTTLS) — salvas em `controle_aux` de
+GERDELL/BARESTELA (não em nenhum arquivo do repositório). Um e-mail de
+teste foi enviado com sucesso para `carlos@kontacto.com.br`, confirmando
+autenticação e envio funcionando de ponta a ponta. 5 testes unitários
+(`test_email_cobranca_service.py`, SMTP mockado), todos passando.
+
+**Reutilizável, ainda sem tela que o consuma de verdade com anexo** — a
+única tela que precisaria dele hoje ("Enviar por Email" em Geração de
+Boletos) depende do PDF do boleto, que ainda não existe (ver seção
+"Geração de Boletos" acima). O serviço já suporta anexos
+(`MIMEApplication`), só falta o gerador de PDF pra produzir o que anexar.
+
+---
+
+## Contas (Financeiro > Fluxo de Caixa)
+
+**Status: 🟢 Implementada 2026-07-24** — não testada ao vivo num navegador.
+Tela nova em Financeiro > Fluxo de Caixa (`frontend/app/contas.tsx`, card
+no hub `fluxo-caixa.tsx`), baseada em `FrmManConta.frm` ("Conta"), colado
+pelo usuário. Tabela `Contas` já existia e já era usada por vários pontos
+do app (`lookups_service.list_contas`, "Conta" na Importação do Arquivo de
+Retorno) — esta é a primeira tela com CRUD completo sobre ela.
+
+**Regra de negócio real, replicada fielmente** (`Command6_Click`, ramo de
+UPDATE): ao editar o Saldo Inicial de uma conta já existente, o Saldo
+Atual é recalculado proporcionalmente pela diferença — preserva o
+"extrato" (soma de movimentações) já lançado, só desloca o ponto de
+partida. O legado escreve isso como duas ramificações `If`/`Else`
+(matematicamente equivalentes, conferido a mão); implementado como uma
+soma só. Toast de sucesso avisa explicitamente quando isso acontece
+("Saldo atual recalculado para X").
+
+**Não replicado, decisão registrada** ("Não replicar truques VB6"): o
+botão "Alterar Descrição" (`Command2_Click`, um `InputBox` dedicado) era
+um workaround pro campo `Nome` do legado ser um ComboBox vinculado à
+lista de contas existentes, não um campo de texto livre. Aqui o
+Nome/Descrição é só mais um campo do formulário normal — a regra real por
+trás daquele botão (não permitir duas contas com o mesmo nome) foi
+preservada, mas aplicada de forma **mais consistente** que o legado (lá só
+rodava dentro do fluxo "Alterar Descrição"; aqui roda sempre que a
+descrição é gravada, criação ou edição).
+
+**Fora de escopo**: campo "Contabilidade" (`Campo(20)`/
+`conta_transf_contabil`, FK pra `Plano_<ano_exercicio>` — tabela ano a
+ano) — mesma decisão já tomada em `financeiro_service.py` pro campo
+homônimo de Classes/Sub-Classes (qual "ano_exercicio" usar é uma pergunta
+em aberto, ver CLAUDE.md > Cliente Completo, mesma pendência
+cross-referenciada).
+
+**Implementado**:
+- Backend: `backend/services/contas_service.py` — list/get/save/delete.
+  Rotas `GET/POST /api/contas-caixa`, `GET /api/contas-caixa/{codigo}`,
+  `DELETE /api/contas-caixa/{codigo}` — **atenção ao nome da rota**:
+  `/api/contas` já existe (lookup genérico código/descrição em
+  `lookups_service.py`, usado por outras telas), por isso esta tela usa
+  `/api/contas-caixa` pra não colidir. Permissão nova `CONTAS` (menu
+  FLUXO_CAIXA, ações padrão ABRIR/GRAVAR/EXCLUIR/IMPRIMIR/EXPORTAR — só
+  GRAVAR/EXCLUIR/ABRIR de fato usados nesta fase). 15 testes unitários
+  (`test_contas_service.py`), todos passando.
+- **Delete guard fiel ao legado** (`Command3_Click`): bloqueia exclusão se
+  a conta tiver lançamentos em `previsoes` OU `movimentacoes` —
+  `(tipo<>2 AND conta=codigo) OR (tipo=2 AND classe=codigo)` nas duas
+  tabelas (`tipo=2` marca transferência entre contas, onde a coluna
+  `classe` é reaproveitada pra guardar a conta de destino — mesmo truque
+  de reaproveitamento de coluna já documentado em
+  `entrada_saida_caixa_service.py`, confirmado que `movimentacoes` é a
+  MESMA tabela que Entrada/Saída de Caixa já escreve). `previsoes` não é
+  escrita por nenhuma tela já migrada deste app — a checagem continua
+  incluída porque a tabela é real e compartilhada com o legado.
+- Frontend: tela única compacta sem abas (mesmo padrão de
+  `fornecedores.tsx`/`bancos.tsx` — o `.frm` legado também não tem aba),
+  Saldo Atual sempre somente leitura (nunca editável, só exibido ao
+  editar uma conta existente), ícone de Ajuda/Modo Didático explicando a
+  regra de recálculo do Saldo Atual e "Conta Padrão no Painel".
+
+---
+
+## Contas x Funcionário (Financeiro > Fluxo de Caixa)
+
+**Status: 🟢 Implementada 2026-07-25** — não testada ao vivo num
+navegador. Tela nova em Financeiro > Fluxo de Caixa
+(`frontend/app/conta-funcionario.tsx`, card no hub `fluxo-caixa.tsx`),
+baseada em `FrmConFunc.frm` ("Acesso das Contas Por Funcionários..."),
+colado pelo usuário.
+
+**Propósito, nas palavras do usuário**: "é a tela de Configurações de
+contas que o funcionário poderá visualizar: telas como geração de
+Boletos, futura tela de Painel de movimentação e Previsão suas
+visualizações de contas estarão sujeitas a configuração dessa tela." —
+ou seja, esta tela é a FONTE da configuração; ela mesma não filtra nada,
+só grava o vínculo. **Nenhuma tela consumidora foi retroalimentada ainda**
+(ver "Pendência aberta" abaixo) — só o pedido explícito ("crie uma tela")
+foi implementado nesta rodada.
+
+**Mapeamento do `.frm`**: `Conta1` (esquerda, "Contas Disponíveis...") /
+`Conta2` (direita, "Contas c/ acesso...") são um transfer-list clássico —
+duplo clique move um item entre as duas listas; `Command1`/`Command2`
+("Adicionar Todas"/"Remover Todas") movem a lista inteira de uma vez;
+`Command3` ("Gravar") é replace-all-on-save: `DELETE FROM conta_func
+WHERE func=X` seguido de um `INSERT` por item que ficou em `Conta2`.
+`Funcs_LostFocus` recarrega as duas listas ao trocar de funcionário —
+parte de `contas` (tabela `Contas`, situação implícita — a query original
+não filtra por `situacao`, mas o cadastro novo de `Contas` já tem esse
+campo, então a versão migrada filtra `situacao='A'`, mesma decisão já
+usada em outras migrações desta sessão de preferir dado "ativo" por
+padrão) e resolve quais já têm vínculo via `conta_func`.
+
+**Adaptação de UI, decisão consciente**: duplo clique (paradigma
+desktop/mouse) foi trocado por toque simples em cada linha — a tela é
+web-only, mas um único toque move o item na hora (ícone de seta indicando
+a direção do movimento em cada lista), mais direto que replicar
+duplo-clique num app que também roda em touch/mobile no futuro. Mesmo
+princípio de "não replicar truque de UI específico do VB6 quando existe
+uma forma mais direta/moderna de fazer a mesma coisa" já usado noutras
+telas.
+
+**Implementado**:
+- Backend: `backend/services/conta_func_service.py` — `get_vinculo`
+  (devolve TODAS as `Contas` ativas + a lista de códigos já vinculados
+  àquele funcionário, pro frontend montar as duas colunas) e
+  `salvar_vinculo` (replace-all: `DELETE` + `INSERT` por item, dentro de
+  uma única transação/commit). Rotas `GET/POST /api/conta-funcionario`.
+  Tabela `conta_func` (conta, func) **já existia** no schema — já era
+  usada como delete-guard em `funcionarios_service._delete_funcionario_sync`
+  ("Contas de Funcionário"), mas sem CRUD próprio até agora. Permissão
+  nova `CONTA_FUNC` ("Contas x Funcionário", nome exatamente 20 chars —
+  no limite de `permissoes.nome` nvarchar(20)), menu FLUXO_CAIXA, ações
+  padrão (só ABRIR/GRAVAR de fato usados). 5 testes unitários
+  (`test_conta_func_service.py`), todos passando.
+- Lista de funcionários reaproveita `GET /api/funcionarios-cadastro`
+  (endpoint já existente, usado pelas telas de cadastro de funcionário) —
+  filtro `situacao === "A"` aplicado no frontend (o endpoint não tem
+  parâmetro de filtro por situação; replicar o filtro client-side foi
+  mais simples que estender o endpoint só para este caso).
+- Frontend: tela única compacta sem abas (mesmo padrão de `contas.tsx`),
+  duas listas lado a lado com toque-para-mover, "Adicionar Todas"/
+  "Remover Todas", Gravar no cabeçalho (padrão "Full CRUD Form Screen
+  Standard"), ícone de Ajuda/Modo Didático.
+
+**Pendência original (acima) parcialmente resolvida em 2026-07-25** — o
+usuário pediu explicitamente pra ligar o crivo na Geração de Boletos.
+Perguntado via `AskUserQuestion` as duas regras que ficaram em aberto
+acima; respostas do usuário:
+1. Funcionário sem NENHUM vínculo em `conta_func` → **não vê nenhuma
+   conta** (padrão restritivo — precisa ser configurado explicitamente em
+   "Contas x Funcionário" antes de aparecer qualquer conta pra ele).
+2. Usuário **master sempre vê todas as contas ativas**, ignorando a
+   configuração (mesmo padrão de bypass de `can()`).
+
+**Implementado**: `conta_func_service._list_visiveis_sync`/
+`list_visiveis` (novo) — `is_master=True` devolve todas as `Contas`
+ativas; senão, só as vinculadas ao `funcionario` via JOIN com
+`conta_func` (lista vazia se não há vínculo nenhum). Rota
+`GET /api/conta-funcionario/visiveis?funcionario=&master=`. 4 testes
+novos (`TestListVisiveis`), suite completa sem regressão.
+
+**Consumido em `frontend/app/geracao-boletos.tsx`** (aba Importação
+Retorno, campo "Conta") — trocou `GET /api/contas-caixa` (todas as
+contas, sem crivo) por `GET /api/conta-funcionario/visiveis`, passando
+`usuarioCodigo`/`isMaster` de `usePermissions()`. Efeito de carregamento
+separado do efeito de mount (`useEffect([conn, isMaster,
+usuarioCodigo])`) porque esses dois campos só ficam prontos depois de um
+carregamento assíncrono próprio do hook de permissões — se ficassem no
+mesmo efeito do mount (`[router]`), a busca rodaria cedo demais com
+`isMaster=false`/`usuarioCodigo=null` (valores iniciais) e nunca
+re-executaria. Lista vazia (funcionário não-master sem nenhuma conta
+liberada) mostra um aviso inline sob o campo, apontando pra "Contas x
+Funcionário".
+
+**Ainda não estendido** às demais telas que hoje mostram/filtram contas
+de caixa sem crivo nenhum (ex.: Entrada/Saída de Caixa, e as futuras
+"Painel de Movimentação"/"Previsão", que nem existem ainda) — só o campo
+pedido explicitamente (Geração de Boletos) foi ligado nesta rodada. Ao
+tocar em qualquer tela nova/existente que liste contas de caixa/banco
+por conta própria, considerar se o mesmo crivo deveria se aplicar, e
+confirmar com o usuário antes de estender — não é gatilho de varredura
+retroativa automática.
+
+---
+
+**Status: 🟢 Fases 1, 2 e 3 implementadas e testadas ao vivo (2026-07-22/23)**
+— núcleo manual (Abertura nos 3 tipos Geral/Parcial/Contábil, Digitação de
+Estoque, Fechar, Cancelar) + lista de "quem digitou o quê" + os 5
+relatórios (Contagem, Conferência, Crítica, Resultado, Divergência) + os 2
+disparos automáticos (mensal + diário contábil). Backend restaurado pelo
+usuário em produção (porta 8081) 2026-07-23, código mais recente confirmado
+ao vivo. Só falta o item 8 do menu legado ("Registro de Inventário",
+código morto no VB6, proposta é não portar — ver pergunta #3, histórico).
+**UI no navegador ainda não clicada manualmente por um humano de ponta a
+ponta** — todo teste de backend foi via `curl`/script Python direto contra
+uma instância temporária (ver nota no fim desta seção); vários bugs reais
+já foram achados e corrigidos pelo usuário clicando na tela de verdade
+durante esta sessão, então a Digitação/Painel/Relatórios já foram testados
+manualmente em partes — só falta um passe completo e deliberado.
+
+### Fase 3 — disparos automáticos (2026-07-23, user-directed "comece a fase 3")
+
+Rastreei o código-fonte exato antes de implementar (não presumir em cima
+do resumo já registrado abaixo em "Funções de inicialização automática")
+— `Geral\Mdl_Proc.bas`, subs `InventarioAutomatico` (linha 26305),
+`InventarioPostoAutomatico` (linha 26233) e o ramo `inventario_contabil`
+de `MudaDataSistema` (linhas 6933-6942), lidos por completo.
+
+- **Mensal, sem módulo Posto** (`_inventario_automatico_mensal_sync`,
+  porta `InventarioAutomatico`): snapshot de TODO `pecas` com estoque
+  (`qtd+reservado+reservado_os>0 OR estoque_cli>0 OR estoque_for>0`, e
+  `qtd<1000000` como guarda de qualidade de dado, não regra de negócio)
+  direto em `inventario_old`, na data do dia 1 do mês corrente — não abre
+  balanço de verdade, zero efeito em `pecas.qtd`/`movimentacao`.
+- **Mensal, com módulo Posto** (`_inventario_posto_automatico_mensal_sync`,
+  porta `InventarioPostoAutomatico`, substitui inteiramente a rotina
+  acima nesse segmento — regra confirmada pelo usuário no levantamento
+  original, nunca as duas juntas): snapshot do estoque de combustível a
+  partir de `tanque_estoque` (mesma fonte já lida pelo módulo Posto), não
+  de `pecas.qtd`. Só marca como fechado quando TODO combustível cadastrado
+  já tem alguma leitura no mês; senão fica em aberto e tenta de novo na
+  próxima chamada (mesmo comportamento do legado). **Melhoria em relação
+  ao legado**: idempotência também POR COMBUSTÍVEL (checa se já existe
+  linha em `inventario_old` antes de inserir) — o original reinseria tudo
+  de novo a cada tentativa incompleta (loop sem checar duplicata), gambiarra
+  de falta de rastreio granular, não regra de negócio.
+- **Diário, sem módulo Posto** (`_inventario_contabil_diario_sync`, porta
+  o ramo `inventario_contabil` de `MudaDataSistema` — o ramo IRMÃO dessa
+  mesma sub, de reconciliação de estoque hardcoded por CNPJ, foi
+  descartado por completo no levantamento original, "pode ser
+  desconsiderada"): snapshot diário de TODO `pecas` ativo + itens de O.S.
+  aberta/fechada cujo código começa com "P", em `inventario_contabil`/
+  `inventario_contabil_os` — puro arquivo histórico, zero efeito em
+  estoque. Retenção de 60 dias (`DELETE ... WHERE data<=hoje-60`, mesma
+  regra do legado). **Bug real do legado corrigido, não replicado**: o
+  INSERT de `inventario_contabil_os` usava uma data/hora HARDCODED
+  literal (`'2021-04-15','12:27:39'`, claramente sobra de teste/
+  desenvolvimento nunca corrigida — o INSERT irmão de `inventario_contabil`,
+  logo acima no mesmo bloco, já usa `Date`/`Time` dinâmicos normalmente) —
+  aqui os dois usam a data/hora de HOJE.
+- **Idempotência sem o sentinela mágico do legado**: `usuario_abertura=-2`
+  (legado, "sistema") virou uma coluna própria `inventario_controle.
+  automatico BIT NULL` (migração idempotente) — mesma "melhoria proposta"
+  já registrada no levantamento original.
+- **Orquestrador** (`_executar_rotinas_automaticas_sync`): módulo Posto
+  ativo → só a rotina mensal de Posto (sem o diário contábil pra esse
+  segmento); sem Posto → a rotina mensal genérica E o diário contábil, as
+  duas. Regra de negócio confirmada pelo usuário no levantamento original,
+  sobrepõe a leitura literal do gate do VB6 (`Posto And NFCe_Ws`, que o
+  próprio código de `InventarioAutomatico` contradiz internamente ao ter
+  seu próprio branch condicional pra quando Posto está ativo — mantido
+  como achado de leitura, mas não replicado, já que a intenção real
+  confirmada é exclusividade total entre as duas rotinas mensais).
+- **Disparo**: endpoint `POST /api/inventario/rotinas-automaticas` (sem
+  permissão nem log de auditoria — não é ação de tela, é manutenção
+  invisível de sistema), chamado pelo frontend (`useDashboard.ts`) uma vez
+  por sessão do app, no boot da Tela Principal, silencioso (erro engolido,
+  nunca gera toast) — mesmo padrão já usado por `loadEmpresa`. Endpoint em
+  si já é idempotente (reverifica antes de fazer qualquer coisa), o ref do
+  frontend só evita repetir a chamada de rede a cada foco de tela dentro
+  da mesma sessão.
+- **Testado ao vivo contra `GERDELL`/`BARESTELA`** (instância temporária,
+  porta 8091): confirmou módulo Posto ativo nesta conexão → rodou só a
+  rotina mensal de Posto (fechou imediatamente, 0 combustíveis cadastrados
+  = `0>=0`, mesmo comportamento trivial do legado nesse caso) e pulou o
+  diário; 2ª chamada confirmou idempotência (`mensal_executado`/
+  `diario_executado` ambos `false`). **Validação extra de sintaxe SQL**:
+  chamei as funções do caminho NÃO-Posto (mensal genérico + diário
+  contábil) diretamente, fora do orquestrador, com `rollback()` explícito
+  ao final (sem `commit`) só pra confirmar que a SQL roda sem erro contra
+  o schema real, sem persistir nada — as duas rodaram sem erro. 10 testes
+  novos (mockados) — 68 testes no arquivo, todos passando.
+- **Não testado ao vivo**: o caminho Posto COM combustíveis cadastrados de
+  verdade (nenhuma conexão de teste disponível tinha isso) — a lógica en
+  si (join com `tanque_estoque`, idempotência por combustível) foi só
+  validada por teste unitário mockado, não contra dados reais.
+
+### Tipo de balanço "Parcial" adicionado 2026-07-23, user-directed ("o mais importante")
+
+Terceiro tipo de balanço, confirmado pelo usuário via foto da tela real do
+legado (`FrmInvAbe.frm` — combo "Tipo de balanço" com 3 opções: Geral,
+Parcial, Contábil, "Parcial" pré-selecionado por padrão) — resolve
+definitivamente a "pergunta aberta #1" do levantamento original (o
+screenshot mostrava "Parcial" como valor padrão do combo, que não batia
+com nenhuma letra testada no código na época).
+
+- **Regra de negócio** (confirmada pelo usuário): não pré-carrega o
+  estoque nenhum na Abertura — `inventario` fica vazio até a Digitação de
+  Estoque incluir item por item. No Fechamento, só os itens que FORAM
+  digitados entram no ajuste de estoque; o resto do catálogo (nunca
+  contado) não é tocado — nem zerado, nem alterado de forma nenhuma.
+  Diferente do Geral, que pré-carrega TUDO e por isso "zera" (ajusta pra
+  baixo) todo item não recontado no Fechamento.
+- **Implementação**: `tipo_balanco='P'`, `TIPOS_BALANCO["P"]="Parcial"`.
+  `_abrir_sync` ganhou um 3º branch que não faz NENHUM insert em
+  `inventario` pro tipo Parcial (só o arquivamento do balanço anterior via
+  `inventario_old` roda, igual pros outros tipos). **Nenhuma mudança foi
+  necessária em `_fechar_sync`** — o `INNER JOIN` já existente contra
+  `inventario` naturalmente só afeta as linhas que existem (ou seja, só o
+  que foi digitado), então o comportamento certo "vem de graça" só por
+  Parcial não pré-carregar nada; o `if tipo_balanco != "C"` já cobria "P"
+  desde sempre (só "C" era excluído).
+- **Frontend**: opção adicionada ao combo de Abertura (`inventario.tsx`,
+  ordem Geral/Parcial/Contábil igual ao legado), **Parcial é o padrão
+  pré-selecionado** (`tipoAbertura` inicial = "P", não "G" — confirmado
+  pelo usuário, mesmo comportamento do combo real). Badge de divergência e
+  diálogo de confirmação do Fechar reescritos pra 3 variantes de texto
+  (Geral: ajusta tudo, inclusive zera não-digitado; Parcial: ajusta só o
+  digitado; Contábil: nunca ajusta). Contador "Total Digitados" no Painel
+  mostra só "X Produtos" pro tipo Parcial (sem "de Y", já que Y sempre é
+  igual a X nesse tipo — toda linha em `inventario` só existe porque foi
+  digitada).
+- **Bug de documentação encontrado de passagem**: o texto de Ajuda ("Modo
+  Didático") do Painel dizia que o tipo Contábil "não pré-carrega nada" —
+  **isso estava errado**, era na verdade a descrição do Parcial (o texto
+  original foi escrito antes de Parcial ser confirmado como tipo
+  distinto, na época em que só se cogitava 2 tipos). Corrigido pros 3
+  tipos com a descrição certa de cada um.
+- **Testado ao vivo contra `GERDELL`/`BARESTELA`**: abriu Parcial → status
+  confirmou nada pré-carregado (0 de 0) → buscou item não-cadastrado no
+  balanço (`ja_contado: false`, sem linha prévia) → incluiu 1 item com
+  valor divergente do sistema → Divergência mostrou só esse item → Fechou
+  → confirmado que só aquele item foi ajustado (dado de teste,
+  intencionalmente deixado como está a pedido do usuário, não restaurado).
+  4 testes unitários novos (Abrir sem pré-carregar, Fechar ajustando
+  Parcial) — 70 testes no arquivo, todos passando.
+
+### Bug real corrigido 2026-07-23 — Crítica/Divergência mostravam item nunca contado
+
+Achado ao vivo pelo usuário: abriu um balanço Geral novo, sem digitar
+nada, e o Relatório de Divergência (e o badge do Painel, mesmo endpoint)
+já mostrava itens divergentes. Mesma causa raiz do bug de "Total
+Digitados" corrigido antes nesta sessão, só que vazando pro relatório em
+vez do contador: `_relatorio_critica_sync`/`_relatorio_divergencia_sync`
+comparavam `estoque_balanco <> estoque_atual+reservado` sem checar se o
+item tinha sido REALMENTE contado — num balanço Geral, todo item com
+estoque no sistema nasce "divergente" por padrão (estoque_balanco fica em
+0 até alguém digitar), então o relatório confundia "ainda não contado"
+com "contado e divergente de verdade".
+
+Corrigido acrescentando `AND i.contado_em IS NOT NULL` nos dois
+relatórios — mesma coluna já usada pro contador. Único cuidado: esse
+filtro só entra quando a query lê o balanço CORRENTE (`inventario`);
+consultar um balanço fechado antigo via `data` (`inventario_old`) não tem
+essa coluna (não existe no schema dessa tabela — nunca foi copiada pra lá
+na Abertura), então o filtro fica de fora nesse caso e o relatório
+histórico continua mostrando pela regra antiga (sem essa distinção,
+porque não tem como saber retroativamente).
+
+Testado ao vivo: balanço Geral aberto, 0 digitado → Divergência/Crítica
+vazios (antes mostrava itens). Contou 1 item IGUAL ao sistema → continua
+fora dos dois relatórios (contado mas não diverge). Contou 1 item
+DIFERENTE do sistema → aparece nos dois (contado E diverge, o cenário
+real que os relatórios devem capturar). 4 testes ajustados (referência de
+índice de query fixa trocada por "a última query", já que
+`_ensure_usuario_digitacao_col` passou a rodar também dentro dessas duas
+funções, deslocando os índices).
+
+### Bug real corrigido 2026-07-23 — grupo expandido não atualizava ao gravar
+
+Achado ao vivo pelo usuário: gravar um item (Incluir/Alterar) não
+atualizava a lista de um accordion de usuário já expandido — só o
+resumo/contagem do cabeçalho era refeito (`carregarContados`), a lista de
+itens em si (`itensPorGrupo`) só é buscada quando o accordion é clicado
+(`toggleGrupoUsuario`, "a quebra de lista só é atualizada se clicar no
+usuário" — pedido explícito de performance, ver "Rastreio de quem digitou
+cada item" acima). Consequência: quem estava com o próprio grupo aberto
+digitando vários itens seguidos não via a lista crescer, precisava
+recolher e clicar de novo pra ver o item recém-gravado. Corrigido
+extraindo a busca de itens de UM grupo pra uma função própria
+(`carregarItensGrupo`), reaproveitada tanto pelo toggle (ao expandir)
+quanto por uma nova `refrescarGruposAbertos` (chamada depois de todo
+gravar bem-sucedido, refaz a busca de TODO grupo que já estiver
+expandido — não só o do usuário atual, já que outro gerente pode estar
+com o grupo de um colega aberto na tela ao mesmo tempo) — mantém o
+princípio original de só buscar de novo o que já está visível, sem virar
+uma recarga geral da tela inteira.
+
+### Bug real corrigido 2026-07-23 — campo Quantidade sem `selectTextOnFocus`
+
+Achado ao vivo pelo usuário na conexão real "Pajé": digitou 4249 num item
+já contado antes, clicou Alterar, e gravou 42 (o valor ANTIGO, sem
+alteração nenhuma). Causa provável: o campo Quantidade pré-preenche com o
+valor já contado quando o item é reaberto pra edição (pedido explícito do
+usuário, ver "Rastreio de quem digitou cada item" acima), mas — diferente
+do campo Código, que já usa `selectTextOnFocus` desde o início — não
+selecionava o conteúdo ao focar. Sem isso, a primeira tecla digitada é
+INSERIDA em vez de SUBSTITUIR o valor antigo; numa conexão lenta, o foco
+automático (que só dispara depois que a resposta da busca chega) pode
+atrasar o suficiente pra atrapalhar quem já começou a digitar, fazendo o
+valor novo não "pegar" direito. Corrigido adicionando `selectTextOnFocus`
++ o mesmo bloqueio de autofill do navegador já usado no campo Código
+(`autoComplete="new-password"` etc.) — não confirmado 100% contra a
+conexão Pajé (não temos acesso direto pra reproduzir), mas é uma correção
+de UX real e segura independente da causa exata, replicando o padrão já
+estabelecido pro campo Código nesta mesma tela. **Pendente**: confirmação
+do usuário de que o problema não se repete depois desta correção.
+
+### Bug real corrigido 2026-07-23 — "Total Digitados"/"já contado" quebrava no tipo Contábil
+
+Achado ao vivo pelo usuário logo depois da Fase 2 acima: abriu um balanço
+**Contábil**, sem digitar nada, e a tela já mostrava "Total Digitados: 236
+de 236 Produtos" e o badge de divergência "Nenhuma divergência até agora".
+
+**Causa raiz**: o critério "já contado" usado em `_status_sync`
+(contador do Painel), `_buscar_item_sync` (`ja_contado`),
+`_resumo_por_usuario_sync` e `_listar_itens_sync` era
+`estoque_balanco<>0` — funciona pro tipo **Geral** (a coluna nasce em 0,
+`DEFAULT` do banco, até alguém digitar), mas **quebra pro tipo Contábil**:
+a própria Abertura Contábil já pré-carrega `estoque_balanco` = saldo do
+sistema (`qtd+reservado+reservado_os`, sempre não-zero pra item com
+estoque) pra TODO item, por desenho (`_abrir_sync`, branch `else`) — então
+"linha com valor não-zero" nunca vira sinal de "alguém digitou" nesse
+tipo, é assim desde a Abertura.
+
+**Fix**: coluna nova `inventario.contado_em` (DATETIME NULL, migração
+idempotente em `_ensure_usuario_digitacao_col` — mesmo helper, nome não
+mudou pra não quebrar as chamadas já espalhadas pelo arquivo), setada só
+por Incluir/Alterar (`GETDATE()`), nunca pela Abertura. Critério "já
+contado" trocado pra `contado_em IS NOT NULL` nos 4 lugares acima —
+funciona igual pros 2 tipos de balanço, e de quebra corrige outro caso
+(item contado como ZERO de propósito não fica mais marcado como "não
+contado", o que acontecia com `estoque_balanco<>0`). **Backfill** incluído
+na mesma migração (`UPDATE inventario SET contado_em=GETDATE() WHERE
+usuario_digitacao IS NOT NULL`, só roda uma vez — guardado por `NOT
+EXISTS (SELECT 1 FROM inventario WHERE contado_em IS NOT NULL)`) pra não
+"zerar" a contagem de um balanço que já tinha itens digitados antes desta
+coluna existir.
+
+**Gotcha de SQL Server descoberto testando ao vivo**: a primeira versão
+tentava `ALTER TABLE ... ADD contado_em` e o backfill `UPDATE` que
+referencia essa coluna no MESMO batch (dentro de um único `IF NOT
+EXISTS(...) BEGIN ... END`) — deu "Invalid column name 'contado_em'"
+porque o SQL Server faz bind de nome de coluna em tempo de PARSE do batch
+inteiro, antes de decidir se o `IF` roda ou não. Corrigido separando em 2
+`cur.execute()` distintos (ALTER numa chamada, backfill guardado em
+outra) — mesma lição já registrada noutro lugar deste arquivo sobre erro
+de sintaxe SQL Server só aparecer no teste ao vivo, nunca no teste
+unitário com cursor mockado.
+
+**Badge de divergência — reversão parcial no mesmo dia, user-directed**:
+a primeira versão deste fix escondia o badge inteiro pro tipo Contábil
+(`tipo_balanco !== "G"` → não busca/mostra nada). O usuário pediu de volta
+("mostrar a frase resumida de divergência se houver nesse card como
+antes") — o badge volta a aparecer pros 2 tipos, só o TEXTO muda por tipo:
+Geral mantém a frase original ("é o que o Fechamento vai ajustar no
+estoque"); Contábil troca pra deixar claro que o Fechamento não ajusta
+estoque nesse tipo, independente da divergência mostrada ("balanço
+Contábil não ajusta o estoque no Fechamento"). Lição: a prévia de
+divergência é informação útil por si só (ver o que diverge), mesmo em um
+tipo de balanço onde o Fechar não age em cima disso — não devia ter sido
+escondida, só a frase que sugeria causalidade com o Fechar precisava
+mudar.
+
+Testado ao vivo contra `GERDELL`/`BARESTELA`: abriu Contábil → status
+mostrou corretamente "0 de 1" (não "1 de 1") → busca do item mostrou
+`ja_contado: false` mesmo com `estoque_balanco_atual: 10.0` pré-carregado
+→ incluiu contagem → status virou "1 de 1", `ja_contado: true` → resumo
+por usuário e lista de itens também corretos (só o 1 item realmente
+digitado, não os pré-carregados) → cancelou o balanço de teste ao final. 2
+testes unitários reescritos (`TestBuscarItem`, `TestListarItens`) + 1
+teste novo (`test_abertura_contabil_pre_carrega_saldo_mas_nao_e_ja_contado`)
+— 57 testes no arquivo, todos passando.
+
+### Fase 2 — os 4 relatórios restantes (2026-07-23, user-directed "continuar com o módulo de inventário")
+
+Implementados **Conferência**, **Crítica**, **Resultado** e **Divergência**
+— só o eixo de agrupamento **Nível** foi portado (mesmo escopo já usado no
+Relatório de Contagem); os eixos "Área/Prateleira" (`FrmInvCar.frm`) e
+"Descrição/Fornecedor" (`FrmInvDes.frm`) do legado, que replicam os MESMOS
+4 relatórios só trocando o agrupamento, não foram portados — não pedido,
+ficaria pra uma extensão futura se for solicitado.
+
+- **Fonte VB6 retraçada por completo** (`FrmRelInvConf.frm`,
+  `FrmRelInvCrit.frm`, `FrmRelInvRes.frm`, `FrmRelInvDiv.frm`) — nenhum dos
+  4 chama `Inventario.bas` (achado importante: as rotinas de impressão
+  desse `.bas` pertencem à família "por Área"/"por Descrição", não à
+  família "por Nível"). Cada `.frm` monta o SQL inline no próprio
+  `Mostra()`.
+- **Achado de modelagem crítico, confirmado no próprio código do Abrir já
+  existente** (`_abrir_sync`, tipo Geral): `custo_inventario`/
+  `custo_reposicao`/`preco_venda` usados em Resultado e Divergência vêm de
+  `inventario`/`inventario_old` (congelados no momento do balanço), **não**
+  do preço/custo atual de `pecas` — os 4 relatórios novos leem sempre da
+  tabela de balanço, nunca de `pecas` pra esses valores.
+- **Conferência** (`_relatorio_conferencia_sync`): 3 grupos SEMPRE
+  separados por `tipo_peca` (Revenda/Consumo/Imobilizado — nunca somados
+  entre si, mesmo comportamento das 3 abas fixas do legado), agrupado por
+  Nível 1 dentro de cada tipo, com toggle "listar zerados". Sempre lê o
+  balanço CORRENTE — o legado nunca permite escolher outra data aqui.
+- **Crítica** (`_relatorio_critica_sync`): só itens onde `estoque_balanco
+  <> estoque_atual+reservado`. O legado esconde deliberadamente a
+  quantidade do sistema (recontagem "às cegas") — replicado como padrão
+  (oculto), mas com toggle "Mostrar estoque do sistema" no frontend (dado
+  já vem na resposta, `estoque_sistema`; melhoria em relação ao legado, que
+  não permitia revelar). Suporta consultar um balanço fechado antigo via
+  `data` (`inventario_old`).
+- **Resultado** (`_relatorio_resultado_sync`): valoriza a quantidade
+  contada nos 3 preços/custos congelados. Réplica a assimetria real do
+  cálculo legado — **arredonda o preço unitário primeiro (half-up), só
+  depois multiplica pela quantidade e TRUNCA o total** (não os dois
+  arredondados nem os dois truncados; confirmado com teste dedicado,
+  `test_arredonda_unitario_antes_e_trunca_total_depois`). "Estoque
+  Fornecedor" troca a quantidade usada só do lado `pecas` (o lado
+  `veiculos` nunca usa essa opção, mesmo comportamento do legado — decisão
+  consciente de replicar, não um bug). **2 inconsistências do legado
+  identificadas e deliberadamente NÃO replicadas** (ver achado do rastreio
+  em detalhe no commit/histórico desta sessão): a condição `TeN2`
+  inconsistente no subtotal de nível 2 (não existe mais no port — a
+  agregação virou um `reduce` correto, não um loop de quebra-de-controle) e
+  o filtro extra `estoque_balanco>0` que só existia numa combinação
+  específica de opções.
+- **Divergência** (`_relatorio_divergencia_sync`): mesma condição de
+  Crítica, mas mostrando os dois valores lado a lado e valorizados em 1 dos
+  3 preços à escolha, com 5 critérios de ordenação. **Bug real do legado
+  corrigido, não replicado**: o lado `veiculos` do `UNION` usava uma
+  variável `um` nunca declarada em lugar nenhum do projeto (VB6 sem
+  `Option Explicit` aceita como `Variant` vazio) — gerava SQL malformado
+  (`as totq` sem expressão antes) que quebrava a consulta inteira sempre
+  que existisse algum veículo no filtro. O port usa a mesma fórmula do lado
+  `pecas` (`estoque_atual+reservado`) pro lado `veiculos`, claramente a
+  intenção original (confirmado: o padrão é idêntico ao SELECT de peças
+  logo acima, só trocando tabela/coluna de código).
+- **Prévia de divergência no Painel antes de Fechar** (melhoria proposta já
+  registrada na seção de levantamento, regra de negócio 9 — "é literalmente
+  uma prévia do que o Fechamento vai lançar"): `app/inventario.tsx` busca
+  um resumo (contagem + valor total em preço de venda) sempre que há
+  balanço aberto e o usuário tem `INVENTARIO.REL_DIVERGENCIA`, mostrando um
+  aviso destacado acima dos botões de ação — toque nele abre o relatório
+  completo. Gated por permissão; quem não tem `REL_DIVERGENCIA` não vê o
+  aviso, mas continua podendo Fechar normalmente.
+- **Frontend**: tela nova `app/inventario-relatorios.tsx` — consolida os 4
+  relatórios num seletor único (em vez de replicar a tela do Relatório de
+  Contagem 4 vezes), reaproveitando a mesma cascata de Nível 1-5. Cada
+  relatório só aparece no seletor se o usuário tiver a permissão
+  correspondente (`INVENTARIO.REL_CONFERENCIA`/`REL_CRITICA`/
+  `REL_RESULTADO`/`REL_DIVERGENCIA`, mesmo padrão de `REL_CONTAGEM` da Fase
+  1). Botão "Relatórios" no Painel (`inventario.tsx`), ao lado do já
+  existente "Relatório de Contagem", visível se o usuário tem qualquer uma
+  das 4 permissões novas. Impressão segue o padrão já estabelecido
+  (`print-report-header.ts`, cabeçalho da empresa, sem mostrar filtro da
+  tela). Modo Didático: `AjudaInventarioModal.tsx` foi parametrizado
+  (`titulo`/`itens`, mesmo padrão de `AjudaPedidoModal.tsx`) — o painel
+  continua com seu conteúdo original, a tela de relatórios usa seu próprio
+  conjunto de itens de ajuda.
+- **Regra [GLOBAL] "feedback visual >3s"** (adicionada no CLAUDE.md nesta
+  mesma sessão, motivada pelo bug do Fechar Inventário "parecia
+  congelado") aplicada retroativamente às telas já existentes do módulo
+  tocadas nesta rodada: botão "Gerar Relatório" (Contagem e Relatórios),
+  Buscar/Incluir/Alterar em Digitação de Estoque (Incluir/Alterar viraram
+  `salvandoAcao` em vez de um `salvando` booleano genérico, pra mostrar o
+  spinner só no botão certo), e o "Carregando…" de cada accordion de
+  usuário ganhou um `ActivityIndicator` ao lado do texto.
+- **Testes**: 30 testes novos em `test_inventario_service.py`
+  (`TestRelatorioConferencia`/`TestRelatorioCritica`/`TestRelatorioResultado`
+  /`TestRelatorioDivergencia`), mockados (cursor/conexão fake, sem tocar
+  banco real) — 56 testes no arquivo inteiro, todos passando. Testado
+  também ao vivo contra `GERDELL`/`BARESTELA` (instância temporária de
+  backend, porta 8091, mesmo padrão da Fase 1): abriu um balanço Geral de
+  teste, rodou os 4 endpoints novos (Conferência com `listar_zerados=true`,
+  Crítica antes/depois de digitar um item, Resultado com as 2 fontes de
+  estoque, Divergência com filtro de nível e data histórica via
+  `inventario_old`), confirmou os 4 rodam sem erro de SQL e devolvem dados
+  corretos, e cancelou o balanço de teste ao final (estado do banco restaurado).
+- **Correção incidental encontrada nesta rodada**: um `.` solto sobrando de
+  uma edição anterior em `inventario_service.py` (linha 633, dentro de um
+  comentário) quebrava a sintaxe do arquivo inteiro (`SyntaxError`),
+  impedindo até a coleta dos testes — corrigido antes de começar a Fase 2.
+  Os 4 testes de `TestFechar` que cobriam o ajuste de estoque também
+  precisaram ser reescritos (estavam mockando a implementação antiga, em
+  loop por item, de antes da reescrita set-based da sessão anterior).
+
+### Rastreio de quem digitou cada item (2026-07-23, user-directed)
+
+Cenário real: vários usuários digitando o mesmo balanço em paralelo, cada
+um cobrindo uma área/nível de produto diferente — faz sentido saber quem
+contou o quê. Coluna nova `inventario.usuario_digitacao` (INT NULL, FK
+`funcionarios.codigo_int`) — **primeira coluna genuinamente nova deste
+módulo**, sem equivalente no legado (o legado só audita Abertura/
+Fechamento/Cancelamento em `inventario_controle`, nunca por item contado).
+Migração idempotente (`_ensure_usuario_digitacao_col`, mesmo padrão de
+`pedido_common._ensure_qtd_pessoas_col`) — aplicada sozinha na primeira
+chamada de Incluir/Alterar/Listar, sem passo de migração manual.
+
+- `POST /api/inventario/itens/incluir`/`alterar` agora gravam
+  `usuario_alteracao` do request nessa coluna.
+- `GET /api/inventario/itens` (novo) lista os itens já contados no balanço
+  aberto — código, descrição (cascata pecas/veiculos), quantidade contada
+  e nome de quem digitou (`COALESCE(NULLIF(nome_guerra,''), nome)`, mesmo
+  critério nome_guerra-primeiro já usado em outros papéis de funcionário
+  no resto do app).
+- Frontend (`app/inventario-digitacao.tsx`): card novo abaixo do
+  formulário, lista os itens contados com quem digitou cada um, atualiza
+  sozinha após cada Incluir/Alterar (mais um ícone de atualizar manual).
+- **Bug de sintaxe SQL Server achado e corrigido testando ao vivo**:
+  escrevi a ordenação como `ORDER BY x IS NULL, ...` (válido em Postgres/
+  MySQL) — SQL Server não aceita `IS NULL` como expressão fora de WHERE/
+  CASE, dava erro 156 "Incorrect syntax near 'IS'". Corrigido pra
+  `ORDER BY CASE WHEN x IS NULL THEN 1 ELSE 0 END, ...`. Reforça que os
+  testes unitários (cursor mockado) não pegam erro de sintaxe SQL real —
+  só o teste ao vivo contra o banco pegou este.
+- Atalho de teclado adicionado no mesmo dia (pedido explícito do usuário):
+  Enter no campo Quantidade já grava sem precisar do mouse — Incluir se o
+  item ainda não foi contado, Alterar direto (sem confirmação) se já foi.
+  Foco pula pra Quantidade sozinho assim que a busca do código encontra o
+  item.
+- Autofill do Chrome desabilitado no campo Código (estava disparando o
+  popup "Salvar documento de identificação") — mesmo padrão já usado no
+  campo Cliente (`autoComplete="new-password"` etc.).
+
+### Fase 1 — núcleo manual — implementada
+
+- **Backend**: `backend/models/inventario.py`, `backend/services/
+  inventario_service.py` (`status`/`abrir`/`buscar_item`/`incluir_item`/
+  `alterar_item`/`fechar`/`cancelar`), `backend/routes/inventario.py`
+  (7 endpoints, registrado em `server.py`). Permissão `INVENTARIO` ganhou
+  4 ações novas (`ABERTURA`, `DIGITACAO`, `FECHAR`, `CANCELAR`) além do
+  `ABRIR` que já existia. 26 testes unitários em
+  `backend/tests/unit/test_inventario_service.py` (cursor/conexão
+  mockados, sem tocar banco real) — todos passando.
+- **Frontend**: `app/inventario.tsx` (Painel — status do balanço,
+  form de Abertura com Data+Tipo, botões Fechar/Cancelar com confirmação)
+  e `app/inventario-digitacao.tsx` (busca por código/chassi + grava
+  contagem, Incluir soma / Alterar substitui). Ambas com Modo Didático
+  (`src/components/inventario/AjudaInventarioModal.tsx` + tooltips via
+  `IconButtonWithTooltip`). Card do hub em `transacoes.tsx` atualizado
+  (não mostra mais "Em construção").
+- **Decisões conscientes tomadas na implementação** (documentadas em
+  comentário no topo de `inventario_service.py` também):
+  - Checkboxes Revenda/Consumo/Imobilizado da Abertura legada são código
+    morto no VB6 (`Vtipos` calculado e descartado antes de qualquer
+    branch) — **não portados**, nem os checkboxes nem um filtro
+    equivalente. A Abertura nova sempre inclui todos os tipos.
+  - Bloco de export pra `.mdb`/PAF-ECF (`Check5` do `FrmInvAbe`) — fora
+    de escopo, mesmo já declarado pra Produto Completo.
+  - Gatilho de reagendamento Tray dentro do Fechamento legado — não
+    portado nesta rodada (Produto Completo já tem o mecanismo Tray real;
+    um gatilho a mais no Fechamento fica pra quando for pedido).
+  - "Registro de Inventário" — não portado (código morto no legado, ver
+    achado original do levantamento).
+  - Ajuste de estoque no Fechamento pra item de `veiculos`: o legado
+    grava uma `Movimentacao` órfã (o `UPDATE veiculos` correspondente
+    está comentado/morto) — não replicado; item de veículo divergente
+    simplesmente não gera `movimentacao` nem tenta atualizar nada.
+  - `movimentacao.serie_nf='IV'` (Inventário) — série própria, mesma
+    convenção de `'MV'` (Mov. de Produtos) e `'CM'` (Comanda/Pedido Bar).
+- **Correção de nomenclatura, achada ao registrar o router em
+  `server.py`**: já existe um router/service `veiculos` no backend, mas
+  é a tabela **`veiculos_transp`** (frota própria de entrega/rotas,
+  `routes/veiculos.py`+`services/veiculos_service.py`) — **totalmente
+  diferente** da tabela `veiculos` (estoque de veículos à venda, chassi/
+  nf_compra/nf_venda) que o Inventário usa. Mesmo nome em português, duas
+  tabelas/domínios distintos — não confundir numa sessão futura.
+- **Testado ao vivo contra `GERDELL`/`BARESTELA` 2026-07-23** (backend
+  completo, via instância temporária do uvicorn numa porta separada —
+  ver "Nota sobre o teste" abaixo): abrir (G) → buscar item → incluir →
+  incluir de novo (soma) → alterar (substitui) → fechar → confirma
+  `movimentacao` (`tipo='S00'`, `serie_nf='IV'`) e `pecas.qtd` ajustados
+  corretamente, `inventario_controle.fechamento` e `controle.
+  situacao_balanco='F'` gravados. Depois: abrir (C) → tentar abrir de
+  novo (bloqueado com a mensagem certa) → cancelar → `inventario` da
+  data zerado, `pecas.qtd` intocado, `controle.situacao_balanco='C'`.
+  Dado de teste restaurado ao final (estoque de `P609` devolvido pro
+  valor original, movimentação de teste apagada).
+- **Bug real encontrado e corrigido durante o teste ao vivo**:
+  `inventario.estoque_balanco` tem `DEFAULT ((0))` no banco (não NULL) —
+  uma Abertura Geral já cria a linha em `inventario` pra TODO produto com
+  estoque, com essa coluna zerada por padrão do próprio SQL Server, antes
+  de qualquer digitação. `_buscar_item_sync` tratava "linha existe" como
+  "já contado", mostrando "já contado: 0" pra item nenhum ter sido
+  contado ainda. Corrigido pra usar o mesmo critério do legado
+  (`FrmInvDig.CmDinclui_Click`: `estoque_balanco <> 0`) — só considera
+  "já contado" quando o valor é diferente de zero. Frontend também
+  ajustado: o botão "Alterar" não fica mais escondido até `ja_contado`
+  (achado do mesmo bug) — fica sempre visível quando um item é
+  encontrado, deixando o backend validar se a linha existe de verdade
+  (mesmo comportamento do `FrmInvDig` legado, que também não escondia o
+  botão). Teste de regressão adicionado
+  (`test_linha_existente_com_saldo_zero_nao_e_ja_contado`).
+- **Nota sobre o teste**: a instância de backend "de produção" desta
+  sessão (porta 8081) foi registrada como Tarefa Agendada do Windows
+  rodando como `SYSTEM` (ver seção de instalação de servidores mais
+  acima neste arquivo/histórico da sessão) — sessões de terminal não
+  elevadas não conseguem reiniciá-la (`Acesso negado` mesmo com
+  `taskkill /F`), então ela ainda está rodando o código de ANTES desta
+  Fase 1. Os testes de backend acima rodaram contra uma instância
+  temporária própria (porta 8091, mesmo banco), já finalizada ao fim do
+  teste. **Teste de UI no navegador não foi feito** — este ambiente não
+  tem uma ferramenta de automação de navegador (`chromium-cli`/
+  Playwright) disponível; só confirmei que o bundle do Metro compila
+  os 3 arquivos novos (`inventario.tsx`, `inventario-digitacao.tsx`,
+  `AjudaInventarioModal.tsx`) sem erro, via `curl` no bundle servido.
+  **Pendente**: reiniciar o backend real (porta 8081, numa janela
+  PowerShell Administrador — mesmo processo já usado antes nesta sessão
+  pra registrar as tarefas agendadas) e clicar no fluxo manualmente no
+  navegador antes de considerar isto validado ponta a ponta.
+
+---
+
+## Inventário — levantamento original (histórico, ver Fase 1 acima pro estado atual)
+
+O usuário pediu explicitamente: **primeiro
+levantar todo o ecossistema do módulo, só depois partir pra execução** —
+não implementar nada desta seção ainda sem confirmação.
+
+### Fonte VB6 rastreada
+
+Menu legado "Inventário" (screenshot colado pelo usuário) tem 9 itens:
+Abertura, Digitação Estoque, Relatório de Contagem, Relatório de
+Conferência, Relatório de Crítica, Relatório de Divergência, Relatório de
+Resultados, Registro de Inventário, Fechar Inventário, Cancelar
+Inventário. Fontes:
+- `Geral\FrmInvAbe.frm` — Abertura de Inventário.
+- `Geral\FrmInvDig.frm` — Digitação dos Valores do Inventário (inclui
+  importação de planilha Excel).
+- `Geral\FrmRelInv.frm` — dispatcher genérico de relatório (usa a global
+  `CodRelInventario` setada ANTES de carregar o form pra decidir qual dos
+  6 relatórios abrir — 0=Conferência, 1=Contagem, 2=Resultado,
+  3=Crítica, 4=Registro, 5=não usado — e delega pra um dos 3 forms de
+  agrupamento conforme o rádio Ordenado-por escolhido: `Opt(0)`=Nível
+  → `FrmRelInvConf`/`FrmRelInvCon`/`FrmRelInvRes`/`FrmRelInvCrit`,
+  `Opt(1)`=Área/Prateleira → `FrmInvCar`, `Opt(2)`/`Opt(3)`=Descrição/
+  Fornecedor → `FrmInvDes`).
+- `Geral\FrmRelInvConf.frm` — Conferência por Nível (3 abas fixas:
+  Revenda/Consumo/Imobilizado, uma grid por aba).
+- `Geral\FrmRelInvCon.frm` — Contagem por Nível (grid única, checkboxes
+  Revenda/Consumo/Imobilizado, "Listar somente ativos").
+- `Geral\FrmRelInvRes.frm` — Resultado por Nível (grid única, valores
+  R$ Custo Inventário/Reposição/Venda × quantidade, com opção rara
+  "Estoque Fornecedor" — só visível pra `App.EXEName` = LIVRARIA/JAMER ou
+  `App.Minor=6`, ou seja **não se aplica a este client** — ver pergunta
+  aberta #6).
+- `Geral\FrmRelInvCrit.frm` — Crítica por Nível (mostra `estoque_balanco`
+  + coluna em branco "Recontagem" pra anotar à mão/reimprimir).
+- `Geral\FrmRelInvDiv.frm` — Relatório de Divergência (Resultado ×
+  0/2/3/4/5 do menu = combina Nível 1-5 filtráveis em cascata + 3 opções
+  de preço unitário Venda/Custo Inventário/Custo Reposição + 5 critérios
+  de ordenação; a única tela do grupo com Imprimir dedicado próprio, e
+  filtra só os itens DIVERGENTES — `estoque_atual+reservado <>
+  estoque_balanco`).
+- `Geral\FrmInvCar.frm` — os mesmos 4 relatórios (Conferência/Contagem/
+  Resultado/Crítica), agrupados por Área+Prateleira em vez de Nível
+  (`CodRelInventario` decide qual chamar). Tem "Gerar Planilha" (Excel).
+- `Geral\FrmInvDes.frm` — os mesmos 4 relatórios agrupados por
+  Descrição/Fornecedor (com combo de filtro por Fornecedor). Também tem
+  "Gerar Planilha".
+- `Geral\Inventario.bas` — módulo global com as 2 rotinas de negócio real
+  (`Fecha_Inventario`, `Cancela_Inventario`, chamadas por "Fechar"/
+  "Cancelar" do menu) + as 8 rotinas de impressão que implementam os 4
+  relatórios × 2 eixos de agrupamento (Área, Descrição) — mesma lógica de
+  consulta/agrupamento já visível nas 4 telas "por Nível" acima, só
+  trocando a cláusula de agrupamento. Rastreado por completo via `Read`
+  direto (achado em `C:\Desenv\VB6\SQLSERVER\Geral\Inventario.bas` — não
+  em "Diario Access-SQL\SQLSERVER" como uma nota antiga do CLAUDE.md
+  sugere; o caminho real hoje é só `C:\Desenv\VB6\SQLSERVER\`).
+
+### Ecossistema de dados (tabelas envolvidas)
+
+- **`controle`** (linha única por empresa, já mapeada por outras telas):
+  `data_balanco` (data do inventário aberto/mais recente),
+  `situacao_balanco` (`A`=Aberto, `F`=Fechado, `C`=Cancelado — confirmado
+  direto no código, não suposição), `tipo_balanco` (`G`=Geral, `C`=algo
+  ainda não confirmado — ver pergunta #1), `cod_rel` (já usado por outra
+  tela: `I`=exibe/ordena por Código Interno, outro valor=Código de
+  Fábrica — mesmo campo documentado em `controle_service.py`).
+- **`inventario`** (tabela "corrente" — o balanço ABERTO agora):
+  `codigo_interno`, `data`, `preco_custo`, `preco_venda`,
+  `custo_inventario`, `custo_reposicao`, `estoque_atual`, `custo_medio`,
+  `estoque_balanco` (a quantidade contada/digitada), `reservado`,
+  `reservado_os`, `estoque_cli`, `estoque_for`. **Confirmado ao vivo
+  contra `GERDELL`/`BARESTELA`** (2026-07-22) — todas as colunas batem
+  exatamente com o que o VB6 assume, nenhum mismatch de nome/tipo
+  (diferente do que rolou com Cliente) — 198 linhas hoje (balanço mais
+  recente, já fechado).
+- **`inventario_old`** — histórico: toda vez que um novo inventário abre,
+  `FrmInvAbe.cmbok_Click` primeiro copia o conteúdo inteiro de
+  `inventario` pra cá (`INSERT ... SELECT ... FROM inventario`) e só
+  depois faz `DELETE FROM inventario` — ou seja, `inventario` é sempre só
+  o balanço ATUAL, `inventario_old` acumula TODOS os anteriores (a coluna
+  `data` diferencia qual balanço é qual). Relatórios que recebem uma data
+  diferente da atual (`DataDif`/`DataBal`, setados em `FrmRelInvDiv`)
+  buscam em `inventario_old` em vez de `inventario`.
+- **`Inventario_Controle`** — 1 linha por data de balanço, auditoria pura:
+  `Data`, `Abertura`/`Hora_Abertura`/`Usuario_Abertura`,
+  `Reabertura`/`Hora_Reabertura`/`Usuario_Reabertura`,
+  `Fechamento`/`Hora_Fechamento`/`Usuario_Fechamento`,
+  `ReFechado`/`Hora_Refechado`/`Usuario_Refechado`,
+  `Cancelamento`/`Hora_Cancelamento`/`Usuario_Cancelamento`. Todo
+  Abrir/Reabrir/Fechar/Cancelar grava aqui, além de logar em `Logs`
+  (tabela de auditoria antiga do VB6 — o equivalente novo já migrado é
+  `log_auditoria`, ver "Log de auditoria" na memória de projeto).
+- **`pecas`**: `tipo_peca` (0=Revenda,1=Consumo,2=Imobilizado — já
+  confirmado existir, usado em Serviços/Produto Completo),
+  `area`/`prateleira`/`escaninho` (posição física — já existem, migrados
+  junto de Produto Completo), `situacao` (`A`=Ativo, usado no filtro
+  "Listar somente ativos"), `classificacao_fiscal`, `fornecedor`,
+  `codigo_fab`, `codigo_int`, `qtd`, `reservado`, `reservado_os`,
+  `Estoque_Cli`, `Estoque_For` — todos já existentes (Produto Completo já
+  migrou ~150 colunas de `pecas`).
+- **`niveis`** (`nivel1..nivel5`, `descr`, `cod_nivel`) — **já migrada e
+  em uso** por "Alterações Cadastro de Produtos Níveis"
+  (`produtos_niveis_service.py`) — reaproveitável direto, não precisa
+  recriar.
+- **`area`** (`codigo` smallint, `descricao` nvarchar) — lookup físico de
+  área de estoque, referenciado por `DescArea()` em `Inventario.bas`.
+  **Confirmado ao vivo**: a tabela existe, só 2 linhas cadastradas hoje —
+  ainda não confirmado se é a MESMA "Área" já citada em Tabelas
+  Auxiliares (CLAUDE.md > "Card List Ordering") ou uma tabela paralela;
+  com só 2 linhas de teste não dá pra decidir pelos dados sozinhos —
+  checar o código-fonte de Tabelas Auxiliares antes de reaproveitar.
+- **`veiculos`** — toda query do módulo Inventário faz `UNION` entre
+  `pecas` e `veiculos` (chassi como código, mesmas colunas).
+  **Confirmado ao vivo: a tabela existe no schema, mas com 0 (zero)
+  linhas** — reforça a suspeita da pergunta aberta #2 (parte da variante
+  "Revenda"/concessionária do legado, não usada por este cliente) — mas
+  existir vazia não é prova definitiva de que nunca será usada, só
+  evidência forte; confirmar com o usuário antes de decidir se o Painel
+  novo cobre `pecas` apenas ou também `veiculos`.
+- **`produtos_site`/`produtos_atualizar_site`** — integração Tray
+  (`TRAY.TRAY_INTEGRACAO`) disparada dentro de `Fecha_Inventario`: ao
+  fechar o balanço, agenda reatualização de estoque no site pra todo
+  produto com `id_tray<>0`. Página de Produto Completo já tem integração
+  Tray real (ver "Produto Completo" na memória de projeto) — esse gatilho
+  seria só mais um ponto de disparo do mesmo mecanismo já existente, não
+  uma integração nova.
+- **`Movimentacao`** — `Fecha_Inventario` insere um registro de ajuste de
+  estoque aqui (`tipo='E00'` entrada / `'S00'` saída) pra cada item cuja
+  contagem diverge do sistema, e SÓ ENTÃO atualiza `pecas.qtd` direto.
+  Precisa checar se este app já tem uma tabela `Movimentacao`/
+  equivalente migrada (candidato óbvio: `movimentacao-produtos.tsx` /
+  `movimentacao_produtos_service.py`, ver "Movimentações" acima) — se
+  for a mesma tabela, o fechamento de inventário deveria gerar as MESMAS
+  linhas que aquela tela já gera pra manter um único histórico de
+  estoque, não uma tabela paralela.
+
+### Regras de negócio confirmadas (direto do código, não suposição)
+
+1. **Só pode existir 1 inventário aberto por vez** (`controle.
+   situacao_balanco = 'A'`) — abrir um novo bloqueia com mensagem se já
+   houver um aberto; a única forma de destravar é Fechar ou Cancelar o
+   atual.
+2. **Digitação só é permitida com inventário Aberto** — `FrmInvDig`
+   confere `situacao_balanco='A'` antes de liberar a tela.
+3. **Tipo "Geral" (`tipo_balanco='G'`) zera o estoque não digitado**:
+   ao abrir, `inventario` é populado com TODO o estoque atual de
+   `pecas`+`veiculos` (menos o texto de confirmação explícito ao
+   usuário: "Inventários do tipo GERAL, zeram o estoque dos produtos não
+   digitados no mesmo!") — ou seja, ao Fechar, qualquer item que não
+   teve sua contagem alterada nesse snapshot inicial permanece com o
+   valor do estoque atual (não zera de fato sozinho — o snapshot já
+   nasce = estoque atual; "zerar" aqui significa que o usuário PRECISA
+   digitar todo item que exista fisicamente, porque um item que sumiu do
+   estoque físico mas não foi zerado manualmente vai ficar sobrando).
+4. **Outro tipo de balanço não pré-carrega estoque nenhum** — o código
+   só tem branches pra `Left(Combo1.Text,1) = "G"` e `="C"`; se o combo
+   tiver uma 3ª opção (o screenshot mostra "Parcial" como valor padrão
+   atual, que não bate com nenhuma das letras testadas no código), a
+   abertura não insere NADA em `inventario` — os itens só entram por
+   `FrmInvDig`'s "Inclui" um a um. Ver pergunta aberta #1.
+5. **Fechamento gera ajuste de estoque automático** — para cada item cuja
+   `estoque_balanco` (contado) difere de `estoque_atual + reservado`
+   (sistema), grava uma `Movimentacao` de entrada ou saída E atualiza
+   `pecas.qtd` diretamente — esse é o efeito real e definitivo do
+   Fechamento (a auditoria/Tray são efeitos colaterais, este é o núcleo).
+6. **Fechamento tipo Cíclico (`tipo_balanco='C'`) pula esse ajuste** —
+   `Fecha_Inventario` vai direto pro rótulo `fecha:` sem tocar em
+   `Movimentacao`/`pecas.qtd` quando `tipo_balanco='C'` — supõe-se
+   que esse tipo já teria ajustado estoque em algum outro momento (ou é
+   só um balanço informativo/de conferência sem efeito de estoque) — ver
+   pergunta aberta #1, já que não ficou claro o que "C" representa.
+7. **Cancelamento apaga tudo do balanço aberto sem tocar em estoque** —
+   `DELETE FROM Inventario WHERE data = <data aberta>` + situação volta
+   pra `'C'` — nenhum ajuste de `pecas.qtd`/`Movimentacao` acontece
+   (diferente de Fechar).
+8. **Confirmação obrigatória em Fechar/Cancelar** (`MsgBox ... vbYesNo`)
+   — telas de confirmação já mostradas pelo usuário nos screenshots.
+9. **Relatório de Divergência só mostra itens onde a contagem realmente
+   diverge** do sistema — critério idêntico ao usado no ajuste de
+   Fechamento (regra 5) — ou seja, é literalmente uma PRÉVIA do que o
+   Fechamento vai lançar em `Movimentacao`/`pecas.qtd`, antes de
+   confirmar. Isso sugere que o Painel novo deveria deixar essa prévia
+   bem em destaque antes do botão Fechar (melhoria, ver abaixo).
+10. Todo relatório tem a mesma dupla dimensão **Nível 1-5** OU
+    **Área/Prateleira** OU **Descrição/Fornecedor** como eixo de
+    agrupamento — nunca os 3 ao mesmo tempo — e os mesmos 3 checkboxes
+    Revenda/Consumo/Imobilizado (`pecas.tipo_peca`) como filtro, quando
+    aplicável.
+11. **"Registro de Inventário" (item 8 do menu, `CodRelInventario=4`)
+    parece estar MORTO no legado atual** — o código que de fato
+    popularia esse relatório (`Vid_Rel_Inventario`, no fim de
+    `FrmRelInv.frm`) está inteiramente comentado (prefixo `'''''` em
+    TODA linha da sub) — a chamada ativa hoje (`Command1_Click`, Case 4)
+    só faz `Call Exibe_Form(FrmRegInv, "FrmRegInv")` sem popular nada.
+    **Não presumir que isso é uma regra de negócio real a portar** — é
+    provavelmente um relatório abandonado/substituído por outro (talvez
+    o próprio Resultado) — ver pergunta aberta #3, não implementar sem
+    confirmação (mesmo princípio de "Não replicar truques VB6").
+
+### Melhorias propostas (o que muda em relação ao VB6)
+
+- **Um Painel único de Gestão de Inventário**, não 9 telas separadas —
+  já é a intenção explícita do usuário. Sugestão de agrupamento (a
+  confirmar): Abertura + Digitação + status do balanço aberto vivem numa
+  tela/cabeçalho principal; os 6 relatórios (Conferência/Contagem/
+  Resultado/Crítica/Divergência + o "Registro" se sobreviver à pergunta
+  #3) viram abas/filtros de uma única tela de Relatórios com um seletor
+  de eixo de agrupamento (Nível/Área/Descrição) em vez de 3 conjuntos de
+  telas quase idênticas — elimina a triplicação real hoje existente no
+  VB6 (mesma lógica de relatório copiada 3x por eixo de agrupamento).
+- **Prévia de divergência sempre visível antes de Fechar** (ver regra 9) —
+  o usuário vê exatamente o que vai virar `Movimentacao`/ajuste de
+  estoque antes de confirmar, não só num relatório separado que precisa
+  ser aberto à parte.
+- **Impressão segue o padrão já estabelecido** (`print-report-header.ts`
+  — cabeçalho com dados da empresa, sem mostrar filtro da tela) em vez
+  do `Printer.Print` posicional por coordenada do VB6.
+- **Exportar planilha via xlsx/SheetJS** (mesma biblioteca já usada no
+  Borderô de Cilindros) no lugar do `CriaPlanilhaExcel` legado.
+- **"Modo Didático" desde o início** (pedido explícito do usuário nesta
+  mesma sessão) — o Painel de Inventário é exatamente o tipo de tela
+  "complexa" que a regra em CLAUDE.md > "Padrões de UI" §4-5 exige: ícone
+  único "i"/Ajuda reunindo a explicação de Abrir/Fechar/Cancelar/
+  Digitar/cada relatório (efeitos não-óbvios: "Geral zera não-digitados",
+  "Fechar ajusta estoque automaticamente", diferença Nível×Área×
+  Descrição), tooltip em todo botão-ícone, texto de ajuda em linguagem
+  de usuário final nos campos com regra de negócio.
+- **Log de auditoria via `log_auditoria`** (não a tabela `Logs` legada) —
+  mesmo padrão já usado em todas as outras telas migradas.
+
+### Perguntas em aberto (bloqueantes antes de iniciar a Fase 1)
+
+1. ~~O que exatamente é `tipo_balanco = 'C'`?~~ — **respondida
+   2026-07-22, user-directed**: é o "tipo balanço **contábil**". Ainda
+   assim, o texto real do combo (`.frx` binário, ilegível como texto)
+   segue não confirmado — o screenshot mostra "Parcial" como valor
+   padrão exibido hoje, que não bate com "Contábil"/"Geral"; possível que
+   o combo mostre rótulos diferentes das letras internas (ex.: "Parcial"
+   podendo ser o rótulo de exibição de `tipo_balanco='C'`, já que o
+   código só reconhece "G" e "C" — sem um 3º branch, não há como o combo
+   ter uma 3ª opção com efeito distinto). Tratar como 2 tipos apenas:
+   Geral (zera não-digitados) e Contábil (não pré-carrega nada, só o que
+   for digitado manualmente entra no fechamento).
+2. ~~Este cliente usa a tabela `veiculos`?~~ — **respondida 2026-07-22,
+   user-directed: SIM, entra.** Apesar de estar com 0 linhas no banco de
+   teste hoje, o Painel de Inventário deve cobrir `pecas` **e**
+   `veiculos` desde o início (mesmas queries UNION do legado) — não
+   restringir só a `pecas`. **Novo ponto de atenção**: como não existe
+   NENHUM outro módulo de veículos/concessionária migrado neste app até
+   agora (Cadastro de Veículos, Venda de Veículo, etc.), o Inventário
+   seria a PRIMEIRA tela a tocar essa tabela — vale confirmar com o
+   usuário se um cadastro de Veículos precisa existir antes (ainda que
+   básico) pra essa parte do Inventário fazer sentido, ou se a ideia é
+   só ela ficar pronta pra quando/se esse módulo existir.
+3. **"Registro de Inventário" deve ser portado?** Ver regra 11 — o código
+   que o populava está comentado/morto no legado atual. Se não houver
+   uma versão viva em outra variante de negócio, a proposta é **não
+   portar** este item (fora de escopo, não regra de negócio real).
+4. ~~A tabela `Movimentacao` do legado é a mesma coisa que
+   `movimentacao-produtos.tsx` já grava?~~ — **respondida/confirmada ao
+   vivo 2026-07-22**: SIM, é literalmente a mesma tabela `movimentacao`
+   (18.773 linhas hoje) com as MESMAS colunas que
+   `movimentacao_produtos_service.py` já lê/grava (`data, tipo,
+   codigo_int, qtd, p_unit, num_nf, serie_nf`) — o Fechamento de
+   Inventário deve reaproveitar esse service (ou pelo menos o mesmo
+   padrão de insert dele) em vez de criar uma tabela de ajuste paralela.
+5. ~~As tabelas `inventario`/`inventario_old`/`Inventario_Controle`/`area`
+   já existem no banco real?~~ — **respondida/confirmada ao vivo
+   2026-07-22** contra `GERDELL`/`BARESTELA`: todas as 4 tabelas (mais
+   `veiculos`, `movimentacao`, `niveis`, `pecas`) já existem, com nomes/
+   tipos de coluna batendo exatamente com o que o VB6 assume — nenhuma
+   migração de schema nova é necessária pra essas tabelas. Estado atual
+   de teste: `controle.situacao_balanco='F'` (nenhum balanço aberto
+   agora), `tipo_balanco='G'` no último balanço; `inventario`=198 linhas,
+   `inventario_old`=55, `inventario_controle`=30, `area`=2, `veiculos`=0.
+6. ~~A opção "Estoque Fornecedor" em Resultado por Nível é aplicável a
+   este cliente?~~ — **respondida 2026-07-22, user-directed: SIM, deve
+   ser aplicada.** Ou seja, essa opção (3º rádio "Valor Usado como Preço
+   Unitário" — Preço Venda / Custo Inventário / **Custo Reposição**, na
+   verdade a opção real chama-se "Estoque Fornecedor" e troca a fonte da
+   quantidade de `estoque_balanco+reservado_os` pra `Estoque_For` — ver
+   `FrmRelInvRes.Mostra`, `vselect`/`vwhere`) entra no relatório de
+   Resultado por Nível do Painel novo desde já, sem gate por
+   `App.EXEName` (esse gate era só uma trava do executável legado, sem
+   equivalente nesta arquitetura de menu único).
+
+### Funções de inicialização automática — rastreadas 2026-07-22
+
+Localizadas em `Geral\Mdl_Proc.bas` (não em `Inventario.bas`), como o
+usuário indicou: `Public Sub InventarioAutomatico()` (linha ~26305) e
+`Public Sub InventarioPostoAutomatico()` (linha ~26233) — chamadas a
+partir da rotina de boot/abertura de dia do sistema principal (`Mdl_Proc.bas`
+linhas ~6944/~7379, dentro do fluxo que já decide `Posto`/não-`Posto` e
+que dispara quando o relógio do computador está à frente da
+`data_movimento` de `controle`, ou seja, roda como parte do boot do dia
+seguinte — o "todo dia 1º do mês" é auto-imposto pelo PRÓPRIO código,
+não por um agendador externo, ver abaixo).
+
+- **Ambas usam uma SEGUNDA conexão ADO pro MESMO banco**
+  (`AbreBancoAuxADO`/`dbrevendaaux`, achei a definição em `Mdl_Proc.bas`
+  linha 11596 — mesmo `Servidor`/`Banco`/credenciais de `AbreBancoADO`,
+  só um `ADODB.Connection` separado). **Isso é gambiarra de concorrência
+  do ADO/VB6, não arquitetura real** (mesmo princípio de "Não replicar
+  truques VB6") — no backend Python cada request já abre sua própria
+  conexão/cursor, então não há necessidade de simular uma "segunda
+  conexão" nem um segundo par servidor/banco.
+- **Idempotência por mês**: cada rotina primeiro verifica se já existe
+  uma linha em `inventario_controle` pro dia 1º do mês corrente com
+  `usuario_abertura=-2` (sentinela = "sistema", não um funcionário real)
+  e `tipo_balanco='K'` (não-Posto) ou `'M'` (Posto) — se já existir E
+  estiver com `fechamento` preenchido, sai sem fazer nada (já rodou esse
+  mês). **Melhoria proposta**: trocar o sentinela mágico `-2` por uma
+  coluna própria (`automatico BIT`) — mesmo princípio já usado noutras
+  telas (evitar valor mágico reaproveitando uma FK que não é bem aquilo).
+- **`InventarioAutomatico` (não-Posto)**: snapshot de TODO `pecas` ativo
+  (`qtd+reservado+reservado_os`, sem filtrar Revenda/Consumo/Imobilizado)
+  direto em `inventario_old` (NÃO em `inventario` — não abre um balanço
+  "de verdade", é só arquivo histórico) — sem nenhum efeito em
+  `pecas.qtd`/`movimentacao` (diferente do Fechamento manual). Exclui
+  `qtd >= 1000000` (guarda de qualidade de dado, não regra de negócio) e,
+  se o módulo Posto estiver ativo, exclui os `codigo_fab` hardcoded
+  `'1'..'7'` (os próprios combustíveis, tratados à parte por
+  `InventarioPostoAutomatico` pra não contar duas vezes).
+- **`InventarioPostoAutomatico`**: snapshot do estoque de combustível
+  calculado a partir de `tanque_estoque`/`tanque` (volume por tanque,
+  já lido diariamente pelo módulo Posto já migrado — ver
+  "Posto de Combustível" na memória de projeto) — não de `pecas.qtd`.
+  Só marca o controle como fechado se TODOS os combustíveis cadastrados
+  tiverem leitura (`fezcomb = qtdcomb`); senão fica em aberto e tenta de
+  novo na próxima vez que rodar.
+- ~~A tabela `inventario_contabil`/`DIFERENCA_ESTOQUE` (achada
+  rastreando o chamador de `InventarioPostoAutomatico`) é o mesmo
+  conceito de "tipo Contábil" da pergunta #1?~~ — **respondida
+  2026-07-22, user-directed**: SIM, também é do tipo contábil, mas é
+  **uma 3ª rotina distinta das duas acima** — disparada **diariamente**,
+  no primeiro acesso ao sistema de cada dia (não mensalmente, e não
+  fica dentro de `InventarioAutomatico`/`InventarioPostoAutomatico`
+  apesar de estar fisicamente perto delas no `.bas`). Confirma o modelo
+  de 3 mecanismos de inventário distintos e paralelos neste módulo:
+  1. **Manual** (menu mostrado pelo usuário) — `inventario`/
+     `inventario_old`/`inventario_controle`, tipos Geral/Contábil,
+     abre→digita→fecha (com efeito real em estoque no fechamento).
+  2. **Automático mensal** (`InventarioAutomatico`/
+     `InventarioPostoAutomatico`) — só `inventario_old` (arquivo, zero
+     efeito em estoque), tipos K/M, roda 1x por mês (auto-idempotente).
+  3. **Automático diário contábil** (`inventario_contabil`/
+     `inventario_contabil_os`/`DIFERENCA_ESTOQUE`) — tabelas próprias,
+     roda 1x por dia. **Lido por completo 2026-07-22** — achado
+     importante que muda o escopo, ver bloco abaixo.
+
+### `inventario_contabil` — lido por completo, escopo final confirmado 2026-07-22
+
+A rotina diária vive dentro de `Mdl_Proc.bas::MudaDataSistema` (não um
+sub próprio) — o "boot do dia" chamado sempre que o sistema detecta que
+`Date` (relógio) passou de `controle.Data_Movimento`. No código-fonte
+lido, essa sub tinha DOIS ramos (`If Not RegControle.Posto Or Not
+NFCe_Ws Then <reconciliação hardcoded por CNPJ> Else <inventario_contabil>
+End If`) — **o usuário confirmou explicitamente a lógica de negócio real
+pretendida, que substitui a leitura literal do código** (o código lido
+tem uma condição de gate — Posto+NFC-e — que não reflete a intenção
+correta, provavelmente resquício de patch/variante específica):
+
+- **Reconciliação de estoque hardcoded por CNPJ**
+  (zera `pecas.qtd/reservado/reservado_os` e reconstrói a partir de
+  `movimentacao`/Orçamento/OS/Pedido de Venda, gravando antes/depois em
+  `DIFERENCA_ESTOQUE`) — **descartada, fora de escopo, não portar.**
+  Confirmado pelo usuário: "pode ser desconsiderada".
+- **Lógica final do sistema (regra de negócio confirmada, autoritativa
+  sobre a leitura do código)**:
+  - **Módulo Posto ativo** → só `InventarioPostoAutomatico`
+    (snapshot de combustível via `tanque_estoque`), disparado no
+    **primeiro acesso ao sistema em cada MÊS**. Sem o snapshot diário
+    contábil pra esse segmento.
+  - **Demais segmentos (não-Posto)** → **dois** disparos:
+    `InventarioAutomatico` (snapshot de `pecas`) no primeiro acesso ao
+    sistema em cada **MÊS**, **e também** o snapshot `inventario_contabil`
+    no primeiro acesso ao sistema em cada **DIA**.
+  - Não existe combinação "Posto + contábil diário" nem "não-Posto +
+    sem contábil diário" — é uma escolha binária por módulo Posto
+    ativo/inativo, não pelo NFC-e como o código sugeria.
+- ~~Como disparar essas rotinas automáticas nesta arquitetura nova
+  (sem processo "sempre ligado")?~~ — **respondida 2026-07-22,
+  user-directed: opção (a)** — um endpoint que o próprio frontend chama
+  no primeiro acesso/login do dia. **Padrão de implementação proposto**
+  (a confirmar quando formos pra execução): reaproveitar o mesmo
+  princípio já usado por `data_movimento`/`posto_common.py` (leitura
+  fresca por request, nunca cache global de processo) — o endpoint
+  checa se a rotina de HOJE (diária) e a de dia-1-do-mês-corrente
+  (mensal, se aplicável) já rodaram (via `inventario_controle`/data em
+  `inventario_contabil`) e, se não, executa sincronamente dentro da
+  própria requisição antes de responder. Não precisa de Tarefa Agendada
+  do Windows nem de worker/cron separado — é sempre o primeiro request
+  do dia de QUALQUER usuário que dispara, não um horário fixo.
+
+**Levantamento do ecossistema considerado COMPLETO em 2026-07-22** — todas
+as perguntas bloqueantes foram respondidas pelo usuário. Único ponto
+ainda formalmente aberto, não-bloqueante: item 3 ("Registro de
+Inventário" não portar, código morto no legado — proposta já feita,
+aguardando só confirmação de leitura, não impede começar). Colunas/
+tabelas todas confirmadas ao vivo contra `GERDELL`/`BARESTELA`. Próximo
+passo: partir pra execução (backend + frontend do Painel de Gestão de
+Inventário) — aguardando o usuário dar o sinal pra começar e definir por
+onde (sugestão: Fase 1 = Abertura/Digitação/Fechar/Cancelar, o núcleo
+manual; Fase 2 = os relatórios consolidados; Fase 3 = os 2 disparos
+automáticos mensais/diário).
+
+---
+
+## O.S. Completa
+
+**Status: 🟢 Fase 1 (núcleo, módulo Assistência Técnica) implementada
+2026-07-30/31, UI confirmada ao vivo pelo usuário em 2026-08-01** (o clique
+numa O.S. da lista abre a tela corretamente — a suspeita de cache do Metro
+desatualizado, registrada abaixo, estava certa). Migração de
+`FrmTraOsNew.frm` (~7000 linhas VB6) + `FrmManRet2.frm`
+(Envio para Terceiros, ainda fora de escopo). Pedido original do usuário:
+"implantar a Ordem de Serviço... utilize a conexão KONTACTO TESTE para essa
+etapa" — Fase 1 = só o núcleo (cabeçalho completo + itens + fechar/faturar/
+reabrir/cancelar + forma de pagamento + anexos + impressão/recibo),
+confirmado via `AskUserQuestion`. Oficina fica pra uma 2ª etapa (mesmo
+código, módulo diferente) — não iniciada.
+
+### O que foi implementado
+
+**Backend** (100% novo, nada duplicado — reaproveita `os_service.py`/
+`os_itens_service.py` diretamente):
+- `backend/services/os_completo_service.py` — cabeçalho (`get_os_completo`/
+  `save_os_completo`, enriquece `os_service._get_os_sync` com os campos
+  extras via JOIN em `funcionarios`/`tipo_os`/`status_os` — as 2 últimas são
+  tabelas de lookup reais, confirmadas ao vivo em KONTACTO-TESTE) +
+  wrappers finos `fechar_os_completo`/`faturar_os_completo`/
+  `reabrir_os_completo`/`cancelar_os_completo`, cada um só chamando a
+  função correspondente de `os_service.py` com `tela="OS_COMP"`.
+- `backend/services/os_service.py` — `_fechar_os_sync`/`_faturar_os_sync`
+  ganharam parâmetro `tela: str = "OS"` (default preserva 100% o
+  comportamento da O.S. Mobile); **novas** `_reabrir_os_sync`/
+  `_cancelar_os_sync` (sem precedente em nenhuma versão da O.S. até então —
+  a Mobile nunca teve Reabrir/Cancelar). Reabrir só F→A, sem mexer em
+  estoque (o Fechar de O.S. não movimenta estoque, só o Faturar libera a
+  reserva). Cancelar A/F→C, sempre estorna a reserva dos itens não-
+  cancelados (`_mover_estoque` delta negativo) — diferente do Pedido, a
+  reserva da O.S. acontece na INCLUSÃO do item, não no Fechar, então
+  Aberta ou Fechada sempre há reserva pra estornar. Cancelar reaproveita a
+  permissão SITUACAO (não uma CANCELAR própria), mesma decisão já tomada
+  pro Pedido Completo.
+- `backend/routes/os_completo.py` (registrado em `server.py`) — cabeçalho +
+  situação com log de auditoria `tela="OS_COMP"`; itens/descontos/desconto-
+  geral/análise em rotas PARALELAS `/api/os-completo/{codigo}/...`
+  (reaproveitando `os_itens_service.py` direto, só pra log de auditoria
+  correto) — mesmo padrão exato de `routes/pedido_completo.py`. **Forma de
+  Pagamento NÃO tem rota própria** — a tela chama
+  `/api/os/{codigo}/formas-pagamento` compartilhada, mesmo precedente do
+  Pedido Completo.
+- `backend/models/schemas.py` — `OSCompletoSaveRequest` (estende
+  `OSSaveRequest` com `referencia_os`/`tecnico_responsavel`/`posicao_os`/
+  `previsao_termino`/`data_termino`/`hora_entrada`/`hora_fechamento`).
+- **Achado durante a implementação, corrigido de passagem**:
+  "Situação/Destino do item" (`Destino(2)` do legado — 0=Cliente paga,
+  1=Garantia, 2=Interno, 3=Contrato) **nunca tinha sido implementado em
+  lugar nenhum** — `OSItemSaveRequest` não tinha o campo, o INSERT gravava
+  `situacao=0` como literal fixo na query, e o SELECT de listagem nem
+  trazia a coluna. Corrigido em `OSItemSaveRequest`/`_add_item_sync`/
+  `_update_item_sync`/`_list_itens_sync` (novo campo `situacao: int = 0`,
+  testes em `test_os_itens_service.py`) — a O.S. Completa é a primeira tela
+  a expor esse combobox.
+- `backend/services/lookups_service.py`/`routes/lookups.py` —
+  `GET /api/status-os`/`GET /api/tipo-os` novos (tabelas `status_os`/
+  `tipo_os`, confirmadas ao vivo, mesmo padrão genérico
+  `_list_codigo_descricao_sync` já usado por dezenas de outras tabelas
+  auxiliares). A O.S. Mobile continua com a lista `STATUS_OS` hardcoded
+  local (`os-form.tsx`) — troca pro lookup real não pedida pra ela ainda.
+- `backend/services/os_service.py::_list_os_sync` — ganhou
+  `atendente_nome` no SELECT (join `funcionarios`, `COALESCE(nome_guerra,
+  nome)`) pra a nova lista da O.S. Completa poder exibir o atendente —
+  não existia antes (a O.S. Mobile lista não usa esse campo).
+- `backend/services/permissoes_service.py` — `ACOES_OS_COMP` (ABRIR/
+  GRAVAR/WHATSAPP/ADD_ITEM/EDIT_ITEM/DEL_ITEM/DESC_ITEM/DESC_GERAL/
+  VER_DESCONTOS/ANALISE/SITUACAO/FORMA_PAG/FATURAR/REABRIR/ANEXOS/
+  IMPRIMIR — sem CANCELAR própria, sem DIVIDIR/ENTREGUE/TX_SERVICO/
+  IMPRIMIR_ITEM/AGENDAR, que são exclusivos do Pedido). O gating por módulo
+  (`OS`/`OS_COMP` desabilitadas quando Oficina E Assistência estão
+  desligados) e o par de exclusividade Mobile×Completa em
+  `permissoes.tsx`'s `EXCLUSIVE_PAIRS` **já existiam** de uma rodada
+  anterior (achado ao investigar, não precisou de mudança).
+
+**Frontend** (novo):
+- `frontend/app/os-geral.tsx` — tela principal, web-only, mesmo esqueleto
+  de `pedido-geral.tsx` (`PedidoHeader`/`ClienteSection`/`ItemList`/
+  `FormaPagamentoField`/`AjudaPedidoModal`/`ScreenToast`). Cabeçalho fixo:
+  Forma de Pagamento, Referência, Técnico Responsável, Tipo O.S. Modal
+  "Dados Principais": Status O.S. (lookup), Atendente, Área de Atuação,
+  Cliente Descreva, Serviço Executado, Observação. Bloco "Equipamento":
+  busca real via `EquipamentoSearchModal` (novo), escopada por
+  `cliente` (equipamento pertence ao cliente, não existe busca global —
+  `GET /api/equipamentos?cliente=X&busca=termo`, endpoint já existente).
+  Reabrir/Cancelar disponíveis pela primeira vez em qualquer versão da O.S.
+- `frontend/app/os-lista.tsx` — lista dedicada (clone de
+  `pedido-lista.tsx`), sem filtro de Vendedor (O.S. não tem vendedor no
+  cabeçalho, só Atendente — vendedor é por item). `app/os.tsx` (Mobile)
+  voltou a ser exclusiva de `OS.ABRIR` (removido o fallback
+  `OS_COMP.ABRIR` que antes deixava a lista abrir mas o toque num item ser
+  no-op) — mesma correção já feita pro Pedido em 2026-07-20.
+  `transacoes.tsx`/`ModuleTiles.tsx` atualizados pra rotear
+  dinamicamente por permissão (mesmo padrão do Pedido).
+- **Correção de arquitetura em relação ao plano original**: o plano
+  aprovado assumia que dava pra reaproveitar `pedido/ItemList.tsx`/
+  `AddItemModal.tsx`/`EditItemModal.tsx`/`usePedidoItens.ts` "estendendo
+  com Executor+Situação". Na prática, `usePedidoItens.ts` (911 linhas) e os
+  2 modais de item carregam MUITO conceito exclusivo do Pedido (kit, m²,
+  número de série, desdobramento Clínica, taxa de serviço, pedido
+  totalizado) que não existe nem faz sentido pra O.S. — forçar a O.S. por
+  esse caminho significaria threading `tela==="OS_COMP"` por todo esse
+  código morto-pra-O.S., mais arriscado que reaproveitar. Decisão tomada
+  durante a implementação (dentro do espírito do plano — "reaproveitar sem
+  duplicar regra de negócio" — só a tática mudou):
+  - `frontend/src/components/os/useOSItens.ts` — hook DEDICADO e bem menor
+    (sem kit/m²/num_serie/clínica/taxa/pedido-totalizado), superfície
+    pública compatível com o que `ItemList.tsx` realmente usa.
+  - `frontend/src/components/pedido/ItemList.tsx` — generalizado
+    (aditivamente, sem quebrar Pedido) pra aceitar `tela === "OS_COMP"` nos
+    gates de Fechar/Faturar/Reabrir/Cancelar/Imprimir (`hasSituacaoActions`/
+    `isTelaCompleta`), com rótulos "Pedido"/"O.S." dinâmicos. Dividir/
+    Imprimir Item/Agendar/Tx Serviço/Pedido Totalizado continuam Pedido-only.
+    Prop `it` teve o tipo estreitado de `UsePedidoItens` (tipo derivado
+    gigante, só do Pedido) pra uma interface `ItemListItens` mínima —
+    `usePedidoItens` já satisfaz automaticamente (é superset),
+    `useOSItens` só implementa o necessário (com no-ops só pra satisfazer o
+    TypeScript nos campos que nunca são de fato chamados pra O.S.).
+    `GeneralDiscountModal.tsx`/`DiscountsReportModal.tsx` receberam o mesmo
+    tratamento (tipos estreitados), já que também são compartilhados.
+  - `frontend/src/components/os/OSItemModal.tsx` — modal ÚNICO de
+    Adicionar/Editar item (mesmo fluxo de busca→confirmar já usado e
+    testado na O.S. Mobile, `os-form.tsx`, só extraído + Situação/Destino
+    novo), em vez dos 2 modais separados do Pedido.
+  - `frontend/src/components/os/types.ts` — `OSItemRow` (`ItemRow &
+    {cod_os_prod, vendedor, executor, situacao}`), `OSData`.
+  - `frontend/src/components/os/OSTotaisResumo.tsx` — totais por Situação
+    (Serviços+Produtos vs. Garantia/Interno/Contrato vs. combinado),
+    puramente derivado dos itens já carregados, sem chamada à API.
+  - `frontend/src/components/os/AnexosOSModal.tsx` — mesmo padrão de
+    `AnexosPedidoModal.tsx` (grava como anexo do CLIENTE, `cod_grupo=1`),
+    sub-grupo "Ordens de Serviço" `cod_sub_grupo=4` (já confirmado ao vivo
+    em "Gestor de Documentos (Anexos)" acima, nunca integrado até agora).
+  - `frontend/src/components/os/ReciboOSModal.tsx` — preview + impressão
+    via iframe oculto (nunca o truque de CSS hide, ver "Impressão via
+    iframe" acima), mais simples que o do Pedido (sem Totalizado/qtd.
+    pessoas/localização/agendamento), com o detalhamento por Situação que
+    o Pedido não tem.
+  - `frontend/src/components/EquipamentoSearchModal.tsx` — clone do padrão
+    `FornecedorSearchModal.tsx`, mas escopado por `cliente` (diferente de
+    Fornecedor, que é busca global) — reflexo de `GET /api/equipamentos`
+    exigir `cliente` como parâmetro obrigatório (é "Cadastro de
+    Equipamentos DO CLIENTE", não uma tabela solta).
+
+### Confirmado durante a implementação (rastreio campo-a-campo)
+
+- Nº da O.S. é `MAX(codigo)+1`, não IDENTITY (já valia pra O.S. Mobile).
+- Vendedor e Executor são por ITEM (`os_produto.vendedor`/`.executor`) —
+  a O.S. Mobile (`os-form.tsx`) já tinha os 2 campos no modal de item desde
+  antes desta Fase 1 (achado ao investigar — a Completa só herdou).
+- Faturar sempre exige a O.S. já Fechada (`_faturar_os_sync` nunca teve o
+  atalho "fecha-e-fatura junto" do Pedido Bar) — igual ao Pedido Geral,
+  diferente do Pedido Bar.
+- Reabrir só habilita em O.S. Fechada — o branch do legado que trataria
+  reabertura de Cancelada é código morto (nunca alcançável na prática),
+  não replicado (ver "Não replicar truques VB6" no CLAUDE.md).
+
+### Fora do escopo desta Fase 1 (registrado, não bloqueante)
+
+- ~~**Oficina (2ª etapa)**~~ — **implementado 2026-08-02**, ver seção
+  própria "Oficina — Fase 2 (O.S. Completa)" logo abaixo.
+- ~~**Envio para Terceiros** (`FrmManRet2.frm`, tabela `retifica`)~~ —
+  **implementado 2026-08-01**, ver seção própria "Envio para Terceiros"
+  logo abaixo.
+- ~~**Pontuação de Técnicos** (`os_produto.Pontuacao_A/E/V`)~~ —
+  **implementado 2026-08-01**, ver seção própria "Pontuação de Técnicos"
+  logo abaixo.
+- ~~**Tempo Gasto por Serviço** (`os_tempo`)~~ — **implementado
+  2026-08-01**, ver seção própria "Tempo Gasto por Serviço" logo abaixo.
+- ~~**Autorização/Expedição de Itens** (module flags
+  `exige_aprovacao_itens_os`/`exige_expedicao_itens_os`)~~ —
+  **implementado 2026-08-01**, ver seção própria "Autorização/Expedição de
+  Itens" logo abaixo.
+- ~~**Requisições vinculadas** (aba read-only da grade do legado)~~ —
+  **implementado 2026-08-01**, ver seção própria "Requisições Vinculadas
+  (O.S. Completa)" logo abaixo.
+- ~~**Agendar item de Serviço** — o Pedido Geral já tem essa feature (módulo
+  Clínica/Assistência); não trazida pra O.S. Completa nesta rodada, avaliar
+  reaproveitar quando fizer sentido (não bloqueante).~~ — **implementado
+  2026-08-01**, ver seção própria "Agendar item de Serviço (O.S. Completa)"
+  logo abaixo.
+- ~~**Doc. Origem/Revisão programada** (validação cruzada de OS/Pedido de
+  origem pra Garantia/Revisão)~~ — **implementado 2026-08-02**, ver seção
+  própria "Doc. Origem / Revisão Programada (O.S. Completa)" logo abaixo.
+- ~~**Criar Cópia** da O.S.~~ — **implementado 2026-08-02**, ver seção
+  própria "Criar Cópia (O.S. Completa)" logo abaixo.
+- ~~**Alteração de Executor pós-fechamento**.~~ — **implementado
+  2026-08-02**, ver seção própria "Alteração de Executor pós-fechamento
+  (O.S. Completa)" logo abaixo.
+- ~~**Bifurcação de faturamento Garantia×Cliente**~~ — **implementado
+  2026-08-02**, ver seção própria "Bifurcação de faturamento
+  Garantia×Cliente (O.S. Completa)" logo abaixo.
+- ~~**Cadastro de equipamento inline** — o `EquipamentoSearchModal` oferece
+  "Cadastrar novo equipamento" navegando pra `/equipamentos` (tela
+  cheia), não um cadastro rápido embutido no modal.~~ — **implementado
+  2026-08-02**, ver seção própria "Cadastro de Equipamento Inline (O.S.
+  Completa)" logo abaixo.
+
+### Teste ao vivo — API e UI confirmadas (2026-08-01)
+
+**Atualização 2026-08-01**: o backend foi exercitado de ponta a ponta via
+chamadas diretas à API contra KONTACTO TESTE (sem navegador — sem
+ferramenta de automação disponível neste ambiente): criar O.S., buscar
+cabeçalho (com enriquecimento de técnico/status/tipo), incluir item com
+vendedor+executor+situação (Garantia), listar itens, definir forma de
+pagamento, Fechar, Faturar (gerou Comanda), Reabrir (em O.S. separada),
+Cancelar com estorno de estoque conferido antes/depois (em O.S. separada),
+Descontos Concedidos, Análise de Margem, Desconto Geral, lookups `/api/
+status-os`/`/api/tipo-os`, busca de equipamento por cliente, listagem de
+O.S. — **tudo funcionou** depois de corrigir 1 bug real encontrado (INSERT
+do cabeçalho com 1 parâmetro faltando). Dados de teste (O.S. #20498/20499/
+20500) ficaram na base como Faturada/Cancelada — não há exclusão física de
+O.S., mesma regra do sistema.
+
+**UI confirmada (2026-08-01)**: o clique numa O.S. da lista abre a tela —
+a causa suspeita (cache do Metro desatualizado, não recompilando os
+arquivos novos da O.S. Completa) estava correta; `.metro-cache` limpo +
+dev server reiniciado do zero resolveu. Anexar documento e imprimir recibo
+seguem sem confirmação visual explícita (não bloqueante, mesmo componente
+já validado em Pedido Bar/Geral).
+
+**Achado adicional, corrigido junto**: `os.valor` fica desatualizado (0)
+em muitos registros de O.S. Faturadas legadas (583 registros afetados em
+KONTACTO TESTE — prováveis registros gravados pelo sistema VB6 legado, que
+roda em paralelo). Corrigido `_list_os_sync`/`_get_os_sync` pra somar o
+total direto de `os_produto` na EXIBIÇÃO (não mexe na gravação/Faturar —
+ver nota abaixo).
+
+**Risco corrigido em 2026-08-01** (era "identificado, não resolvido" até
+então): `_fechar_os_sync`/`_faturar_os_sync` (`os_service.py`) liam
+`os.valor` cru da tabela pra decidir o subtotal gravado em
+`comanda.valor_venda` — se essa coluna estivesse desatualizada (os 2
+casos identificados acima, ou qualquer O.S. gravada fora do fluxo normal
+de inclusão de item deste backend), o valor faturado saía errado. Os dois
+agora chamam `_recalc_os_total` (já existente em `os_itens_service.py`,
+reaproveitado — não duplicado) ANTES de ler o subtotal, recalculando
+`os.valor = SUM(os_produto)` na hora, tanto pro Fechar (decide a Forma de
+Pagamento) quanto pro Faturar (valor gravado na Comanda). Cobertura nova
+em `test_os_service.py`
+(`test_fatura_recalcula_valor_ignorando_os_valor_desatualizado`) — simula
+`os.valor=0`/soma real 200 e confirma que a Comanda recebe 200, não 0.
+Suíte completa de testes de O.S. (151 testes) sem regressão.
+
+---
+
+## Envio para Terceiros
+
+**Status: 🟢 Implementado e testado ao vivo, 2026-08-01.** Migração de
+`FrmManRet.frm` ("Envio de Equipamentos para Terceiros") — rastreado no
+código-fonte real em `C:\Desenv\VB6\SQLSERVER\Kontacto\frmmanret.frm`
+(2381 linhas). Tela própria, standalone, web-only, sem abas (o legado
+também não tem — mesma exceção "compact single-view screens" já usada em
+Fornecedores/Cilindros).
+
+### Regras de negócio confirmadas no rastreio
+
+- Registra o envio de um equipamento do cliente para um FORNECEDOR externo
+  ("Terceiro" — confirmado no JOIN `val(retifica.fornecedor) =
+  fornecedor.codigo_int` usado em toda consulta do form original, não é
+  texto livre) fazer conserto/manutenção, vinculado a uma O.S.
+- **Nomes de coluna enganosos, mantidos por serem os nomes reais da tabela
+  compartilhada com o legado**: `retifica.entrada` = data em que o
+  equipamento foi ENVIADO ao terceiro (gravada ao "Envio p/ Terceiro");
+  `retifica.saida` = data em que RETORNOU do terceiro (gravada ao
+  "Retorno/Terceiro") — o oposto do que os nomes sugeririam isoladamente.
+  Exibido na tela como "Data de Envio"/"Data de Retorno" pra não confundir
+  o usuário, mas a coluna do banco continua `entrada`/`saida`.
+- `cliente`/`fornecedor` são gravados como TEXTO (nvarchar) na tabela
+  mesmo representando códigos numéricos — mesma tabela do legado, sem
+  migração de schema (mesmo raciocínio já usado noutras reaproveitamentos
+  de coluna deste projeto).
+- Exclusão é HARD DELETE de verdade (`DELETE FROM retifica`) — confirmado
+  no código-fonte, diferente de Pedido/O.S. (que só mudam situação); única
+  entidade deste sistema com exclusão física real até agora.
+- **Não replicado** (bug do código legado, não regra de negócio): o check
+  de duplicidade antes de Inserir (`Procura(3, Protocolos, "")`) compara
+  por `num` — sempre vazio num registro novo — em vez de por `os`/
+  `numero_de_serie` como o texto do `MsgBox` ("já existe um envio para
+  esta O.S.") sugere. Nunca dispara na prática no legado; não replicado
+  (ver "Não replicar truques VB6" no CLAUDE.md).
+
+### O que foi implementado
+
+- **Backend**: `backend/services/retifica_service.py` (list/save/update/
+  retorno/delete) + `backend/routes/retifica.py` (`GET/POST /api/
+  retifica`, `PUT /api/retifica/{num}`, `POST /api/retifica/{num}/retorno`,
+  `DELETE /api/retifica/{num}`, registrado em `server.py`) +
+  `RetificaSaveRequest`/`RetificaRetornoRequest` em `schemas.py`. Permissão
+  própria `RETIFICA` (ABRIR/GRAVAR/RETORNO/EXCLUIR) no menu Transações,
+  gateada pelo mesmo módulo de OS/OS_COMP (Oficina OU Assistência).
+  12 testes unitários em `test_retifica_service.py`.
+- **Frontend**: `frontend/app/envio-terceiros.tsx` — lista (busca + filtro
+  "somente em aberto") + modal de Envio/Alterar (Cliente e Terceiro via
+  busca real — `ClientSearchModal`/`FornecedorSearchModal`, mesma regra
+  `[GLOBAL]` de campos de identidade; Marca/Modelo via combobox de tabela
+  auxiliar) + modal de Retorno (data + valor). Card novo em `transacoes.tsx`
+  ("Envio para Terceiros"), gated por `RETIFICA.ABRIR`.
+- **Bug real encontrado e corrigido durante o teste ao vivo**: `numero_de_
+  serie` (nvarchar(20)) não era truncado antes de gravar — um valor mais
+  longo que 20 caracteres quebrava com erro cru do SQL Server ("String or
+  binary data would be truncated"). Corrigido com o padrão já usado no
+  projeto (`_get_col_sizes`/`_trunc`), aplicado também em `cliente`/
+  `fornecedor` (nvarchar(14)).
+- **Testado ao vivo contra KONTACTO TESTE**: criar envio (O.S. #20499),
+  listar (com filtro "somente abertos" e por busca), registrar retorno
+  (grava `saida`+`valor`), alterar (incluindo o caso de truncamento acima,
+  antes e depois da correção), excluir — protocolo de teste removido ao
+  final (esta tabela tem exclusão física real, então a limpeza foi
+  completa, diferente de O.S./Pedido).
+
+### Fora do escopo desta rodada
+
+- **Relatório/impressão formatada** (`Command5_Click`, subs `Imprime`/
+  `Envio_Retifica2`/`Retorno_Retifica`) — não rastreado nem implementado;
+  a lista em tela (com busca/filtro) cobre a consulta, mesma decisão já
+  tomada pro Borderô de Cilindros (on-screen em vez do formato de
+  impressão térmica do legado). Sem pedido explícito do usuário pra
+  reconsiderar ainda.
+- **Colunas `marinheiro` (nvarchar(40)) e `tipo_envio` (nvarchar(1))** —
+  existem na tabela real (confirmado ao vivo) mas NÃO aparecem em
+  `frmmanret.frm`; não modeladas aqui por falta de rastreio de uma regra
+  de negócio real pra elas (podem pertencer a uma tela/variante diferente,
+  não localizada). Revisitar se o usuário confirmar o propósito.
+- **F2 - Busca de O.S.** do legado (`PrepProcuraOS`, join usando
+  `os.CHASSI = equipamentos.numero_de_serie`) não replicado — campo O.S.
+  é só um número digitado + validação no Gravar (mesmo padrão simples já
+  usado em outras telas deste projeto que referenciam O.S./Pedido por
+  número).
+- **Auto-preenchimento de Cliente a partir da O.S.** — não implementado;
+  o legado também não faz isso (Cliente é campo independente com sua
+  própria busca). Poderia ser uma melhoria de UX futura, não pedida.
+
+---
+
+## Pontuação de Técnicos
+
+**Status: 🟢 Implementado e testado ao vivo, 2026-08-01.** Migração do
+frame "Pontuação" (`Command4_Click`) — rastreado no código-fonte real em
+`C:\Desenv\VB6\SQLSERVER\Kontacto\frmtraosa.frm` (18909 linhas — a
+variante mais completa das encontradas: `frmtraos.frm`/`frmtraosnova.frm`/
+`frmtraos18052012.frm` também têm o form de O.S., mas `frmtraosa.frm` é a
+única com o frame de Pontuação rastreado).
+
+### Regras de negócio confirmadas no rastreio
+
+- Nota de 0 a 999 (máscara "999" de 3 dígitos do legado) por ITEM da O.S.
+  (`os_produto.Pontuacao_A/E/V`, colunas já existentes no schema),
+  avaliando 3 papéis: **Executor** (rotulado "Técnico" na tela — quem
+  executou o serviço, `os_produto.executor`), **Vendedor**
+  (`os_produto.vendedor`) e **Atendente** (o atendente da O.S. inteira,
+  `os.atendente` — mesmo valor repetido em toda linha, confirmado no
+  código-fonte: a grade resolve o nome do Atendente uma vez a partir do
+  combobox do cabeçalho, não por item).
+- Gravação é direta por item (`UPDATE os_produto SET Pontuacao_A=...,
+  Pontuacao_E=..., Pontuacao_V=... WHERE Cod_Os_Prod=...`), sem exigir a
+  O.S. estar Aberta — é uma avaliação de desempenho, não uma alteração do
+  pedido em si (confirmado: o botão que abre o frame não checa situação
+  da O.S., só se ela existe).
+
+### O que foi implementado
+
+- **Backend**: `os_itens_service._list_itens_sync` passou a trazer
+  `pontuacao_a`/`pontuacao_e`/`pontuacao_v` (reaproveita o endpoint de
+  itens já existente, sem view nova — decisão deliberada: o legado inclui
+  itens cancelados na grade de Pontuação, aqui não, já que pontuar um item
+  cancelado não tem valor real); nova `save_pontuacao`/`_save_pontuacao_sync`
+  (valida 0-999, item pertence à O.S.) + `PontuacaoSaveRequest` em
+  `schemas.py` + rota `PUT /api/os-completo/{codigo}/itens/{cod_os_prod}/
+  pontuacao` em `os_completo.py` (log de auditoria `tela="OS_COMP"`,
+  `comando="PONTUACAO"`). Permissão própria `OS_COMP.PONTUACAO`. 6 testes
+  unitários novos em `test_os_itens_service.py`.
+- **Frontend**: `OSItemRow`/`useOSItens.ts` estendidos com os 3 campos +
+  `savePontuacao`; `PontuacaoModal.tsx` novo (lista os itens da O.S. já
+  carregados, 3 campos numéricos + botão Gravar por linha — mesmo padrão
+  do grid+mask do legado, sem view/endpoint de listagem próprio). Botão
+  "Pontuação de Técnicos" em `os-geral.tsx`, ao lado dos totais por
+  Situação, gated por `OS_COMP.PONTUACAO`.
+- **Testado ao vivo contra KONTACTO TESTE**: incluir item, gravar
+  pontuação (Executor=90/Vendedor=80/Atendente=70), conferir persistência
+  via novo GET, validação de faixa (rejeitou 1500) — tudo funcionou de
+  primeira, sem bug encontrado nesta rodada. O.S. de teste (#20501)
+  cancelada ao final (sem exclusão física de O.S., mesma regra já
+  documentada).
+
+### Fora do escopo desta rodada
+
+- Não modelado: itens CANCELADOS não aparecem na lista de Pontuação aqui
+  (aparecem no legado) — decisão deliberada, ver acima.
+- Não implementado: nenhum relatório consolidado de pontuação por técnico/
+  vendedor/atendente (ex.: "ranking" ou médias) — só o registro por item,
+  igual ao escopo mínimo do frame original.
+
+---
+
+## Autorização/Expedição de Itens
+
+**Status: 🟢 Implementado e testado ao vivo, 2026-08-01.** Migração da aba
+"Autorização de Itens" — rastreada no código-fonte real em
+`C:\Desenv\VB6\SQLSERVER\Revenda\FrmTraOsNew.frm` (20241 linhas — a variante
+canônica pra esta feature: a cópia de `Kontacto\` tem os controles de UI
+presentes mas `Visible=0` e **sem nenhum `Click` handler ligado**, forte
+indício de que a feature foi só escafoldada e nunca ativada nessa linha de
+negócio; `Revenda\` é a única cópia com a lógica de fato implementada).
+
+### Regras de negócio confirmadas no rastreio (e com o usuário, via `AskUserQuestion`)
+
+- **Reserva de estoque é condicional, não uma escolha binária entre "sempre
+  na inclusão" e "sempre na autorização"** — confirmado diretamente pelo
+  usuário depois de eu ter oferecido só essas duas opções: *"O normal é o
+  sistema reservar o estoque quando lança o produto na o.s., mas quando no
+  controle está habilitado pra exigir aprovação prévia, o estoque só baixa
+  após ser autorizado"*. Ou seja: comportamento padrão inalterado (reserva
+  na inclusão do item) **exceto** quando
+  `controle_aux.exige_aprovacao_itens_os` = 1 (checkbox "Exige Autorização
+  de itens O.S." em Controle do Sistema > Gerencial/Controle), caso em que
+  a reserva só acontece no momento da Autorização.
+- **Autorizar** é o passo que de fato move estoque (`pecas.qtd -=
+  quant; reservado_os += quant`) — grava `usuario_autorizacao`/
+  `data_autorizacao`/`hora_autorizacao`/`qtd_autorizada=quant` no item, cria
+  1 registro em `os_autorizacao` por LOTE (a tela sempre autoriza vários
+  itens marcados de uma vez) + 1 linha em `os_autorizacao_itens` por item
+  (trilha de auditoria). Só permite item ainda não autorizado.
+- **Quando `exige_expedicao_itens_os` também está ligada, a ordem é
+  Expedição ANTES de Autorização** — confirmado no código-fonte
+  (`CmdExpedicao_Click`'s validação): um item só pode ser Autorizado depois
+  de já ter sido Expedido. Ordem inicialmente pareceu contraditória numa
+  primeira leitura do `.frm` (reli com calma até confirmar) — Expedição é o
+  registro de picking/separação física, Autorização é quem de fato libera o
+  estoque contabilmente.
+- **Expedição (Autorização de Expedição) NUNCA movimenta estoque** —
+  confirmado no código-fonte: a linha de movimentação de estoque desse
+  botão está desativada/comentada no legado. Só grava
+  `usuario_expedicao`/`data_expedicao`/`hora_expedicao`. Só permite item
+  ainda não autorizado e ainda não expedido.
+- **Remover Autorização** desfaz tudo (limpa os 4 campos de autorização +
+  `qtd_autorizada=0`, apaga a linha de `os_autorizacao_itens`, estorna o
+  estoque). **Remover Autorização de Expedição** só limpa os 3 campos de
+  expedição (+ reset de `qtd_autorizada=0`, no-op idêntico ao legado) — só
+  permitido em item já expedido e AINDA NÃO autorizado (uma vez autorizado,
+  a expedição não pode ser desfeita isoladamente; tem que remover a
+  autorização primeiro).
+- **Permissão por Área de Estoque**: um funcionário só pode Autorizar/
+  Expedir itens cuja `pecas.area` bata com alguma área atribuída a ele em
+  `funcionarios_area`. Essa tabela **já existe e já é totalmente
+  gerenciável** — é o campo "Área de Estoque" já existente no cadastro de
+  Funcionários (`funcionario-completo.tsx`/`funcionarios_service.py`,
+  campo `areas_estoque`), confirmado diretamente pelo usuário: *"tabela
+  funcionarios_area existe sim, é o campo 'area de estoque' no cadastro de
+  funcionarios"* — nenhuma UI nova precisou ser criada pra gerenciar essa
+  tabela, só CONSULTÁ-la ao autorizar/expedir. Usuários "sentinela" de
+  sistema (`usuario_alteracao <= 0`, ex. master `-2`) bypassa essa checagem
+  — mesmo espírito de "Master tem acesso total" já usado no resto do
+  projeto, aqui é uma restrição de escopo de dados por funcionário comum,
+  não uma permissão de tela.
+- **Não replicado** (arquitetura estranha ao modelo desta migração, não uma
+  regra de negócio): a segunda conexão `dbrevendaDEV` que o legado abre em
+  paralelo — este backend é single-connection-per-empresa, sem equivalente.
+  Também não replicado: `ImprimeExpedicao`/`CmdImpExpedicao` (impressão
+  formatada) — mesma decisão já tomada noutras telas deste projeto
+  (consulta em tela cobre o caso de uso, sem o formato de impressora
+  térmica do legado).
+
+### O que foi implementado
+
+- **Backend**: dois helpers novos em `pedido_common.py`
+  (`_exige_aprovacao_itens_os_ativo`/`_exige_expedicao_itens_os_ativo`, lêem
+  `controle_aux.exige_aprovacao_itens_os`/`.exige_expedicao_itens_os`).
+  `os_itens_service.py` ganhou: (1) reserva de estoque CONDICIONAL em
+  `_add_item_sync`/`_update_item_sync`/`_delete_item_sync` (só reserva/
+  ajusta/estorna quando a flag está desligada OU o item já foi autorizado
+  antes — evita mexer em estoque que nunca foi de fato reservado); (2) 4
+  funções novas — `_autorizar_itens_sync`/`_remover_autorizacao_sync`/
+  `_expedir_itens_sync`/`_remover_expedicao_sync` — todas em LOTE (recebem
+  uma lista de `cod_os_prod`, processam item a item, retornando quais foram
+  processados e quais bloqueados, sem abortar o lote inteiro no primeiro
+  bloqueio); (3) `_list_itens_sync` estendida com os 8 campos de
+  autorização/expedição (`usuario_autorizacao`/`data_autorizacao`/
+  `hora_autorizacao`/`qtd_autorizada`/`usuario_expedicao`/`data_expedicao`/
+  `hora_expedicao` + nomes resolvidos). `AutorizacaoItensRequest` novo em
+  `schemas.py`. 4 rotas novas em `os_completo.py`
+  (`POST /api/os-completo/{codigo}/itens/autorizar`, `/remover-autorizacao`,
+  `/expedir`, `/remover-expedicao`, log de auditoria `tela="OS_COMP"`,
+  `comando="AUTORIZAR"`/`"EXPEDIR"`), mais as 2 flags expostas no cabeçalho
+  (`os_completo_service.get_os_completo` → `exige_aprovacao_itens_os`/
+  `exige_expedicao_itens_os`). Permissões novas `OS_COMP.AUTORIZAR`/
+  `OS_COMP.EXPEDIR` no catálogo. 22 testes unitários novos em
+  `test_os_itens_service.py` (estoque condicional nas 3 funções de item +
+  as 4 funções de autorização/expedição, incluindo os casos de bloqueio por
+  já-autorizado/falta-de-expedição-prévia/área-de-estoque).
+- **Frontend**: `OSItemRow`/`OSData` (`types.ts`) estendidos com os campos
+  novos; `useOSItens.ts` ganhou estado de seleção em lote
+  (`autorizacaoSelecionados`) + as 4 ações; `AutorizacaoItensModal.tsx` novo
+  (lista de itens com checkbox + badge de estado Autorizado/Expedido +
+  usuário/data, e os 4 botões de ação — Autorizar/Remover Autorização
+  sempre visíveis se `OS_COMP.AUTORIZAR`; Autorizar Expedição/Remover
+  Expedição só quando `exige_expedicao_itens_os` E `OS_COMP.EXPEDIR`).
+  Botão "Autorização de Itens" em `os-geral.tsx`, ao lado do de Pontuação de
+  Técnicos, só aparece quando pelo menos uma das 2 flags de empresa está
+  ligada E o usuário tem `OS_COMP.AUTORIZAR` ou `OS_COMP.EXPEDIR`.
+- **Testado ao vivo contra KONTACTO TESTE** (produto `P9890`, O.S. #20497):
+  liguei `exige_aprovacao_itens_os` temporariamente (valor original 0/0
+  restaurado ao final), incluí item e confirmei que o estoque NÃO foi
+  reservado (`qtd`/`reservado_os` inalterados); Autorizar moveu o estoque
+  corretamente (-2/+2) e criou a trilha (`os_autorizacao`/
+  `os_autorizacao_itens`); Remover Autorização estornou certinho. Depois
+  liguei também `exige_expedicao_itens_os` e confirmei: Autorizar sem
+  Expedir antes bloqueia (`bloqueados`); Expedir não mexe em estoque;
+  Autorizar depois de Expedir funciona; Remover Autorização de Expedição
+  bloqueia com item já autorizado, funciona depois de remover a
+  autorização. Exclusão do item de teste estornou corretamente (item nunca
+  autorizado) e o estoque final bateu exatamente com o valor inicial
+  (73/1). Catálogo de permissões confirmado expondo `AUTORIZAR`/`EXPEDIR`
+  sob `OS_COMP`. `tsc --noEmit` sem novos erros (baseline 12 preexistentes,
+  não relacionados). **UI React (cliques/modal) não testada visualmente**
+  — só a API, mesma ressalva já registrada pro resto da O.S. Completa nesta
+  sessão (sem ferramenta de automação de navegador disponível).
+
+### Fora do escopo desta rodada
+
+- Nenhum relatório/consulta consolidada de itens pendentes de autorização/
+  expedição entre O.S. (só o modal por-O.S., igual ao escopo do frame
+  original).
+- Cadastro/gestão de `funcionarios_area` não foi tocado — já existia e já
+  é gerenciável via o cadastro de Funcionários, só foi CONSULTADO aqui.
+
+---
+
+## Tempo Gasto por Serviço
+
+**Status: 🟢 Implementado 2026-08-01 (testes unitários; sem teste ao vivo
+contra KONTACTO TESTE ainda — próxima sessão que tocar este módulo deve
+validar antes de considerar realmente concluído).** Migração do frame
+"Tempo Gasto" (`Command30_Click`/`Command57_Click`/`Command56_Click`) —
+rastreado no código-fonte real em `C:\Desenv\VB6\SQLSERVER\Revenda\
+FrmTraOsNew.frm` (20241 linhas). **`Geral\FrmTraOs.frm` NÃO tem essa
+feature** (confirmado por grep, 0 ocorrências de `os_tempo`) — mesmo
+precedente já registrado em "Autorização/Expedição de Itens" acima:
+`Revenda\` é a cópia com a lógica de fato implementada, `Geral` não serve
+de referência aqui.
+
+### Regras de negócio confirmadas no rastreio
+
+- Tabela `os_tempo` (colunas confirmadas no código real: `codigo` PK
+  IDENTITY, `os` FK, `codigo_interno`, `funcionario`, `data`,
+  `hora_inicio`, `hora_fim` opcional, `obs`) — já existia no schema, até
+  agora só referenciada como guard de integridade em
+  `funcionarios_service.py` (`("os_tempo", "funcionario", "", "Tempo de
+  O.S.")`), nunca tinha CRUD próprio.
+- Painel é uma seção dentro do próprio `FrmTraOsNew.frm` (não um form
+  separado) — grid + formulário de lançamento, sem tela de
+  relatório/consulta dedicada em nenhum outro `.frm`.
+- **Só permite Incluir/Alterar/Excluir com a O.S. Aberta** — confirmado em
+  `Command56_Click`/`Command57_Click` (`If tb("situacao") <> "A" Then
+  fechaconexoes: Exit Sub`). **Consulta é permitida em qualquer situação**
+  (a checagem de `Command30_Click`, que abre o painel, está comentada no
+  legado).
+- Combo de Serviço restrito ao que já foi incluído na O.S. (`SELECT
+  DISTINCT servicos.codigo... WHERE os=<OS>`), com fallback pro catálogo
+  geral de serviços quando a O.S. ainda não tem nenhum serviço lançado.
+- **Tempo Gasto é sempre DERIVADO** (`hora_fim - hora_inicio`), nunca uma
+  coluna própria persistida — recalculado a cada exibição no legado
+  (`Diferenca()`), replicado aqui em Python (`_tempo_gasto_min`, assume
+  virada de meia-noite quando `hora_fim < hora_inicio`).
+- **Não replicado** (workaround VB6, não regra de negócio — ver "Não
+  replicar truques VB6" no CLAUDE.md): o bloqueio de escrita no legado é
+  **silencioso** (sem mensagem, só sai da sub-rotina). Aqui optamos por
+  retornar uma mensagem clara ("OS 'X' não permite lançar/excluir Tempo
+  Gasto — só com a OS Aberta") — a regra real (bloquear) foi mantida, só
+  o silêncio da UI não foi replicado.
+
+### O que foi implementado
+
+- **Backend**: `backend/services/os_tempo_service.py` (novo — list/save/
+  delete, exige OS Aberta pra escrita, sem checagem de permissão
+  server-side — mesmo padrão já usado por TODO o resto de
+  `os_itens_service.py`: ADD_ITEM/EDIT_ITEM/DEL_ITEM/PONTUACAO/AUTORIZAR/
+  EXPEDIR também não checam `tem_permissao` server-side, só client-side
+  via `can(...)` — não é uma omissão desta rodada, é consistência com o
+  arquivo-irmão). `OSTempoSaveRequest` novo em `schemas.py`. 3 rotas novas
+  em `os_completo.py` (`GET/POST /api/os-completo/{codigo}/tempo`,
+  `PUT/DELETE /api/os-completo/{codigo}/tempo/{tempo_codigo}`, log de
+  auditoria `tela="OS_COMP"`, `comando="TEMPO"`). Permissão nova
+  `OS_COMP.TEMPO` no catálogo (`ACOES_OS_COMP`). 19 testes unitários novos
+  em `test_os_tempo_service.py` (validação de campos obrigatórios, OS não
+  encontrada/não aberta, criar/atualizar/excluir com sucesso e bloqueios,
+  cálculo de `_tempo_gasto_min` incl. virada de meia-noite).
+- **Frontend**: `frontend/src/components/os/TempoGastoModal.tsx` — modal
+  autocontido (busca sua própria lista ao abrir, não depende do hook
+  `useOSItens`, mesmo espírito de `AnexosOSModal.tsx`): formulário
+  Serviço (combo dos serviços já na O.S., fallback pro catálogo geral via
+  `GET /api/produtos-servicos?tipo=S`) + Técnico (reaproveita `funcOptions`
+  já carregado em `os-geral.tsx`) + Data/Hora Inicial/Hora Final
+  (`WebDateField`) + Observação, lista de lançamentos com duração
+  calculada (`Xh Ymin`) e Editar/Excluir por linha — formulário e ações de
+  escrita somem quando a O.S. não está Aberta, mantendo só a consulta.
+  Botão "Tempo Gasto por Serviço" em `os-geral.tsx` (ícone `time-outline`,
+  ao lado de Pontuação/Autorização), gated por `can("OS_COMP.TEMPO")`,
+  visível independente de a O.S. já ter itens (diferente de Pontuação/
+  Autorização, que só aparecem com `it.itens.length > 0` — Tempo Gasto não
+  é por-item, então não faz sentido escondê-lo nesse caso). Entrada nova
+  no Modo Didático (`AJUDA_OS_ITENS`).
+- `tsc --noEmit`: sem novos erros (baseline de 12 pré-existentes
+  inalterado). Suíte de testes do backend (O.S. completa + Tempo Gasto):
+  151 testes, sem regressão.
+
+### Fora do escopo desta rodada
+
+- **Teste ao vivo contra KONTACTO TESTE** — só testado via testes
+  unitários (cursor fake) e `tsc`, igual à ressalva já registrada nas
+  outras sub-features desta sessão quando não dava pra usar navegador.
+  Validar criar/editar/excluir lançamento e o fallback de busca de
+  serviço (O.S. sem nenhum serviço lançado ainda) antes de considerar
+  encerrado.
+- Nenhum relatório consolidado de tempo gasto por técnico/serviço (ex.:
+  total de horas no período) — só o lançamento por O.S., igual ao escopo
+  mínimo do frame original.
+- `os_tempo.codigo_interno` aceita só serviços nesta implementação — o
+  legado também suporta peças no JOIN de exibição (`UNION ALL PECAS`),
+  mas o combo de lançamento em si só oferece serviços (`LEFT(codigo_interno,1)='S'`
+  no fallback); não foi encontrado nenhum caminho no legado que de fato
+  grave uma peça em `os_tempo`, então não foi replicado.
+
+---
+
+## Requisições Vinculadas (O.S. Completa)
+
+**Status: 🟢 Implementado 2026-08-01 (testes unitários; sem teste ao vivo
+contra KONTACTO TESTE ainda — validar antes de considerar realmente
+concluído).** Migração da aba "Requisições vinculadas a O.S." (`GridReq`,
+`Sub Requisicoes()`) — rastreada no código-fonte real em
+`C:\Desenv\VB6\SQLSERVER\Revenda\FrmTraOsNew.frm` (2ª aba de um `SSTab1`
+dentro do frame "Itens da Ordem de Serviço", ao lado de "Itens..." e
+"Autorização de Itens"). **100% somente leitura no legado** — confirmado
+por grep: não existe `GridReq_Click`/`GridReq_DblClick` em todo o arquivo,
+e `Frame17` (o frame que contém o grid) não tem nenhum outro controle.
+
+### Rastreio — dois mecanismos de vínculo coexistentes no legado
+
+Achado importante durante o rastreio (evita retrabalho numa sessão
+futura): o legado tem **dois mecanismos diferentes e redundantes** para
+vincular uma Requisição a uma O.S., e o `GridReq` lê os dois via
+`UNION ALL`:
+
+1. **Tabela `os_requisicao`** (`os` + `requisicao`, só essas 2 colunas —
+   confirmado por todo `INSERT INTO Os_Requisicao` encontrado no
+   repositório). É gravada só por variantes do form de inclusão de item de
+   O.S. **fora** de `Revenda\` (`Klifer\FrmOsProdutoNV2.frm`,
+   `Geral\FrmOsProdutoPAFECF.frm`, `Geral\FrmOsProdutoNV.frm`/`NV2.frm`) —
+   ou seja, **nenhum form que esta migração já rastreou/portou grava
+   nela**. `Revenda\FrmTraOsNew.frm` só LÊ essa tabela (reserva de
+   estoque, limpeza no Cancelar O.S.), nunca escreve.
+2. **Colunas escalares `requisicao.tipo_mov_requisicao`/
+   `codigo_requisicao`** — é o mecanismo que a tela de Requisição já
+   migrada (`Geral\frmmanreq.frm`, campo "Documento vinculado" do
+   cabeçalho, `Campo(0)`/`Campo(4)`) usa de fato, só que esse campo **não
+   foi implementado** na migração de Requisição (registrado lá como fora
+   de escopo — "Toda requisição criada aqui é avulsa" — ver seção
+   "Movimentações" acima). Também é o mecanismo usado pelo
+   `GeraRequisicao` (`Geral\mdl_proc.bas:18849`, requisição automática de
+   produto composto) chamado por `Revenda\FrmTraOsNew.frm:8652`.
+- **Consequência prática pra esta implementação**: como nenhuma tela desta
+  migração grava em nenhum dos dois mecanismos ainda, esta grade hoje
+  normalmente vem **vazia** em qualquer O.S. criada só pela stack nova —
+  isso é esperado, não é bug. A leitura foi implementada fiel ao legado
+  (`UNION ALL` das duas fontes) pra já cobrir (a) dados históricos que
+  possam existir em `os_requisicao` de outras variantes/instalações e (b)
+  o dia em que "Documento vinculado" for implementado na tela de
+  Requisição — nenhuma mudança seria necessária nesta grade.
+- **Só mostra PRODUTOS** (join com `pecas`), nunca serviços — fiel ao
+  legado, que nunca junta com `servicos` nesta grade específica, mesmo a
+  Requisição em si aceitando os dois tipos.
+- Recarrega ao abrir/trocar de O.S. no legado (5 pontos de `Call
+  Requisicoes` — `Form_Load`, `CARREGAOS`, "Nova O.S.", requisição
+  automática, reabrir/gravar); replicado aqui como um `GET` sob demanda ao
+  abrir o modal (não fica escutando eventos da tela).
+
+### O que foi implementado
+
+- **Backend**: `os_completo_service.list_requisicoes_vinculadas` (nova
+  função `_list_requisicoes_vinculadas_sync`, réplica fiel do `UNION ALL`
+  do `GridReq`, com total calculado em Python — mesmo padrão de
+  `os_tempo_service`, sem view nova). Rota
+  `GET /api/os-completo/{codigo}/requisicoes-vinculadas`. Permissão nova
+  `OS_COMP.VER_REQUISICOES` ("Ver Requisições Vinculadas", mesmo padrão de
+  `VER_DESCONTOS` — ação só de leitura). 4 testes unitários novos em
+  `test_os_completo_service.py` (OS não encontrada, lista+soma total,
+  lista vazia, wrapper async).
+- **Frontend**: `frontend/src/components/os/RequisicoesVinculadasModal.tsx`
+  — modal 100% somente leitura (sem formulário, sem botão de ação), busca
+  a lista ao abrir, mostra requisição/data/cód. fábrica/descrição/qtd×valor
+  unit./total por linha + linha de TOTAL geral. Botão "Requisições
+  Vinculadas" em `os-geral.tsx` (ícone `clipboard-outline`, na mesma linha
+  do botão de Tempo Gasto), gated por `can("OS_COMP.VER_REQUISICOES")`,
+  visível independente de a O.S. ter itens (mesmo raciocínio do botão de
+  Tempo Gasto — não é uma ação por-item). Entrada nova no Modo Didático.
+- `tsc --noEmit`: sem novos erros (baseline de 12 pré-existentes
+  inalterado — 1 erro novo foi introduzido e corrigido na mesma rodada,
+  `alignItems: "center"` sem `as const` no objeto de estilo). Suíte de
+  testes do backend (O.S. completa + Requisição): 131 testes, sem
+  regressão.
+
+### Fora do escopo desta rodada
+
+- **Teste ao vivo contra KONTACTO TESTE** — como o mecanismo de vínculo
+  ainda não é gravado por nenhuma tela desta migração (ver acima), não há
+  hoje um jeito de popular dados reais pra esse teste sem um INSERT manual
+  direto no banco; validar quando "Documento vinculado" for implementado
+  na tela de Requisição, ou com um INSERT manual de teste em
+  `os_requisicao`/`requisicao.codigo_requisicao` se quiser validar antes
+  disso.
+- **"Documento vinculado" na tela de Requisição** (`Geral\frmmanreq.frm`,
+  `Campo(0)`/`Campo(4)`, grava `requisicao.tipo_mov_requisicao`/
+  `codigo_requisicao`) — continua fora de escopo, não foi implementado
+  nesta rodada (só a LEITURA do lado da O.S. foi feita). Se for pedido no
+  futuro: campo de texto "Tipo"+"Código" no cabeçalho da Requisição,
+  validando que só aceita `Tipo="OS"` + um número de O.S. Aberta
+  existente (mesma regra do legado, `Campo_LostFocus` linhas 1595-1639 de
+  `frmmanreq.frm`).
+- **Escrita em `os_requisicao`** (Mecanismo B, "Importar Requisição
+  Fechada" de `Klifer\FrmOsProdutoNV2.frm`) — não replicado; nenhum form
+  desta migração usa esse fluxo específico de importação de requisição
+  fechada pra dentro de um item de O.S.
+
+---
+
+## Agendar item de Serviço (O.S. Completa)
+
+**Status: 🟢 Implementado 2026-08-01 (testes unitários + `tsc` limpo; sem
+teste ao vivo contra KONTACTO TESTE ainda — validar antes de considerar
+realmente concluído, inclusive criar/consultar a tabela `AGENDA_OS` numa
+instalação real).** Extensão do módulo Agenda (já existente pro Pedido
+Geral — módulo Clínica/Assistência, ver "Transações" > "Pedido Geral —
+Fase B: Clínica (Agendamento)" acima) pra também cobrir item de Serviço da
+O.S. Completa, quando o módulo Assistência está ligado.
+
+### Rastreio — dois mecanismos coexistentes, `AGENDA_PEDIDO` vs. `AGENDA_OS`
+
+O backend do módulo Agenda (`agenda_service.py`) era, antes desta rodada,
+**hard-coded** pra `pedido_venda_prod`/`AGENDA_PEDIDO` — uma nota antiga
+neste arquivo (seção "Transações" > "Pedido Geral — Fase B", "Integração
+com O.S. Assistência Técnica") dizia que "o backend já é genérico
+(AGENDA/AGENDA_PEDIDO/AGENDA_OS)", o que se mostrou **impreciso** ao
+investigar de verdade: a tabela `AGENDA` em si não tem FK fixa pra
+pedido/O.S. (é genérica), mas o CÓDIGO Python só sabia falar com
+`AGENDA_PEDIDO`. `AGENDA_OS(CODAGENDA, CODOS)` é a tabela ponte
+equivalente do lado da O.S. (`CODOS` guarda o `os_produto.cod_os_prod` do
+ITEM, mesma convenção de `AGENDA_PEDIDO.CODPEDIDO` guardar o `codauto` do
+item, não o número do pedido/O.S.) — confirmada como parte real do schema
+legado, mas nenhum código Python a usava ainda.
+
+### O que foi generalizado no backend (sem duplicar a máquina de estados)
+
+`agenda_service.py` ganhou um parâmetro `origem: str = "pedido"` (e
+`tela: str = "PEDIDO_COMP"` pra permissão) em `_salvar_agendamento_sync`/
+`_cancelar_agendamento_sync`/`_agendamento_atual`/
+`get_agendamento_item`/`salvar_agendamento`/`cancelar_agendamento` —
+**default preserva 100% do comportamento anterior** (todos os 53 testes
+pré-existentes de `test_agenda_service.py` passam sem alteração de
+fixture). Só os pontos que precisam saber a tabela/coluna de origem
+branch por `origem`:
+- Busca do item (`pedido_venda_prod`/`pedido_venda` vs. `os_produto`/`os`)
+  — o resto da validação (item cancelado, é serviço, elegibilidade por
+  especialidade, disponibilidade do profissional, situação protegida) é
+  **100% compartilhado**, não duplicado.
+- `_agendamento_atual` (bridge `AGENDA_PEDIDO`/`AGENDA_OS`).
+- INSERT do vínculo ao criar (`AGENDA_PEDIDO`/`AGENDA_OS`).
+- UPDATE do cache no item (`pedido_venda_prod.data_servico`/
+  `.executor_agenda` vs. `os_produto.data_servico`/`.executor_agenda` —
+  colunas novas em `os_produto`, ver migração abaixo).
+- `_agendamento_por_codagenda` agora faz LEFT JOIN nos DOIS bridges e
+  **deriva** um campo novo `origem` (`"pedido"`/`"os"`/`None` avulso) —
+  usado por `_trocar_profissional_sync` (que só recebe `codagenda`, não
+  sabe a origem de antemão) pra decidir qual tabela de item atualizar.
+  Campos de saída antigos (`codauto`, `pedido`) continuam com o mesmo
+  significado de antes (só o lado Pedido) — os novos (`codauto_os`, `os`,
+  `origem`) são aditivos, nenhum consumidor existente quebra.
+- **Migrações idempotentes novas** em `pedido_common.py`
+  (`_ensure_agenda_os_table`/`_ensure_os_produto_agenda_cols`, mesmo
+  padrão de `_ensure_agenda_forma_pag_tables`/`_ensure_qtd_pessoas_col` —
+  `IF NOT EXISTS`, sem executor de migração central): criam `AGENDA_OS` se
+  não existir, e `os_produto.data_servico`/`.executor_agenda` se não
+  existirem. Chamadas tanto ao salvar um agendamento de O.S. quanto na
+  listagem de itens da O.S. (`os_itens_service._list_itens_sync`, pro
+  enriquecimento — ver abaixo), pra nunca quebrar numa instalação que
+  ainda não tem essas tabelas/colunas.
+- `os_itens_service._list_itens_sync` ganhou o mesmo enriquecimento com
+  `item.agendamento` que o Pedido Geral já tinha
+  (`pedido_completo_service._get_pedido_completo_sync`) — mesma forma
+  (`codagenda`/`data`/`hora_ini`/`profissional`/`funcionario`/`situacao`),
+  reaproveitando o campo `agendamento?` que já existe em `ItemRow`
+  (compartilhado por Pedido e O.S. via `OSItemRow = ItemRow & {...}`).
+- Rotas novas em `routes/agenda.py`: `GET/POST /api/agenda/os-item/
+  {cod_os_prod}` e `POST /api/agenda/os-item/{cod_os_prod}/cancelar` —
+  espelham as rotas `/agenda/item/{codauto}` já existentes, log de
+  auditoria com `tela="OS_COMP"`.
+- Permissão nova `OS_COMP.AGENDAR` no catálogo (`ACOES_OS_COMP`).
+- 9 testes unitários novos em `test_agenda_service.py` (salvar/cancelar/
+  trocar profissional pela origem "os", checagem de permissão por tela,
+  módulo desligado, derivação de `origem` em `_agendamento_por_codagenda`)
+  + 2 em `test_os_itens_service.py` (enriquecimento com/sem agendamento).
+  Suíte completa relacionada (agenda + O.S. + Pedido Completo + permissões):
+  274 testes, sem regressão.
+
+### O que foi feito no frontend (reaproveitando o modal inteiro, não um fork)
+
+`AgendarModal.tsx` (Situação do Atendimento, Revisão/Garantia,
+Descartáveis, Hora Chegada/Saída, Anexos do agendamento, Formulários/
+Layouts, Troca de Profissional com `AuthorizationSlide` — feature completa
+já validada no Pedido Geral) foi **reaproveitado tal e qual**, sem
+duplicar nenhuma linha de UI: seu prop `it` era tipado como
+`UsePedidoItens` (o hook inteiro do Pedido); foi estreitado pra uma
+interface estrutural nova, `AgendaItens`
+(`frontend/src/components/pedido/agendaTypes.ts` — `conn`, `agendarItem`,
+`setAgendarItem`, `profissionaisAgenda`, `profissionaisLoading`,
+`agendaSaving`, `salvarAgendamento`, `cancelarAgendamento`,
+`trocarProfissionalAgenda`, os únicos 9 campos que o modal de fato usa).
+Mesmo princípio já usado em `ItemList.tsx`'s `ItemListItens`/
+`GeneralDiscountModal`/`DiscountsReportModal` — `UsePedidoItens` já
+satisfaz `AgendaItens` automaticamente (é superset, zero mudança no
+Pedido), e `useOSItens.ts` (O.S. Completa) só precisou implementar esses 9
+campos DE VERDADE (antes só tinha `setAgendarItem` como no-op) — as
+funções são réplica adaptada das de `usePedidoItens.ts`, só apontando pra
+`/api/agenda/os-item/...` em vez de `/api/agenda/item/...`.
+
+- `ItemList.tsx`'s `canAgendar` estendido: `tela === "OS_COMP" &&
+  moduleOn("Assistencia") && can("OS_COMP.AGENDAR")` (Clínica não se
+  aplica à O.S. — é exclusiva do segmento Pedido). O botão "Agendar"/
+  "Ver Atendimento" por item de Serviço, e o texto "· Agendado: ..." na
+  descrição, já funcionam pra O.S. sem nenhuma mudança adicional em
+  `ItemList.tsx` (o componente já era compartilhado).
+- `os-geral.tsx`: `<AgendarModal it={it} clienteCodigo={cliente?.codigo}
+  usuarioCod={usuarioCod} />` adicionado; `useOSItens` ganhou o parâmetro
+  `master` (bypassa a permissão AGENDAR no backend, mesmo padrão do
+  Pedido) alimentado por `isMaster` (`usePermissions()`). Entrada nova no
+  Modo Didático (`AJUDA_OS_ITENS`).
+
+### Desdobramento de item (`os_agenda_split`) — implementado 2026-08-01, mesmo dia
+
+**Correção da decisão acima, revertida no mesmo dia por pedido explícito
+do usuário** ("pode replicar. caso o técnico tenha que fazer 3
+manutenções por mês com datas diferentes da mesma OS"). A hipótese
+registrada acima (itens de Serviço de O.S. seriam sempre unidades únicas)
+era errada pro caso real de uso — Assistência Técnica também tem
+atendimentos recorrentes na mesma O.S. (manutenções periódicas), cada um
+com data própria.
+
+`os_itens_service._add_item_sync` ganhou o mesmo `clinica_split` do
+Pedido Geral (renomeado `os_agenda_split` no contexto da O.S., mesma
+lógica): item de Serviço + módulo Agenda ativo (`_modulo_agenda_ativo`,
+CLINICA OU Assistência — reaproveitado sem mudança) grava N linhas
+(`os_produto`, `quant=1` cada, literal na query — não parâmetro) em vez
+de 1 linha com `quant=N`; quantidade fracionária bloqueia com mensagem
+clara ("cada unidade vira um atendimento agendável"). Produto (tipo "P")
+nunca desdobra — o `and` do Python nem chega a consultar
+`_modulo_agenda_ativo` (short-circuit), sem query extra nesse caminho.
+Reserva de estoque (`_mover_estoque`) só roda no caminho SEM desdobro —
+no caminho desdobrado é sempre serviço, então seria sempre um no-op
+(`_is_peca` retorna False), evitado de propósito pra não gastar N queries
+à toa.
+
+- **Resposta do backend** ganhou `cod_os_prods` (lista, todos os códigos
+  criados) e `os_agenda_split` (bool) além do já existente `cod_os_prod`
+  (mantido = primeiro da lista, pra não quebrar nenhum consumidor que já
+  lia essa chave). `routes/os_completo.py`'s `add_item` usa
+  `os_agenda_split` pra logar uma descrição diferente no log de auditoria
+  ("Serviço 'X' desdobrado em N atendimento(s) agendável(is)..."), mesmo
+  padrão já usado em `routes/pedido_completo.py`.
+- **Frontend não precisou de nenhuma mudança** — `useOSItens.
+  handleAddItem` já só olha `j?.success` e recarrega a lista
+  (`loadItens()`); as N linhas aparecem naturalmente depois do reload,
+  cada uma agendável via o botão "Agendar" já implementado (ver seção
+  acima). Mesmo comportamento (nenhum toast especial pro caso desdobrado)
+  já usado pelo Pedido Geral — não é uma lacuna, é o padrão existente.
+- 4 testes unitários novos em `test_os_itens_service.py`
+  (`TestAddItemAgendaSplit`): desdobra em N linhas com módulo ativo,
+  bloqueia quantidade fracionária, NÃO desdobra com módulo desligado,
+  produto nunca desdobra e nunca consulta `controle_configuracao`. Suíte
+  completa relacionada (O.S. + Agenda + Pedido Completo + permissões):
+  202 testes, sem regressão. `tsc --noEmit`: sem novos erros (nenhuma
+  mudança de frontend nesta correção).
+
+### Fora do escopo desta rodada
+
+- **Teste ao vivo contra KONTACTO TESTE** — só testes unitários (cursor
+  fake) e `tsc`, mesma ressalva já registrada nas outras sub-features
+  desta sessão. Validar especialmente: `AGENDA_OS` sendo criada
+  corretamente na primeira vez que alguém agenda um item de O.S. nessa
+  base, o enriquecimento de `item.agendamento` na listagem não quebrando
+  instalações que nunca usaram Agenda em O.S. antes, e o desdobramento em
+  N linhas gerando de fato N atendimentos agendáveis independentes na UI.
+- Tudo que já está fora de escopo pro módulo Agenda do Pedido Geral
+  (Foto via webcam, Exportar Excel/Imprimir agenda via automação COM)
+  continua fora de escopo aqui também, sem mudança.
+
+---
+
+## Doc. Origem / Revisão Programada (O.S. Completa)
+
+**Status: 🟢 Implementado 2026-08-02 (testes unitários + `tsc` limpo; sem
+teste ao vivo contra KONTACTO TESTE ainda — validar antes de considerar
+realmente concluído).** Migração de `Command2_Click` (Gravar da O.S.),
+`Revenda\FrmTraOsNew.frm`, linhas 9737-9982 (validação) + 10043-10110
+(consumo/regeneração de `osrevisao`) + 16107-16128/14311-14322 (habilita/
+desabilita campo) + 5753-5764 (geração de datas). Item registrado há
+tempos em PENDENCIAS.md sem detalhe nenhum — rastreio completo feito nesta
+rodada antes de implementar.
+
+### O que a feature realmente é (rastreio)
+
+Duas features distintas no mesmo bloco de código, que se conectam:
+
+1. **Doc. Origem** (`Campo(150)` + `Option9`"Pedido"/`Option10`"O.S.") —
+   campo no CABEÇALHO da O.S. que aponta pra uma O.S. ou Pedido de Venda
+   ANTERIOR, do qual esta O.S. é uma Garantia ou Revisão. Validado
+   (cruzado) na gravação.
+2. **Revisão programada** (`Campo(151)` "Revisões" + tabela `osrevisao`) —
+   ao informar uma quantidade, gera N datas futuras (a cada 30 dias,
+   pulando domingo) "reservadas" pra essa O.S. — não é um job/cron, é só o
+   registro das datas esperadas (uma "agenda" de revisitas). Campo sempre
+   habilitado, em QUALQUER O.S., independente do tipo (`Campo(151).Enabled
+   = True` incondicional no legado).
+
+Quando o cliente volta, uma nova O.S. do tipo Revisão informa a O.S.
+anterior como Doc. Origem e "reivindica" a data mais antiga ainda
+disponível dessa O.S. de origem.
+
+### Regras de negócio confirmadas no rastreio
+
+- **Dois ramos mutuamente exclusivos**, decididos por SUBSTRING (sem
+  acento, maiúsculo) do texto do Tipo O.S. escolhido — não dá pra usar
+  código fixo, o cadastro `tipo_os` é livre:
+  - **Ramo "revisao"**: tipo contém "REVISÃO"/"REVISAO" E
+    `controle_aux.ControlaRevisaoOS` ligado — só aceita **O.S.** como
+    origem (Pedido fica bloqueado na tela), e exige uma data de revisão
+    programada AINDA DISPONÍVEL na O.S. de origem (`osrevisao`).
+  - **Ramo "garantia"**: tipo contém "GARANTIA" (ou "REVISÃO"/"REVISAO"
+    quando o ramo acima não se aplicou) E
+    `controle_aux.EXIGE_OS_ORIGINAL_GARANTIA` ligado — aceita **O.S. OU
+    Pedido de Venda** como origem.
+  - Se nenhum ramo se aplica (tipo comum, ou flags desligadas), nada é
+    validado.
+- **Validações cruzadas** (ambos os ramos): Doc. Origem não pode ser a
+  própria O.S.; a O.S./Pedido de origem precisa existir, ser do MESMO
+  CLIENTE, e estar FATURADA/FATURADO (`situacao='PG'`). Ramo Revisão
+  ainda exige uma linha em `osrevisao` com `os=<origem> AND
+  ISNULL(osrevisao,0)=0` (data disponível) — a menos que esta própria
+  O.S. já tenha consumido uma (reedição sem trocar Doc. Origem).
+- **Bypass por "senha superior"**: se a validação falha, o usuário pode
+  prosseguir mesmo assim com autorização de gerente/supervisor/master —
+  mesmo padrão já usado em `AgendarItemRequest.autorizado_por`/
+  `AuthorizationSlide` (frontend já validou a senha via `POST /api/login`,
+  o backend não reverifica, só confia no sinal não-vazio).
+- **Skip de revalidação**: se a O.S. já tem `validou_garantia=1` e os
+  valores atuais de Doc. Origem/Tipo batem com os já persistidos, não
+  repete a validação nem pede senha de novo (reedição de outros campos da
+  mesma O.S. já autorizada).
+- **Consumo de data programada** (só Ramo Revisão): libera qualquer
+  vínculo anterior desta O.S. (`UPDATE osrevisao SET osrevisao=0 WHERE
+  osrevisao=<esta_os>`) e reivindica a data mais antiga ainda disponível
+  da O.S. de origem.
+
+### Desvio deliberado do legado — regeneração de `osrevisao`
+
+O legado, a CADA Gravar, apaga e recria TODAS as linhas de `osrevisao`
+desta O.S. a partir do combo em tela (`DELETE FROM OsRevisao WHERE
+os=Campo(0)` + reinsert), **mesmo que "Revisões" não tenha mudado** — isso
+inclui linhas JÁ CONSUMIDAS por outra O.S., cujo reinsert (`INSERT INTO
+OsRevisao (os,data)`, só 2 colunas) **perde o vínculo de consumo**
+silenciosamente. Não achei nenhuma vantagem de negócio nisso — tem cheiro
+de bug/efeito colateral não intencional do "apaga tudo e recria" (ver
+"Não replicar truques VB6" no CLAUDE.md), não uma regra real.
+
+**Implementado diferente, deliberadamente**: a cada Gravar, só as linhas
+AINDA DISPONÍVEIS (`ISNULL(osrevisao,0)=0`) desta O.S. são apagadas e
+recriadas a partir de `qtd_revisoes`; linhas já consumidas por outra O.S.
+nunca são tocadas/apagadas por este código. Preserva o histórico de
+consumo mesmo que o usuário reedite "Revisões" depois.
+
+### O que foi implementado
+
+- **Backend** — `pedido_common.py`: `_controla_revisao_os_ativo`/
+  `_exige_os_original_garantia_ativo` (leitura dos 2 flags, já existiam
+  migrados em `controle_aux`/`controle-sistema.tsx`, só não eram usados
+  por nenhuma lógica ainda); `_ensure_os_doc_origem_cols` (migração
+  idempotente — `os.Tipo_Doc_Original`/`.VALIDOU_GARANTIA`/`.QtdRevisoes`
+  novas, `OS_ORIGINAL` já existia mas ficava hardcoded em `0`);
+  `_ensure_osrevisao_table` (idem, tabela `osrevisao`); `_validar_doc_origem`
+  (função pura, a máquina de validação em si, reaproveitável se outra tela
+  algum dia precisar — hoje só a O.S. Completa usa).
+  `os_completo_service.py`: `_save_os_completo_sync` resolve o texto do
+  Tipo O.S. (`SELECT descricao FROM tipo_os`, só quando `posicao_os`
+  informado — sem query extra quando não), chama `_validar_doc_origem`
+  ANTES do INSERT/UPDATE, grava as 4 colunas novas, e depois do
+  INSERT/UPDATE faz o consumo de data (Ramo Revisão) + regeneração segura
+  de `osrevisao`. `_get_os_completo_sync` enriquece com `os_original`/
+  `tipo_doc_original`/`validou_garantia`/`qtd_revisoes`/
+  `revisoes_programadas` (lista, com quem consumiu cada data) +
+  `controla_revisao_os`/`exige_os_original_garantia` (decide o que exibir
+  no frontend). `OSCompletoSaveRequest` ganhou `os_original`/
+  `tipo_doc_original`/`qtd_revisoes`/`autorizado_por`. Resposta de erro de
+  validação ganha `requer_autorizacao: true` pro frontend saber quando
+  oferecer o `AuthorizationSlide` em vez de só mostrar a mensagem.
+  32 testes unitários novos (`test_pedido_common_doc_origem.py`: 23 casos
+  cobrindo cada ramo/validação/bypass/skip-revalidação, com um
+  `SqlFakeCursor` por substring — mesmo padrão de
+  `test_pedido_common_forma_pagamento.py`; `test_os_completo_service.py`:
+  9 novos, integração save/get/regeneração de `osrevisao`). Suíte completa
+  relacionada: 329 testes, sem regressão.
+- **Frontend** — `os-geral.tsx`: card novo "Revisão Programada" (sempre
+  visível com a O.S. já salva) com o campo "Revisões" + lista read-only
+  das datas já programadas (disponível/consumida por qual O.S.); campos
+  "Doc. Origem" + seletor O.S./Pedido aparecem só quando
+  `mostrarDocOrigem` (mesmo critério de ramo calculado no cliente, a
+  partir do Tipo O.S. escolhido + flags já carregados no `os`) — Pedido
+  fica oculto quando o ramo é Revisão (só aceita O.S.). No Gravar, se a
+  resposta trouxer `requer_autorizacao`, mostra confirmação
+  (`useFeedback().showConfirm`) e, se aceito, abre `AuthorizationSlide`
+  (componente já estabelecido no projeto, reaproveitado sem duplicar) —
+  autorizado, regrava passando `autorizado_por`. `OSData`
+  (`os/types.ts`) ganhou os campos novos. Entrada nova no Modo Didático.
+  `tsc --noEmit`: sem novos erros (baseline de 12 pré-existentes
+  inalterado).
+
+### Fora do escopo desta rodada
+
+- **Teste ao vivo contra KONTACTO TESTE** — só testes unitários e `tsc`,
+  mesma ressalva das outras sub-features desta sessão. Validar
+  especialmente: criação da tabela `osrevisao`/colunas novas em `os` numa
+  instalação real, o fluxo completo Revisão (gerar datas numa O.S.,
+  faturar, abrir uma segunda O.S. tipo Revisão apontando pra ela, conferir
+  que consome a data certa), e o fluxo de bypass por senha superior
+  (`AuthorizationSlide` → `autorizado_por` → regravação).
+- **"Deseja entrar com senha superior?" pro CANCELAR o Gravar** — o
+  legado, ao recusar a autorização (`MsgBox ... vbNo`), cancela o Gravar
+  inteiro (`Exit Sub`, mantém a tela aberta pro usuário corrigir). Aqui o
+  comportamento equivalente é: o toast de confirmação fecha, nada é
+  gravado, o usuário permanece na tela com os campos como estavam — mesmo
+  efeito, não implementado como um "modo" separado.
+- **Log de auditoria da autorização por senha** — o legado grava uma linha
+  em `Logs`/`Grava_Andamento` quando o bypass é usado. Não implementado
+  nesta rodada (o log de auditoria genérico da tela já registra o GRAVAR
+  em si, incluindo os campos alterados — só não há uma entrada DEDICADA
+  "autorizado por X" como o legado tem). Registrar se o usuário pedir
+  rastreabilidade específica desse evento.
+
+---
+
+## Cadastro de Equipamento Inline (O.S. Completa)
+
+**Status: 🟢 Implementado 2026-08-02 (sem teste ao vivo ainda — endpoint
+`POST /api/equipamentos` já existe e já é usado/testado pela tela completa
+`equipamentos.tsx`, só o formulário inline em si não foi exercitado contra
+KONTACTO TESTE).** Sem precedente no legado (não é migração de VB6) — pura
+melhoria de UX pedida pelo usuário. Sem mudança de backend: reaproveita
+100% o endpoint já existente (`equipamentos_service._save_sync`), zero
+rota/schema novo.
+
+### O que mudou
+
+Antes, `EquipamentoSearchModal.tsx` (usado pelo bloco "Dados do
+Equipamento" da O.S. Completa) tinha um botão "Cadastrar novo
+equipamento" que **fechava o modal e navegava** pra `/equipamentos` (tela
+cheia) quando a busca não encontrava nada — perdendo o contexto da O.S.
+que estava sendo preenchida.
+
+Agora esse botão abre um **formulário mínimo dentro do próprio modal**
+(sem navegação): Número de Série + Marca + Modelo (os 3 únicos campos que
+o backend realmente exige — confirmado em `equipamentos_service._save_sync`,
+linhas 143-151) + Portador (opcional, incluído por ser barato e útil).
+Todo o resto (Local, Data de Revisão, Valor, Situação, Tipo, Detalhes)
+fica com os defaults do backend (`situacao_equipamento='A'`,
+`tipo_equipamento='A'` — Avulso, o default correto pra equipamento criado
+a partir de uma O.S., "Contrato" é uma ação separada de disponibilização)
+— quem precisar preencher esses campos completa depois pela tela cheia
+`app/equipamentos.tsx`, que continua existindo inalterada como cadastro
+completo.
+
+Marca/Modelo são combos de tabela auxiliar (`GET /api/tabelas/marcas`/
+`GET /api/tabelas/modelos?cod_marca=...`, Modelo dependente da Marca
+escolhida) — mesmos endpoints que `equipamentos.tsx` já usa, buscados sob
+demanda só quando o formulário inline é aberto (não no boot do modal de
+busca, pra não gastar uma chamada à toa em toda O.S. que nunca precisa
+cadastrar equipamento novo).
+
+Ao gravar com sucesso, monta um `EquipamentoRow` sintético localmente (com
+o `codigo` retornado pelo backend + os dados já digitados/escolhidos — sem
+precisar de um segundo round-trip de busca) e chama `onPick` — o
+equipamento recém-criado já fica selecionado na O.S. na hora, sem sair da
+tela nem re-buscar.
+
+### Duplicidade de Número de Série — comportamento herdado, não alterado
+
+`numero_de_serie` é único **GLOBALMENTE** (entre todos os clientes, não só
+o atual) — checado só no backend
+(`equipamentos_service._save_sync:170-176`), sem checagem prévia no
+frontend. Se o usuário digitar um nº de série que já existe em OUTRO
+cliente, a mensagem de erro do backend aparece inline no formulário
+(`friendlyApiError`) — mesmo comportamento que a tela completa já tinha,
+só passou a aparecer também no fluxo inline.
+
+### Precedente novo no projeto
+
+**Este é o primeiro lugar do projeto com um cadastro 100% inline dentro de
+um modal de busca, sem navegação nenhuma** — todo outro "Cadastrar
+novo X" existente (Cliente a partir de `ClientSearchModal`, tanto em
+Pedido/O.S. quanto em `AtendimentoAvulsoModal`) continua navegando pra uma
+tela própria (`cliente-form.tsx`). Não generalizado retroativamente pros
+outros — só Equipamento foi pedido explicitamente nesta rodada. Se um caso
+futuro pedir o mesmo padrão pra outra entidade, este arquivo
+(`EquipamentoSearchModal.tsx`) é a referência de implementação.
+
+### Fora do escopo desta rodada
+
+- **Teste ao vivo contra KONTACTO TESTE** — mesma ressalva de todas as
+  sub-features desta sessão de O.S. Completa.
+- **Local, Data de Revisão, Valor, Tipo, Detalhes** no formulário inline —
+  deliberadamente fora, ver "O que mudou" acima. Só a tela completa
+  continua oferecendo esses campos.
+- Nenhuma mudança de backend — `equipamentos_service.py`/
+  `routes/equipamentos.py` permanecem exatamente como estavam.
+
+---
+
+## Criar Cópia (O.S. Completa)
+
+**Status: 🟢 Implementado 2026-08-02 (sem teste ao vivo ainda — validar
+antes de considerar realmente concluído).** Migração do botão "Criar
+Cópia" (`Command49_Click`, `Revenda\FrmTraOsNew.frm`, linhas 11337-11383).
+
+### Regras de negócio confirmadas no rastreio
+
+- **Sem restrição de Situação** — disponível em QUALQUER situação da O.S.
+  original (legado não checa `situacao` em lugar nenhum, nem pra
+  habilitar o botão nem dentro da rotina). Única guarda é a O.S. já estar
+  salva (`Campo(0) > 0`).
+- **Sem confirmação prévia** — o legado executa direto no clique (só
+  mostra "OS copiada com sucesso!" DEPOIS de já ter copiado).
+- **Nova O.S. nasce sempre Aberta** (`situacao='A'` hardcoded), com data/
+  hora de entrada = agora (não copia a data da O.S. original), número
+  novo (aqui via `MAX(codigo)+1`, o gerador já padrão desta migração — o
+  legado usa `GeraCodigoOS`/`CONTROLE.numero_os`, um contador próprio sem
+  equivalente aqui, mesmo espírito de "Não replicar truques VB6").
+- **Itens só são copiados se o produto/serviço mestre ainda está ATIVO no
+  cadastro** (`pecas.situacao='A'`/`servicos.situacao='A'`) — item cujo
+  cadastro foi desativado depois da O.S. original não é trazido pra
+  cópia.
+- **Preço do item recalculado pelo CADASTRO ATUAL** (`pecas.p_venda`/
+  `servicos.valor_hora`), não o preço congelado que estava na O.S.
+  original — e **desconto/acréscimo sempre zerados** na cópia.
+- Copiados tal como estavam: quantidade, vendedor, executor, `faturado`,
+  custo, pontuação (Executor/Vendedor/Atendente), situação/destino do
+  item, `item_cancelado`.
+- **Reserva de estoque das peças copiadas** — legado sempre reserva
+  (`pecas.qtd -= quant`, `reservado_os += quant`), sem checar nenhuma
+  flag; esta migração aplica a MESMA condição já usada em
+  `os_itens_service._add_item_sync` (só reserva se a empresa NÃO exige
+  Autorização de Itens) — adaptação deliberada pra manter consistência
+  com o resto da migração, não uma omissão.
+- **Formas de pagamento** — o legado copia as tabelas detalhadas
+  (`os_dinheiro`/`os_cheque`/etc., via `Copia_FPAG_DAV`). **Não
+  implementado nesta rodada** — só o código simples `forma_pagamento` do
+  cabeçalho é copiado (via cópia normal de coluna), não o detalhamento
+  por múltiplas formas. Ver "Fora do escopo" abaixo.
+- **NÃO copiados** (mesmo comportamento do legado, confirmado nas colunas
+  ausentes do `INSERT...SELECT` original): anexos, histórico/log
+  (`LOG_OS`), agendamento (`AGENDA`/`AGENDA_OS`), Doc. Origem/Revisão
+  (`OS_ORIGINAL`/`Tipo_Doc_Original`/`VALIDOU_GARANTIA`/`QtdRevisoes` —
+  sempre zerados/nulos na cópia, mesmo que a O.S. original os tivesse).
+- **Navega pra O.S. nova depois de criar** — mesmo efeito de `CARREGAOS
+  Cod_OS` no legado (a tela fica olhando a cópia, não a original).
+
+### Colunas do cabeçalho copiadas — recorte deliberado
+
+O `INSERT...SELECT` do legado lista ~34 colunas do cabeçalho
+(`NUM_CONTROLE, CLIENTE, CLIENTE_GARANTIA, FORMA_PAGAMENTO,
+FORMA_PAGAMENTO_GARANTIA, EMP_OS, MARCA, MODELO, COR, ANO, RENAVAM,
+PLACA, CHASSI, MOTOR, KM, NUMERO_DE_SERIE, DESCRICAO_CLIENTE, OBS,
+RESUMO, COMPLEMENTO, ATENDENTE, DATA_COMPRA, REVENDEDOR, VALOR, PRISMA,
+COR_PRISMA, TECNICO_RESPONSAVEL, POSICAO_OS, TIPO, STATUS_OS,
+AREA_ATUACAO`). Esta migração copia só o subconjunto que já é
+usado/exposto em ALGUMA outra tela da O.S. Completa (cliente, área de
+atuação, descrição do cliente, obs, resumo, status O.S., atendente,
+placa, marca, modelo, km, ano, chassi, nº de série, forma de pagamento,
+referência, técnico responsável, tipo O.S.) — colunas como
+`CLIENTE_GARANTIA`, `FORMA_PAGAMENTO_GARANTIA`, `COR`, `MOTOR`,
+`COMPLEMENTO`, `PRISMA`, `COR_PRISMA`, `REVENDEDOR`, `DATA_COMPRA`,
+`NUM_CONTROLE`, `EMP_OS`, `RENAVAM` nunca foram modeladas em NENHUM outro
+lugar desta migração (não lidas, não gravadas, sem campo na tela), então
+copiá-las seria copiar valores que o resto do app não consegue nem
+exibir. Decisão deliberada, não uma omissão por pressa — se alguma dessas
+colunas for modelada no futuro (ex.: Bifurcação de faturamento
+Garantia×Cliente vai precisar de `CLIENTE_GARANTIA`/
+`FORMA_PAGAMENTO_GARANTIA`), revisitar esta cópia também.
+
+### O que foi implementado
+
+- **Backend** — `os_completo_service._criar_copia_os_sync` (+ wrapper
+  async `criar_copia_os`): checa permissão, busca cabeçalho de origem,
+  gera novo código, INSERT do cabeçalho (recorte de colunas acima,
+  `situacao='A'` hardcoded, `OS_ORIGINAL=0` sempre), 2 INSERTs de itens
+  (JOIN com `pecas`/`servicos` filtrando `situacao='A'` e recalculando
+  preço), reserva de estoque condicional, `_recalc_os_total` no fim
+  (itens inseridos via SQL direto, não via `_add_item_sync`, então
+  `os.valor` precisa ser recalculado manualmente). Rota nova
+  `POST /api/os-completo/{codigo}/copiar` (`routes/os_completo.py`,
+  reaproveita `FecharRequest` como body — mesmo padrão de
+  Fechar/Faturar/Reabrir/Cancelar, já tem tudo que a ação precisa). Log
+  de auditoria `tela="OS_COMP"`, `comando="COPIAR"`, referência = código
+  da O.S. NOVA (não da original). Permissão nova `OS_COMP.COPIAR`. 6
+  testes unitários novos em `test_os_completo_service.py` (permissão,
+  não encontrada, sucesso sem itens, cópia de itens pecas+serviços,
+  reserva de estoque condicional, wrapper async). Suíte completa
+  relacionada: 260 testes, sem regressão.
+- **Frontend** — `os-geral.tsx`: botão "Criar Cópia" (ícone
+  `copy-outline`) na mesma linha de Tempo Gasto/Requisições Vinculadas
+  (mesmo padrão visual, sem depender de a O.S. ter itens — disponível em
+  qualquer situação, igual ao legado), gated por `can("OS_COMP.COPIAR")`.
+  Spinner + texto "Copiando…" enquanto processa (regra global "Feedback
+  visual em processos demorados >3s" do CLAUDE.md). Ao concluir, navega
+  pra O.S. nova (`router.replace`), mesmo efeito do `CARREGAOS` do
+  legado. Entrada nova no Modo Didático. `tsc --noEmit`: sem novos erros
+  (baseline de 12 pré-existentes inalterado).
+
+### Fora do escopo desta rodada
+
+- **Teste ao vivo contra KONTACTO TESTE** — mesma ressalva de todas as
+  sub-features desta sessão de O.S. Completa.
+- **Cópia de Formas de Pagamento detalhadas** (`Copia_FPAG_DAV`, tabelas
+  `os_dinheiro`/`os_cheque`/`os_cartao`/`os_debito`/`os_duplicata`/
+  `os_ticket`/`os_vale`/`os_financiado`) — não implementado, só o código
+  simples do cabeçalho é copiado. Se precisar no futuro, `pedido_common.
+  FORMA_PAG_SUFIXO_TIPO`/`DAV_CONFIG` já têm a estrutura de tabelas
+  mapeada, só falta escrever a função de cópia em si.
+- **Colunas de cabeçalho nunca modeladas nesta migração** — ver "Colunas
+  do cabeçalho copiadas" acima.
+- **Confirmação antes de copiar** — não implementado (o legado também não
+  tem); se o usuário achar o clique único arriscado demais na prática,
+  considerar um `showConfirm` no futuro.
+
+## Alteração de Executor pós-fechamento (O.S. Completa)
+
+**Status: 🟢 Implementado 2026-08-02 (sem teste ao vivo ainda — validar
+antes de considerar realmente concluído).** Migração do botão
+`CmdAltExec`, branch F/PG de `CmDaltera_Click` (`Revenda\FrmTraOsNew.frm`)
+— corrige o Executor (técnico) e/ou o Vendedor de um item já lançado
+depois que a O.S. foi Fechada ou Faturada, sem precisar reabrir a O.S.
+
+### Regras de negócio confirmadas no rastreio
+
+- **Só disponível com a O.S. Fechada (`F`) ou Faturada (`PG`)** — com a
+  O.S. Aberta, a correção de Vendedor/Executor já é possível pela edição
+  normal do item (`OSItemModal.tsx`), que também permite mexer em preço/
+  quantidade/desconto; este botão é especificamente a via restrita
+  pós-fechamento, quando a edição normal do item já está bloqueada.
+- **Preço/quantidade/desconto continuam bloqueados** — só
+  `os_produto.vendedor`/`.executor` são alterados; nenhum outro campo do
+  item é tocado nem recalculado (`_recalc_os_total` não é chamado).
+- **Efeito colateral de comissão do legado NÃO foi portado** — no VB6,
+  trocar o Executor/Vendedor de um item já lançado recalcula ao vivo os
+  campos de comissão (`ITEM_COMISSAO_VENDEDOR`/`ITEM_COMISSAO_EXECUTOR`
+  em `os_produto`, `movimentacao.item_paga_comissao`,
+  `MOVIMENTACAO.VENDEDOR` via `COMANDA_OS` da O.S. faturada). **Esta
+  migração não tem nenhum módulo de comissão implementado** — nenhuma
+  dessas tabelas/campos existe aqui, então nada precisou (nem pôde) ser
+  replicado. Se um módulo de comissão for construído no futuro, revisitar
+  esta função (`_alterar_executor_sync`,
+  `backend/services/os_itens_service.py`) pra adicionar o recálculo
+  correspondente.
+- **Propagação em massa (`propagar_demais`) — SEM equivalente no legado**,
+  conveniência desta migração: quando marcada, aplica a MESMA troca a
+  todos os outros itens da O.S. que tinham o valor ANTERIOR de Vendedor/
+  Executor (não o valor novo) — pensado pro caso comum de uma O.S. inteira
+  ter sido lançada com o técnico errado.
+  - **Guarda deliberada, não presente no legado**: só propaga quando o
+    valor ANTERIOR do item de origem não era vazio/nulo — evita propagar
+    "de vazio pra um valor" em massa sobre itens que nunca tiveram
+    executor/vendedor definido (poderia sobrescrever escolhas
+    intencionalmente distintas por item).
+- **Sem checagem de permissão explícita dentro do service** — segue o
+  mesmo padrão já usado pelas outras ações de `os_itens_service.py`
+  (a permissão é responsabilidade da camada de rota/frontend, não
+  duplicada dentro do `_sync`).
+
+### O que foi implementado
+
+- **Backend** — `AlterarExecutorRequest` (`backend/models/schemas.py`,
+  `vendedor`/`executor` opcionais — `None` = não alterar aquele campo,
+  `propagar_demais` opcional). `_alterar_executor_sync` + wrapper async
+  `alterar_executor` (`backend/services/os_itens_service.py`): valida
+  situação da O.S. (`F`/`PG`), valida item existente, faz o `UPDATE`, e
+  quando `propagar_demais` é verdadeiro, localiza e atualiza os demais
+  itens que tinham o valor anterior (executor e vendedor tratados
+  independentemente — só propaga o que de fato mudou). Rota nova
+  `PUT /api/os-completo/{codigo}/itens/{cod_os_prod}/executor`
+  (`routes/os_completo.py`), com log de auditoria
+  (`tela="OS_COMP"`, `comando="ALT_EXECUTOR"`, diff de
+  `vendedor`/`executor`, menciona quantos itens foram propagados na
+  descrição). Permissão nova `OS_COMP.ALT_EXECUTOR`
+  (`permissoes_service.py`, fim de `ACOES_OS_COMP`). 13 testes unitários
+  novos em `test_os_itens_service.py`
+  (`TestAlterarExecutorPosFechamento`) cobrindo: bloqueio fora de F/PG,
+  item não encontrado, OS não encontrada, alteração só de executor, só de
+  vendedor, dos dois juntos, propagação de executor, propagação de
+  vendedor, propagação dos dois, guarda de valor anterior vazio não
+  propaga, `propagar_demais=False` não propaga mesmo com outros itens
+  elegíveis, nada informado retorna erro, e o wrapper async. Suíte
+  focada (`test_os_itens_service.py` + `test_os_completo_service.py` +
+  `test_os_service.py` + `test_permissoes_service.py`): 120 testes, sem
+  regressão.
+- **Frontend** — `useOSItens.ts`: `altExecutorModalOpen`/
+  `altExecutorSaving`/`salvarAlterarExecutor` (chama a rota nova,
+  recarrega os itens e mostra quantos foram propagados no toast).
+  Componente novo `AlterarExecutorModal.tsx`
+  (`frontend/src/components/os/`) — lista os itens da O.S., cada linha
+  com `SelectField` (Vendedor/Executor, mesma lista `funcOptions` já
+  usada em `OSItemModal.tsx`) + um `Switch` "Aplicar também aos demais
+  itens..." + botão Salvar por linha (desabilitado se nada mudou).
+  Botão "Alteração de Executor" em `os-geral.tsx`, mesma linha de Tempo
+  Gasto/Requisições Vinculadas/Criar Cópia, gated por
+  `can("OS_COMP.ALT_EXECUTOR") && (sit === "F" || sit === "PG")`. Entrada
+  nova no Modo Didático. `tsc --noEmit`: sem novos erros (baseline de 12
+  pré-existentes inalterado, confirmado 2026-08-02).
+
+### Fora do escopo desta rodada
+
+- **Teste ao vivo contra KONTACTO TESTE** — mesma ressalva de todas as
+  sub-features desta sessão de O.S. Completa.
+- **Recálculo de comissão** — ver "Efeito colateral de comissão do
+  legado NÃO foi portado" acima; não há módulo de comissão nesta
+  migração ainda.
+- **Checagem de permissão dentro do service** — segue o padrão já
+  estabelecido no arquivo (permissão fica na camada de rota/frontend).
+
+## Bifurcação de faturamento Garantia×Cliente (O.S. Completa)
+
+**Status: 🟢 Implementado 2026-08-02 (sem teste ao vivo ainda — validar
+antes de considerar realmente concluído).** Migração de `Command2_Click`/
+`GeraComanda` (`Revenda\FrmTraOsNew.frm`, linhas ~11101-11290 e
+~14637-14818) — itens da O.S. são divididos em 2 blocos por
+`os_produto.situacao` (0=Cliente paga vs. 1/2/3=Garantia/Interno/
+Contrato), faturados em Comandas SEPARADAS, cada uma com sua própria
+forma de pagamento.
+
+### Regras de negócio confirmadas no rastreio
+
+- **2 blocos, 2 Comandas**: bloco "cliente" (situação=0) e bloco
+  "garantia" (situação<>0) nunca viram uma Comanda combinada — mesmo
+  quando os dois são faturados na mesma ação (`Check3`+`Check5` marcados
+  juntos no legado), são 2 chamadas separadas a `GeraComanda` ("C" e "G"),
+  2 `comanda`, 2 vínculos em `COMANDA_OS`.
+- **Forma de pagamento por bloco**: bloco cliente usa `os.forma_pagamento`
+  (já existente); bloco garantia usa a coluna NOVA
+  `os.forma_pagamento_garantia` (migração idempotente
+  `pedido_common._ensure_os_forma_pagamento_garantia_col`). Faturar o
+  bloco garantia sem essa forma definida bloqueia com mensagem clara — o
+  legado tem um fallback pra uma forma de pagamento "padrão de garantia"
+  configurada a nível de empresa (`forma_pagamento.FORMA_PAG_GARANTIA=1`,
+  aplicado automaticamente e regravado em `os.forma_pagamento_garantia`
+  na primeira falta) — **não portado**, decisão deliberada (ver "Fora do
+  escopo" abaixo): exige que a O.S. tenha sua PRÓPRIA forma de garantia
+  definida, sem fallback de empresa.
+- **Escolha obrigatória quando os 2 blocos têm valor pendente ao mesmo
+  tempo**: réplica funcional da tela bloqueante `Frame5`/`Check3`/`Check5`
+  do legado — `_faturar_os_sync` não fatura nada nesse caso, devolve
+  `needs_choice=True` + os 2 totais, e só fatura de fato numa chamada
+  SEGUINTE com `faturar_bucket` explícito ("cliente"/"garantia"/"ambos").
+  Sem ambiguidade (só um bloco com valor pendente), decide sozinha, sem
+  pedir escolha — mesmo comportamento dos ramos `ElseIf`/`Else` do legado.
+- **Situação vira `PG` mesmo faturando só o bloco garantia** (sem nenhum
+  item Cliente paga pendente) — réplica exata do ramo "só garantia" do
+  legado, que também marca `PG` nesse caso.
+- **Re-faturamento pós-`PG`**: uma O.S. já Faturada pode voltar a
+  `_faturar_os_sync` pra faturar itens de Garantia/Interno/Contrato
+  incluídos DEPOIS do primeiro faturamento (`os_produto.faturado=0`
+  ainda) — o bloco cliente nunca é reconsultado nesse caso (já resolvido
+  no primeiro faturamento; o legado também nunca reabre esse bloco). Sem
+  itens de garantia pendentes, volta a bloquear com "OS já faturada."
+  (mesma mensagem/comportamento de antes desta feature).
+- **`os_produto.faturado=1` só é marcado nos itens do bloco garantia** —
+  o bloco cliente não precisa dessa marcação porque, uma vez faturado, a
+  O.S. inteira vira `PG` e esse bloco nunca é reconsultado de novo (coluna
+  `faturado` já existia no schema, usada em outro lugar da migração —
+  `produtos_niveis_service.py` — confirmando que não era preciso migração
+  de coluna nova pra ela).
+- **Sempre fatura pro `os.cliente`, nunca pro `cliente_garantia`** — o
+  legado fatura o bloco garantia pro `os.cliente_garantia` quando
+  preenchido (campo pra faturar num CNPJ de seguradora/garantidor
+  diferente do cliente da O.S.); esse campo nunca foi modelado em NENHUM
+  outro lugar desta migração (mesma decisão já tomada em "Criar Cópia" >
+  "Colunas do cabeçalho copiadas") — replicá-lo só aqui, isolado, criaria
+  um conceito sem nenhuma tela pra gerenciá-lo. Ver "Fora do escopo"
+  abaixo.
+
+### O que foi implementado
+
+- **Backend** — `FaturarOSRequest` (`backend/models/schemas.py`, estende
+  `FecharRequest` com `faturar_bucket: Optional[str]`).
+  `os_service._faturar_bucket_os` (helper novo — fatura UM bloco, réplica
+  de `GeraComanda`) + `_faturar_os_sync` reescrita por completo: calcula
+  os 2 totais (`SUM(quant*p_venda)` agrupado por `situacao=0` vs.
+  `situacao<>0 AND faturado=0`), decide o bloco automaticamente quando não
+  há ambiguidade, devolve `needs_choice` quando há, valida forma de
+  pagamento de garantia antes de faturar esse bloco, e trata o
+  re-faturamento pós-`PG` como um ramo separado (só bloco garantia).
+  `os_completo_service`: `forma_pagamento_garantia`/
+  `forma_pagamento_garantia_descricao` (JOIN `forma_pagamento`) expostos
+  em `_get_os_completo_sync`, gravados em `_save_os_completo_sync`
+  (INSERT/UPDATE) via `OSCompletoSaveRequest.forma_pagamento_garantia`.
+  Rotas `POST /api/os/{codigo}/faturar` e
+  `POST /api/os-completo/{codigo}/faturar` migradas pra `FaturarOSRequest`
+  (compatível com chamadas antigas — campo novo é opcional); descrição do
+  log de auditoria agora menciona as 2 comandas quando aplicável
+  (`_descricao_faturamento`, helper novo em cada arquivo de rota). 19
+  testes em `test_os_service.py` (8 atualizados em `TestFaturarOS` + 11
+  novos em `TestFaturarOSBifurcacaoGarantia`) + 2 asserts novos em
+  `test_os_completo_service.py` (campo exposto/gravado). Suíte focada
+  (`test_os_service.py` + `test_os_completo_service.py` +
+  `test_os_itens_service.py` + `test_permissoes_service.py` +
+  `test_pedido_common_doc_origem.py` + `test_agenda_service.py`): 216
+  testes, sem regressão.
+- **Frontend** — `os-geral.tsx`: campo novo "Forma de Pag. Garantia"
+  (`SelectField compactWeb`, mesma lista `formaPagOptions` já usada pela
+  Forma de Pagamento normal) ao lado do campo Forma de Pagamento, gravado
+  junto no Gravar normal do cabeçalho (não é um combobox de grava-ao-
+  trocar como `forma_pagamento` — é só mais um campo do formulário).
+  `handleFaturar` ganhou parâmetro opcional `bucket`; ao receber
+  `needs_choice` da API, abre `FaturarBucketModal.tsx` (componente novo,
+  `frontend/src/components/os/`) — 3 botões (Só Cliente / Só Garantia /
+  Faturar os Dois) com os 2 totais, tier de modal "confirmação"
+  (`modalCardWebCompactNarrow`); escolher um bloco chama `handleFaturar`
+  de novo já com `faturar_bucket` definido. Entrada nova no Modo
+  Didático. `tsc --noEmit`: sem novos erros (baseline de 12
+  pré-existentes inalterado, confirmado 2026-08-02).
+
+### Fora do escopo desta rodada
+
+- **Teste ao vivo contra KONTACTO TESTE** — mesma ressalva de todas as
+  sub-features desta sessão de O.S. Completa.
+- **`cliente_garantia`** (faturar o bloco garantia pra um cliente
+  diferente do cliente da O.S.) — não modelado, ver "Regras de negócio
+  confirmadas" acima.
+- **Forma de pagamento de garantia "padrão de empresa"**
+  (`forma_pagamento.FORMA_PAG_GARANTIA=1`, fallback automático do
+  legado) — não implementado; cada O.S. precisa da sua própria
+  `forma_pagamento_garantia` definida. Se pedido no futuro, adicionar uma
+  coluna bit na tabela auxiliar `forma_pagamento` (tela
+  `forma-pagamento.tsx`) + o fallback em `_faturar_os_sync`.
+- **Detalhamento de forma de pagamento por parcela** (`comanda_dinheiro`/
+  `comanda_duplicata`/`comanda_cheque`/etc., `GeraComanda`'s lógica de
+  prazo/percentual) — nem o bloco cliente nem o bloco garantia fazem esse
+  detalhamento nesta migração; mesma simplificação já usada em
+  `_faturar_pedido_sync`/o `_faturar_os_sync` original (a Comanda grava um
+  valor único, sem splitting por forma/prazo).
+- **PAGA_COMISSAO / ITEM_COMISSAO_VENDEDOR / atendente_dav** (campos de
+  comissão do legado, também presentes em `GeraComanda`) — mesma decisão
+  já tomada em "Alteração de Executor pós-fechamento" acima: esta
+  migração não tem módulo de comissão implementado ainda.
+- **Pesquisa de satisfação** (`Pesquisa_Satisfacao_BTEN`) — não modelada
+  em nenhum outro lugar desta migração, fora de escopo.
+
+## Oficina — Fase 2 (O.S. Completa)
+
+**Status: 🟢 Implementado 2026-08-02 (só frontend — sem teste ao vivo
+ainda, ver ressalva abaixo).** Fase 1 da O.S. Completa (`os-geral.tsx`)
+tinha os campos placa/marca/modelo/km/ano/chassi como state gravado, mas
+SEM nenhuma UI pra editá-los — o bloco "Veículo/Equipamento" da tela
+sempre forçava o fluxo de busca real do módulo Assistência
+(`EquipamentoSearchModal`), que não faz sentido pra um veículo de Oficina
+(carro não é uma entidade "Cadastro de Equipamentos" com número de série
+buscável). Esta rodada só precisou de FRONTEND — o backend
+(`OSSaveRequest`/`OSCompletoSaveRequest`, `_save_os_completo_sync`) já
+aceitava e gravava todos os 6 campos desde a Fase 1, confirmado ao ler o
+código antes de começar.
+
+### Referência usada: `os-form.tsx` (O.S. Mobile) já tinha isso pronto
+
+A O.S. Mobile já implementa a Oficina completa desde antes desta rodada —
+bottom sheet "Veículo/Equipamento" com Placa (texto livre), KM (texto
+livre), Marca (`SelectField` alimentado por `GET /api/tabelas/marcas
+?marca_produto=false`), Modelo (`SelectField` alimentado por
+`GET /api/tabelas/modelos?cod_marca=X`, desabilitado até escolher a
+Marca), Ano (texto livre) e Chassi/Nº de Série (um único campo, rotulado
+"Chassi" ou "Nº de Série" conforme o módulo — `os.chassi` e
+`os.numero_de_serie` são colunas separadas, só uma é usada por vez). Esta
+implementação não trouxe nenhum conceito novo — só portou esse mesmo
+padrão (campos + tabelas auxiliares Marcas/Modelos) pra dentro da tela
+web "Completa", nas mesmas 6 colunas de `os` que a Mobile já usa.
+
+### O que foi implementado
+
+- **`frontend/app/os-geral.tsx`**: bloco "Veículo" novo, renderizado
+  quando `isOficina && !isAssist` (mesma condição que já decidia
+  `equipLabel`/o mapeamento de `chassi` vs. `numero_de_serie` no payload
+  de Gravar — não foi inventada agora, só reaproveitada pra decidir
+  também QUAL bloco de UI aparece). Layout em 3 linhas de 2 colunas
+  (Placa+KM, Marca+Modelo, Ano+Chassi), mesmos campos/ordem da O.S.
+  Mobile, usando os componentes padrão da tela web (`Field`,
+  `SelectField compactWeb`, `styles.input`) em vez do bottom sheet mobile
+  — cabe direto no card da tela, sem precisar de modal (a Completa já é
+  uma tela cheia com espaço de sobra, diferente da Mobile que precisa
+  economizar espaço vertical).
+  - Quando `isAssist` (Assistência, com ou sem Oficina junto) continua
+    exatamente como estava — o bloco "Equipamento" com busca real
+    (`EquipamentoSearchModal`), sem nenhuma mudança de comportamento.
+  - Marcas carregadas no boot da tela (`GET /api/tabelas/marcas
+    ?marca_produto=false`, mesmo endpoint/parâmetro da Mobile) junto com
+    área de atuação/funcionários/forma de pagamento/status/tipo O.S., que
+    já eram carregados ali. Modelos carregados reativamente
+    (`useEffect` disparado por mudança em `marca`, mesmo padrão exato de
+    `os-form.tsx`) — zero endpoint novo precisou ser criado, os dois já
+    existiam (`tabelas_aux_service.py`, usados por outras telas de
+    cadastro auxiliar).
+  - Entrada do Modo Didático ("Equipamento" → "Equipamento / Veículo")
+    atualizada pra explicar os dois módulos, já que o mesmo texto único
+    de antes só descrevia o fluxo de busca (Assistência).
+- **Nenhuma mudança de backend** — `OSSaveRequest`/`OSCompletoSaveRequest`
+  já tinham `placa`/`marca`/`modelo`/`km`/`ano`/`chassi` desde a Fase 1;
+  `_save_os_completo_sync` já grava os 6 campos (inclusive truncando
+  `marca`/`modelo` pra 3 caracteres — são códigos de FK pras tabelas
+  auxiliares, não texto livre, confirmado batendo com o que a Mobile já
+  grava). `tsc --noEmit`: sem novos erros (baseline de 12 pré-existentes
+  inalterado, confirmado 2026-08-02).
+
+### Fora do escopo desta rodada
+
+- **Teste ao vivo contra uma empresa com módulo Oficina ligado** — esta
+  sessão só teve acesso à conexão KONTACTO TESTE (módulo Assistência); a
+  UI de Veículo não foi exercitada contra dados reais ainda. Validar
+  antes de considerar realmente concluído.
+- **Recibo (`ReciboOSModal.tsx`) não imprime dados de
+  Equipamento/Veículo** — gap pré-existente da Fase 1, não introduzido
+  nem corrigido nesta rodada (o recibo já não mostrava o equipamento da
+  Assistência antes disso também — não é uma regressão específica de
+  Oficina).
+- **`os-lista.tsx`** — tela de listagem não tem nenhuma coluna/ícone
+  específico de módulo, não precisou de mudança.
+
+---
+
+## Gestor de Projetos
+
+**Status: 🟢 Fase 1 (núcleo) implementada 2026-08-02 — sem teste ao vivo
+ainda, ver ressalva no final desta seção.** Pedido do usuário:
+"rastreie os frm, regra de negócio e análise o ecossistema desse módulo.
+verifique se tem um módulo específico para ele em configurações de módulo
+ou usa o mesmo da assistência técnica. esse módulo tem ou deveria ter
+relacionamento com produtos, serviços, prevendas e etc" — seguido de
+"Gestor de Projetos vai ficar em Transações. fase 4 - Recursos extras
+sugeridos que pode ser implementado ao longo das fases 1, 2 e 3.
+implementar fase 1". Mencionado antes desta sessão só como item do menu
+legado "Transações" (screenshot de referência de escopo futuro, ver seção
+"Transações" acima) — nunca tinha sido rastreado de verdade até agora.
+
+**Local confirmado pelo usuário**: mora em **Transações**
+(`frontend/app/(tabs)/transacoes.tsx`), mesmo grupo de Pedido Geral/O.S.
+Completa/Contratos — não em Cadastros nem em uma aba própria.
+
+### Fonte VB6
+
+- **Form principal**: `Geral\frmgespro.frm` (5005 linhas, Caption "Gestor de
+  Projetos", `VB_Name = "FrmGesPro"`). Parte do projeto principal
+  `Kontacto\backon.vbp` (mesmo `.vbp` de `FrmTraOsNew.frm`/`frmmanpedfor.frm`
+  etc.), Module global compartilhado `mdl_proc.bas`.
+  **Cuidado**: existe outro arquivo com nome parecido,
+  `Geral\FrmProjetos.frm` ("Consulta Sistemas") — é uma ferramenta interna
+  de controle de versão de sistemas (tabela `Sistemas`, banco Access
+  próprio `Sistemas.mdb`), sem nenhuma relação com este módulo. Não usar
+  como referência se este módulo for retomado.
+- **Item de menu**: `Tra_gdp` ("Gestor de Projetos") em `mdirevendanv.frm`/
+  `mdi_os_nova.frm`, `Tag = "FrmGesPro"`.
+- **Chamado a partir de**: `frmmanreq.frm` (Requisição — o vínculo
+  `ExisteDAVProjeto` já registrado como "não implementado" na seção
+  "Movimentações" acima é exatamente este módulo), `FrmConPed.frm`,
+  `frmconosa.frm`, `frmconorc.frm`, `FrmConCli2.frm` (o seletor de cliente
+  F2 que a seção "Contatos" registrou como "nunca fornecido" — **na
+  verdade existe e está em `Geral\FrmConCli2.frm`**, só não tinha sido
+  localizado ainda; revisitar aquela pendência se o Gestor de Projetos ou
+  outra tela que o referencie for retomado).
+
+### Módulo de configuração: **dedicado, não reaproveita Assistência**
+
+- Coluna própria `controle_configuracao.gestor_projetos` (BIT), confirmada
+  no dump de schema (`Atualiza\estrutura_sem_cep.sql`) e na propriedade
+  `Dados_Controle_Configuracao.Gestor_Projetos` (`mdl_proc.bas`) —
+  totalmente separada de `Assistencia`/`Oficina`/`TSO`/`Clinica`/etc.
+- **Bug real encontrado no legado, não replicar**: a linha que esconderia
+  o item de menu quando o flag está desligado está COMENTADA em
+  `mdl_proc.bas` (`If Not Dados_Controle_Configuracao.Gestor_Projetos Then
+  ' MdiPrincipal.Tra_gdp.Visible = False End If`) — ou seja, hoje o menu
+  aparece sempre, independente do flag. Se portado, o gating deve
+  funcionar de verdade (mesmo padrão `moduleOn("gestor_projetos")` já
+  usado nos outros módulos), não replicar esse bug.
+
+### Ecossistema — relacionamento real com Produtos, Serviços, Pedido, O.S., Orçamento e Requisição
+
+Este é o núcleo do módulo, não um relacionamento incidental:
+
+- **Schema**: `Projetos` (codigo PK, data_abertura/data_inicio/
+  data_prevista/data_termino, cliente FK, situacao 'A'/'F'/'C' — sem
+  estado "faturado" no próprio projeto, isso vive por documento —,
+  valor_projeto/valor_produtos/valor_servicos, responsavel FK
+  funcionário, detalhes, logs). `projetos_documentos` (codauto PK,
+  projeto FK, tipo_doc — `'PED'`/`'ORC'`/`'OSS'`/`'REQ'` —, num_doc,
+  data_inclusao, incluido_por) — tabela de VÍNCULO N:1 entre documentos
+  já existentes e um projeto. `itens_temp_projetos` — tabela de STAGING
+  usada só durante a tela aberta (é limpa e repopulada a cada operação),
+  não é histórico persistente.
+- **Um documento só pode pertencer a UM projeto no sistema inteiro** — o
+  legado bloqueia explicitamente ao tentar adicionar um Pedido/O.S./
+  Orçamento/Requisição já vinculado a outro projeto, avisando qual
+  projeto e de qual cliente.
+- **Agregação automática de itens**: a tela une (`UNION ALL`)
+  `pedido_venda_prod` + `orc_produto` + `os_produto` + `rec_prod` de TODOS
+  os documentos vinculados ao projeto (join via `projetos_documentos`),
+  separando Produtos de Serviços (join com `pecas`/`servicos`), com
+  totais de custo/venda/margem — geral, por documento, e por
+  produto/serviço condensado.
+- **Rastro fiscal por documento vinculado**: a grade de documentos mostra
+  Comanda/ECF/NFCe/NFe/NFSe de cada Pedido/O.S. vinculado (só leitura,
+  reflete o que os módulos de faturamento já geraram — o Gestor de
+  Projetos não emite nada).
+- **"Ajustar Valores" — rebalanceamento de valor em massa através de
+  VÁRIOS documentos ao mesmo tempo**: define um novo total-alvo pra
+  Produtos ou Serviços do projeto; um algoritmo de rateio proporcional
+  (mesma família conceitual do rateio já implementado em Contratos, mas
+  aplicado através de N documentos diferentes, não um só) distribui
+  desconto/acréscimo item a item, em até 3 passadas (percentual →
+  fechamento sem estourar o alvo → ajuste final de R$0,01 por item pra
+  fechar o centavo), até bater exatamente o valor pedido. Reescreve
+  `p_venda`/`desconto`/`acrescimo`/`ajustar` de cada item
+  (`orc_produto`/`os_produto`/`pedido_venda_prod`) e o total do
+  cabeçalho de Orçamento/Pedido.
+  - **Inconsistência real observada no legado**: esse recálculo atualiza
+    o total do cabeçalho de `orcamento`/`pedido_venda`, mas **não** de
+    `os` — parece lacuna do legado, não decisão consciente. Confirmar
+    antes de replicar (provavelmente deveria recalcular os 3).
+  - Requisição entra na agregação/totais de itens, mas **não** entra no
+    motor de Ajustar Valores (não tem preço de venda ao cliente).
+- **Distinção Produto×Serviço via prefixo de código** (`Left(codigo,1) =
+  'S'`), não via consulta às tabelas `pecas`/`servicos` — esta migração já
+  tem um jeito mais seguro e já estabelecido (`_is_peca`, consulta real
+  contra `pecas`), portar usando esse padrão em vez do prefixo textual do
+  legado.
+- **Anexos via Gestor de Documentos genérico** — `cod_grupo=1` (Cliente),
+  sub-grupo resolvido por descrição "Projetos" (find-or-create, mesmo
+  padrão exato já usado por outras entidades nesta migração — ver seção
+  "Gestor de Documentos (Anexos)" acima), `referencia` = código do
+  projeto. Integração direta, sem invenção nova.
+- **Log de auditoria embutido no próprio registro** (`projetos.logs`,
+  texto único acumulando entradas "data - hora - texto - usuário",
+  reescrito por completo a cada evento) — padrão pré-`log_auditoria`
+  desta migração; portar usando a tabela `log_auditoria` já existente em
+  vez de replicar o campo texto único.
+- **Permissões são muito granulares no legado**: botões (e permissões)
+  próprios pra Adicionar O.S., Adicionar Pedido, Adicionar Orçamento,
+  Adicionar Requisição, Remover Documento do Projeto, Ajustar Valores,
+  Visualizar Custos do Projeto (esconde colunas de custo/margem de quem
+  não tem essa permissão — separado da permissão geral de acesso à tela),
+  Logs do Projeto, Finalizar, Reabrir — não é só ABRIR/GRAVAR.
+
+### Bloqueios de escopo — resolvido
+
+- ~~**Orçamento não existe nesta migração**~~ — **resolvido 2026-08-02**,
+  ver CLAUDE.md > "Regras Globais de Pré-venda" `[GLOBAL]`: "todo pedido
+  aberto é um orçamento". `tipo_doc='ORC'` do legado mapeia pra Pedido de
+  Venda com `situacao='A'` — não precisa de tabela/tela nova de Orçamento.
+  Isso significa que o vínculo com "Orçamento" do Gestor de Projetos, na
+  prática, é só mais um filtro sobre `pedido_venda` (situação Aberto),
+  não um 4º tipo de documento de verdade — ver plano de fases abaixo.
+- Duas telas de O.S. mais antigas referenciadas no `Documentos2_DblClick`
+  do legado (`FrmTraOs`/`FrmTraOsA`/`FrmOStso`, dependendo dos flags
+  Oficina/TSO) parecem ser gerações anteriores à `FrmTraOsNew.frm` (a
+  fonte já usada como canônica pra O.S. Completa nesta migração) — ao
+  portar o duplo-clique num documento O.S. vinculado, abrir a tela
+  `os-geral.tsx` já existente, não tentar replicar essa bifurcação
+  antiga de formulários.
+
+### Plano de fases
+
+Com a regra "todo pedido aberto é um orçamento" (ver CLAUDE.md), o
+vínculo simplifica pra **3 tipos reais de documento**: PED (Pedido de
+Venda, em qualquer situação — inclusive Aberto, cumprindo o papel de
+orçamento), OSS (O.S.), REQ (Requisição) — sem tabela/tipo "ORC" próprio.
+
+- ~~**Fase 1 — Núcleo**~~ — **implementado 2026-08-02**, ver "O que foi
+  implementado (Fase 1)" logo abaixo.
+- ~~**Fase 2 — Ajustar Valores**~~ — **implementado 2026-08-02**, ver "O
+  que foi implementado (Fase 2)" logo abaixo.
+- ~~**Fase 3 — Custos, Impressão e Logs**~~ — **implementado 2026-08-02**,
+  ver "O que foi implementado (Fase 3)" logo abaixo.
+- **Fase 4 — Recursos extras** (lista abaixo): **user-directed 2026-08-02
+  — não é uma fase isolada no fim, os itens dela podem (e devem) ser
+  encaixados ao longo da implementação das Fases 1/2/3** quando fizer
+  sentido pro trecho sendo tocado, em vez de esperar as 3 primeiras
+  fases terminarem por completo.
+
+### O que foi implementado (Fase 1)
+
+- **Backend**:
+  - `backend/services/projetos_service.py` (novo) — `_ensure_projetos_tables`
+    (migração idempotente de `projetos`/`projetos_documentos`, mesmas
+    colunas do schema legado confirmado no dump), list/get/save de
+    Projeto, `_documentos_vinculados_sync` (UNION Pedido/O.S./Requisição
+    com situação e total sempre resolvidos AO VIVO da tabela dona, nunca
+    de coluna cacheada), `_itens_agregados_sync` (agregação Produtos/
+    Serviços ao vivo, sem a tabela de staging do legado — distingue
+    peça×serviço via JOIN real com `pecas`/`servicos`, não pelo prefixo
+    de código do legado), `_faturado_saldo` (soma dos documentos
+    vinculados já `PG` vs. o resto), transições de situação (Finalizar/
+    Reabrir/Cancelar, helper único `_transicao_situacao_sync`), vincular/
+    desvincular documento (bloqueia documento já vinculado a outro
+    projeto, valida existência do documento na tabela de origem antes de
+    vincular).
+  - `backend/routes/projetos.py` (novo, registrado em `server.py`) — log
+    de auditoria (`tela="PROJETOS"`) em toda escrita.
+  - `backend/models/schemas.py` — `ProjetosListRequest`/
+    `ProjetoSaveRequest`/`ProjetoDocumentoRequest` novos; `data_abertura`
+    e `data_termino` (Finalizado em) NÃO são editáveis pelo cliente —
+    gravadas pelo backend via `GETDATE()`, mesmo padrão já usado em toda
+    a migração (nunca confiar num campo de data de abertura/fechamento
+    editável).
+  - `backend/services/pedido_common.py` — `_modulo_gestor_projetos_ativo`
+    (mesmo padrão de `_modulo_contratos_ativo`).
+  - `backend/services/permissoes_service.py` — tela `PROJETOS` nova
+    dentro do menu `TRANSACOES`, ações ABRIR/GRAVAR/ADD_PEDIDO/ADD_OS/
+    ADD_REQUISICAO/REMOVER_DOC/SITUACAO/VER_CUSTOS/ANEXOS (SITUACAO cobre
+    Finalizar/Reabrir/Cancelar juntos, mesmo padrão de uma permissão só
+    pra todas as transições já usado em O.S.).
+  - `backend/services/controle_config_service.py` — `MODULE_TELAS`
+    ganhou `"gestor_projetos": ["PROJETOS"]` (desabilita a tela quando o
+    módulo está desligado, tanto pra grupo quanto — diferente do bug do
+    legado — de verdade).
+  - 32 testes novos em `test_projetos_service.py`. Suíte focada
+    (`test_projetos_service.py` + `test_permissoes_service.py` +
+    `test_pedidos_service.py` + `test_os_service.py`): 155 testes, sem
+    regressão.
+- **Frontend**:
+  - `frontend/app/projetos.tsx` (novo) — lista (mesmo padrão de
+    `os-lista.tsx`): busca por cliente + chips Abertos/Finalizados/
+    Cancelados/Todos, FAB "Novo" gated por `PROJETOS.GRAVAR`.
+  - `frontend/app/projeto-form.tsx` (novo) — tela cheia (Full CRUD Form
+    Screen Standard): Cliente via `ClienteSection`/`ClientSearchModal`
+    (Campo de Identidade com busca, mesmo padrão global já estabelecido),
+    Responsável/Datas/Detalhes; badge de situação + Finalizar/Reabrir/
+    Cancelar; card "Documentos Vinculados" com botão "Vincular
+    Pedido/O.S./Requisição" por tipo (gated por permissão própria) —
+    abre um modal simples de "número do documento → Buscar → preview
+    (cliente/situação/total) → Vincular", já que não existe ainda um
+    componente de busca-por-nome reutilizável pra Pedido/O.S./Requisição
+    (diferente de Cliente/Produto/Fornecedor); remover documento com
+    confirmação; card "Itens do Projeto" com totais Produtos/Serviços/
+    Geral (+ custo, gated por `PROJETOS.VER_CUSTOS`) e Faturado/Saldo a
+    Faturar; Anexos via `GestorDocumentosSection` (grupo Cliente,
+    sub-grupo "Projetos" resolvido dinamicamente por
+    `POST /api/gestor-documentos/sub-grupos` find-or-create — não
+    hardcodado, mesmo padrão já usado pelo sub-grupo "Imagens" de Produto
+    Completo, já que não há acesso a um banco real pra confirmar o ID
+    numérico como foi feito pro sub-grupo "Pedidos de Venda"). Modo
+    Didático (ícone "i" no cabeçalho).
+  - `frontend/app/(tabs)/transacoes.tsx` — card "Gestor de Projetos"
+    novo, gated por `moduleOn("gestor_projetos") && can("PROJETOS.ABRIR")`.
+  - `tsc --noEmit`: sem novos erros (baseline de 12 pré-existentes
+    inalterado, confirmado 2026-08-02).
+
+### O que foi implementado (Fase 2)
+
+Rastreio focado de `Command10_Click`/`Opcoes_Click`/`ResumoAcerto`/
+`Reprocessados`/`Itens2`/`RecalculaDAVS`/`Descontos_Acrescimos`/
+`Aplica_Desc*`/`Aplica_Acresc*` em `Geral\frmgespro.frm` — resolveu tanto
+o mecanismo de "Ajustar Valores" quanto **2 gaps reais da Fase 1**
+encontrados no caminho:
+
+- **Gap 1 corrigido**: `Campo(7)/(8)/(9)` ("Valor do Projeto"/"Valor
+  Produtos"/"Valor Serviços") são campos de estimativa editáveis que
+  fazem parte do `Command14_Click` (Gravar) do legado, mas ficaram de
+  fora da Fase 1 (gravados sempre como 0). Adicionados como "Valor
+  Estimado (Produtos)"/"Valor Estimado (Serviços)" no card "Dados do
+  Projeto" — `valor_projeto` continua sempre calculado no servidor como a
+  soma dos dois (nunca aceito direto do cliente), mesmo comportamento do
+  `Campo_LostFocus` legado.
+- **Gap 2 corrigido / decisão "Situação Cancelado" da Fase 1 CONFIRMADA**:
+  `Command10_Click` (Cancelar Projeto) também **desvincula todos os
+  documentos** (`DELETE FROM projetos_documentos`) antes de marcar
+  `situacao='C'` — a dúvida em aberto da Fase 1 (abaixo) sobre não ter
+  achado esse fluxo foi resolvida ao vivo nesta passada: cancelar um
+  projeto libera seus Pedidos/O.S./Requisições pra entrar em outro
+  projeto no futuro, em vez de ficarem presos a um projeto cancelado.
+  `_transicao_situacao_sync` corrigido.
+
+**Simplificações deliberadas em relação ao legado** (documentadas também
+no docstring de `projetos_service.py`):
+
+- **Seleção só no nível de DOCUMENTO, não item individual**: o legado tem
+  2 níveis de seleção — checkbox "Reprocessar" por documento
+  (`Reprocessados`) e checkbox por item dentro do documento (`Itens2`).
+  Mas a própria função `Carrega2Itens` do legado **apaga e reconstrói**
+  `itens_temp_projetos` (sempre com `reprocessar=1`) toda vez que
+  QUALQUER checkbox de documento muda — ou seja, desmarcar um item
+  individual em `Itens2` é descartado na próxima troca de seleção de
+  documento, não é um estado que sobrevive de forma confiável. Replicar
+  esse segundo nível não teria efeito prático real; a migração ficou só
+  com seleção por documento (lista de checkboxes na tela).
+- **"Valores Já Faturados" usa a mesma definição da Fase 1** (documentos
+  com `situacao='PG'`), não o rastreamento de NFe/NFSe por `comanda_nf`
+  que o legado usa nesse cálculo específico do Ajustar Valores — esta
+  migração não tem esse vínculo fiscal automático por comanda ainda.
+- **Correção deliberada (bug real do legado)**: `RecalculaDAVS` recalcula
+  o total de `pedido_venda`/`orcamento` mas esquece de recalcular o de
+  `os` — a migração recalcula os 2 tipos de documento de forma
+  consistente (`_recalc_os_total`, reaproveitado de `os_itens_service.py`).
+- Redistribuição sempre reinicia do preço BRUTO (`p_normal`/
+  `preco_unitario`) antes de aplicar o novo ajuste — mesmo comportamento
+  do legado (cada passada de "Ajustar Valores" é um recálculo do zero,
+  nunca empilha em cima de um ajuste anterior).
+
+**Backend**:
+- `backend/services/projetos_service.py` — `_itens_detalhados_sync`
+  (query única, base compartilhada do preview e da execução — itens de
+  Pedido/O.S. vinculados com preço bruto, nunca Requisição, que não tem
+  preço de venda ao cliente), `_ajuste_valores_preview_sync` (estimado/
+  faturado/pendente/saldo do orçamento + lista de documentos elegíveis
+  com total de Produtos/Serviços cada), `_ajustar_valores_sync` (motor:
+  calcula a diferença entre o total atual dos itens selecionados e
+  `novo_valor`, distribui proporcionalmente como desconto/acréscimo por
+  item, com o último item absorvendo a sobra de arredondamento —
+  substituto mais simples, mas fiel, do laço `Aplica_Desc_Final`/
+  `Aplica_Acresc_Final` de R$0,01 por vez do legado).
+- `backend/models/schemas.py` — `ProjetoSaveRequest.valor_produtos/
+  valor_servicos`; `ProjetoDocumentoKey`/`ProjetoAjustarValoresRequest`
+  novos.
+- `backend/routes/projetos.py` — `GET/POST /projetos/{codigo}/ajustar-valores`,
+  log de auditoria (`comando="AJUSTAR_VALORES"`) só quando algum item foi
+  de fato ajustado.
+- `backend/services/permissoes_service.py` — ação `AJUSTAR_VALORES` nova
+  na tela `PROJETOS`.
+- 16 testes novos em `test_projetos_service.py` (48 no total). Suíte
+  completa do arquivo: 48/48 passando.
+
+**Frontend** (`frontend/app/projeto-form.tsx`):
+- Card "Dados do Projeto" ganhou "Valor Estimado (Produtos)"/"(Serviços)"/
+  "(Total)" (o último somente leitura, calculado no cliente).
+- Botão "Ajustar Valores" no card "Itens do Projeto" (gated por
+  `situacao === "A" && can("PROJETOS.AJUSTAR_VALORES")`) abre modal:
+  abas Produtos/Serviços, resumo Estimado/Já Faturado/Saldo do Orçamento,
+  lista de documentos elegíveis com checkbox (todos marcados por padrão),
+  total atual da seleção (calculado ao vivo no cliente), campo "Novo
+  Valor" (pré-preenchido com o total atual, editável) e botão "Aplicar
+  Ajuste". Mensagem de sucesso com `durationMs: 5000` (CLAUDE.md > "Mensagem
+  5s p/ info grande" — carrega números que o usuário precisa conferir).
+  Modo Didático (`AjudaPedidoModal`) ganhou 2 itens novos: "Valor
+  Estimado" e "Ajustar Valores".
+- `tsc --noEmit`: sem novos erros (baseline de 12 pré-existentes
+  inalterado, confirmado 2026-08-02).
+
+### O que foi implementado (Fase 3)
+
+**Custos** — a permissão `PROJETOS.VER_CUSTOS` e o gating do total
+agregado ("Custo Geral") já existiam desde a Fase 1; o que faltava era um
+jeito de ver custo/margem **por item**, não só no agregado. Adicionado:
+
+- Botão "Detalhar itens" no card "Itens do Projeto" (colapsado por
+  padrão, sem ScrollView próprio — projetos costumam ter poucos itens)
+  expande a lista de Produtos e Serviços um a um: descrição, quantidade,
+  preço de venda unitário e total; quando `canVerCustos`, também mostra
+  custo unitário e margem (`(venda-custo)/custo × 100`, "—" quando custo
+  é 0). Reaproveita os arrays `itens.produtos`/`itens.servicos` que a
+  Fase 1 já buscava do backend (`_itens_agregados_sync`) mas nunca
+  renderizava — nenhuma chamada nova ao backend.
+
+**Impressão** — reaproveita `printHtml.ts` + `print-report-header.ts`
+(mesmo padrão já usado por Gestão de Compras/Ressuprimento, Cotação de
+Compra, etc. — ver CLAUDE.md > "Padrão de Impressão de Relatórios"),
+nenhum utilitário novo:
+
+- Ícone "Imprimir" no cabeçalho (`editing` apenas — precisa do projeto já
+  gravado). Monta um HTML com cabeçalho de empresa (`fetchEmpresaHeader`)
+  + "Projeto nº N" como título, Cliente/Responsável/Situação/Datas/
+  Detalhes/Valor Estimado, lista de Documentos Vinculados, e as mesmas
+  listas de Produtos/Serviços do "Detalhar itens" (com custo/margem
+  também gated por `canVerCustos` na impressão) — sem nenhum resumo de
+  filtro de tela (não há filtro nesta tela de qualquer forma, é uma tela
+  de registro único, não uma lista).
+
+**Logs do Projeto** — em vez de uma tela própria (rejeitada desde o
+plano original, ver "Plano de fases"), a tela de auditoria já existente
+(`frontend/app/log-auditoria.tsx`) ganhou suporte a deep-link:
+
+- `LogAuditoriaScreen` agora lê `useLocalSearchParams<{tela, referencia}>`
+  e repassa pra `LogAuditoriaWebScreen` como `telaInicial`/
+  `referenciaInicial`. No mount, depois do catálogo carregar, resolve o
+  nó `TELA` correspondente a `telaInicial` (busca recursiva no catálogo
+  já carregado) e chama `setFiltroNode`; `referenciaInicial` vira o valor
+  inicial do campo "Referência". Um novo state `paramsApplied` (setado
+  `true` no fim do bloco de inicialização) faz o `useEffect` de busca
+  automática esperar os parâmetros da URL serem aplicados antes de
+  disparar a 1ª busca (`[conn, paramsApplied]` em vez de só `[conn]`) —
+  sem isso, a busca automática dispararia cedo demais, sem filtro
+  nenhum, antes do catálogo (assíncrono) terminar de carregar.
+- `projeto-form.tsx` ganhou ícone "Ver Logs" no cabeçalho (`editing &&
+  can("LOG_AUDITORIA.ABRIR")`) navegando pra
+  `/log-auditoria?tela=PROJETOS&referencia=<codigo>`.
+- **Decisão deliberada**: não foi criada uma permissão `PROJETOS.LOGS`
+  separada (a lista de permissões granulares do rastreio original menciona
+  "Logs do Projeto" como item próprio) — a tela de destino já tem seu
+  próprio gate (`LOG_AUDITORIA.ABRIR`), e ligar o botão de entrada a essa
+  mesma permissão evita uma permissão redundante que não controlaria
+  nenhuma capacidade a mais (quem não tem `LOG_AUDITORIA.ABRIR` já não
+  consegue abrir a tela de destino de qualquer forma, com ou sem uma
+  permissão `PROJETOS.LOGS` própria). Revisitar se o usuário quiser um
+  controle mais fino (ex.: um grupo que pode ver custos do Projeto mas
+  não deveria ver o log de auditoria do sistema inteiro).
+
+**Frontend**: só `frontend/app/projeto-form.tsx` e
+`frontend/app/log-auditoria.tsx` tocados — nenhuma mudança de backend
+nesta fase (nenhum endpoint novo foi necessário; Impressão usa dados já
+carregados na tela + `/api/controle/empresa` já existente, Logs reaproveita
+`/api/log-auditoria` já existente). `tsc --noEmit`: sem novos erros
+(baseline de 12 pré-existentes inalterado, confirmado 2026-08-02). Suíte
+`test_projetos_service.py` + `test_permissoes_service.py`: 58/58 passando
+(sem regressão, já que não houve mudança de backend).
+
+### Decisões tomadas sem confirmação direta do legado (revisitar se necessário)
+
+- ~~**Situação Cancelado**: não encontrei no rastreio o botão/fluxo exato
+  que leva um Projeto a `situacao='C'` no legado~~ — **confirmado na
+  passada de rastreio da Fase 2**: é `Command10_Click`, e além de marcar
+  `situacao='C'` também desvincula todos os documentos — ver "O que foi
+  implementado (Fase 2)" acima. Implementação já estava correta quanto ao
+  "Cancelar só a partir de Aberto, com confirmação, permissão
+  `SITUACAO`"; só faltava o desvínculo, já corrigido.
+- **Modal "Vincular Documento" por número + Buscar**: não é o padrão
+  "Campo de Identidade com busca" completo (CLAUDE.md) — é mais simples
+  (busca por número exato, não por nome/busca textual), porque vincular
+  um documento a um Projeto pressupõe que o usuário já sabe qual
+  Pedido/O.S./Requisição quer vincular (não é uma escolha entre vários
+  candidatos como Cliente/Produto). Se o usuário achar isso limitado na
+  prática, considerar construir um `PedidoSearchModal`/`OSSearchModal`/
+  `RequisicaoSearchModal` reutilizáveis (mesmo padrão de
+  `FornecedorSearchModal`/`ProdutoSearchModal`).
+
+### Fase 4 — Recursos extras sugeridos (além do legado)
+
+**Implementado 2026-08-02** — os 5 itens, incluindo o que estava
+reservado (confirmado via `AskUserQuestion` direto ao usuário nesta
+sessão, mesmo critério já usado antes pro card de Alertas de Estoque):
+
+- ~~**Card "Projetos" na Tela Principal**~~ — implementado após
+  confirmação explícita. Novo componente
+  `frontend/src/components/principal/ProjetosResumoCard.tsx` (mesmo
+  padrão visual — chip 160px web, borda esquerda colorida — do
+  `EstoqueAlertasCard.tsx`, mas **sem** a complexidade de cache
+  compartilhado/botão "Atualizar" daquele: a consulta aqui é barata (2
+  agregados sobre `projetos`/`projetos_documentos`+`pedido_venda`+`os`,
+  não uma varredura de Curva ABC por todo o catálogo de produtos), então
+  recarrega junto com o resto do dashboard a cada visita, sem precisar do
+  mecanismo de "só 1x por sessão" que o card de estoque usa
+  especificamente pra evitar repetir aquele cálculo caro. Gating:
+  `isManagerFuncao` (mesmo critério) + `moduleOn("gestor_projetos")` +
+  `can("PROJETOS.ABRIR")` (permissão reaproveitada, nenhuma nova). Toque
+  no card navega pra `/projetos?situacao=A`. Mostrado em mobile também
+  (mesmo precedente do card de Estoque — que já navega pra uma tela
+  web-only, `gestao-compras-ressuprimento.tsx` — mesmo "papercut" aceito
+  de tocar num card gerencial no mobile e cair num `LockedView` se a tela
+  de destino for web-only; "informação gerencial" é escopo mobile
+  permitido mesmo quando a tela de detalhe não é).
+  - Backend: `_resumo_projetos_sync`/`resumo_projetos` em
+    `projetos_service.py`, rota `GET /api/projetos-resumo`
+    (`servidor`+`banco` apenas — sem paginação/filtro, é um agregado
+    único). `ativo=false` (sem consultar mais nada) quando o módulo
+    `gestor_projetos` está desligado — mesmo padrão de curto-circuito já
+    usado nos outros gates de módulo. 2 testes novos
+    (`TestResumoProjetos`).
+- ~~**"Projeto parado"**~~ — implementado em `frontend/app/projetos.tsx`
+  (`isProjetoParado`): projeto Aberto é destacado (borda + texto em
+  vermelho, mesma cor `colors.error` já usada em outros destaques do
+  sistema) quando `data_prevista` já venceu, OU quando não recebe um
+  novo documento vinculado há mais de **15 dias** (limiar próprio —
+  deliberadamente mais longo que o 1 dia do Painel de Pedidos, já que
+  Projeto é uma entidade de ciclo de vida mais longo). Precisou de um
+  campo novo na listagem, `ultimo_vinculo`
+  (`MAX(projetos_documentos.data_inclusao)` por projeto, subquery
+  adicionada em `_list_projetos_sync`) — sem documento vinculado ainda,
+  cai para `data_abertura` como referência.
+- ~~**Vínculo visível no próprio Pedido/O.S.**~~ — implementado: novo
+  endpoint `GET /api/projetos-vinculo?tipo_doc=&num_doc=` (busca reversa
+  documento→projeto, `_find_vinculo_sync`) chamado por
+  `pedido-geral.tsx`/`os-geral.tsx` ao carregar um documento já gravado;
+  quando encontra vínculo, `PedidoHeader.tsx` (novo prop
+  `vinculoProjeto`) mostra um chip "Projeto #N" no cabeçalho, tocável,
+  navegando pra `/projeto-form?codigo=N`. Falha da busca é silenciosa
+  (chip é só um atalho de descoberta, não pode travar a tela).
+- ~~**Filtro "Projeto" nos relatórios já existentes**~~ — implementado no
+  **Relatório de Pedidos** (`useRelatorioPedidos.ts`/`Filtros.tsx`, campo
+  numérico "Projeto (nº, opcional)") e no **Relatório de Margem/
+  Descontos** (`relatorio-descontos.tsx`, campo "Projeto (nº, opcional —
+  só filtra Pedidos)"). Backend: `_relatorio_pedidos_sync`/
+  `_relatorio_desc_margem_sync` ganharam parâmetro `projeto` opcional —
+  restringe via `pv.pedido IN (SELECT num_doc FROM projetos_documentos
+  WHERE projeto=%s AND tipo_doc='PED')`, mesmo padrão de subquery já
+  usado noutros filtros do sistema. **Limitação deliberada**: o filtro
+  só cobre a origem Pedido — a tela de Descontos & Margem também mistura
+  O.S. (`_relatorio_os_desc_margem_sync`, endpoint `/relatorios/os/
+  descontos-margem`), que não foi tocado nesta rodada (fora do escopo
+  explicitamente pedido: "Relatório de Pedidos, Relatório de Margem/
+  Descontos" são 2 telas, não 3) — quando a origem "OS" ou "Todos" está
+  selecionada, o filtro de Projeto só afeta as linhas de Pedido, as de
+  O.S. continuam sem filtro. Documentado no comentário do código e no
+  próprio rótulo do campo na tela.
+  - **Decisão de UX**: o campo "Projeto" é um `TextInput` numérico
+    simples (mesmo padrão do campo "Código (Pedido/OS)" já existente
+    nessas telas), não um modal de busca por nome — mesma lógica já usada
+    pra "Modal 'Vincular Documento' por número" do próprio Gestor de
+    Projetos (ver "Decisões tomadas sem confirmação direta do legado"
+    abaixo): filtrar por Projeto pressupõe que o usuário já sabe o
+    número, não é uma escolha entre vários candidatos.
+- ~~**Exportar Excel**~~ — implementado em `projeto-form.tsx`, ícone
+  "Exportar Excel" no cabeçalho (`editing` apenas), reaproveita
+  `exportSheetsToXlsx` (mesmo utilitário do Borderô de Cilindros — nada
+  novo criado). Gera `projeto-<codigo>.xlsx` com 3 abas: "Documentos"
+  (tipo/número/data/situação/total), "Produtos" e "Serviços" (código/
+  descrição/qtd/preço de venda/total — custo/margem também nas 2 últimas
+  colunas, só quando `canVerCustos`).
+
+**Backend tocado**: `projetos_service.py` (`_find_vinculo_sync` +
+wrapper `find_vinculo`, `ultimo_vinculo` em `_list_projetos_sync`,
+`_resumo_projetos_sync`/`resumo_projetos`), `routes/projetos.py` (`GET
+/projetos-vinculo`, `GET /projetos-resumo`), `relatorios_service.py`
+(parâmetro `projeto` em `_relatorio_pedidos_sync`/
+`_relatorio_desc_margem_sync` + wrappers), `routes/relatorios.py` (mesmo
+parâmetro nas 2 rotas). 2 endpoints novos (`/projetos-vinculo`,
+`/projetos-resumo`) — os outros 3 recursos reaproveitaram endpoints/
+parâmetros incrementais em cima do que já existia. 14 testes novos:
+`TestFindVinculo` (3) + `TestResumoProjetos` (2) +
+`test_expoe_ultimo_vinculo_para_projeto_parado` (1) em
+`test_projetos_service.py`, `test_relatorios_projeto_filter.py` (novo
+arquivo, 4 testes) — suíte focada
+(`test_projetos_service.py`+`test_relatorios_projeto_filter.py`+
+`test_relatorios_dashboard.py`+`test_permissoes_service.py`): 76/76
+passando. `tsc --noEmit`: sem novos erros (baseline de 12 pré-existentes
+inalterado, confirmado 2026-08-02).
+
+### Teste ao vivo — ainda não feito
+
+As Fases 1, 2, 3 e 4 (backend + frontend) só foram validadas via testes
+unitários e `tsc --noEmit` nesta sessão — **nenhuma chamada real contra
+uma conexão KONTACTO TESTE (ou outra) foi feita**, nem o fluxo completo
+foi exercitado num navegador. Antes de considerar o módulo realmente
+concluído: criar um Projeto de teste, vincular um Pedido/O.S./Requisição
+reais, conferir a agregação de itens/Faturado/Saldo, testar
+Finalizar/Reabrir/Cancelar (inclusive que Cancelar realmente desvincula
+os documentos), gravar os valores estimados de Produtos/Serviços, rodar
+"Ajustar Valores" de ponta a ponta contra um Pedido e uma O.S. reais
+(conferir que o desconto/acréscimo gravado bate com o valor-alvo e que o
+total do documento é recalculado corretamente), confirmar que o módulo
+`gestor_projetos` liga/desliga a tela corretamente em Configurações >
+Módulos e Recursos, testar "Detalhar itens" com e sem
+`PROJETOS.VER_CUSTOS` concedida, imprimir um Projeto de verdade (conferir
+que o cabeçalho de empresa vem certo e que a impressão térmica/monospace
+de `printHtml.ts` fica legível para um conteúdo mais denso como este, já
+que esse utilitário foi pensado originalmente para cupom/comanda, não
+para um relatório de página inteira), e clicar em "Ver Logs" pra
+confirmar que o Log de Auditoria abre já filtrado pela tela PROJETOS e
+pelo número do projeto certo. Da Fase 4: abrir um Pedido/O.S. já
+vinculado a um Projeto e conferir que o chip "Projeto #N" aparece e
+navega certo; deixar um Projeto Aberto sem vínculo novo por mais de 15
+dias (ou com "Prev. Término" vencida) e conferir o destaque vermelho em
+`projetos.tsx`; filtrar o Relatório de Pedidos e o de Descontos & Margem
+por um número de Projeto real e conferir que só os Pedidos vinculados
+aparecem; exportar o Excel de um Projeto com documentos/itens reais e
+abrir o `.xlsx` gerado pra conferir as 3 abas; conferir que o card
+"Projetos" aparece na Tela Principal só pra usuário Gerente/Supervisor/
+Master com o módulo ligado, que o total de Abertos e o saldo a faturar
+batem com a lista real, e que some quando não há permissão/módulo
+desligado.

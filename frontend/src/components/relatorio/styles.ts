@@ -33,10 +33,6 @@ export const styles = StyleSheet.create({
     backgroundColor: colors.brandPrimary, borderRadius: radius.md, paddingVertical: 12, marginTop: spacing.sm,
   },
   btnText: { color: colors.onBrandPrimary, fontSize: 15, fontWeight: "600" },
-  errorBox: {
-    flexDirection: "row", alignItems: "center", gap: spacing.sm,
-    backgroundColor: "#FDE7E7", borderRadius: radius.md, padding: spacing.md,
-  },
   errorText: { color: colors.error, fontSize: 13, flex: 1 },
   empty: { textAlign: "center", color: colors.muted, fontSize: 13, marginTop: spacing.lg },
   totaisBox: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, gap: spacing.sm, marginTop: spacing.sm },

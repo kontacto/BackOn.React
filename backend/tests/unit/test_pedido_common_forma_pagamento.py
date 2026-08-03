@@ -195,3 +195,38 @@ class TestInsereDuplicataParcelada:
         inserts = [p for q, p in cur.queries if q.startswith("INSERT INTO pedido_venda_duplicata")]
         valores = [p[2] for p in inserts]
         assert round(sum(valores), 2) == 100.0
+
+
+class TestFecharPedidoItensEstoqueM2:
+    """`_fechar_pedido_itens` baixa estoque por ÁREA (`_area_estoque`,
+    réplica de `AreaEstoque`) pra item m², não pela contagem de peças —
+    ver PENDENCIAS.md > "Transações" > "Pedido Geral — Metro Quadrado".
+    `_fecha_fpag_dav` é mockado direto (já coberto pelos testes de
+    `TestFechaFpagDav` acima) pra isolar só a lógica de estoque; subtotal=0
+    evita a checagem de `_qtd_formas`."""
+
+    def test_item_m2_baixa_por_area_nao_por_qtd_pecas(self, monkeypatch):
+        monkeypatch.setattr(pc, "_fecha_fpag_dav", lambda cur, dav: None)
+        movimentos = []
+        monkeypatch.setattr(pc, "_mover_estoque", lambda cur, codigo, delta, campo: movimentos.append((codigo, delta, campo)))
+        cur = SqlFakeCursor().when_many(
+            "SELECT produto, qtd_pedida, comprimento, largura",
+            [{"produto": "P1", "qtd_pedida": 3.0, "comprimento": 1.2, "largura": 0.8}],
+        )
+        erro = pc._fechar_pedido_itens(cur, 1, subtotal=0.0)
+        assert erro is None
+        assert len(movimentos) == 1
+        # área bruta 1.2*0.8=0.96 (sem arredondamento/piso) x 3 peças = 2.88
+        assert movimentos[0] == ("P1", 3.0 * 0.96, "reservado")
+
+    def test_item_normal_continua_baixando_por_qtd_pedida(self, monkeypatch):
+        monkeypatch.setattr(pc, "_fecha_fpag_dav", lambda cur, dav: None)
+        movimentos = []
+        monkeypatch.setattr(pc, "_mover_estoque", lambda cur, codigo, delta, campo: movimentos.append((codigo, delta, campo)))
+        cur = SqlFakeCursor().when_many(
+            "SELECT produto, qtd_pedida, comprimento, largura",
+            [{"produto": "P2", "qtd_pedida": 5.0, "comprimento": None, "largura": None}],
+        )
+        erro = pc._fechar_pedido_itens(cur, 1, subtotal=0.0)
+        assert erro is None
+        assert movimentos == [("P2", 5.0, "reservado")]

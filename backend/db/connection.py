@@ -44,17 +44,32 @@ def _open_conn(servidor: str, banco: str, timeout: int = 10):
 
     • Hosts *.database.windows.net → conta Azure ("suporte").
     • Demais hosts (SQL Server local/on-prem) → conta "sa".
+
+    Qualquer falha aqui é traduzida por `friendly_db_error` antes de
+    propagar — este é o ÚNICO ponto de abertura de conexão usado por todo
+    o resto do backend (~70 services), então traduzir aqui cobre todo
+    mensagem de "Falha conexão: ..." do sistema de uma vez, sem precisar
+    tocar em cada call site (`except Exception as e: message=f"Falha
+    conexão: {e}"` continua igual em todo canto, só que `{e}` agora já vem
+    com o texto amigável em vez do erro cru do driver). `friendly_db_error`
+    já existia e já era usado só na tela de Login (`auth_service.py`, que
+    chama `pymssql.connect` direto, fora deste helper) — regra [GLOBAL]
+    "mensagens do sistema devem usar linguagem menos técnica pro usuário
+    final", pedido explícito do usuário, 2026-07-18.
     """
     server = (servidor or "").strip()
     user, password = _pick_sql_credentials(server)
-    return pymssql.connect(
-        server=server,
-        user=user,
-        password=password,
-        database=banco,
-        login_timeout=timeout, timeout=timeout,
-        tds_version=SQL_TDS_VERSION,
-    )
+    try:
+        return pymssql.connect(
+            server=server,
+            user=user,
+            password=password,
+            database=banco,
+            login_timeout=timeout, timeout=timeout,
+            tds_version=SQL_TDS_VERSION,
+        )
+    except Exception as e:
+        raise ConnectionError(friendly_db_error(e)) from e
 
 
 def _to_json_safe(row: Optional[dict]) -> Optional[dict]:

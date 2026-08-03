@@ -48,13 +48,18 @@ from typing import Optional
 
 from db.connection import _open_conn, _to_json_safe
 
+# `Controla_Agenda` foi adicionado depois (2026-07-28), fora do escopo
+# original desta porta (FrmManPro) — é a coluna `FUNCIONARIOS.CONTROLA_AGENDA`
+# lida por `FrmAtende.frm`/`FrmMarAge2.frm` (módulo Clínica) pra decidir quem
+# aparece como profissional elegível pra agendamento. Ver PENDENCIAS.md >
+# "Transações" > "Pedido Geral — Fase B: Clínica (Agendamento)".
 CAMPOS_FUNCIONARIO = [
     "nome_guerra", "situacao", "nome", "cod_funcao", "email",
     "liberar_pedido_lista_negra", "liberar_pedido_limite_excedido",
     "admissao", "cpf_prof", "ident_prof", "cart_prof", "data_nasc", "sexo_prof",
     "CODIGO_DEP", "docespecial", "numespecial", "conselho", "numconselho", "codcargo",
     "cep_prof", "bairr_prof", "endereco", "cid_prof", "est_prof", "tel_prof",
-    "Controla_Carteira",
+    "Controla_Carteira", "Controla_Agenda",
     "tipo_comissao", "comissaop", "comissaos", "COMISSAO_PRIORIDADE_VENDEDOR",
     "tipo_comissao_e", "comissaop_e", "comissaos_e", "COMISSAO_PRIORIDADE_EXECUTOR",
     "tipo_comissao_a", "comissaop_a", "comissaos_a", "COMISSAO_PRIORIDADE_ATENDENTE",
@@ -115,6 +120,7 @@ def _coerce_vals(dados: dict) -> dict:
         "est_prof": s("est_prof", 2),
         "tel_prof": s("tel_prof", 15),
         "Controla_Carteira": b("controla_carteira"),
+        "Controla_Agenda": b("controla_agenda"),
         "tipo_comissao": s("tipo_comissao", 1) or "S",
         "comissaop": f("comissaop"),
         "comissaos": f("comissaos"),

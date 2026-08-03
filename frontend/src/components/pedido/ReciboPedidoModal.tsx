@@ -36,6 +36,25 @@ import { styles } from "./styles";
 
 const isWeb = Platform.OS === "web";
 
+// Largura da bobina térmica usada pra recibo/ticket de cozinha — confirmada
+// pelo usuário 2026-07-23 (impressora de 80mm). Sem passar isso pro
+// `printHtml`, o navegador imprime na página padrão dele (A4/Letter), sem
+// noção da largura real do rolo, o que desproporciona o cupom (achado ao
+// vivo, comparando contra um cupom impresso de verdade). Se algum cliente
+// usar bobina de 58mm, isto vira um campo de configuração — por ora, fixo,
+// já que só uma largura foi confirmada até agora.
+const PAPER_WIDTH_MM = 80;
+
+// Clientes reservados (Mesa/Comanda) costumam ter `cgc_cpf` gravado como
+// "0"/zeros em vez de vazio — sem esse filtro o recibo imprimia "Doc: 0",
+// um dado sem sentido pro cliente final. Achado comparando a impressão real
+// contra o recibo legado VB6 (que simplesmente omite a linha quando não há
+// documento de verdade), 2026-07-18.
+function temDocumentoValido(cgc: string | null | undefined): boolean {
+  const v = (cgc || "").replace(/\D/g, "");
+  return v.length > 0 && !/^0+$/.test(v);
+}
+
 type Empresa = {
   fantasia?: string | null; rz_social?: string | null; uf?: string | null;
   endereco: string; numero: number | null; complemento: string; bairro: string; cidade: string;
@@ -53,7 +72,7 @@ type Props = {
   clienteResumo: ClienteResumo | null;
   // Só `.itens`/`.pedidoTotalizadoGrupos` são lidos aqui — `Pick` em vez do
   // hook inteiro (`UsePedidoItens`) pra permitir montar esse recibo fora do
-  // fluxo normal de pedido-form/pedido-completo (ex.: Painel de Pedidos,
+  // fluxo normal de pedido-form/pedido-geral (ex.: Painel de Pedidos,
   // `app/pedidos.tsx`) sem precisar instanciar `usePedidoItens` inteiro (que
   // carrega muito mais estado — descontos, modais de item, etc. — do que
   // esse componente usa). Pedido explícito do usuário, 2026-07-17.
@@ -97,48 +116,89 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
     : "";
   const cidadeEmpresa = empresa ? [empresa.bairro, empresa.cidade, empresa.uf].filter(Boolean).join(" - ") : "";
 
+  // Sub-Total (preço de tabela, sem desconto) x Desconto — ver bloco
+  // "SUB-TOTAL/DESCONTO/TOTAL" mais abaixo pro racional completo.
+  const subtotalBruto = it.itens.reduce((s, r) => s + r.qtd * (r.p_normal || r.valor_unitario), 0);
+  const descontoTotal = subtotalBruto - pedido.total;
+
   const buildHtml = (): string => {
     const parts: string[] = [];
     const hr = () => parts.push('<div class="hr"></div>');
     const center = (t: string) => parts.push(`<div class="center">${escHtml(t)}</div>`);
     const bold = (t: string) => parts.push(`<div class="bold">${escHtml(t)}</div>`);
     const line = (t: string) => parts.push(`<div class="mb">${escHtml(t)}</div>`);
-    const big = (t: string) => parts.push(`<div class="big mb">${escHtml(t)}</div>`);
     const row = (a: string, b: string) =>
       parts.push(`<div class="row"><span>${escHtml(a)}</span><span>${escHtml(b)}</span></div>`);
-    // Linha de item: descrição (esquerda) / qtd x unit (meio) / total (direita) —
-    // alinhamento justificado nas duas pontas, valor total sempre alinhado à
-    // direita da linha, pedido explícito do usuário 2026-07-16.
-    const itemRow = (desc: string, qtdUnit: string, total: string) =>
-      parts.push(
-        `<div class="row3"><span>${escHtml(desc)}</span><span>${escHtml(qtdUnit)}</span><span>${escHtml(total)}</span></div>`
-      );
+    // Linha de item: descrição ocupa a linha INTEIRA (quebra livre,
+    // qualquer tamanho), qtd x unit / total ficam numa segunda linha
+    // compacta abaixo. Substitui o layout anterior de 3 colunas numa linha
+    // só (`row3`) — em papel de 80mm as colunas de qtd/total (que nunca
+    // quebram) sobravam quase nenhum espaço pra descrição, quebrando
+    // palavra por sílaba/letra. Corrigido a partir de print real da
+    // impressora térmica mostrando o problema (2026-07-18).
+    const itemRow = (desc: string, qtdUnit: string, total: string) => {
+      parts.push(`<div class="mb">${escHtml(desc)}</div>`);
+      parts.push(`<div class="row mb"><span>${escHtml(qtdUnit)}</span><span>${escHtml(total)}</span></div>`);
+    };
 
-    center((empresa?.fantasia || empresa?.rz_social || "").toUpperCase());
-    if (enderecoEmpresa) center(enderecoEmpresa);
-    if (cidadeEmpresa) center(`${cidadeEmpresa}${empresa?.cep ? ` CEP: ${empresa.cep}` : ""}`);
-    if (empresa?.telefone) {
-      center(`Tel: (${empresa.ddd}) ${empresa.telefone}${empresa.celular ? ` / ${empresa.celular}` : ""}`);
+    if (isItemMode) {
+      // Ticket de cozinha/bar inteiro em negrito (pedido explícito do
+      // usuário, 2026-07-23) — inclusive o nome da empresa, que no modo
+      // pedido completo continua só centralizado (`center()`, sem negrito).
+      parts.push(`<div class="bold center mb">${escHtml((empresa?.fantasia || empresa?.rz_social || "").toUpperCase())}</div>`);
+    } else {
+      center((empresa?.fantasia || empresa?.rz_social || "").toUpperCase());
     }
-    if (empresa?.cgc) center(`CNPJ: ${empresa.cgc}${empresa.inscr_est ? ` IE: ${empresa.inscr_est}` : ""}`);
+    // Endereço/telefone/CNPJ da empresa só fazem sentido no recibo do
+    // cliente — o ticket de cozinha/bar (modo item) é uso interno, esses
+    // dados só ocupam espaço à toa (pedido explícito do usuário).
+    if (!isItemMode) {
+      if (enderecoEmpresa) center(enderecoEmpresa);
+      if (cidadeEmpresa) center(`${cidadeEmpresa}${empresa?.cep ? ` CEP: ${empresa.cep}` : ""}`);
+      if (empresa?.telefone) {
+        center(`Tel: (${empresa.ddd}) ${empresa.telefone}${empresa.celular ? ` / ${empresa.celular}` : ""}`);
+      }
+      if (empresa?.cgc) center(`CNPJ: ${empresa.cgc}${empresa.inscr_est ? ` IE: ${empresa.inscr_est}` : ""}`);
+    }
     hr();
-    bold(`${situacaoLabel} nº ${pedido.pedido}${pedido.localizacao_descricao ? `   Local: ${pedido.localizacao_descricao}` : ""}`);
+    // Nome do cliente entra na mesma linha do nº do pedido, mesma fonte
+    // (pedido explícito do usuário, modelo anexado) — só no modo item;
+    // no recibo completo o cliente já aparece em linha própria mais abaixo.
+    bold(
+      `${situacaoLabel} nº ${pedido.pedido}` +
+      (pedido.localizacao_descricao ? `   Local: ${pedido.localizacao_descricao}` : "") +
+      (isItemMode && cliente ? `   ${cliente.nome}` : "")
+    );
     hr();
 
     if (isItemMode && item) {
-      parts.push(`<div class="big center mb">${escHtml(`${formatDateBR(pedido.data)} ${new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`)}</div>`);
+      // Ticket de cozinha/bar — Qtd e Produto em fonte grande (`.huge2`,
+      // um pouco menor que a `.huge` anterior — pedido explícito do
+      // usuário) pra continuar legível de longe na cozinha, mas sem
+      // dominar o ticket inteiro. Atendente e Data/Hora dividem a mesma
+      // linha, mesma fonte (antes eram 2 linhas separadas, a de
+      // Data/Hora em fonte gigante). A linha "Pedido nº X   Impressão:
+      // Y" foi REMOVIDA (pedido explícito do usuário, ver modelo
+      // anexado — a mesma informação de nº do pedido já está na linha do
+      // cabeçalho, acima).
+      bold(
+        `Atendente: ${pedido.vendedor_nome}   ` +
+        `${formatDateBR(pedido.data)}  ${new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
+      );
       hr();
-      parts.push(`<div class="big mb">${escHtml(item.descricao)}</div>`);
+      parts.push(`<div class="huge2 mb">${escHtml(`QTD: ${fmtNum(item.qtd)}`)}</div>`);
+      parts.push(`<div class="huge2 mb">${escHtml(item.descricao)}</div>`);
       if (item.complemento && item.complemento.trim().toUpperCase() !== item.descricao.trim().toUpperCase()) {
         parts.push(`<div class="big mb">${escHtml(item.complemento)}</div>`);
       }
-      big(`QTD: ${fmtNum(item.qtd)}`);
+      if (item.comprimento && item.largura) {
+        parts.push(`<div class="big mb">${escHtml(`${fmtNum(item.comprimento)} x ${fmtNum(item.largura)} m`)}</div>`);
+      }
       hr();
-      if (pedido.obs) { line(`Obs: ${pedido.obs}`); hr(); }
-      if (cliente) {
-        big(cliente.nome);
-        if (clienteResumo?.endereco) line(clienteResumo.endereco);
-        if (clienteResumo?.telefone) line(`Tel: ${clienteResumo.telefone}`);
+      if (pedido.obs) { bold(`Obs: ${pedido.obs}`); hr(); }
+      if (clienteResumo?.endereco || clienteResumo?.telefone) {
+        if (clienteResumo?.endereco) bold(clienteResumo.endereco);
+        if (clienteResumo?.telefone) bold(`Tel: ${clienteResumo.telefone}`);
       }
       if (pedido.previsao_entrega) {
         hr();
@@ -152,13 +212,35 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
       } else {
         it.itens.forEach((row_) => {
           itemRow(
-            row_.descricao + (row_.complemento ? ` — ${row_.complemento}` : ""),
+            row_.descricao
+              + (row_.complemento ? ` — ${row_.complemento}` : "")
+              // Dimensão m² (Fase B — módulo Metro Quadrado), só quando
+              // gravada. Ver PENDENCIAS.md > "Transações" > "Pedido Geral —
+              // Metro Quadrado".
+              + (row_.comprimento && row_.largura ? ` — ${fmtNum(row_.comprimento)} x ${fmtNum(row_.largura)} m` : "")
+              // Agendamento (Fase B — módulo Clínica) — data/hora/profissional
+              // por linha, só quando o item de Serviço já foi agendado. Ver
+              // PENDENCIAS.md > "Transações" > "Pedido Geral — Fase B: Clínica
+              // (Agendamento)".
+              + (row_.agendamento ? ` — Agendado: ${formatDateBR(row_.agendamento.data)} às ${row_.agendamento.hora_ini} (${row_.agendamento.profissional})` : ""),
             `${fmtNum(row_.qtd)} x ${formatBRL(row_.valor_unitario)}`,
             formatBRL(row_.qtd * row_.valor_unitario)
           );
         });
       }
       hr();
+      // Sub-Total/Desconto — réplica do recibo legado VB6 (colado pelo
+      // usuário 2026-07-18: "* SUB-TOTAL:" / "* DESCONTO:" / "* TOTAL:"),
+      // que detalha o valor bruto e o desconto separados antes do total.
+      // Calculado a partir de `p_normal` (preço de tabela, sem desconto)
+      // de `it.itens` — sempre a lista crua, independente do toggle
+      // "Totalizado" acima (esse resumo é fixo, não segue o agrupamento).
+      // Só aparece quando há desconto de fato (evita "Desconto: R$ 0,00"
+      // poluindo pedidos sem nenhum desconto lançado).
+      if (subtotalBruto > 0 && descontoTotal > 0.005) {
+        row("SUB-TOTAL", formatBRL(subtotalBruto));
+        row("DESCONTO", formatBRL(descontoTotal));
+      }
       row("TOTAL", formatBRL(pedido.total));
       // Divisão da conta pela qtd. de pessoas (Painel de Pedidos, campo
       // "Qtd. Pessoas" do card) — só aparece quando informada. Pedido
@@ -178,7 +260,7 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
       }
       hr();
       if (cliente) {
-        if (cliente.cgc_cpf) line(`Doc: ${cliente.cgc_cpf}`);
+        if (temDocumentoValido(cliente.cgc_cpf)) line(`Doc: ${cliente.cgc_cpf}`);
         line(cliente.nome);
         if (clienteResumo?.endereco) line(clienteResumo.endereco);
         if (clienteResumo?.telefone) line(`Tel: ${clienteResumo.telefone}`);
@@ -198,7 +280,16 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
 
   const handlePrint = () => {
     if (!isWeb) return;
-    printHtml(buildHtml(), isItemMode ? "Imprimir Item" : "Imprimir Pedido");
+    // Título em branco no modo item: no ticket de cozinha/bar (papel
+    // térmico estreito, sem uso de "salvar como PDF") o título só reforça
+    // a faixa de cabeçalho que o PRÓPRIO NAVEGADOR imprime em cima da
+    // página ("data — título"), fora do nosso controle via CSS — ver
+    // "Impressão — cabeçalho do navegador" em CLAUDE.md/PENDENCIAS.md
+    // pro que precisa ser desligado manualmente em "Mais definições" >
+    // "Cabeçalhos e rodapés" do diálogo de impressão. No modo pedido
+    // inteiro o título continua útil (identifica o PDF quando o destino é
+    // "Salvar como PDF"), não mudado.
+    printHtml(buildHtml(), isItemMode ? "" : "Imprimir Pedido", PAPER_WIDTH_MM);
   };
 
   return (
@@ -225,43 +316,56 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
 
           <ScrollView style={{ maxHeight: 480 }}>
             <View style={rs.paper}>
-              <Text style={rs.center}>{(empresa?.fantasia || empresa?.rz_social || "").toUpperCase()}</Text>
-              {enderecoEmpresa ? <Text style={rs.center}>{enderecoEmpresa}</Text> : null}
-              {cidadeEmpresa ? <Text style={rs.center}>{cidadeEmpresa}{empresa?.cep ? ` CEP: ${empresa.cep}` : ""}</Text> : null}
-              {empresa?.telefone ? (
+              <Text style={isItemMode ? [rs.bold, rs.center] : rs.center}>
+                {(empresa?.fantasia || empresa?.rz_social || "").toUpperCase()}
+              </Text>
+              {!isItemMode && enderecoEmpresa ? <Text style={rs.center}>{enderecoEmpresa}</Text> : null}
+              {!isItemMode && cidadeEmpresa ? <Text style={rs.center}>{cidadeEmpresa}{empresa?.cep ? ` CEP: ${empresa.cep}` : ""}</Text> : null}
+              {!isItemMode && empresa?.telefone ? (
                 <Text style={rs.center}>Tel: ({empresa.ddd}) {empresa.telefone}{empresa.celular ? ` / ${empresa.celular}` : ""}</Text>
               ) : null}
-              {empresa?.cgc ? <Text style={rs.center}>CNPJ: {empresa.cgc}{empresa.inscr_est ? ` IE: ${empresa.inscr_est}` : ""}</Text> : null}
+              {!isItemMode && empresa?.cgc ? <Text style={rs.center}>CNPJ: {empresa.cgc}{empresa.inscr_est ? ` IE: ${empresa.inscr_est}` : ""}</Text> : null}
 
               <View style={rs.hr} />
+              {/* Nome do cliente entra na mesma linha do nº do pedido, mesma
+                  fonte — só no modo item (pedido explícito do usuário). */}
               <Text style={rs.bold}>
-                {situacaoLabel} nº {pedido.pedido}{pedido.localizacao_descricao ? `   Local: ${pedido.localizacao_descricao}` : ""}
+                {situacaoLabel} nº {pedido.pedido}
+                {pedido.localizacao_descricao ? `   Local: ${pedido.localizacao_descricao}` : ""}
+                {isItemMode && cliente ? `   ${cliente.nome}` : ""}
               </Text>
               <View style={rs.hr} />
 
               {isItemMode && item ? (
                 <>
-                  <Text style={rs.dataHora}>{formatDateBR(pedido.data)} {new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</Text>
+                  {/* Atendente e Data/Hora na mesma linha, mesma fonte —
+                      antes eram 2 linhas separadas (a de Data/Hora em fonte
+                      gigante). A linha "Pedido nº X   Impressão: Y" foi
+                      REMOVIDA (pedido explícito do usuário, ver modelo
+                      anexado — a informação do nº do pedido já está no
+                      cabeçalho, acima). */}
+                  <Text style={rs.bold}>
+                    Atendente: {pedido.vendedor_nome}{"   "}
+                    {formatDateBR(pedido.data)}  {new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                  </Text>
                   <View style={rs.hr} />
-                  <Text style={rs.itemDesc}>{item.descricao}</Text>
+                  {/* Qtd/Produto em fonte grande (`rs.huge2`, um pouco menor
+                      que `rs.huge` — pedido explícito do usuário) pra
+                      continuar legível de longe na cozinha. */}
+                  <Text style={rs.huge2}>QTD: {fmtNum(item.qtd)}</Text>
+                  <Text style={rs.huge2}>{item.descricao}</Text>
                   {item.complemento && item.complemento.trim().toUpperCase() !== item.descricao.trim().toUpperCase() ? (
                     <Text style={rs.itemDesc}>{item.complemento}</Text>
                   ) : null}
-                  <Text style={rs.itemDesc}>QTD: {fmtNum(item.qtd)}</Text>
                   <View style={rs.hr} />
                   {pedido.obs ? (
                     <>
-                      <Text style={rs.mono}>Obs: {pedido.obs}</Text>
+                      <Text style={rs.bold}>Obs: {pedido.obs}</Text>
                       <View style={rs.hr} />
                     </>
                   ) : null}
-                  {cliente ? (
-                    <>
-                      <Text style={rs.itemDesc}>{cliente.nome}</Text>
-                      {clienteResumo?.endereco ? <Text style={rs.mono}>{clienteResumo.endereco}</Text> : null}
-                      {clienteResumo?.telefone ? <Text style={rs.mono}>Tel: {clienteResumo.telefone}</Text> : null}
-                    </>
-                  ) : null}
+                  {clienteResumo?.endereco ? <Text style={rs.bold}>{clienteResumo.endereco}</Text> : null}
+                  {clienteResumo?.telefone ? <Text style={rs.bold}>Tel: {clienteResumo.telefone}</Text> : null}
                   {pedido.previsao_entrega ? (
                     <>
                       <View style={rs.hr} />
@@ -273,27 +377,46 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
                 </>
               ) : (
                 <>
+                  {/* Descrição na linha inteira + qtd/total numa linha compacta
+                      abaixo — mesmo layout do `buildHtml`, ver comentário lá
+                      (colunas fixas de qtd/total espremiam a descrição em
+                      papel de 80mm real). */}
                   {agrupado
                     ? it.pedidoTotalizadoGrupos.map((g) => (
-                        <View key={g.produto} style={[rs.row, { marginBottom: 4 }]}>
-                          <Text style={[rs.mono, rs.rowDesc]}>{g.descricao}</Text>
-                          <Text style={[rs.mono, rs.rowQtd]}>
-                            {fmtNum(g.qtd)} x {formatBRL(g.qtd ? g.valorTotal / g.qtd : 0)}
-                          </Text>
-                          <Text style={[rs.mono, rs.rowValue]}>{formatBRL(g.valorTotal)}</Text>
+                        <View key={g.produto} style={{ marginBottom: 4 }}>
+                          <Text style={rs.mono}>{g.descricao}</Text>
+                          <View style={rs.row}>
+                            <Text style={rs.mono}>{fmtNum(g.qtd)} x {formatBRL(g.qtd ? g.valorTotal / g.qtd : 0)}</Text>
+                            <Text style={rs.mono}>{formatBRL(g.valorTotal)}</Text>
+                          </View>
                         </View>
                       ))
                     : it.itens.map((row) => (
-                        <View key={row.codauto} style={[rs.row, { marginBottom: 4 }]}>
-                          <Text style={[rs.mono, rs.rowDesc]}>{row.descricao}{row.complemento ? ` — ${row.complemento}` : ""}</Text>
-                          <Text style={[rs.mono, rs.rowQtd]}>
-                            {fmtNum(row.qtd)} x {formatBRL(row.valor_unitario)}
+                        <View key={row.codauto} style={{ marginBottom: 4 }}>
+                          <Text style={rs.mono}>
+                            {row.descricao}{row.complemento ? ` — ${row.complemento}` : ""}
+                            {row.agendamento ? ` — Agendado: ${formatDateBR(row.agendamento.data)} às ${row.agendamento.hora_ini} (${row.agendamento.profissional})` : ""}
                           </Text>
-                          <Text style={[rs.mono, rs.rowValue]}>{formatBRL(row.qtd * row.valor_unitario)}</Text>
+                          <View style={rs.row}>
+                            <Text style={rs.mono}>{fmtNum(row.qtd)} x {formatBRL(row.valor_unitario)}</Text>
+                            <Text style={rs.mono}>{formatBRL(row.qtd * row.valor_unitario)}</Text>
+                          </View>
                         </View>
                       ))}
 
                   <View style={rs.hr} />
+                  {subtotalBruto > 0 && descontoTotal > 0.005 ? (
+                    <>
+                      <View style={rs.row}>
+                        <Text style={rs.mono}>SUB-TOTAL</Text>
+                        <Text style={rs.mono}>{formatBRL(subtotalBruto)}</Text>
+                      </View>
+                      <View style={rs.row}>
+                        <Text style={rs.mono}>DESCONTO</Text>
+                        <Text style={rs.mono}>{formatBRL(descontoTotal)}</Text>
+                      </View>
+                    </>
+                  ) : null}
                   <View style={rs.row}>
                     <Text style={rs.bold}>TOTAL</Text>
                     <Text style={rs.bold}>{formatBRL(pedido.total)}</Text>
@@ -333,7 +456,7 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
 
                   {cliente ? (
                     <>
-                      {cliente.cgc_cpf ? <Text style={rs.mono}>Doc: {cliente.cgc_cpf}</Text> : null}
+                      {temDocumentoValido(cliente.cgc_cpf) ? <Text style={rs.mono}>Doc: {cliente.cgc_cpf}</Text> : null}
                       <Text style={rs.mono}>{cliente.nome}</Text>
                       {clienteResumo?.endereco ? <Text style={rs.mono}>{clienteResumo.endereco}</Text> : null}
                       {clienteResumo?.telefone ? <Text style={rs.mono}>Tel: {clienteResumo.telefone}</Text> : null}
@@ -376,11 +499,16 @@ const rs = StyleSheet.create({
   mono: { fontSize: 12, fontFamily: isWeb ? "monospace" : undefined, color: "#111" },
   bold: { fontSize: 12, fontFamily: isWeb ? "monospace" : undefined, fontWeight: "700", color: "#111" },
   itemDesc: { fontSize: 15, fontFamily: isWeb ? "monospace" : undefined, fontWeight: "700", color: "#111" },
-  dataHora: { fontSize: 15, fontFamily: isWeb ? "monospace" : undefined, fontWeight: "700", color: "#111", textAlign: "center" },
+  // Ticket de cozinha/bar (modo item) — Mesa/Data/Hora/Qtd/Produto em fonte
+  // bem maior, legível de longe (pedido explícito do usuário, a partir de
+  // um exemplo real de cupom anexado).
+  huge: { fontSize: 24, fontFamily: isWeb ? "monospace" : undefined, fontWeight: "800", color: "#111", marginBottom: 4 },
+  hugeCenter: { fontSize: 24, fontFamily: isWeb ? "monospace" : undefined, fontWeight: "800", color: "#111", textAlign: "center", marginBottom: 4 },
+  // Qtd/Produto do ticket de cozinha/bar — um pouco menor que `huge`
+  // (pedido explícito do usuário, 2026-07-23), mirror de `.huge2` em
+  // printHtml.ts.
+  huge2: { fontSize: 18, fontFamily: isWeb ? "monospace" : undefined, fontWeight: "800", color: "#111", marginBottom: 4 },
   center: { fontSize: 12, textAlign: "center", color: "#111" },
   row: { flexDirection: "row", justifyContent: "space-between", gap: 8 },
-  rowDesc: { flexShrink: 1, flexGrow: 1, minWidth: 0 },
-  rowQtd: { flexShrink: 0 },
-  rowValue: { flexShrink: 0, minWidth: 64, textAlign: "right" },
   hr: { borderBottomWidth: 1, borderColor: "#999", marginVertical: 6 },
 });

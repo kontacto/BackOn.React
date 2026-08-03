@@ -1,14 +1,25 @@
 // Modal "Editar Item": ajusta qtd, valor, desconto, acréscimo e complemento; permite excluir.
 import {
-  ActivityIndicator, Modal, Platform, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View,
+  ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 import { Ionicons } from "@/src/components/Ionicons";
 
-import { colors, spacing } from "@/src/theme/colors";
+import { colors, radius, spacing } from "@/src/theme/colors";
 import { formatBRL, parseNum, fmtNum, calcDescUnit } from "@/src/utils/format";
 import { usePermissions } from "@/src/permissions";
 import { styles } from "./styles";
 import { UsePedidoItens } from "./usePedidoItens";
+
+// Radio de tipo de preço m² — mesmo padrão do seletor de Nº de Série/
+// Modificadores em AddItemModal.tsx (`modStyles.modRow`), duplicado aqui
+// em escala menor pra não acoplar os dois arquivos por um estilo tão
+// pequeno.
+const m2Styles = StyleSheet.create({
+  row: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 6 },
+  nome: { flex: 1, fontSize: 13, color: colors.onSurface },
+  valor: { fontSize: 12, fontWeight: "600", color: colors.success },
+  active: { backgroundColor: colors.brandTertiary, borderRadius: radius.sm },
+});
 
 const isWeb = Platform.OS === "web";
 
@@ -18,6 +29,10 @@ export default function EditItemModal({ it, tela = "PEDIDO" }: { it: UsePedidoIt
   const canDesc = can(`${tela}.DESC_ITEM`);
   const canSave = can(`${tela}.EDIT_ITEM`);
   const canDelete = can(`${tela}.DEL_ITEM`);
+  // Metro Quadrado (Fase B, só Pedido Geral) — item já tem comprimento/
+  // largura gravados. Ver PENDENCIAS.md > "Transações" > "Pedido Geral —
+  // Metro Quadrado".
+  const eM2 = !!(editItem?.comprimento && editItem?.largura);
   return (
     <Modal visible={!!editItem} transparent animationType="slide" onRequestClose={() => it.setEditItem(null)}>
       <Pressable style={[styles.modalBg, isWeb && styles.modalBgWebCompact]} onPress={() => it.setEditItem(null)}>
@@ -52,9 +67,75 @@ export default function EditItemModal({ it, tela = "PEDIDO" }: { it: UsePedidoIt
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.fieldLabel}>Valor unitário</Text>
-                    <TextInput value={it.editValor} onChangeText={it.setEditValor} keyboardType="decimal-pad" style={styles.input} testID="pedido-form-edit-valor" />
+                    <TextInput
+                      value={it.editValor}
+                      onChangeText={it.setEditValor}
+                      editable={!eM2}
+                      keyboardType="decimal-pad"
+                      style={[styles.input, eM2 && styles.inputDisabled]}
+                      testID="pedido-form-edit-valor"
+                    />
                   </View>
                 </View>
+                {eM2 ? (
+                  <View style={{ gap: spacing.sm }}>
+                    <Text style={styles.fieldLabel}>Tipo de Preço</Text>
+                    {it.editPrecosM2.length === 0 ? (
+                      <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 4 }} />
+                    ) : (
+                      <View style={{ gap: 4 }}>
+                        {it.editPrecosM2.map((tp) => {
+                          const ativo = it.editTipoPrecoM2 === tp.tipo;
+                          return (
+                            <Pressable
+                              key={tp.tipo}
+                              onPress={() => it.setEditTipoPrecoM2(tp.tipo)}
+                              style={[m2Styles.row, ativo && m2Styles.active]}
+                              testID={`pedido-form-edit-tipopreco-m2-${tp.tipo}`}
+                            >
+                              <Ionicons
+                                name={ativo ? "radio-button-on" : "radio-button-off"}
+                                size={18}
+                                color={ativo ? colors.brandPrimary : colors.muted}
+                              />
+                              <Text style={m2Styles.nome}>{tp.label}</Text>
+                              <Text style={m2Styles.valor}>{formatBRL(tp.preco)}</Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    )}
+                    <View style={styles.qtdRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.fieldLabel}>Comprimento (m)</Text>
+                        <TextInput
+                          value={it.editComprimento}
+                          onChangeText={it.setEditComprimento}
+                          keyboardType="decimal-pad"
+                          style={styles.input}
+                          testID="pedido-form-edit-comprimento"
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.fieldLabel}>Largura (m)</Text>
+                        <TextInput
+                          value={it.editLargura}
+                          onChangeText={it.setEditLargura}
+                          keyboardType="decimal-pad"
+                          style={styles.input}
+                          testID="pedido-form-edit-largura"
+                        />
+                      </View>
+                    </View>
+                    {it.editPreviewM2Loading ? (
+                      <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 4 }} />
+                    ) : it.editPreviewM2 ? (
+                      <Text style={styles.resultSub}>
+                        Área calculada: {fmtNum(it.editPreviewM2.area_venda)} m² · Valor unitário: {formatBRL(it.editPreviewM2.valor_unitario)}
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : null}
                 <View style={styles.qtdRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.fieldLabel}>Desc. %</Text>

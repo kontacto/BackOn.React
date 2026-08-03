@@ -5,6 +5,7 @@ import { useAuditContext } from "@/src/hooks/useAuditContext";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
+import { friendlyApiError } from "@/src/utils/api";
 
 // Cadastro de Produtos (completo) — tabela `pecas`. Legado: FrmManPec.frm
 // (Kontacto), rastreado campo-a-campo 2026-07-14 — ver
@@ -35,7 +36,7 @@ const NUM_FIELDS = [
   "desc_g", "desc_s", "desc_v", "comissao", "comissao_a", "comissao_e",
   "valor_comissao", "Valor_Comissão_E", "Valor_Comissão_A",
   "valor_desc_base_comissao", "valor_desc_base_comissao_e", "valor_desc_base_comissao_a",
-  "perc_ipi", "valor_ipi", "cod_grupo_pis_cofins", "tributacao_pis", "perc_valor_pis",
+  "perc_ipi", "valor_ipi", "tributacao_pis", "perc_valor_pis",
   "tributacao_cofins", "perc_valor_cofins", "outros_trib_federais", "IBPT_FEDERAIS", "IBPT_ESTADUAIS",
   "valor_substituicao", "perc_mva",
   "comprimento", "largura", "altura", "peso_liquido", "peso_bruto",
@@ -93,6 +94,11 @@ export function useProdutoCompletoForm(codigoParam?: string) {
   const [xmlVinculos, setXmlVinculos] = useState<XmlVinculoItem[]>([]);
   const [protocoloSt, setProtocoloSt] = useState<string[]>([]);
   const [grade, setGrade] = useState<GradeItem[]>([]);
+  // Nome do fornecedor do campo "Fabricante/Distribuidor" (`pecas.fornecedor`)
+  // — vem resolvido do backend (`fornecedor_nome`, não é coluna real de
+  // `pecas`) só pra exibição; também atualizado localmente ao escolher um
+  // fornecedor pelo mecanismo de busca (ver produto-completo.tsx).
+  const [fornecedorNome, setFornecedorNome] = useState("");
 
   const setField = useCallback((k: string, v: string | boolean) => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -113,6 +119,7 @@ export function useProdutoCompletoForm(codigoParam?: string) {
     setXmlVinculos(j.xml_vinculos || []);
     setProtocoloSt(j.protocolo_st || []);
     setGrade(j.grade || []);
+    setFornecedorNome(d.fornecedor_nome || "");
   }, []);
 
   const carregarDetalhe = useCallback(
@@ -231,7 +238,7 @@ export function useProdutoCompletoForm(codigoParam?: string) {
         setField("codigo_int", j.codigo_int);
         return { codigo_int: j.codigo_int, wasEditing };
       }
-      fb.showError(j?.message || (Array.isArray(j?.detail) ? j.detail.map((d: any) => d.msg).join("; ") : "Falha ao gravar."));
+      fb.showError(friendlyApiError(j, "Não foi possível gravar o produto. Verifique os campos e tente novamente."));
       return null;
     } catch (e) {
       fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
@@ -316,6 +323,7 @@ export function useProdutoCompletoForm(codigoParam?: string) {
     loadingInit, saving, form, setField, editingCodigo,
     fornecedores, setFornecedores, similares, setSimilares, secundarios, setSecundarios,
     xmlVinculos, setXmlVinculos, protocoloSt, setProtocoloSt, grade,
+    fornecedorNome, setFornecedorNome,
     save, deleteProduto, criarItensGrade, enviarSite, carregarDetalhe, buscarPorCodigoInt,
   };
 }

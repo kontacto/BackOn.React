@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
-} from "react-native";
+import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -532,7 +530,6 @@ function ProdutosNiveisWebScreen({
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.iconBtn} testID="produtos-niveis-back-button">
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
         <Text style={styles.headerTitle} numberOfLines={1}>Alterações Cadastro de Produtos/Serviços Níveis</Text>
         <View style={{ width: 40 }} />
       </View>

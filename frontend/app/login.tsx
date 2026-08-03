@@ -17,7 +17,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import { Connection, listConnections } from "@/src/utils/storage/connections";
-import { setSession } from "@/src/utils/storage/session";
+import { setSession, getLastLogin, setLastLogin } from "@/src/utils/storage/session";
 import { usePermissions } from "@/src/permissions";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import BiometricButton from "@/src/components/BiometricButton";
@@ -80,7 +80,6 @@ export default function LoginScreen() {
   const [showPicker, setShowPicker] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [errorDetails, setErrorDetails] = useState<LoginResult | null>(null);
   const [showEnable, setShowEnable] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const pendingCredsRef = useRef<{ usuario: string; senha: string } | null>(null);
@@ -105,10 +104,22 @@ export default function LoginScreen() {
         funcionario: data.funcionario ?? null,
         loggedAt: new Date().toISOString(),
       });
+      // Último login (conexão + usuário) — sobrevive ao logout, pra
+      // pré-preencher a tela de Login na próxima vez (ver session.ts).
+      const usuarioLogin = String((data.usuario as Record<string, unknown> | null)?.usuario ?? "").trim();
+      if (usuarioLogin) {
+        await setLastLogin({ connectionId: conn.id, usuario: usuarioLogin });
+      }
       await reloadPermissions();
     },
     [reloadPermissions]
   );
+
+  // Aplica a conexão/usuário do último login só na primeira carga da tela
+  // (depois disso, respeita o que o usuário escolher/editar manualmente,
+  // mesmo que a tela recarregue ao voltar de "Conexões" e ganhar foco de
+  // novo). Ver session.ts > getLastLogin/setLastLogin.
+  const lastLoginAppliedRef = useRef(false);
 
   const reload = useCallback(async () => {
     const items = await listConnections();
@@ -117,13 +128,23 @@ export default function LoginScreen() {
       router.replace("/connections?initial=1");
       return;
     }
+    const isFirstLoad = !lastLoginAppliedRef.current;
+    const last = isFirstLoad ? await getLastLogin() : null;
     setSelected((prev) => {
       if (prev) {
         const stillExists = items.find((c) => c.id === prev.id);
         if (stillExists) return stillExists;
       }
+      if (last?.connectionId) {
+        const lastConn = items.find((c) => c.id === last.connectionId);
+        if (lastConn) return lastConn;
+      }
       return items[0];
     });
+    if (isFirstLoad) {
+      if (last?.usuario) setUsuario((prev) => prev || last.usuario);
+      lastLoginAppliedRef.current = true;
+    }
   }, [router]);
 
   useFocusEffect(
@@ -134,13 +155,11 @@ export default function LoginScreen() {
 
   useEffect(() => {
     setError(null);
-    setErrorDetails(null);
   }, [selected, usuario, senha]);
 
   const handleSubmit = async () => {
     if (submitting) return;
     setError(null);
-    setErrorDetails(null);
     if (!selected) {
       setError("Selecione uma empresa.");
       return;
@@ -208,17 +227,12 @@ export default function LoginScreen() {
           router.replace("/principal");
         }
       } else {
-        setErrorDetails(data);
-        if (data.message === GENERIC_AUTH_ERROR) {
-          setError(GENERIC_AUTH_ERROR);
-        } else if (
-          data.message &&
-          (data.message.startsWith("Erro") || data.message.startsWith("Falha"))
-        ) {
-          setError(data.message);
-        } else {
-          setError(GENERIC_AUTH_ERROR);
-        }
+        // O backend já traduz toda falha (credenciais erradas, conexão fora
+        // do ar, timeout, etc.) para uma mensagem amigável antes de mandar
+        // pra cá — mostrar direto em vez de filtrar por prefixo evita
+        // esconder mensagens reais (ex.: falha de conexão sendo mascarada
+        // como "Usuário ou senha inválidos.").
+        setError(data.message || GENERIC_AUTH_ERROR);
       }
     } catch (e: unknown) {
       const isAbort = e instanceof Error && e.name === "AbortError";
@@ -242,7 +256,6 @@ export default function LoginScreen() {
   const handleBiometricLogin = async () => {
     if (!selected) return;
     setError(null);
-    setErrorDetails(null);
     setSubmitting(true);
     try {
       const res = await loginWithBiometrics();
@@ -283,7 +296,7 @@ export default function LoginScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]} testID="login-screen">
       <View style={styles.header}>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
+        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 130, height: 36, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.brand}>Back-On</Text>
         <Pressable
           onPress={() => router.push("/connections")}
@@ -389,59 +402,9 @@ export default function LoginScreen() {
                   <Text style={[styles.bannerText, { color: colors.error, fontWeight: "500" }]}>
                     {error}
                   </Text>
-                  {errorDetails?.attempted ? (
-                    <View style={styles.errorMeta} testID="login-error-attempted">
-                      <Text style={styles.errorMetaTitle}>Conexão tentada</Text>
-                      <Text style={styles.errorMetaLine}>
-                        Empresa: {errorDetails.attempted.empresa}
-                      </Text>
-                      <Text style={styles.errorMetaLine}>
-                        Servidor: {errorDetails.attempted.server}
-                      </Text>
-                      <Text style={styles.errorMetaLine}>
-                        Banco: {errorDetails.attempted.database}
-                      </Text>
-                      <Text style={styles.errorMetaLine}>
-                        Usuário SQL: {errorDetails.attempted.sql_user}
-                      </Text>
-                      <Text style={styles.errorMetaLine}>
-                        Usuário login: {errorDetails.attempted.login_user}
-                      </Text>
-                      {errorDetails.attempted.login_timeout ? (
-                        <Text style={styles.errorMetaLine}>
-                          Timeout: {errorDetails.attempted.login_timeout}s
-                        </Text>
-                      ) : null}
-                    </View>
-                  ) : null}
-                  {errorDetails?.error_step || errorDetails?.error_line ? (
-                    <View style={styles.errorMeta} testID="login-error-origin">
-                      <Text style={styles.errorMetaTitle}>Origem do erro</Text>
-                      {errorDetails.error_step ? (
-                        <Text style={styles.errorMetaLine}>
-                          Etapa: {errorDetails.error_step}
-                        </Text>
-                      ) : null}
-                      {errorDetails.error_line ? (
-                        <Text style={styles.errorMetaLine}>
-                          Linha: {errorDetails.error_line}
-                        </Text>
-                      ) : null}
-                      {errorDetails.error_code_line ? (
-                        <Text style={styles.errorMetaCode}>
-                          {errorDetails.error_code_line}
-                        </Text>
-                      ) : null}
-                      {errorDetails.error_query ? (
-                        <>
-                          <Text style={[styles.errorMetaLine, { marginTop: 4 }]}>Query:</Text>
-                          <Text style={styles.errorMetaCode}>
-                            {errorDetails.error_query}
-                          </Text>
-                        </>
-                      ) : null}
-                    </View>
-                  ) : null}
+                  <Text style={styles.bannerHint}>
+                    Verifique se o usuário e a senha estão corretos. Se o problema continuar, entre em contato com o suporte técnico.
+                  </Text>
                 </View>
               </View>
             ) : null}
@@ -652,6 +615,7 @@ const styles = StyleSheet.create({
   bannerSuccess: { backgroundColor: "#E7F5EE", borderColor: "#BFE0CE" },
   bannerText: { fontSize: 13, flex: 1, lineHeight: 18 },
   bannerSub: { fontSize: 12, color: colors.onSurfaceTertiary, marginTop: 2 },
+  bannerHint: { fontSize: 12, color: colors.onSurfaceTertiary, marginTop: 4, lineHeight: 16 },
   errorMeta: {
     marginTop: spacing.sm,
     paddingTop: spacing.sm,

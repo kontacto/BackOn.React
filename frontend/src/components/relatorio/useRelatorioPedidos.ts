@@ -6,6 +6,7 @@ import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { apiGet } from "@/src/utils/api";
 import { SelectOption } from "@/src/components/SelectField";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 
 export type PedidoItem = {
   pedido: number; data: string | null; situacao: string; situacao_label: string;
@@ -30,14 +31,24 @@ function todayISO(): string {
 
 export function useRelatorioPedidos() {
   const router = useRouter();
+  const feedback = useFeedback();
   const [conn, setConn] = useState<Connection | null>(null);
   const [dataIni, setDataIni] = useState<string | null>(firstOfMonthISO());
   const [dataFim, setDataFim] = useState<string | null>(todayISO());
   const [vendedorOpts, setVendedorOpts] = useState<SelectOption[]>([]);
   const [vendedor, setVendedor] = useState<string | number | null>(null);
   const [situacao, setSituacao] = useState<string>("");
+  // Filtro "Projeto" — Gestor de Projetos Fase 4 (recurso extra, sem
+  // equivalente no legado). Restringe aos Pedidos vinculados àquele
+  // projeto (`projetos_documentos`).
+  const [projeto, setProjeto] = useState<string>("");
 
   const [loading, setLoading] = useState(false);
+  // `error` não é mais renderizado como banner inline (regra [GLOBAL]
+  // "mensagens do sistema sempre no meio da tela" — pedido explícito do
+  // usuário, 2026-07-18); a mensagem em si vai via `feedback.showError`
+  // (toast centralizado), e este state só continua existindo pra suprimir
+  // "Nenhum pedido..." quando a última busca falhou.
   const [error, setError] = useState<string | null>(null);
   const [pedidos, setPedidos] = useState<PedidoItem[]>([]);
   const [totais, setTotais] = useState<RelTotais | null>(null);
@@ -50,7 +61,7 @@ export function useRelatorioPedidos() {
       if (!s) { router.replace("/login"); return; }
       const conns = await listConnections();
       const c = conns.find((x) => x.empresa === s.empresa);
-      if (!c) { setError("Conexão não encontrada."); return; }
+      if (!c) { setError("Conexão não encontrada."); feedback.showError("Conexão não encontrada."); return; }
       setConn(c);
       try {
         const j = await apiGet(c, "/api/funcionarios");
@@ -66,22 +77,27 @@ export function useRelatorioPedidos() {
 
   const buscar = useCallback(async () => {
     if (!conn) return;
-    if (!dataIni || !dataFim) { setError("Informe o período."); return; }
+    if (!dataIni || !dataFim) { setError("Informe o período."); feedback.showError("Informe o período."); return; }
     setLoading(true); setError(null); setExpandedId(null); setAnalises({});
     try {
       const j = await apiGet(conn, "/api/relatorios/pedidos", {
         data_ini: dataIni, data_fim: dataFim,
         vendedor: vendedor ? String(vendedor) : undefined,
         situacao: situacao || undefined,
+        projeto: projeto.trim() ? projeto.trim() : undefined,
       });
-      if (!j?.success) { setError(j?.message || "Falha ao gerar relatório."); setPedidos([]); setTotais(null); }
-      else { setPedidos(Array.isArray(j.pedidos) ? j.pedidos : []); setTotais(j.totais || null); }
+      if (!j?.success) {
+        const msg = j?.message || "Falha ao gerar relatório.";
+        setError(msg); feedback.showError(msg);
+        setPedidos([]); setTotais(null);
+      } else { setPedidos(Array.isArray(j.pedidos) ? j.pedidos : []); setTotais(j.totais || null); }
     } catch (e) {
-      setError(`Falha de rede: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = `Falha de rede: ${e instanceof Error ? e.message : String(e)}`;
+      setError(msg); feedback.showError(msg);
     } finally {
       setLoading(false);
     }
-  }, [conn, dataIni, dataFim, vendedor, situacao]);
+  }, [conn, dataIni, dataFim, vendedor, situacao, projeto, feedback.showError]);
 
   const loadAnalise = useCallback(async (pedido: number) => {
     if (!conn) return;
@@ -115,7 +131,7 @@ export function useRelatorioPedidos() {
   return {
     router,
     dataIni, setDataIni, dataFim, setDataFim,
-    vendedorOpts, vendedor, setVendedor, situacao, setSituacao,
+    vendedorOpts, vendedor, setVendedor, situacao, setSituacao, projeto, setProjeto,
     loading, error, pedidos, totais, expandedId, analises,
     buscar, toggleExpand,
   };

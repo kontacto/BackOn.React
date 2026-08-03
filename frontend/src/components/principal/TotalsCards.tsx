@@ -22,30 +22,34 @@ export default function TotalsCards({
   showMargem = true,
   showDescontos = true,
 }: Props) {
+  const isWeb = Platform.OS === "web";
   if (!showTotais && !showMargem) return null;
   return (
     <>
       {showTotais ? (
         <>
-          <Text style={[styles.sectionTitle, Platform.OS === "web" && styles.sectionTitleWeb]}>Totais de Hoje</Text>
-          <View style={[styles.totalsRow, Platform.OS === "web" && styles.totalsRowWeb]} testID="principal-totals">
-            <View style={[styles.totalCard, Platform.OS === "web" && styles.totalCardWeb, { borderLeftColor: colors.brandPrimary }]}>
-              <Text style={styles.totalLabel}>Pedidos</Text>
-              <Text style={styles.totalValue} testID="totals-pedidos">{dashLoading ? "…" : totais.pedidos}</Text>
+          <Text style={[styles.sectionTitle, isWeb && styles.sectionTitleWeb]}>Totais de Hoje</Text>
+          {/* Formatação reduzida — as 4 informações em uma única linha,
+              não mais 2 linhas de 2 (pedido explícito do usuário,
+              2026-07-20: "coloque em uma única linha"). Cards mais
+              estreitos/compactos (padding e fonte menores) pra caber os 4
+              juntos sem quebrar. */}
+          <View style={[styles.totalsRow, isWeb && styles.totalsRowWeb]} testID="principal-totals">
+            <View style={[styles.totalCard, isWeb && styles.totalCardWebCompact, { borderLeftColor: colors.brandPrimary }]}>
+              <Text style={[styles.totalLabel, isWeb && styles.totalLabelWebCompact]}>Pedidos</Text>
+              <Text style={[styles.totalValue, isWeb && styles.totalValueWebCompact]} testID="totals-pedidos">{dashLoading ? "…" : totais.pedidos}</Text>
             </View>
-            <View style={[styles.totalCard, Platform.OS === "web" && styles.totalCardWeb, { borderLeftColor: colors.brandSecondary || colors.brandPrimary }]}>
-              <Text style={styles.totalLabel}>OS</Text>
-              <Text style={styles.totalValue} testID="totals-os">{dashLoading ? "…" : (totais.os ?? 0)}</Text>
+            <View style={[styles.totalCard, isWeb && styles.totalCardWebCompact, { borderLeftColor: colors.brandSecondary || colors.brandPrimary }]}>
+              <Text style={[styles.totalLabel, isWeb && styles.totalLabelWebCompact]}>OS</Text>
+              <Text style={[styles.totalValue, isWeb && styles.totalValueWebCompact]} testID="totals-os">{dashLoading ? "…" : (totais.os ?? 0)}</Text>
             </View>
-          </View>
-          <View style={[styles.totalsRow, { marginTop: 8 }, Platform.OS === "web" && styles.totalsRowWeb]}>
-            <View style={[styles.totalCard, Platform.OS === "web" && styles.totalCardWeb, { borderLeftColor: colors.success }]}>
-              <Text style={styles.totalLabel}>Produtos</Text>
-              <Text style={[styles.totalValue, { fontSize: 16 }]} testID="totals-produtos">{dashLoading ? "…" : formatBRL(totais.produtos)}</Text>
+            <View style={[styles.totalCard, isWeb && styles.totalCardWebCompact, { borderLeftColor: colors.success }]}>
+              <Text style={[styles.totalLabel, isWeb && styles.totalLabelWebCompact]}>Produtos</Text>
+              <Text style={[styles.totalValue, { fontSize: 16 }, isWeb && styles.totalValueWebCompact]} testID="totals-produtos">{dashLoading ? "…" : formatBRL(totais.produtos)}</Text>
             </View>
-            <View style={[styles.totalCard, Platform.OS === "web" && styles.totalCardWeb, { borderLeftColor: colors.warning }]}>
-              <Text style={styles.totalLabel}>Serviços</Text>
-              <Text style={[styles.totalValue, { fontSize: 16 }]} testID="totals-servicos">{dashLoading ? "…" : formatBRL(totais.servicos)}</Text>
+            <View style={[styles.totalCard, isWeb && styles.totalCardWebCompact, { borderLeftColor: colors.warning }]}>
+              <Text style={[styles.totalLabel, isWeb && styles.totalLabelWebCompact]}>Serviços</Text>
+              <Text style={[styles.totalValue, { fontSize: 16 }, isWeb && styles.totalValueWebCompact]} testID="totals-servicos">{dashLoading ? "…" : formatBRL(totais.servicos)}</Text>
             </View>
           </View>
         </>

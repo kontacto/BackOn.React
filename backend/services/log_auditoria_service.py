@@ -22,6 +22,41 @@ from services.permissoes_service import tem_permissao
 
 logger = logging.getLogger(__name__)
 
+# Migração idempotente: `log_auditoria` não faz parte do schema legado (é
+# uma tabela nova deste projeto) — bases mais antigas/de teste podem nunca
+# ter passado por uma criação manual dela. Descoberto 2026-07-20: numa base
+# sem a tabela, toda chamada a `registrar_log` falhava em silêncio (é
+# best-effort, nunca propaga o erro) e o resumo de alertas de estoque
+# reportava "Curva ABC nunca foi gerada" mesmo depois do usuário ter
+# gerado — o INSERT do log simplesmente nunca acontecia, então não havia
+# nenhum registro pra encontrar. Mesmo padrão de `services/whatsapp/
+# repository.py::ensure_tables` (CREATE TABLE IF NOT EXISTS na primeira
+# utilização, sem migração central).
+_DDL_LOG_AUDITORIA = """
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'log_auditoria')
+BEGIN
+    CREATE TABLE log_auditoria (
+        id INT IDENTITY(1,1) PRIMARY KEY,
+        data_hora DATETIME NOT NULL DEFAULT GETDATE(),
+        tela NVARCHAR(15) NOT NULL,
+        comando NVARCHAR(15) NOT NULL,
+        referencia NVARCHAR(100) NULL,
+        descricao NVARCHAR(MAX) NULL,
+        campos_alterados NVARCHAR(MAX) NULL,
+        usuario INT NULL,
+        classe INT NULL,
+        ip_origem NVARCHAR(45) NULL,
+        plataforma NVARCHAR(20) NULL
+    );
+    CREATE INDEX IX_log_auditoria_tela ON log_auditoria (tela, comando);
+    CREATE INDEX IX_log_auditoria_data_hora ON log_auditoria (data_hora);
+END
+"""
+
+
+def _ensure_log_auditoria_table(cur) -> None:
+    cur.execute(_DDL_LOG_AUDITORIA)
+
 
 def _registrar_log_sync(
     servidor: str, banco: str, *,
@@ -41,6 +76,7 @@ def _registrar_log_sync(
         return
     try:
         cur = conn.cursor(as_dict=True)
+        _ensure_log_auditoria_table(cur)
         cur.execute(
             "INSERT INTO log_auditoria "
             "(tela, comando, referencia, descricao, campos_alterados, usuario, classe, ip_origem, plataforma) "
@@ -80,6 +116,8 @@ def _list_logs_sync(
     conn = _open_conn(servidor, banco)
     try:
         cur = conn.cursor(as_dict=True)
+        _ensure_log_auditoria_table(cur)
+        conn.commit()
         if not master and classe is not None and not tem_permissao(cur, classe, "LOG_AUDITORIA", "ABRIR"):
             return {"success": False, "message": "Sem permissão para consultar o log de auditoria.", "items": [], "total": 0}
         where = ["1=1"]

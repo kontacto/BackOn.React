@@ -3,7 +3,7 @@
 // legado VB6, pasta Posto, planejadas mas não implementadas ainda). Cada
 // card do painel aponta pra cá com seu próprio título via querystring
 // até a tela real ser construída, uma de cada vez.
-import { Image, Platform, Pressable, Text, View, StyleSheet } from "react-native";
+import { Platform, Pressable, Text, View, StyleSheet } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -22,7 +22,6 @@ export default function PostoPlaceholderScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle} numberOfLines={1}>{label}</Text>
         <View style={{ width: 40 }} />
       </View>

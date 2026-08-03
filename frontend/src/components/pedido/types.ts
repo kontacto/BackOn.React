@@ -69,6 +69,24 @@ export type ItemRow = {
   // "" pra serviço ou produto sem Finalidade definida) — rótulo no ticket
   // de impressão de item (ReciboPedidoModal em modo item).
   finalidade_descricao: string;
+  // Número de série vinculado (pedido_venda_prod.cod_num_serie ->
+  // pecas_num_serie.num_serie) — só o Pedido Geral (PEDIDO_COMP) grava isso
+  // hoje (Fase B, controla_num_serie); undefined/"" pra item sem número de
+  // série. Ver PENDENCIAS.md > "Transações" > "Pedido Geral — Fase B".
+  num_serie?: string;
+  // Agendamento vinculado (Fase B — módulo Clínica, `AGENDA`/`AGENDA_PEDIDO`)
+  // — só o Pedido Geral grava isso, e só pra item de Serviço com o módulo
+  // Clínica ativo; undefined pra item sem agendamento. Ver PENDENCIAS.md >
+  // "Transações" > "Pedido Geral — Fase B: Clínica (Agendamento)".
+  agendamento?: { codagenda: number; data: string; hora_ini: string; profissional: string; funcionario: number; situacao: string } | null;
+  // Dimensão m²/ml/m³ (Fase B — módulo Metro Quadrado, `pedido_venda_prod.
+  // comprimento/largura/area_venda`) — só o Pedido Geral grava isso, só pra
+  // produto com `pecas.uni` M2/ML/M3 e o módulo ligado; undefined pra item
+  // sem dimensão. Ver PENDENCIAS.md > "Transações" > "Pedido Geral — Metro
+  // Quadrado".
+  comprimento?: number;
+  largura?: number;
+  area_venda?: number;
 };
 
 // Dados mínimos pro ticket de impressão de um item só (ReciboPedidoModal
@@ -79,11 +97,20 @@ export type ItemPrintData = {
   codauto: number; produto: string; tipo: "P" | "S" | "?";
   descricao: string; complemento: string; cod_fab: string; unidade: string; qtd: number;
   finalidade_descricao: string;
+  // Dimensão m² (Fase B — módulo Metro Quadrado) — undefined pra item sem
+  // dimensão (produto normal, ou disparo automático por Finalidade que não
+  // tem esse dado disponível na hora).
+  comprimento?: number;
+  largura?: number;
 };
 
 export type ProdutoServico = {
   tipo: "P" | "S"; codigo: string; descricao: string; valor: number;
   estoque: number | null; cod_fab?: string; unidade?: string;
+  // pecas.controla_num_serie — só vem preenchido pra produtos (tipo "P"); só
+  // o Pedido Geral (PEDIDO_COMP) exige a escolha de um número de série antes
+  // de incluir o item quando true (Fase B). Ver PENDENCIAS.md > "Transações".
+  controla_num_serie?: boolean;
 };
 
 export type DescontoRow = {
@@ -92,3 +119,17 @@ export type DescontoRow = {
 };
 
 export type ToastTone = "info" | "error" | "success";
+
+// Seletor de Modificador na hora da venda (Fase 2 — ver
+// backend/services/modificadores_service.py::_get_modificadores_completo_por_item_sync
+// e PENDENCIAS.md > "Modificadores"). Só produto/serviço com categoria(s)
+// associada(s) traz isso; lista vazia = sem modificador, seletor nem aparece.
+// Tipo de preço m² disponível pro produto escolhido (Fase B — módulo Metro
+// Quadrado) — ver `GET /api/produtos/{codigo}/tipos-preco-m2`.
+export type TipoPrecoM2 = { tipo: number; label: string; preco: number };
+
+export type ModificadorVenda = { codigo: number; nome: string; acrescimo: number; desconto: number };
+export type ModificadorCategoriaVenda = {
+  codigo: number; nome: string; obrigatorio: boolean; selecao_multipla: boolean;
+  modificadores: ModificadorVenda[];
+};

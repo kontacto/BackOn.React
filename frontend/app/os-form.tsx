@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator, Image, KeyboardAvoidingView, Modal, Platform, Pressable,
-  ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
-} from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -156,6 +153,7 @@ export default function OSFormScreen() {
   const [itemSaving, setItemSaving] = useState(false);
 
   const isAberta = (os?.situacao || "A").toUpperCase() === "A";
+  const isFechada = (os?.situacao || "A").toUpperCase() === "F";
 
   // -------- Init
   useEffect(() => {
@@ -502,6 +500,29 @@ export default function OSFormScreen() {
     } finally { setFechandoOS(false); }
   };
 
+  // Faturar — gera Comanda (`_faturar_os_sync`), pré-requisito do Gestor de
+  // Comandas (2026-07-21). Diferente do Pedido Bar, exige a OS já Fechada
+  // (sem atalho "fecha e fatura junto") — só habilitado com `isFechada`.
+  const [faturandoOS, setFaturandoOS] = useState(false);
+  const handleFaturarOS = async () => {
+    if (!conn || !osId) return;
+    setFaturandoOS(true);
+    try {
+      const j = await apiSend(conn, `/api/os/${osId}/faturar`, "POST", {
+        classe, master: isMaster, usuario_alteracao: waUserId, plataforma: Platform.OS,
+      });
+      if (j?.success) {
+        showToast(j.message || "OS faturada.", "success");
+        setOs((o) => (o ? { ...o, situacao: "PG" } : o));
+        setSituacao("PG");
+      } else {
+        showToast(j?.message || "Não foi possível faturar.", "error");
+      }
+    } catch (e) {
+      showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
+    } finally { setFaturandoOS(false); }
+  };
+
 
   const areaOptions: SelectOption[] = useMemo(
     () => areas.map((a) => ({ value: a.codigo, label: a.descricao })),
@@ -547,7 +568,6 @@ export default function OSFormScreen() {
         <Pressable onPress={() => router.back()} style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]} hitSlop={12} testID="os-form-back">
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>{editing ? `OS #${osId}` : "Nova OS"}</Text>
         {can("OS.GRAVAR") ? (
           <Pressable onPress={handleSaveHeader} disabled={saving} style={({ pressed }) => [styles.saveBtn, (pressed || saving) && { opacity: 0.7 }]} testID="os-form-save">
@@ -808,6 +828,23 @@ export default function OSFormScreen() {
                 <Ionicons name="lock-closed-outline" size={18} color="#fff" />
               )}
               <Text style={styles.fecharOsBtnText}>Fechar pré-venda</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {editing && osId && isFechada && can("OS.FATURAR") ? (
+            <TouchableOpacity
+              onPress={handleFaturarOS}
+              activeOpacity={0.85}
+              disabled={faturandoOS}
+              style={[styles.fecharOsBtn, { backgroundColor: colors.brandPrimary }, faturandoOS && { opacity: 0.5 }]}
+              testID="os-form-faturar-btn"
+            >
+              {faturandoOS ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="cash-outline" size={18} color="#fff" />
+              )}
+              <Text style={styles.fecharOsBtnText}>Faturar O.S.</Text>
             </TouchableOpacity>
           ) : null}
 

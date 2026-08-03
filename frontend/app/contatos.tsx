@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
-} from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -358,7 +356,6 @@ export default function ContatosScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Contatos</Text>
         <View style={{ width: 40 }} />
       </View>
@@ -368,7 +365,17 @@ export default function ContatosScreen() {
           <View style={styles.filterRow}>
             <View style={styles.colNarrow}>
               <Text style={styles.label}>Período de</Text>
-              <WebDateField value={dataDe} onChange={setDataDe} testID="contatos-filtro-periodo-de" />
+              <WebDateField
+                value={dataDe}
+                onChange={(v) => {
+                  setDataDe(v);
+                  if (v) setDataAte(v);
+                }}
+                testID="contatos-filtro-periodo-de"
+                onSubmitEditing={() => {
+                  document.querySelector<HTMLInputElement>('[data-testid="contatos-filtro-periodo-ate"]')?.focus();
+                }}
+              />
             </View>
             <View style={styles.colNarrow}>
               <Text style={styles.label}>até</Text>
@@ -376,7 +383,17 @@ export default function ContatosScreen() {
             </View>
             <View style={styles.colNarrow}>
               <Text style={styles.label}>Previsão de</Text>
-              <WebDateField value={prevDe} onChange={setPrevDe} testID="contatos-filtro-prev-de" />
+              <WebDateField
+                value={prevDe}
+                onChange={(v) => {
+                  setPrevDe(v);
+                  if (v) setPrevAte(v);
+                }}
+                testID="contatos-filtro-prev-de"
+                onSubmitEditing={() => {
+                  document.querySelector<HTMLInputElement>('[data-testid="contatos-filtro-prev-ate"]')?.focus();
+                }}
+              />
             </View>
             <View style={styles.colNarrow}>
               <Text style={styles.label}>até</Text>

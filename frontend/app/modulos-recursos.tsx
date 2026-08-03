@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { ActivityIndicator, FlatList, Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -13,14 +13,17 @@ import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Campo = { campo: string; label: string };
 
-// "Bar", "Cilindro" e "Pedido de Venda" são 3 versões diferentes da mesma
-// tela de Pedido de Venda (segmentos de negócio distintos) — mutuamente
-// exclusivos, nunca mais de um ligado ao mesmo tempo. [GLOBAL],
-// 2026-07-15, user-directed. Ficam agrupados sob "Pedidos" no topo da
-// lista, quebrando a ordem alfabética só nesse caso (mesma exceção já
-// aplicada ao Painel Posto de Combustível — ver CLAUDE.md > "Card List
+// "Bar", "Cilindro", "Pedido de Venda", "Metro Quadrado" e "Clínica" são 5
+// versões/segmentos diferentes da mesma tela de Pedido de Venda — mutuamente
+// exclusivos, nunca mais de um ligado ao mesmo tempo. [GLOBAL], 2026-07-15,
+// user-directed (Metro Quadrado e Clínica adicionados 2026-07-27 — ver
+// PENDENCIAS.md > "Transações" > "Pedido Geral — Metro Quadrado / Clínica"
+// pro rastreio de campo-a-campo do `frmmanpedfor.frm`, ainda não
+// implementado, só o registro do módulo). Ficam agrupados sob "Pedidos" no
+// topo da lista, quebrando a ordem alfabética só nesse caso (mesma exceção
+// já aplicada ao Painel Posto de Combustível — ver CLAUDE.md > "Card List
 // Ordering").
-const SEGMENTOS_PEDIDO_EXCLUSIVOS = ["Bar", "Cilindro", "Pedido_venda"];
+const SEGMENTOS_PEDIDO_EXCLUSIVOS = ["Bar", "Cilindro", "Pedido_venda", "metro_quadrado", "CLINICA"];
 
 export default function ModulosRecursosScreen() {
   const router = useRouter();
@@ -134,7 +137,6 @@ export default function ModulosRecursosScreen() {
         <Pressable onPress={() => router.back()} hitSlop={8} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Módulos e Recursos</Text>
         <View style={{ width: 40 }} />
       </View>
@@ -156,7 +158,7 @@ export default function ModulosRecursosScreen() {
               <View testID="mod-grupo-pedidos">
                 <Text style={styles.groupTitle}>Pedidos</Text>
                 <Text style={styles.groupHint}>
-                  Bar, Cilindro e Pedido de Venda são versões diferentes da mesma tela — só uma pode ficar ativa.
+                  Bar, Cilindro, Pedido de Venda, Metro Quadrado e Clínica são versões diferentes da mesma tela — só uma pode ficar ativa.
                 </Text>
                 {pedidosCampos.map((item) => renderRow(item))}
                 <View style={styles.groupDivider} />

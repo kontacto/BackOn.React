@@ -10,8 +10,8 @@ import {
 import { Ionicons } from "@/src/components/Ionicons";
 import { AppModal } from "@/src/components/AppModal";
 
-import { apiGet } from "@/src/utils/api";
-import { Connection } from "@/src/utils/storage/connections";
+import { apiGet, ConnLike } from "@/src/utils/api";
+import { buildNivelBreadcrumb } from "@/src/utils/nivelTree";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 const isCompactWeb = Platform.OS === "web";
@@ -25,7 +25,7 @@ export type NivelNode = {
 
 type Props = {
   visible: boolean;
-  conn: Connection | null;
+  conn: ConnLike | null;
   onClose: () => void;
   onPick: (codigo: string, label: string) => void;
 };
@@ -99,7 +99,7 @@ export default function NiveisModal({ visible, conn, onClose, onPick }: Props) {
             {filtrados.map((n) => (
               <Pressable
                 key={`${n.cod_nivel}-${n.codigo}`}
-                onPress={() => onPick(n.codigo, `${n.codigo} · ${n.descricao}`)}
+                onPress={() => onPick(n.codigo, buildNivelBreadcrumb(niveis, n.codigo))}
                 style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.brandTertiary }]}
                 testID={`ml-nivel-${n.codigo}`}
               >

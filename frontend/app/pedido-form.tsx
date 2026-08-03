@@ -32,6 +32,7 @@ import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
 import FormaPagamentoField from "@/src/components/pedido/FormaPagamentoField";
 import AnexosPedidoModal from "@/src/components/pedido/AnexosPedidoModal";
 import DividirPedidoModal from "@/src/components/pedido/DividirPedidoModal";
+import AjudaPedidoModal from "@/src/components/pedido/AjudaPedidoModal";
 import WhatsappButton from "@/src/components/WhatsappButton";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 
@@ -546,6 +547,11 @@ export default function PedidoFormScreen() {
   // obrigatório pra gravar).
   const [anexosOpen, setAnexosOpen] = useState(false);
 
+  // Modal único de Ajuda (ícone "i" no cabeçalho) — reúne a explicação de
+  // todos os botões/campos da tela, em vez de tooltip por botão. Pedido
+  // explícito do usuário, 2026-07-20 (ver CLAUDE.md > "Modo Didático").
+  const [ajudaOpen, setAjudaOpen] = useState(false);
+
   // Preview/impressão do pedido (Pedido_48_COL) — botão "Imprimir" ao lado
   // de "Faturar Pedido", e auto-aberto após faturar com sucesso (acima).
   const [reciboOpen, setReciboOpen] = useState(false);
@@ -602,6 +608,8 @@ export default function PedidoFormScreen() {
         onBack={() => router.replace({ pathname: "/pedidos", params: { situacao: "A" } })}
         onSave={handleSave}
         canSave={can("PEDIDO.GRAVAR") && isAberto}
+        onAnexos={editing && pedidoId && cliente ? () => setAnexosOpen(true) : undefined}
+        onHelp={() => setAjudaOpen(true)}
         titleExtra={
           <View style={{ width: 110, marginRight: 8 }}>
             <SelectField
@@ -946,7 +954,6 @@ export default function PedidoFormScreen() {
             reabrindo={reabrindo}
             onCancelar={editing && pedidoId ? handleCancelar : undefined}
             cancelando={cancelando}
-            onAnexos={editing && pedidoId && cliente ? () => setAnexosOpen(true) : undefined}
             onImprimir={editing && pedidoId ? () => setReciboOpen(true) : undefined}
             footerRight={
               editing && pedidoId && can("PEDIDO.WHATSAPP") ? (
@@ -1033,6 +1040,7 @@ export default function PedidoFormScreen() {
         item={it.printItem}
       />
       <ScreenToast toast={toast} testID="pedido-form-toast" />
+      <AjudaPedidoModal visible={ajudaOpen} onClose={() => setAjudaOpen(false)} />
     </SafeAreaView>
   );
 }

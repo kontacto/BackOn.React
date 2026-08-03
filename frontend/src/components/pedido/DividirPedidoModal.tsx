@@ -33,7 +33,10 @@ type Props = {
   conn: Connection | null;
   pedido: number;
   itens: ItemRow[];
-  basePath?: string; // "/api/pedidos" (Pedido Bar) — Dividir é exclusivo do Bar por ora.
+  // "/api/pedidos" (Pedido Bar, default) ou "/api/pedido-completo" (Pedido
+  // Geral/Completo, trazido 2026-07-20) — mesmo componente reaproveitado
+  // pelas duas telas, só troca o prefixo da API.
+  basePath?: string;
   onDivided: (novosPedidos: number[]) => void;
 };
 
@@ -95,7 +98,18 @@ export default function DividirPedidoModal({ visible, onClose, conn, pedido, ite
   const [qtds, setQtds] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
-  const itensDivisiveis = useMemo(() => itens.filter((i) => i.produto !== TAXA_SERVICO_CODIGO), [itens]);
+  // Rateio automático de Taxa de Serviço é regra exclusiva do Pedido Bar
+  // (ver `_dividir_pedido_sync`, backend) — lá o S002 fica de fora da lista
+  // (é recalculado sozinho em cada pedido resultante). No Pedido Geral
+  // (basePath="/api/pedido-completo") não existe rateio automático nem
+  // botão de Tx Serviço — S002, se existir no pedido, é só mais um serviço
+  // listado normalmente, e só move pro pedido novo o que for informado
+  // aqui, igual qualquer outro item. Pedido explícito do usuário, 2026-07-24.
+  const isPedidoGeral = basePath === "/api/pedido-completo";
+  const itensDivisiveis = useMemo(
+    () => (isPedidoGeral ? itens : itens.filter((i) => i.produto !== TAXA_SERVICO_CODIGO)),
+    [itens, isPedidoGeral]
+  );
   const grupos = useMemo(() => agruparPorProduto(itensDivisiveis), [itensDivisiveis]);
 
   const parseQtd = (s: string): number => {

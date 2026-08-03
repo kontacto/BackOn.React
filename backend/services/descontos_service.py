@@ -137,19 +137,27 @@ def _aplicar_desconto_geral_sync(req: DescontoGeralRequest, pedido: int) -> dict
             conn.close()
             return {"success": False, "message": "Valor inválido."}
 
-        # busca todos os itens do pedido
+        # busca todos os itens do pedido — `aceita_desconto` vem de `pecas`
+        # (NULL pra serviço/item sem correspondência = aceita, mesmo default
+        # já usado em `_linha_peca_completo`/inclusão de item).
         cur.execute(
-            "SELECT codauto, p_normal, acrescimo, qtd_pedida FROM pedido_venda_prod "
-            "WHERE pedido=%s AND ISNULL(item_cancelado,0)=0",
+            "SELECT i.codauto, i.p_normal, i.acrescimo, i.qtd_pedida, p.aceita_desconto "
+            "FROM pedido_venda_prod i LEFT JOIN pecas p ON p.codigo_int = i.produto "
+            "WHERE i.pedido=%s AND ISNULL(i.item_cancelado,0)=0",
             (pedido,),
         )
         itens = cur.fetchall()
         if not itens:
             conn.close()
             return {"success": False, "message": "Pedido sem itens para aplicar desconto."}
+        for it in itens:
+            it["_aceita"] = it.get("aceita_desconto") is None or bool(it.get("aceita_desconto"))
 
-        # base = soma dos itens a preço cheio (p_normal * qtd)
-        base = sum(float(it.get("p_normal") or 0) * float(it.get("qtd_pedida") or 0) for it in itens)
+        # base = soma só dos itens que aceitam desconto (a preço cheio,
+        # p_normal * qtd) — item marcado "não aceita desconto" fica de fora
+        # do rateio geral, mesma proteção que já bloqueia desconto de item
+        # avulso nesse produto (ver `_add_item_sync`/`_add_item_completo_sync`).
+        base = sum(float(it.get("p_normal") or 0) * float(it.get("qtd_pedida") or 0) for it in itens if it["_aceita"])
         if valor > 0 and base <= 0:
             conn.close()
             return {"success": False, "message": "Itens sem valor para distribuir o desconto."}
@@ -171,8 +179,9 @@ def _aplicar_desconto_geral_sync(req: DescontoGeralRequest, pedido: int) -> dict
             codauto = int(it["codauto"])
             p_normal = float(it.get("p_normal") or 0)
             acr = float(it.get("acrescimo") or 0)
-            # distribui proporcionalmente ao peso do item (p_normal) → desconto UNITÁRIO
-            desconto_unit = round(valor * p_normal / base, 2) if (valor > 0 and base > 0) else 0.0
+            # distribui proporcionalmente ao peso do item (p_normal) → desconto
+            # UNITÁRIO; item que não aceita desconto fica sempre de fora (0).
+            desconto_unit = round(valor * p_normal / base, 2) if (valor > 0 and base > 0 and it["_aceita"]) else 0.0
             p_venda = round(p_normal - desconto_unit + acr, 4)
             cur.execute(
                 "UPDATE pedido_venda_prod SET desconto=%s, p_venda=%s, "

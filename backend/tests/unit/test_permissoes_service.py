@@ -50,11 +50,15 @@ class TestPedidoBarXPedidoCompleto:
 
 class TestFilterCatalogoRemoveTelasOcultasDaArvore:
     def test_tela_desligada_some_da_arvore_inteira(self):
-        # Com tudo desligado, as 4 telas de TRANSACOES (OS/OS_COMP/PEDIDO/
-        # PEDIDO_COMP) ficam ocultas — o menu inteiro some (fica sem filhos).
+        # Com tudo desligado, as 4 telas gateadas por módulo em TRANSACOES
+        # (OS/OS_COMP/PEDIDO/PEDIDO_COMP) somem — mas o menu em si continua
+        # existindo, já que MOV_PRODUTOS/REQUISICAO (Movimentações,
+        # 2026-07-18) não são gateadas por nenhum módulo.
         disabled = ps.disabled_telas(_flags())
         cat = ps.filter_catalogo(disabled)
-        assert not any(m["tela"] == "TRANSACOES" for m in cat)
+        transacoes = next(m for m in cat if m["tela"] == "TRANSACOES")
+        telas_visiveis = {t["tela"] for t in transacoes["children"]}
+        assert not ({"OS", "OS_COMP", "PEDIDO", "PEDIDO_COMP"} & telas_visiveis)
 
     def test_tela_ligada_aparece_na_arvore(self):
         disabled = ps.disabled_telas(_flags(Bar=True, Oficina=True))

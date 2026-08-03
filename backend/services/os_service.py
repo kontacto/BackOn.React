@@ -10,10 +10,14 @@ import asyncio
 from typing import Optional
 
 from db.connection import _open_conn, _get_col_sizes, _trunc
-from models.schemas import OSListRequest, OSSaveRequest, FecharRequest, FormaPagSimplesRequest
+from models.schemas import OSListRequest, OSSaveRequest, FecharRequest, FaturarOSRequest, FormaPagSimplesRequest
 from services.constants import SITUACAO_LABEL
-from services.pedido_common import _check_cliente_ativo, DavPagamento, DAV_OS, _fecha_fpag_dav, _qtd_formas
+from services.pedido_common import (
+    _check_cliente_ativo, DavPagamento, DAV_OS, _fecha_fpag_dav, _qtd_formas, _liberar_reservado, _mover_estoque,
+    _ensure_os_forma_pagamento_garantia_col,
+)
 from services.permissoes_service import tem_permissao
+from services.os_itens_service import _recalc_os_total
 
 
 def _list_os_sync(req: OSListRequest) -> dict:
@@ -54,10 +58,14 @@ def _list_os_sync(req: OSListRequest) -> dict:
 
         offset = max(0, (req.page - 1) * req.size)
         cur.execute(
-            f"SELECT o.codigo, o.cliente, o.data_entrada, o.hora_entrada, o.situacao, o.valor, "
-            f"       o.area_atuacao, c.nome AS cliente_nome "
+            f"SELECT o.codigo, o.cliente, o.data_entrada, o.hora_entrada, o.situacao, "
+            f"       ISNULL((SELECT SUM(p.quant * p.p_venda) FROM os_produto p "
+            f"               WHERE p.os = o.codigo AND ISNULL(p.item_cancelado,0)=0), 0) AS valor_calc, "
+            f"       o.area_atuacao, c.nome AS cliente_nome, "
+            f"       COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS atendente_nome "
             f"FROM os o "
             f"LEFT JOIN cliente c ON c.codigo = o.cliente "
+            f"LEFT JOIN funcionarios f ON f.codigo_int = o.atendente "
             f"{where} "
             f"ORDER BY o.codigo DESC OFFSET {offset} ROWS FETCH NEXT {req.size} ROWS ONLY",
             params,
@@ -73,7 +81,16 @@ def _list_os_sync(req: OSListRequest) -> dict:
                 "hora": (r.get("hora_entrada") or "").strip(),
                 "situacao": sit,
                 "situacao_label": SITUACAO_LABEL.get(sit, sit),
-                "total": float(r.get("valor") or 0),
+                # Somado a partir de os_produto, não `os.valor` — muitos
+                # registros legados (importados/gravados fora deste backend)
+                # têm `os.valor` desatualizado/zerado mesmo com itens reais
+                # (achado ao vivo em KONTACTO-TESTE: 583 O.S. Faturadas com
+                # valor=0). `os.valor` continua sendo a fonte de verdade
+                # pra ESCRITA (Faturar/etc — `_recalc_os_total` mantém em
+                # sincronia pra tudo criado/editado por este backend); aqui
+                # é só EXIBIÇÃO, mais robusta a dado legado divergente.
+                "total": float(r.get("valor_calc") or 0),
+                "atendente_nome": (r.get("atendente_nome") or "").strip(),
             })
         cur.close()
         conn.close()
@@ -94,7 +111,9 @@ def _get_os_sync(servidor: str, banco: str, codigo: int) -> dict:
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            "SELECT o.codigo, o.cliente, o.data_entrada, o.hora_entrada, o.situacao, o.valor, "
+            "SELECT o.codigo, o.cliente, o.data_entrada, o.hora_entrada, o.situacao, "
+            "       ISNULL((SELECT SUM(p.quant * p.p_venda) FROM os_produto p "
+            "               WHERE p.os = o.codigo AND ISNULL(p.item_cancelado,0)=0), 0) AS valor_calc, "
             "       o.area_atuacao, o.descricao_cliente, o.obs, o.resumo, o.status_os, o.atendente, "
             "       o.placa, o.marca, o.modelo, o.km, o.ano, o.chassi, o.numero_de_serie, "
             "       o.forma_pagamento, fp.descricao AS forma_pagamento_descricao, "
@@ -126,7 +145,9 @@ def _get_os_sync(servidor: str, banco: str, codigo: int) -> dict:
                 "hora": (row.get("hora_entrada") or "").strip(),
                 "situacao": sit,
                 "situacao_label": SITUACAO_LABEL.get(sit, sit),
-                "total": float(row.get("valor") or 0),
+                # Somado a partir de os_produto — ver comentário em
+                # `_list_os_sync` sobre `os.valor` legado desatualizado.
+                "total": float(row.get("valor_calc") or 0),
                 "area_atuacao": int(row["area_atuacao"]) if row.get("area_atuacao") is not None else None,
                 "area_descricao": (row.get("area_descricao") or "").strip(),
                 "descricao_cliente": row.get("descricao_cliente") or "",
@@ -299,12 +320,18 @@ async def set_forma_pag_simples(req: FormaPagSimplesRequest, codigo: int) -> dic
 
 
 
-def _fechar_os_sync(req: FecharRequest, codigo: int) -> dict:
+def _fechar_os_sync(req: FecharRequest, codigo: int, tela: str = "OS") -> dict:
     """Fecha a O.S. (situação A -> F). Valida itens, permissão e forma de
     pagamento (réplica de `Fecha_FPAG_Dav`, mesmo `Type_FormaPagPedOS`
     compartilhado com o Pedido — ver `pedido_common.DavPagamento`).
     O estoque das peças já foi movido na INCLUSÃO do item (reservado_os),
-    portanto o fechamento NÃO movimenta estoque novamente."""
+    portanto o fechamento NÃO movimenta estoque novamente.
+
+    `tela` (default "OS", O.S. Mobile) decide qual permissão é checada —
+    a O.S. Completa (`os_completo_service.py`) chama esta mesma função
+    passando `tela="OS_COMP"`, mesmo padrão já usado em
+    `pedidos_service._faturar_pedido_sync`/`_reabrir_pedido_sync` pro
+    Pedido Completo, pra não duplicar a regra."""
     try:
         conn = _open_conn(req.servidor, req.banco)
     except Exception as e:
@@ -320,7 +347,7 @@ def _fechar_os_sync(req: FecharRequest, codigo: int) -> dict:
         if sit != "A":
             conn.close()
             return {"success": False, "message": f"OS '{SITUACAO_LABEL.get(sit, sit)}' não pode ser fechada."}
-        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, "OS", "SITUACAO"):
+        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, tela, "SITUACAO"):
             conn.close()
             return {"success": False, "message": "Sem permissão para fechar a O.S."}
         cur.execute(
@@ -330,7 +357,11 @@ def _fechar_os_sync(req: FecharRequest, codigo: int) -> dict:
         if not cur.fetchone():
             conn.close()
             return {"success": False, "message": "Inclua pelo menos um produto ou serviço antes de fechar."}
-        subtotal = float(ex.get("valor") or 0)
+        # Recalcula de os_produto em vez de confiar em os.valor: itens
+        # incluídos/editados antes desta correção (ou por outro processo)
+        # podem ter deixado essa coluna desatualizada — ver PENDENCIAS.md
+        # > "O.S. Completa" > "Risco identificado".
+        subtotal = _recalc_os_total(cur, codigo)
         forma_padrao = (ex.get("forma_pagamento") or "").strip()
         dav = DavPagamento(tipo=DAV_OS, documento=codigo, situacao="A", valor=subtotal, forma_padrao=forma_padrao)
         erro = _fecha_fpag_dav(cur, dav)
@@ -353,5 +384,314 @@ def _fechar_os_sync(req: FecharRequest, codigo: int) -> dict:
         return {"success": False, "message": f"Erro ao fechar: {e}"}
 
 
-async def fechar_os(req: FecharRequest, codigo: int) -> dict:
-    return await asyncio.to_thread(_fechar_os_sync, req, codigo)
+async def fechar_os(req: FecharRequest, codigo: int, tela: str = "OS") -> dict:
+    return await asyncio.to_thread(_fechar_os_sync, req, codigo, tela)
+
+
+def _faturar_bucket_os(cur, req: FaturarOSRequest, codigo: int, cliente, area_atuacao, bucket: str, total: float) -> int:
+    """Fatura UM bloco de itens da O.S. (`bucket` = "cliente" ou
+    "garantia") numa Comanda própria — réplica de `GeraComanda` (FlagOS
+    "C"/"G"): mesma tabela de itens `os_produto`, filtrada por
+    `situacao=0` (cliente) ou `situacao<>0 AND faturado=0` (garantia/
+    interno/contrato). Sempre fatura pro `os.cliente` (o legado fatura
+    garantia pro `cliente_garantia` quando preenchido, campo nunca
+    modelado nesta migração — ver "Não replicar truques VB6"). Marca
+    `os_produto.faturado=1` só nos itens do bloco garantia — o bloco
+    cliente não precisa dessa marcação porque, uma vez faturado, a O.S.
+    inteira vira `PG` e o bloco cliente nunca é reconsultado de novo."""
+    cur.execute(
+        "INSERT INTO comanda (data, cliente, valor_venda, situacao, atendente, hora_comanda, area_atuacao) "
+        "OUTPUT INSERTED.comanda "
+        "VALUES (CONVERT(date, GETDATE()), %s, %s, 'PG', %s, CONVERT(varchar(8), GETDATE(), 108), %s)",
+        (cliente, total, req.usuario_alteracao or 0, area_atuacao),
+    )
+    comanda_id = int(cur.fetchone()["comanda"])
+
+    if bucket == "cliente":
+        cur.execute(
+            "SELECT cod_os_prod, codigo_interno, quant, p_venda, custo_os, vendedor FROM os_produto "
+            "WHERE os=%s AND situacao=0 AND ISNULL(item_cancelado,0)=0",
+            (codigo,),
+        )
+    else:
+        cur.execute(
+            "SELECT cod_os_prod, codigo_interno, quant, p_venda, custo_os, vendedor FROM os_produto "
+            "WHERE os=%s AND situacao<>0 AND ISNULL(faturado,0)=0 AND ISNULL(item_cancelado,0)=0",
+            (codigo,),
+        )
+    itens = cur.fetchall()
+    for it in itens:
+        produto = (it.get("codigo_interno") or "").strip()
+        qtd = float(it.get("quant") or 0)
+        p_venda = float(it.get("p_venda") or 0)
+        custo = float(it.get("custo_os") or 0)
+        vendedor = it.get("vendedor") or 0
+        _liberar_reservado(cur, produto, qtd, campo="reservado_os")
+        cur.execute(
+            "INSERT INTO movimentacao (data, tipo, codigo_int, qtd, p_unit, num_nf, serie_nf, vendedor, custo_mov) "
+            "VALUES (CONVERT(date, GETDATE()), 'S01', %s, %s, %s, %s, 'CM', %s, %s)",
+            (produto, qtd, p_venda, comanda_id, vendedor, custo),
+        )
+        if bucket == "garantia":
+            cur.execute("UPDATE os_produto SET faturado=1 WHERE cod_os_prod=%s", (it["cod_os_prod"],))
+
+    cur.execute("INSERT INTO COMANDA_OS (comanda, os) VALUES (%s, %s)", (comanda_id, codigo))
+    return comanda_id
+
+
+def _faturar_os_sync(req: FaturarOSRequest, codigo: int, tela: str = "OS") -> dict:
+    """Fatura a O.S.: gera a Comanda (`comanda`, `movimentacao` S01/CM,
+    `COMANDA_OS`), libera o estoque reservado das PEÇAS (`reservado_os` —
+    a baixa de `qtd` já aconteceu na inclusão do item, ver
+    `os_itens_service._add_item_sync`) e marca a OS como paga (situação
+    PG). Réplica do mesmo padrão de `pedidos_service._faturar_pedido_sync`,
+    pedido explícito do usuário 2026-07-21 — mas **exige a OS já Fechada**
+    (sem o atalho "fecha-e-fatura junto" do Pedido Bar): O.S. hoje só tem
+    Fechar (`_fechar_os_sync`), nunca teve um "fecha e fatura" combinado
+    rastreado, então a transição A->F continua exigindo o botão Fechar
+    normalmente antes de Faturar.
+
+    Vendedor de cada linha de `movimentacao` vem do próprio item
+    (`os_produto.vendedor`), não de um campo único no cabeçalho — diferente
+    de `pedido_venda`, que guarda um vendedor só no cabeçalho e o repete
+    pra todo item ao faturar; O.S. já guarda vendedor por item desde a
+    inclusão (ver `os_itens_service.py`), então é isso que se usa aqui.
+
+    **Bifurcação de faturamento Garantia×Cliente** (`Command2_Click`/
+    `GeraComanda`, `FrmTraOsNew.frm`) — itens são divididos em 2 blocos por
+    `os_produto.situacao`: bloco "cliente" (situação=0) e bloco "garantia"
+    (situação IN 1/2/3 — Garantia/Interno/Contrato), cada um faturado numa
+    Comanda PRÓPRIA, com sua própria forma de pagamento
+    (`os.forma_pagamento_garantia` pro bloco garantia). Quando os 2 blocos
+    têm valor pendente ao mesmo tempo e `req.faturar_bucket` não veio
+    definido, a função NÃO fatura nada — devolve `needs_choice=True` com
+    os 2 totais, pra tela perguntar ao usuário o que faturar agora (mesmo
+    efeito da tela bloqueante `Frame5`/`Check3`/`Check5` do legado). Sem
+    ambiguidade (só um bloco com valor), decide sozinha, sem perguntar.
+
+    Uma O.S. já Faturada (`PG`) pode voltar aqui pra faturar itens de
+    Garantia/Interno/Contrato incluídos DEPOIS do primeiro faturamento
+    (`situacao<>0 AND faturado=0` ainda pendente) — o bloco cliente nunca
+    é reconsultado nesse caso (já foi resolvido no primeiro faturamento, o
+    legado nunca reabre esse bloco)."""
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        _ensure_os_forma_pagamento_garantia_col(cur)
+        cur.execute(
+            "SELECT situacao, cliente, valor, area_atuacao, forma_pagamento_garantia FROM os WHERE codigo=%s",
+            (codigo,),
+        )
+        ex = cur.fetchone()
+        if not ex:
+            conn.close()
+            return {"success": False, "message": "OS não encontrada."}
+        sit = (ex.get("situacao") or "").strip().upper()
+        if sit not in ("A", "F", "PG"):
+            conn.close()
+            return {"success": False, "message": f"OS '{SITUACAO_LABEL.get(sit, sit)}' não pode ser faturada."}
+        if sit == "A":
+            conn.close()
+            return {"success": False, "message": "Feche a OS antes de faturar."}
+        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, tela, "FATURAR"):
+            conn.close()
+            return {"success": False, "message": "Sem permissão para faturar a O.S."}
+
+        # Mesmo recálculo defensivo do Fechar — não confiar em os.valor cru.
+        _recalc_os_total(cur, codigo)
+        cliente = ex.get("cliente")
+        area_atuacao = ex.get("area_atuacao") or 0
+        forma_pagamento_garantia = (ex.get("forma_pagamento_garantia") or "").strip()
+
+        if sit == "PG":
+            # Já faturada — só sobra o bloco garantia pendente (itens
+            # incluídos depois do primeiro faturamento).
+            cur.execute(
+                "SELECT COALESCE(SUM(quant*p_venda),0) AS total FROM os_produto "
+                "WHERE os=%s AND situacao<>0 AND ISNULL(faturado,0)=0 AND ISNULL(item_cancelado,0)=0",
+                (codigo,),
+            )
+            total_garantia = float((cur.fetchone() or {}).get("total") or 0)
+            if total_garantia <= 0:
+                conn.close()
+                return {"success": False, "message": "OS já faturada."}
+            if not forma_pagamento_garantia:
+                conn.close()
+                return {
+                    "success": False,
+                    "message": "Defina a Forma de Pagamento de Garantia da O.S. antes de faturar os itens pendentes.",
+                }
+            comanda_garantia = _faturar_bucket_os(cur, req, codigo, cliente, area_atuacao, "garantia", total_garantia)
+            conn.commit()
+            cur.close()
+            conn.close()
+            return {
+                "success": True, "message": "Itens de Garantia/Interno/Contrato faturados.", "situacao": "PG",
+                "comanda_garantia": comanda_garantia, "situacao_antes": sit,
+            }
+
+        # sit == "F": calcula os 2 blocos de uma vez.
+        cur.execute(
+            "SELECT "
+            "  COALESCE(SUM(CASE WHEN situacao=0 THEN quant*p_venda ELSE 0 END),0) AS total_cliente, "
+            "  COALESCE(SUM(CASE WHEN situacao<>0 AND ISNULL(faturado,0)=0 THEN quant*p_venda ELSE 0 END),0) AS total_garantia "
+            "FROM os_produto WHERE os=%s AND ISNULL(item_cancelado,0)=0",
+            (codigo,),
+        )
+        tot = cur.fetchone() or {}
+        total_cliente = float(tot.get("total_cliente") or 0)
+        total_garantia = float(tot.get("total_garantia") or 0)
+        if total_cliente <= 0 and total_garantia <= 0:
+            conn.close()
+            return {"success": False, "message": "OS sem produtos/serviços a serem faturados."}
+
+        bucket = (req.faturar_bucket or "").strip().lower() or None
+        if bucket not in (None, "cliente", "garantia", "ambos"):
+            bucket = None
+        if total_cliente > 0 and total_garantia > 0:
+            if bucket is None:
+                conn.close()
+                return {
+                    "success": False, "needs_choice": True,
+                    "total_cliente": total_cliente, "total_garantia": total_garantia,
+                    "message": (
+                        "Esta O.S. tem itens de Cliente e de Garantia/Interno/Contrato pendentes — "
+                        "escolha o que faturar agora."
+                    ),
+                }
+        elif total_garantia > 0:
+            bucket = "garantia"
+        else:
+            bucket = "cliente"
+
+        if bucket in ("garantia", "ambos") and total_garantia > 0 and not forma_pagamento_garantia:
+            conn.close()
+            return {
+                "success": False,
+                "message": "Defina a Forma de Pagamento de Garantia da O.S. antes de faturar.",
+            }
+
+        comanda_cliente = None
+        comanda_garantia = None
+        if bucket in ("cliente", "ambos") and total_cliente > 0:
+            comanda_cliente = _faturar_bucket_os(cur, req, codigo, cliente, area_atuacao, "cliente", total_cliente)
+        if bucket in ("garantia", "ambos") and total_garantia > 0:
+            comanda_garantia = _faturar_bucket_os(cur, req, codigo, cliente, area_atuacao, "garantia", total_garantia)
+
+        cur.execute("UPDATE os SET situacao='PG' WHERE codigo=%s", (codigo,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {
+            "success": True, "message": "OS faturada.", "situacao": "PG",
+            "comanda": comanda_cliente, "comanda_garantia": comanda_garantia, "situacao_antes": sit,
+        }
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao faturar: {e}"}
+
+
+async def faturar_os(req: FaturarOSRequest, codigo: int, tela: str = "OS") -> dict:
+    return await asyncio.to_thread(_faturar_os_sync, req, codigo, tela)
+
+
+def _reabrir_os_sync(req: FecharRequest, codigo: int, tela: str = "OS") -> dict:
+    """Reabre a O.S. (situação F -> A). Só permite reabrir Fechada — o
+    legado (`FrmTraOsNew.frm`, `cmdReabrir_Click`) só habilita o botão
+    nesse estado, então o branch de código que trataria reabertura de
+    Cancelada nunca é alcançável na prática e não foi replicado (ver
+    "Não replicar truques VB6" no CLAUDE.md). Não reverte nenhuma
+    movimentação de estoque — o Fechar de O.S. não movimenta estoque (só o
+    Faturar libera a reserva), então reabrir também não precisa."""
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT situacao FROM os WHERE codigo=%s", (codigo,))
+        ex = cur.fetchone()
+        if not ex:
+            conn.close()
+            return {"success": False, "message": "OS não encontrada."}
+        sit = (ex.get("situacao") or "").strip().upper()
+        if sit != "F":
+            conn.close()
+            return {"success": False, "message": f"OS '{SITUACAO_LABEL.get(sit, sit)}' não pode ser reaberta."}
+        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, tela, "REABRIR"):
+            conn.close()
+            return {"success": False, "message": "Sem permissão para reabrir a O.S."}
+        cur.execute("UPDATE os SET situacao='A' WHERE codigo=%s", (codigo,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "message": "O.S. Reaberta.", "situacao": "A"}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao reabrir: {e}"}
+
+
+async def reabrir_os(req: FecharRequest, codigo: int, tela: str = "OS") -> dict:
+    return await asyncio.to_thread(_reabrir_os_sync, req, codigo, tela)
+
+
+def _cancelar_os_sync(req: FecharRequest, codigo: int, tela: str = "OS", acao: str = "SITUACAO") -> dict:
+    """Cancela a O.S. (situação A/F -> C, nunca Paga). Estorna a reserva de
+    estoque de cada item não-cancelado (`_mover_estoque` com delta
+    negativo — devolve a peça a `pecas.qtd` e remove de `reservado_os`,
+    espelho exato do que a inclusão de item faz ao reservar). `acao`
+    default "SITUACAO" reaproveita a mesma permissão de Fechar/Reabrir
+    (mesmo raciocínio já usado por `pedidos_service._cancelar_pedido_sync`
+    pro Pedido Completo — evita exigir reconcessão de permissão numa ação
+    nova)."""
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT situacao FROM os WHERE codigo=%s", (codigo,))
+        ex = cur.fetchone()
+        if not ex:
+            conn.close()
+            return {"success": False, "message": "OS não encontrada."}
+        sit = (ex.get("situacao") or "").strip().upper()
+        if sit not in ("A", "F"):
+            conn.close()
+            return {"success": False, "message": f"OS '{SITUACAO_LABEL.get(sit, sit)}' não pode ser cancelada."}
+        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, tela, acao):
+            conn.close()
+            return {"success": False, "message": "Sem permissão para cancelar a O.S."}
+        cur.execute(
+            "SELECT codigo_interno, quant FROM os_produto WHERE os=%s AND ISNULL(item_cancelado,0)=0",
+            (codigo,),
+        )
+        itens = cur.fetchall()
+        for it in itens:
+            produto = (it.get("codigo_interno") or "").strip()
+            qtd = float(it.get("quant") or 0)
+            _mover_estoque(cur, produto, -qtd, "reservado_os")
+        cur.execute("UPDATE os SET situacao='C' WHERE codigo=%s", (codigo,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "message": "O.S. Cancelada.", "situacao": "C"}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao cancelar: {e}"}
+
+
+async def cancelar_os(req: FecharRequest, codigo: int, tela: str = "OS", acao: str = "SITUACAO") -> dict:
+    return await asyncio.to_thread(_cancelar_os_sync, req, codigo, tela, acao)

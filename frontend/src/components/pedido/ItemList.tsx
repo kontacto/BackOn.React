@@ -1,6 +1,7 @@
 // Seção "Itens do Pedido": lista de itens + botões de desconto geral/concedidos + subtotal.
 import { useState, type ReactNode } from "react";
 import { ActivityIndicator, Platform, Pressable, Text, TouchableOpacity, View } from "react-native";
+import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 // Ícone de garçom/prato servido pra Taxa de Serviço (pedido explícito do
 // usuário, com imagem de referência) — não existe em Ionicons, então usamos
@@ -11,17 +12,51 @@ import { Ionicons } from "@/src/components/Ionicons";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 
 import { colors } from "@/src/theme/colors";
-import { formatBRL, formatDateBR } from "@/src/utils/format";
+import { formatBRL, formatDateBR, fmtNum } from "@/src/utils/format";
 import { usePermissions } from "@/src/permissions";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
 import { styles } from "./styles";
 import { ItemRow } from "./types";
-import { UsePedidoItens } from "./usePedidoItens";
+
+// Superfície mínima que o ItemList realmente usa do hook de itens — não o
+// `UsePedidoItens` inteiro (que carrega kit/m²/clínica/num_serie/taxa de
+// serviço, conceitos exclusivos do Pedido). Interseção estrutural: o
+// retorno de `usePedidoItens` já satisfaz esta interface automaticamente
+// (é um superset), e o retorno de `useOSItens` (O.S. Completa) só precisa
+// implementar isto. `setAgendarItem` é real dos dois lados desde 2026-08-01
+// (Agendar item de Serviço chegou na O.S. Completa via módulo Assistência,
+// ver `os/useOSItens.ts` e `pedido/agendaTypes.ts`) — os campos
+// verdadeiramente Pedido-only que restam (`taxaServicoSaving`,
+// `handleTaxaServico`, `setPrintItem`, `setPedidoTotalizadoOpen`) nunca são
+// de fato chamados pra `tela === "OS_COMP"` (os gates abaixo —
+// `canTaxaServico`/`canImprimirItem`/`showPedidoTotalizado` — ficam todos
+// falsos), mas o TypeScript ainda exige que a propriedade exista no objeto.
+export type ItemListItens = {
+  itens: ItemRow[];
+  subtotal: number;
+  itensLoading: boolean;
+  descTotalItens: number;
+  geralAtual: number;
+  openDescontos: () => void;
+  openAddModal: () => void;
+  openEditModal: (item: ItemRow) => void;
+  openGeralModal: () => void;
+  taxaServicoSaving: boolean;
+  handleTaxaServico: () => void;
+  setPrintItem: (item: ItemRow) => void;
+  setAgendarItem: (item: ItemRow) => void;
+  setPedidoTotalizadoOpen: (open: boolean) => void;
+};
 
 type Props = {
   editing: boolean;
   isAberto: boolean;
-  it: UsePedidoItens;
-  // Tela dona da permissão — "PEDIDO" (rápido, default) ou "PEDIDO_COMP".
+  it: ItemListItens;
+  // Tela dona da permissão — "PEDIDO" (rápido, default), "PEDIDO_COMP" ou
+  // "OS_COMP" (O.S. Completa reaproveita a barra de ações Fechar/Faturar/
+  // Reabrir/Cancelar/Imprimir — ver `hasSituacaoActions` abaixo — mas nunca
+  // Dividir/Imprimir Item/Agendar/Pedido Totalizado/Tx Serviço, que
+  // continuam exclusivos do Pedido).
   tela?: string;
   // Navegação pro relatório de margem/descontos — a tela dona decide a
   // rota; o botão só aparece se informado e a permissão ANALISE existir.
@@ -46,12 +81,6 @@ type Props = {
   // explícito do usuário, 2026-07-17 — funcionalidade nova, sem
   // equivalente no legado.
   onDividir?: () => void;
-  // Abre o Gestor de Documentos (AnexosPedidoModal) — pill entre "Faturar
-  // Pedido" e "Imprimir" (pedido explícito do usuário, 2026-07-16), só
-  // Pedido Bar, permissão própria ANEXOS. Só aparece com cliente já
-  // selecionado (anexo é gravado como anexo do Cliente, precisa do
-  // código dele).
-  onAnexos?: () => void;
   // Reabre o pedido (situação F -> A) — pill amarelo entre "Faturar Pedido"
   // e "Anexo", ao lado de "Cancelar" (pedido explícito do usuário,
   // 2026-07-16), réplica de `cmdReabrir_Click` (FrmManPedBar.frm). Só
@@ -81,43 +110,97 @@ const isWeb = Platform.OS === "web";
 
 export default function ItemList({
   editing, isAberto, it, tela = "PEDIDO", onAnalisar, onFechar, fechando, onFaturar, faturando, isFechado,
-  onDividir, onAnexos, onReabrir, reabrindo, onCancelar, cancelando, onImprimir, footerRight,
+  onDividir, onReabrir, reabrindo, onCancelar, cancelando, onImprimir, footerRight,
 }: Props) {
+  const router = useRouter();
   const { itens, subtotal, itensLoading, descTotalItens, geralAtual } = it;
-  const { can } = usePermissions();
+  const { can, moduleOn } = usePermissions();
   const canEditItem = can(`${tela}.EDIT_ITEM`) || can(`${tela}.DEL_ITEM`) || can(`${tela}.DESC_ITEM`);
   const canAnalise = !!onAnalisar && can(`${tela}.ANALISE`);
   const canGeral = isAberto && can(`${tela}.DESC_GERAL`);
+  // Botões trazidos do Pedido Bar pro Pedido Completo/Geral 2026-07-20
+  // (pedido explícito do usuário: "aplicar... o layout e as funções do
+  // pedido bar com exceção da taxa de serviço") — daí o `["PEDIDO",
+  // "PEDIDO_COMP"].includes(tela)` em vez de `tela === "PEDIDO"` puro.
+  // TX_SERVICO continua exclusivo do Bar (não checado aqui, ver mais
+  // abaixo) — único item deliberadamente não generalizado.
+  const isPedidoOuCompleto = tela === "PEDIDO" || tela === "PEDIDO_COMP";
+  // Fechar/Faturar/Reabrir/Cancelar/Imprimir são a máquina de estados
+  // compartilhada por Pedido E O.S. Completa (`os_service.py` reaproveita
+  // literalmente `_fechar_os_sync`/`_faturar_os_sync`/etc. com
+  // `tela="OS_COMP"`, ver os_completo_service.py) — Dividir/Imprimir Item/
+  // Agendar/Pedido Totalizado/Tx Serviço continuam checados só por
+  // `isPedidoOuCompleto`/`tela === "PEDIDO"`, sem equivalente na O.S.
+  const hasSituacaoActions = isPedidoOuCompleto || tela === "OS_COMP";
+  // Pedido Geral e O.S. Completa ("telas completas") compartilham 2 regras
+  // que divergem do Pedido Bar: (1) só faturam já Fechado, sem o atalho
+  // "fecha-e-fatura junto" (`_faturar_os_sync` nunca teve esse atalho,
+  // igual ao Pedido Geral); (2) Cancelar reaproveita a permissão SITUACAO
+  // em vez de uma CANCELAR própria (ver comentário de `canCancelar`).
+  const isTelaCompleta = tela === "PEDIDO_COMP" || tela === "OS_COMP";
   const canFechar = !!onFechar && isAberto && can(`${tela}.SITUACAO`);
-  const canDividir = !!onDividir && tela === "PEDIDO" && isAberto && itens.length > 0 && can(`${tela}.DIVIDIR`);
-  const canFaturar = !!onFaturar && tela === "PEDIDO" && (isAberto || !!isFechado) && can(`${tela}.FATURAR`);
-  const canAnexos = !!onAnexos && tela === "PEDIDO" && can(`${tela}.ANEXOS`);
-  const canReabrir = !!onReabrir && tela === "PEDIDO" && !!isFechado && can(`${tela}.REABRIR`);
-  const canCancelar = !!onCancelar && tela === "PEDIDO" && (isAberto || !!isFechado) && can(`${tela}.CANCELAR`);
-  const canImprimir = isWeb && !!onImprimir && tela === "PEDIDO" && itens.length > 0 && can(`${tela}.IMPRIMIR`);
+  const canDividir = !!onDividir && isPedidoOuCompleto && isAberto && itens.length > 0 && can(`${tela}.DIVIDIR`);
+  // Diferença de regra confirmada pelo usuário, 2026-07-20: diferente do
+  // Pedido Bar (fecha-e-fatura num clique só, aceita Aberto ou Fechado), o
+  // Pedido Geral só pode faturar um pedido já Fechado — mesma restrição
+  // aplicada no backend (`_faturar_pedido_sync`'s `exigir_fechado=True`).
+  const canFaturar = !!onFaturar && hasSituacaoActions
+    && (isTelaCompleta ? !!isFechado : (isAberto || !!isFechado))
+    && can(`${tela}.FATURAR`);
+  const canReabrir = !!onReabrir && hasSituacaoActions && !!isFechado && can(`${tela}.REABRIR`);
+  // Pedido Geral e O.S. Completa cancelam reaproveitando a permissão
+  // SITUACAO (não uma CANCELAR própria) — decisão deliberada pra não
+  // exigir reconcessão de permissão em instalações já configuradas (ver
+  // docstring de `pedidos_service._cancelar_pedido_sync`/
+  // `os_service._cancelar_os_sync` e ACOES_PEDIDO_COMP/ACOES_OS_COMP em
+  // permissoes_service.py, que por isso não têm a ação CANCELAR própria).
+  // Checar `${tela}.CANCELAR` aqui sempre daria falso pra essas duas telas
+  // — mesmo bug já corrigido pro Pedido Geral em 2026-07-20.
+  const canCancelar = !!onCancelar && hasSituacaoActions && (isAberto || !!isFechado)
+    && can(isTelaCompleta ? `${tela}.SITUACAO` : `${tela}.CANCELAR`);
+  const canImprimir = isWeb && !!onImprimir && hasSituacaoActions && itens.length > 0 && can(`${tela}.IMPRIMIR`);
   // Botão "Imprimir Item" em cada linha (FrmManPedBar.frm, Command62_Click)
   // — sempre disponível, não depende de haver impressora configurada por
   // Finalidade (isso só decide o disparo automático ao adicionar, ver
   // usePedidoItens.checkAutoPrintItem).
-  const canImprimirItem = isWeb && tela === "PEDIDO" && can(`${tela}.IMPRIMIR_ITEM`);
+  const canImprimirItem = isWeb && isPedidoOuCompleto && can(`${tela}.IMPRIMIR_ITEM`);
+  // Agendar item de Serviço — Pedido Geral (Fase B, módulo Clínica OU
+  // Assistência, user-directed 2026-07-28; mesmo escopo do desdobramento de
+  // item, ver `pedido_completo_service._add_item_completo_sync`) E, desde
+  // 2026-08-01, O.S. Completa (só módulo Assistência — Clínica é exclusiva
+  // do segmento Pedido, sem equivalente na O.S.). Ver PENDENCIAS.md >
+  // "O.S. Completa" > "Agendar item de Serviço" e "Transações" > "Pedido
+  // Geral — Fase B: Clínica (Agendamento)".
+  const canAgendar =
+    (tela === "PEDIDO_COMP" && (moduleOn("CLINICA") || moduleOn("Assistencia")) && can(`${tela}.AGENDAR`)) ||
+    (tela === "OS_COMP" && moduleOn("Assistencia") && can(`${tela}.AGENDAR`));
   const canVerDescontos = descTotalItens > 0 && can(`${tela}.VER_DESCONTOS`);
-  const canTaxaServico = isAberto && can(`${tela}.TX_SERVICO`);
+  // Taxa de Serviço continua EXCLUSIVA do Pedido Bar — único recurso
+  // deliberadamente não trazido ao Pedido Completo/Geral (pedido explícito
+  // do usuário). `tela === "PEDIDO"` aqui, não `isPedidoOuCompleto`.
+  const canTaxaServico = isAberto && tela === "PEDIDO" && can(`${tela}.TX_SERVICO`);
   const taxaServicoIncluida = itens.some((i) => i.produto === "S002");
-  // "Pedido Totalizado" — relatório read-only (agrupa itens repetidos),
-  // exclusivo do Pedido Bar (FrmManPedBar.frm; o Pedido Completo não tem
-  // esse botão na origem) — sem permissão própria, mesmo precedente de
-  // sub-tela só-leitura não precisar de BOTAO no catálogo.
-  const showPedidoTotalizado = tela === "PEDIDO" && itens.length > 0;
+  // "Pedido Totalizado" — relatório read-only (agrupa itens repetidos).
+  // Exclusivo do Pedido Bar na origem (FrmManPedBar.frm; frmmanpedfor.frm
+  // não tem esse botão) — trazido ao Pedido Completo/Geral por consistência
+  // de layout mesmo assim (pedido explícito do usuário, 2026-07-20). Sem
+  // permissão própria (sub-tela só-leitura), mesmo precedente de sempre.
+  const showPedidoTotalizado = isPedidoOuCompleto && itens.length > 0;
   // Tooltip da etiqueta de desconto — um só de cada vez, compartilhado
   // entre as linhas (hover no web, toque no mobile já que não há hover).
   const [descTooltipCodauto, setDescTooltipCodauto] = useState<number | null>(null);
+  // Rótulos "Pedido"/"O.S." nos textos da toolbar/título — só isso muda
+  // entre as 3 telas que reaproveitam este componente, o resto do JSX é
+  // igual (ver `hasSituacaoActions` acima pro porquê disso ser seguro).
+  const entidadeLabel = tela === "OS_COMP" ? "O.S." : "Pedido";
+  const itensLabel = tela === "OS_COMP" ? "Itens da O.S." : "Itens do Pedido";
 
   return (
     <>
       {/* Ação de Fechar/Faturar Pedido — acima da lista, pra não exigir rolar
           até o fim do pedido pra achá-la. Faturar fica ao lado de Fechar
           (pedido explícito do usuário). */}
-      {canFechar || canDividir || canFaturar || canReabrir || canCancelar || canAnexos || canImprimir ? (
+      {canFechar || canDividir || canFaturar || canReabrir || canCancelar || canImprimir ? (
         <View style={styles.itensToolbar}>
           {canFechar ? (
             <TouchableOpacity
@@ -132,7 +215,7 @@ export default function ItemList({
               ) : (
                 <Ionicons name="lock-closed-outline" size={16} color="#fff" />
               )}
-              <Text style={styles.toolbarPillFecharText}>Fechar Pedido</Text>
+              <Text style={styles.toolbarPillFecharText}>Fechar {entidadeLabel}</Text>
             </TouchableOpacity>
           ) : null}
           {canDividir ? (
@@ -159,7 +242,7 @@ export default function ItemList({
               ) : (
                 <Ionicons name="cash-outline" size={16} color="#fff" />
               )}
-              <Text style={styles.toolbarPillFaturarText}>Faturar Pedido</Text>
+              <Text style={styles.toolbarPillFaturarText}>Faturar {entidadeLabel}</Text>
             </TouchableOpacity>
           ) : null}
           {canReabrir ? (
@@ -194,17 +277,6 @@ export default function ItemList({
               <Text style={styles.toolbarPillCancelarText}>Cancelar</Text>
             </TouchableOpacity>
           ) : null}
-          {canAnexos ? (
-            <TouchableOpacity
-              onPress={onAnexos}
-              activeOpacity={0.8}
-              style={styles.toolbarPillAnexo}
-              testID="pedido-form-anexos-btn"
-            >
-              <Ionicons name="attach-outline" size={16} color={colors.brandPrimary} />
-              <Text style={styles.toolbarPillAnexoText}>Anexo</Text>
-            </TouchableOpacity>
-          ) : null}
           {canImprimir ? (
             <TouchableOpacity
               onPress={onImprimir}
@@ -222,7 +294,7 @@ export default function ItemList({
       <View style={styles.itensSummaryRow}>
         <View style={styles.itensSummaryLeft}>
           <Text style={styles.sectionTitle}>
-            Itens do Pedido {itens.length ? `(${itens.length})` : ""}
+            {itensLabel} {itens.length ? `(${itens.length})` : ""}
           </Text>
           {canVerDescontos ? (
             <TouchableOpacity
@@ -287,7 +359,7 @@ export default function ItemList({
       {!editing ? (
         <View style={styles.itensHint}>
           <Ionicons name="information-circle-outline" size={18} color={colors.muted} />
-          <Text style={styles.itensHintText}>Grave o pedido para adicionar itens.</Text>
+          <Text style={styles.itensHintText}>Grave {tela === "OS_COMP" ? "a O.S." : "o pedido"} para adicionar itens.</Text>
         </View>
       ) : itensLoading && itens.length === 0 ? (
         <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 16 }} />
@@ -297,7 +369,15 @@ export default function ItemList({
           <Text style={styles.itensHintText}>Nenhum item adicionado.</Text>
         </View>
       ) : (
-        <View style={{ gap: 8 }}>
+        // `zIndex` aqui garante que a lista inteira (e qualquer tooltip que
+        // escape de uma linha pra fora dos limites dela, ex.: "Agendar
+        // atendimento" perto do fim da linha) pinte por cima do rodapé
+        // seguinte (Margem/Desconto Geral/Pedido Totalizado) — os dois são
+        // IRMÃOS no mesmo pai, então elevar só o wrapper interno do ícone
+        // (já feito em `IconButtonWithTooltip`) não basta; a comparação de
+        // stacking que importa aqui acontece neste nível, entre a lista e o
+        // rodapé. Ver CLAUDE.md > "Modo Didático" > tooltip sempre por cima.
+        <View style={{ gap: 8, zIndex: 1 }}>
           {itens.map((item: ItemRow) => {
             const desc = item.descricao || item.produto;
             const complementoDiferente =
@@ -328,6 +408,13 @@ export default function ItemList({
                 </View>
                 <Text style={styles.itemDescCompact} numberOfLines={1}>
                   {desc}{complementoDiferente ? ` — ${item.complemento}` : ""}
+                  {/* Número de série vinculado (Fase B, só Pedido Geral) —
+                      item.num_serie nunca vem preenchido pro Pedido Bar. */}
+                  {item.num_serie ? ` · Nº Série: ${item.num_serie}` : ""}
+                  {/* Dimensão m² (Fase B, só Pedido Geral) — item.comprimento/
+                      largura nunca vêm preenchidos pro Pedido Bar. */}
+                  {item.comprimento && item.largura ? ` · ${fmtNum(item.comprimento)} x ${fmtNum(item.largura)} m` : ""}
+                  {item.agendamento ? ` · Agendado: ${formatDateBR(item.agendamento.data)} às ${item.agendamento.hora_ini} (${item.agendamento.profissional})` : ""}
                 </Text>
                 {item.desconto > 0 ? (
                   <View style={{ position: "relative" }}>
@@ -361,16 +448,46 @@ export default function ItemList({
                   </Text>
                 ) : null}
                 {canImprimirItem ? (
-                  <Pressable
+                  <IconButtonWithTooltip
+                    icon="print-outline"
+                    label="Imprimir item"
+                    size={13}
                     onPress={(e) => {
                       e.stopPropagation();
                       it.setPrintItem(item);
                     }}
                     style={styles.imprimirItemTag}
                     testID={`pedido-form-item-imprimir-${item.codauto}`}
-                  >
-                    <Ionicons name="print-outline" size={13} color={colors.brandPrimary} />
-                  </Pressable>
+                  />
+                ) : null}
+                {canAgendar && item.tipo === "S" ? (
+                  <IconButtonWithTooltip
+                    icon="calendar-outline"
+                    label="Agendar atendimento"
+                    size={13}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      it.setAgendarItem(item);
+                    }}
+                    style={styles.imprimirItemTag}
+                    testID={`pedido-form-item-agendar-${item.codauto}`}
+                  />
+                ) : null}
+                {item.agendamento ? (
+                  <IconButtonWithTooltip
+                    icon="open-outline"
+                    label="Ver na Agenda"
+                    size={13}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      router.push({
+                        pathname: "/agenda",
+                        params: { funcionario: String(item.agendamento!.funcionario), data: item.agendamento!.data },
+                      } as never);
+                    }}
+                    style={styles.imprimirItemTag}
+                    testID={`pedido-form-item-ver-agenda-${item.codauto}`}
+                  />
                 ) : null}
                 <Text style={[styles.itemTotal, styles.itemTotalCompact]}>{formatBRL(item.total)}</Text>
               </Pressable>

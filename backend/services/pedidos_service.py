@@ -5,14 +5,15 @@ from typing import Optional
 from db.connection import _open_conn
 from models.schemas import (
     PedidosListRequest, PedidoSaveRequest, FecharRequest, PedidoEntregueRequest, FormaPagSimplesRequest,
-    DividirPedidoRequest, QtdPessoasRequest,
+    DividirPedidoRequest, QtdPessoasRequest, TipoPedidoRequest,
 )
 from services.constants import SITUACAO_LABEL
 from services.pedido_common import (
     _check_cliente_ativo, _mover_estoque, _liberar_reservado, _fechar_pedido_itens,
     _ensure_hora_inclusao_item_col, _recalc_pedido_total, _ensure_qtd_pessoas_col,
+    _resolve_tipo_pedido,
 )
-from services.itens_service import TAXA_SERVICO_CODIGO, sincroniza_taxa_servico_apos_alteracao
+from services.itens_service import TAXA_SERVICO_CODIGO, _recalc_valor_taxa_servico, sincroniza_taxa_servico_apos_alteracao
 from services.permissoes_service import tem_permissao
 
 
@@ -132,7 +133,15 @@ def _list_pedidos_sync(req: PedidosListRequest) -> dict:
             f"       CASE WHEN EXISTS ("
             f"         SELECT 1 FROM pedido_venda_prod ip2 "
             f"         WHERE ip2.pedido = p.pedido AND ip2.produto <> 'S002' AND ISNULL(ip2.item_cancelado,0) = 0"
-            f"       ) THEN 1 ELSE 0 END AS tem_itens "
+            f"       ) THEN 1 ELSE 0 END AS tem_itens, "
+            # Valor da Taxa de Serviço lançada neste pedido (0 se não tem)
+            # — usado pelo Painel de Pedidos pra somar o total de Taxa de
+            # Serviço do dia/filtro no tooltip do pill "Total". Pedido
+            # explícito do usuário, 2026-07-18.
+            f"       COALESCE(("
+            f"         SELECT SUM(ip3.qtd_pedida * ip3.p_venda) FROM pedido_venda_prod ip3 "
+            f"         WHERE ip3.pedido = p.pedido AND ip3.produto = 'S002' AND ISNULL(ip3.item_cancelado,0) = 0"
+            f"       ), 0) AS taxa_servico_valor "
             f"FROM pedido_venda p "
             f"LEFT JOIN cliente c ON c.codigo = p.cliente "
             f"LEFT JOIN funcionarios f ON f.codigo_int = p.vendedor "
@@ -179,6 +188,7 @@ def _list_pedidos_sync(req: PedidosListRequest) -> dict:
                 "qtd_pessoas": int(r["qtd_pessoas"]) if r.get("qtd_pessoas") else None,
                 "taxa_servico_incluida": bool(r.get("taxa_servico_incluida")),
                 "tem_itens": bool(r.get("tem_itens")),
+                "taxa_servico_valor": float(r.get("taxa_servico_valor") or 0),
             })
         cur.close()
         conn.close()
@@ -387,12 +397,7 @@ def _save_pedido_sync(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> d
         # listagem cai pro tipo do cliente nesse caso
         # (`COALESCE(p.tipo, c.cliente_forn)`, ver `_list_pedidos_sync`).
         # Pedido explícito do usuário, 2026-07-18.
-        fantasia_up = (cli_row.get("fantasia") or "").strip().upper()
-        cliente_reservado = any(k in fantasia_up for k in ("MESA", "COMANDA", "BALCÃO", "BALCAO"))
-        if cliente_reservado:
-            tipo_final = cli_row.get("cliente_forn")
-        else:
-            tipo_final = req.tipo
+        tipo_final = _resolve_tipo_pedido(cli_row.get("fantasia"), cli_row.get("cliente_forn"), req.tipo)
 
         validade = req.validade or None
         obs = req.obs or ""
@@ -553,6 +558,48 @@ def _set_qtd_pessoas_sync(req: QtdPessoasRequest, pedido: int) -> dict:
         return {"success": False, "message": f"Erro ao gravar quantidade de pessoas: {e}"}
 
 
+def _set_tipo_pedido_sync(req: TipoPedidoRequest, pedido: int) -> dict:
+    """Painel de Pedidos — troca do Tipo (Mesa/Comanda/Balcão/Entrega/Fiado)
+    direto da listagem (arrastar card entre colunas), fora do fluxo normal
+    de Gravar (mesmo raciocínio de `_set_qtd_pessoas_sync` acima). Passa
+    pela mesma regra de override de cliente reservado do combobox "Tipo" da
+    tela cheia (`_resolve_tipo_pedido`) — arrastar uma "MESA 7" física pra
+    coluna Entrega não muda o tipo gravado, mesma exceção de sempre. Só
+    permitido com o pedido ainda Aberto ou Fechado."""
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT p.situacao, c.fantasia, c.cliente_forn "
+            "FROM pedido_venda p LEFT JOIN cliente c ON c.codigo = p.cliente "
+            "WHERE p.pedido=%s",
+            (pedido,),
+        )
+        ex = cur.fetchone()
+        if not ex:
+            conn.close()
+            return {"success": False, "message": "Pedido não encontrado."}
+        sit = (ex.get("situacao") or "").strip().upper()
+        if sit not in ("A", "F"):
+            conn.close()
+            return {"success": False, "message": f"Pedido '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterado."}
+        tipo_final = _resolve_tipo_pedido(ex.get("fantasia"), ex.get("cliente_forn"), req.tipo)
+        cur.execute("UPDATE pedido_venda SET tipo=%s WHERE pedido=%s", (tipo_final, pedido))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True, "tipo": tipo_final}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao gravar tipo do pedido: {e}"}
+
+
 async def list_pedidos(req: PedidosListRequest) -> dict:
     return await asyncio.to_thread(_list_pedidos_sync, req)
 
@@ -579,6 +626,10 @@ async def set_forma_pag_simples(req: FormaPagSimplesRequest, pedido: int) -> dic
 
 async def set_qtd_pessoas(req: QtdPessoasRequest, pedido: int) -> dict:
     return await asyncio.to_thread(_set_qtd_pessoas_sync, req, pedido)
+
+
+async def set_tipo_pedido(req: TipoPedidoRequest, pedido: int) -> dict:
+    return await asyncio.to_thread(_set_tipo_pedido_sync, req, pedido)
 
 
 def _fechar_pedido_sync(req: FecharRequest, pedido: int) -> dict:
@@ -624,15 +675,25 @@ async def fechar_pedido(req: FecharRequest, pedido: int) -> dict:
     return await asyncio.to_thread(_fechar_pedido_sync, req, pedido)
 
 
-def _faturar_pedido_sync(req: FecharRequest, pedido: int) -> dict:
-    """Fatura o Pedido Bar: gera a Comanda (comanda, movimentacao S01,
-    COMANDA_PED), libera o estoque reservado das PEÇAS e marca o pedido
-    como pago (situação PG). Portado de `Command111_Click`/`GeraComanda`
-    (FrmManPedBar.frm) — SEM a parte fiscal (emissão de NFC-e via
-    Backon_Controllers.Nfe), que fica bloqueada por decisão explícita do
-    usuário (ver PENDENCIAS.md > "Pedido Bar" e CLAUDE.md §12). Também não
-    imprime (impressão térmica ainda não existe nesta migração — ver
-    project_impressao_automatica_finalidade).
+def _faturar_pedido_sync(req: FecharRequest, pedido: int, tela: str = "PEDIDO", exigir_fechado: bool = False) -> dict:
+    """Fatura o Pedido (Bar ou Geral/Completo — mesma tabela `pedido_venda`,
+    mesma regra, só a `tela` muda pra checar a permissão certa no catálogo):
+    gera a Comanda (comanda, movimentacao S01, COMANDA_PED), libera o
+    estoque reservado das PEÇAS e marca o pedido como pago (situação PG).
+    Portado de `Command111_Click`/`GeraComanda` (FrmManPedBar.frm) — SEM a
+    parte fiscal (emissão de NFC-e via Backon_Controllers.Nfe), que fica
+    bloqueada por decisão explícita do usuário (ver PENDENCIAS.md > "Pedido
+    Bar" e CLAUDE.md §12). Também não imprime (impressão térmica ainda não
+    existe nesta migração — ver project_impressao_automatica_finalidade).
+
+    **Compartilhada com o Pedido Geral/Completo** (`pedido_completo_service`
+    não duplica esta lógica — chama esta mesma função com `tela=
+    "PEDIDO_COMP"`, pedido explícito do usuário 2026-07-20: "tente usar as
+    mesmas funções para não replicar o mesmo código entre telas"). O
+    `frmmanpedfor.frm` (Pedido Geral) não tem um "Faturar" equivalente
+    rastreado ainda — a regra replicada aqui é a mesma decisão de negócio já
+    validada pro Bar (gera Comanda, sem NFC-e), reaproveitada por pedido
+    explícito do usuário via `AskUserQuestion` em vez de tracing próprio.
 
     Se o pedido ainda estiver Aberto (situação A), fecha primeiro (mesma
     rotina de `/pedidos/{pedido}/fechar`) e já emenda o faturamento — não
@@ -640,7 +701,14 @@ def _faturar_pedido_sync(req: FecharRequest, pedido: int) -> dict:
     do usuário, replica o `Command111_Click` do legado, que faz o mesmo:
     só pula o fechamento se o pedido já estiver Fechado). Tudo numa única
     transação — se o faturamento falhar depois, o fechamento também é
-    desfeito."""
+    desfeito.
+
+    `exigir_fechado`: diferença de regra confirmada pelo usuário 2026-07-20
+    — diferente do Pedido Bar (que fecha-e-fatura num clique só, acima),
+    o **Pedido Geral só pode faturar pedido já Fechado** (situação A
+    bloqueada, mesma mensagem de situação inválida). `pedido_completo_
+    service.faturar_pedido_completo` passa `exigir_fechado=True`; o Bar
+    mantém o default `False`."""
     try:
         conn = _open_conn(req.servidor, req.banco)
     except Exception as e:
@@ -663,9 +731,12 @@ def _faturar_pedido_sync(req: FecharRequest, pedido: int) -> dict:
         if sit not in ("A", "F"):
             conn.close()
             return {"success": False, "message": f"Pedido '{SITUACAO_LABEL.get(sit, sit)}' não pode ser faturado."}
+        if exigir_fechado and sit == "A":
+            conn.close()
+            return {"success": False, "message": "Feche o pedido antes de faturar."}
         # Permissão (master ignora) — ação própria "FATURAR", separada de
         # SITUACAO (cada botão real da tela tem seu checkbox próprio).
-        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, "PEDIDO", "FATURAR"):
+        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, tela, "FATURAR"):
             conn.close()
             return {"success": False, "message": "Sem permissão para faturar o pedido."}
 
@@ -711,6 +782,21 @@ def _faturar_pedido_sync(req: FecharRequest, pedido: int) -> dict:
 
         cur.execute("INSERT INTO COMANDA_PED (comanda, ped) VALUES (%s, %s)", (comanda_id, pedido))
         cur.execute("UPDATE pedido_venda SET situacao='PG' WHERE pedido=%s", (pedido,))
+        # Reflete o faturamento na Agenda — item de Serviço deste pedido que
+        # tenha um agendamento vinculado (AGENDA_PEDIDO) precisa mostrar
+        # "Pago" lá também, senão a tela Agenda continua mostrando "Em
+        # Aberto" pra um atendimento cujo Pedido já foi faturado (achado ao
+        # vivo 2026-07-28, contra a conexão KONTACTO-TESTE — mesmo campo
+        # `situacao_caixa` que `_faturar_avulso_sync` já atualiza pro
+        # caminho avulso, só faltava neste caminho vindo do Pedido).
+        cur.execute(
+            "UPDATE AGENDA SET SITUACAO_CAIXA='P' "
+            "FROM AGENDA a "
+            "JOIN AGENDA_PEDIDO ap ON ap.CODAGENDA = a.codagenda "
+            "JOIN pedido_venda_prod i ON i.codauto = ap.CODPEDIDO "
+            "WHERE i.pedido=%s",
+            (pedido,),
+        )
         conn.commit()
         cur.close()
         conn.close()
@@ -726,12 +812,12 @@ def _faturar_pedido_sync(req: FecharRequest, pedido: int) -> dict:
         return {"success": False, "message": f"Erro ao faturar: {e}"}
 
 
-async def faturar_pedido(req: FecharRequest, pedido: int) -> dict:
-    return await asyncio.to_thread(_faturar_pedido_sync, req, pedido)
+async def faturar_pedido(req: FecharRequest, pedido: int, tela: str = "PEDIDO", exigir_fechado: bool = False) -> dict:
+    return await asyncio.to_thread(_faturar_pedido_sync, req, pedido, tela, exigir_fechado)
 
 
-def _cancelar_pedido_sync(req: FecharRequest, pedido: int) -> dict:
-    """Cancela o Pedido Bar (situação -> C). Portado de `Command9_Click`
+def _cancelar_pedido_sync(req: FecharRequest, pedido: int, tela: str = "PEDIDO", acao: str = "CANCELAR") -> dict:
+    """Cancela o Pedido (situação -> C). Portado de `Command9_Click`
     (FrmManPedBar.frm): só permite cancelar pedido Aberto ou Fechado — um
     pedido já Faturado (PG) não pode ser cancelado (o legado bloqueia com
     a mesma mensagem; não desfaz Comanda/COMANDA_PED). Se o pedido estava
@@ -742,10 +828,19 @@ def _cancelar_pedido_sync(req: FecharRequest, pedido: int) -> dict:
     Aberto, nada foi baixado, então não há nada para reverter.
 
     O legado exige senha de gerente antes de cancelar (`frGerente`); esta
-    migração usa o mesmo mecanismo de permissão de grupo (`CANCELAR`, ação
-    própria — cada botão real da tela tem seu checkbox, não reaproveita
-    SITUACAO) em vez de senha ad-hoc — decisão consistente com o resto da
-    migração (ver "Não replicar truques VB6" no CLAUDE.md)."""
+    migração usa o mesmo mecanismo de permissão de grupo em vez de senha
+    ad-hoc — decisão consistente com o resto da migração (ver "Não
+    replicar truques VB6" no CLAUDE.md).
+
+    **Compartilhada com o Pedido Geral/Completo** (mesma tabela, mesma
+    regra — `pedido_completo_service` chama esta função com
+    `tela="PEDIDO_COMP"`, pedido explícito do usuário 2026-07-20, ver
+    `_faturar_pedido_sync`). `acao` deixa o nome da permissão checada
+    parametrizável: o Pedido Bar usa uma ação própria `CANCELAR` (cada
+    botão real da tela tem seu checkbox); o Pedido Completo já cancelava
+    reaproveitando a permissão `SITUACAO` antes desta unificação — mantido
+    como default do Pedido Completo pra não exigir uma reconcessão de
+    permissão em instalações já configuradas."""
     try:
         conn = _open_conn(req.servidor, req.banco)
     except Exception as e:
@@ -761,7 +856,7 @@ def _cancelar_pedido_sync(req: FecharRequest, pedido: int) -> dict:
         if sit not in ("A", "F"):
             conn.close()
             return {"success": False, "message": "Somente pedidos em Aberto/Fechado poderão ser Cancelados!"}
-        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, "PEDIDO", "CANCELAR"):
+        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, tela, acao):
             conn.close()
             return {"success": False, "message": "Sem permissão para cancelar o pedido."}
 
@@ -787,12 +882,12 @@ def _cancelar_pedido_sync(req: FecharRequest, pedido: int) -> dict:
         return {"success": False, "message": f"Erro ao cancelar: {e}"}
 
 
-async def cancelar_pedido(req: FecharRequest, pedido: int) -> dict:
-    return await asyncio.to_thread(_cancelar_pedido_sync, req, pedido)
+async def cancelar_pedido(req: FecharRequest, pedido: int, tela: str = "PEDIDO", acao: str = "CANCELAR") -> dict:
+    return await asyncio.to_thread(_cancelar_pedido_sync, req, pedido, tela, acao)
 
 
-def _reabrir_pedido_sync(req: FecharRequest, pedido: int) -> dict:
-    """Reabre o Pedido Bar (situação F -> A). Portado de `cmdReabrir_Click`
+def _reabrir_pedido_sync(req: FecharRequest, pedido: int, tela: str = "PEDIDO") -> dict:
+    """Reabre o Pedido (situação F -> A). Portado de `cmdReabrir_Click`
     (FrmManPedBar.frm): só permite reabrir pedido Fechado — o legado
     bloqueia Aberto/Cancelado/Faturado com a mesma mensagem (o ramo "C" no
     `Select Case` do legado é código morto, nunca alcançado, porque o guard
@@ -803,7 +898,10 @@ def _reabrir_pedido_sync(req: FecharRequest, pedido: int) -> dict:
     Cancelar-a-partir-de-Fechado. Diferente do Cancelar, o legado não exige
     senha de gerente aqui — mesmo assim esta migração usa uma permissão de
     grupo própria (`REABRIR`), consistente com "cada botão real da tela tem
-    seu checkbox"."""
+    seu checkbox".
+
+    **Compartilhada com o Pedido Geral/Completo**, mesmo princípio de
+    `_faturar_pedido_sync` acima (`tela="PEDIDO_COMP"`)."""
     try:
         conn = _open_conn(req.servidor, req.banco)
     except Exception as e:
@@ -819,7 +917,7 @@ def _reabrir_pedido_sync(req: FecharRequest, pedido: int) -> dict:
         if sit != "F":
             conn.close()
             return {"success": False, "message": "Somente pedidos fechados podem ser reabertos!"}
-        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, "PEDIDO", "REABRIR"):
+        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, tela, "REABRIR"):
             conn.close()
             return {"success": False, "message": "Sem permissão para reabrir o pedido."}
 
@@ -844,15 +942,24 @@ def _reabrir_pedido_sync(req: FecharRequest, pedido: int) -> dict:
         return {"success": False, "message": f"Erro ao reabrir: {e}"}
 
 
-async def reabrir_pedido(req: FecharRequest, pedido: int) -> dict:
-    return await asyncio.to_thread(_reabrir_pedido_sync, req, pedido)
+async def reabrir_pedido(req: FecharRequest, pedido: int, tela: str = "PEDIDO") -> dict:
+    return await asyncio.to_thread(_reabrir_pedido_sync, req, pedido, tela)
 
 
-def _dividir_pedido_sync(req: DividirPedidoRequest, pedido: int) -> dict:
+def _dividir_pedido_sync(req: DividirPedidoRequest, pedido: int, tela: str = "PEDIDO") -> dict:
     """Dividir Pedido — funcionalidade NOVA, sem precedente no legado
     (pesquisado em toda a árvore VB6, nenhum "Dividir/Separar Conta" existe
     em nenhuma linha de negócio; ver PENDENCIAS.md > "Pedido Bar" >
     "Dividir Pedido"). Decisões confirmadas com o usuário (2026-07-17):
+
+    **Compartilhada com o Pedido Geral/Completo desde 2026-07-20**
+    (`tela="PEDIDO_COMP"`, mesmo princípio de `_faturar_pedido_sync` acima,
+    incluindo o reaproveitamento de `pedido_venda.num_ped_cliente` pro
+    rastreio do pedido-pai — aceito pelo usuário mesmo essa coluna já ter
+    um uso genuíno no Pedido Geral como "Nº Pedido do Cliente": ao dividir,
+    o(s) pedido(s) filho(s) tem esse campo sobrescrito com o nº do pedido
+    original e passa a ficar travado na tela — o pedido ORIGINAL continua
+    livre pra manter seu próprio nº de referência do cliente, se houver).
 
     - Só pedido Aberto pode ser dividido (nada de estoque/comanda/forma de
       pagamento foi lançado ainda — mais simples e seguro).
@@ -909,7 +1016,7 @@ def _dividir_pedido_sync(req: DividirPedidoRequest, pedido: int) -> dict:
         if (ex.get("num_ped_cliente") or "").strip().isdigit():
             conn.close()
             return {"success": False, "message": "Este pedido já é resultado de uma distribuição — não pode ser distribuído novamente."}
-        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, "PEDIDO", "DIVIDIR"):
+        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, tela, "DIVIDIR"):
             conn.close()
             return {"success": False, "message": "Sem permissão para dividir o pedido."}
 
@@ -925,6 +1032,22 @@ def _dividir_pedido_sync(req: DividirPedidoRequest, pedido: int) -> dict:
             (pedido,),
         )
         itens_originais = {int(r["codauto"]): r for r in cur.fetchall()}
+        # Rateio automático de Taxa de Serviço (S002) é uma regra EXCLUSIVA do
+        # Pedido Bar (tela="PEDIDO") — pedido explícito do usuário, 2026-07-24:
+        # "o rateio da taxa s002 só se aplica pro pedido Bar". No Pedido Geral
+        # (tela="PEDIDO_COMP"), S002 é só mais um serviço listável na divisão
+        # (nada de bloqueio nem de rateio automático) — só move pro pedido
+        # novo o que for informado manualmente, igual qualquer outro item.
+        rateio_automatico_taxa = tela == "PEDIDO"
+        pedido_tinha_taxa_servico = rateio_automatico_taxa and any(
+            (r.get("produto") or "").strip().upper() == TAXA_SERVICO_CODIGO for r in itens_originais.values()
+        )
+        descricao_taxa_servico = "Taxa de Serviço"
+        if pedido_tinha_taxa_servico:
+            cur.execute("SELECT descricao FROM servicos WHERE codigo=%s", (TAXA_SERVICO_CODIGO,))
+            serv = cur.fetchone()
+            if serv and (serv.get("descricao") or "").strip():
+                descricao_taxa_servico = serv["descricao"].strip()
 
         somas: dict[int, float] = {}
         for g in grupos:
@@ -936,7 +1059,7 @@ def _dividir_pedido_sync(req: DividirPedidoRequest, pedido: int) -> dict:
                     conn.close()
                     return {"success": False, "message": "Quantidade dividida deve ser maior que zero."}
                 produto = (itens_originais[it.codauto].get("produto") or "").strip().upper()
-                if produto == TAXA_SERVICO_CODIGO:
+                if produto == TAXA_SERVICO_CODIGO and rateio_automatico_taxa:
                     conn.close()
                     return {"success": False, "message": "Taxa de Serviço é recalculada automaticamente em cada pedido — não pode ser dividida manualmente."}
                 somas[it.codauto] = somas.get(it.codauto, 0.0) + it.qtd
@@ -994,12 +1117,35 @@ def _dividir_pedido_sync(req: DividirPedidoRequest, pedido: int) -> dict:
                 cur.execute("DELETE FROM pedido_venda_prod WHERE codauto=%s", (codauto,))
             else:
                 cur.execute("UPDATE pedido_venda_prod SET qtd_pedida=%s WHERE codauto=%s", (restante, codauto))
-                if (original.get("produto") or "").strip().upper() != TAXA_SERVICO_CODIGO:
+                # No Pedido Bar, uma linha de Taxa de Serviço sobrando sozinha
+                # não conta como "pedido ainda com item real" (ela é só um
+                # acréscimo automático, não faz sentido sem produto/serviço
+                # embaixo). No Pedido Geral, S002 é um serviço comum — conta
+                # como item real igual qualquer outro.
+                eh_taxa = (original.get("produto") or "").strip().upper() == TAXA_SERVICO_CODIGO
+                if not (eh_taxa and rateio_automatico_taxa):
                     itens_zerados_ou_taxa_apenas = False
 
-        sincroniza_taxa_servico_apos_alteracao(cur, pedido)
+        if rateio_automatico_taxa:
+            sincroniza_taxa_servico_apos_alteracao(cur, pedido)
         for novo_pedido in novos_pedidos:
-            sincroniza_taxa_servico_apos_alteracao(cur, novo_pedido)
+            if pedido_tinha_taxa_servico:
+                valor_taxa = _recalc_valor_taxa_servico(cur, novo_pedido)
+                cur.execute(
+                    "INSERT INTO pedido_venda_prod "
+                    "(pedido, produto, qtd_pedida, p_venda, p_normal, desconto, acrescimo, custo_ped, "
+                    " descricao_produto, unidade_pedido, situacao_item, item_cancelado, data_inclusao_item, "
+                    " hora_inclusao_item) "
+                    "VALUES (%s,%s,1,%s,%s,0,0,0,%s,'UN','A',0,CAST(GETDATE() AS DATE),"
+                    "        CONVERT(NVARCHAR(8), GETDATE(), 108))",
+                    (novo_pedido, TAXA_SERVICO_CODIGO, valor_taxa, valor_taxa, descricao_taxa_servico),
+                )
+            elif rateio_automatico_taxa:
+                sincroniza_taxa_servico_apos_alteracao(cur, novo_pedido)
+            # No Pedido Geral (rateio_automatico_taxa=False), S002 já foi
+            # copiado (se selecionado) pelo laço genérico de itens acima,
+            # exatamente com a quantidade/valor informado — nada automático
+            # a fazer aqui.
             _recalc_pedido_total(cur, novo_pedido)
 
         original_cancelado = False
@@ -1033,5 +1179,5 @@ def _dividir_pedido_sync(req: DividirPedidoRequest, pedido: int) -> dict:
         return {"success": False, "message": f"Erro ao dividir pedido: {e}"}
 
 
-async def dividir_pedido(req: DividirPedidoRequest, pedido: int) -> dict:
-    return await asyncio.to_thread(_dividir_pedido_sync, req, pedido)
+async def dividir_pedido(req: DividirPedidoRequest, pedido: int, tela: str = "PEDIDO") -> dict:
+    return await asyncio.to_thread(_dividir_pedido_sync, req, pedido, tela)

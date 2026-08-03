@@ -6,7 +6,7 @@ import services.pedidos_service as svc
 from models.schemas import (
     PedidoEntregueRequest, PedidosListRequest, FecharRequest, FormaPagSimplesRequest,
     DividirPedidoRequest, DividirPedidoGrupo, DividirPedidoItem, QtdPessoasRequest,
-    PedidoSaveRequest,
+    PedidoSaveRequest, TipoPedidoRequest,
 )
 
 
@@ -211,6 +211,22 @@ class TestFaturarPedido:
         assert reservado_updates == [(2.0, "P001")]
         assert sum(1 for q in queries if "INSERT INTO movimentacao" in q) == 2
 
+    def test_fatura_reflete_pago_no_agendamento_vinculado(self, monkeypatch):
+        """Regressão: item de Serviço com atendimento marcado na Agenda
+        (AGENDA_PEDIDO) precisa mostrar "Pago" lá também depois de faturar
+        o Pedido — achado ao vivo 2026-07-28 (a tela Agenda continuava
+        mostrando "Em Aberto" pra um atendimento cujo Pedido já tinha sido
+        faturado)."""
+        pedido_row = {"situacao": "F", "cliente": 10, "total": 50.0, "area_atuacao": 2, "vendedor": 20, "forma_pag": "001"}
+        itens = [{"produto": "S001", "qtd_pedida": 1.0, "p_venda": 50.0, "custo_ped": 0.0}]
+        cur = FakeCursor(one=[pedido_row, {"comanda": 501}, None], many=[itens])
+        _patch(monkeypatch, cur)
+        r = svc._faturar_pedido_sync(self._req(), 77)
+        assert r["success"] is True
+        query, params = next((q, p) for q, p in cur.queries if "UPDATE AGENDA SET SITUACAO_CAIXA" in q)
+        assert "AGENDA_PEDIDO" in query and "pedido_venda_prod" in query
+        assert params == (77,)
+
     def test_pedido_aberto_fecha_e_fatura_automaticamente(self, monkeypatch):
         """Pedido explícito do usuário: Faturar Pedido não exige clicar em
         Fechar Pedido antes — se ainda estiver Aberto, fecha (mesma rotina
@@ -283,6 +299,26 @@ class TestFaturarPedido:
         r = svc._faturar_pedido_sync(self._req(), 999)
         assert r["success"] is False
         assert "não encontrado" in r["message"].lower()
+
+    def test_exigir_fechado_bloqueia_pedido_aberto(self, monkeypatch):
+        """`exigir_fechado=True` — regra exclusiva do Pedido Geral (diferente
+        do Bar, que fecha-e-fatura num clique só): pedido ainda Aberto não
+        pode ser faturado, mesmo estando numa situação normalmente aceita."""
+        cur = FakeCursor(one=[{"situacao": "A", "cliente": 10, "total": 100.0, "area_atuacao": 2, "vendedor": 20, "forma_pag": "001"}])
+        _patch(monkeypatch, cur)
+        r = svc._faturar_pedido_sync(self._req(), 77, tela="PEDIDO_COMP", exigir_fechado=True)
+        assert r["success"] is False
+        assert "feche o pedido" in r["message"].lower()
+        assert not any("INSERT INTO comanda" in q for q, _ in cur.queries)
+
+    def test_exigir_fechado_permite_pedido_fechado(self, monkeypatch):
+        pedido_row = {"situacao": "F", "cliente": 10, "total": 150.0, "area_atuacao": 2, "vendedor": 20, "forma_pag": "001"}
+        itens = [{"produto": "P001", "qtd_pedida": 2.0, "p_venda": 50.0, "custo_ped": 30.0}]
+        cur = FakeCursor(one=[pedido_row, {"comanda": 501}, {"ok": 1}], many=[itens])
+        conn = _patch(monkeypatch, cur)
+        r = svc._faturar_pedido_sync(self._req(), 77, tela="PEDIDO_COMP", exigir_fechado=True)
+        assert r["success"] is True and r["situacao"] == "PG"
+        assert conn.committed is True
 
 
 class TestCancelarPedido:
@@ -518,6 +554,128 @@ class TestDividirPedido:
         r = svc._dividir_pedido_sync(req, 77)
         assert r["success"] is False
         assert "não pertence" in r["message"].lower()
+
+    def test_taxa_servico_distribuida_proporcionalmente_no_pedido_novo(self, monkeypatch):
+        """Pedido explícito do usuário, 2026-07-24: se o pedido original já
+        tem Taxa de Serviço lançada, o pedido novo (criado pela divisão)
+        também recebe sua própria linha S002 — 10% do que foi movido pra
+        ele — em vez de ficar sem taxa nenhuma."""
+        itens = [
+            {"codauto": 1, "produto": "P001", "qtd_pedida": 4.0, "p_venda": 10.0, "p_normal": 10.0,
+             "desconto": 0.0, "acrescimo": 0.0, "custo_ped": 5.0, "descricao_produto": "", "unidade_pedido": "UN"},
+            {"codauto": 9, "produto": "S002", "qtd_pedida": 1.0, "p_venda": 4.0, "p_normal": 4.0,
+             "desconto": 0.0, "acrescimo": 0.0, "custo_ped": 0.0, "descricao_produto": "Taxa de Serviço", "unidade_pedido": "UN"},
+        ]
+        cur = FakeCursor(
+            one=[
+                self._header(), {"descricao": "Taxa de Serviço"}, {"pedido": 501},
+                {"codauto": 9}, {"s": 20.0},   # sincroniza taxa do pedido ORIGINAL (sobrou só P001 qtd=2.0*10)
+                {"s": 20.0},                    # recalc_valor_taxa_servico do pedido NOVO (P001 qtd=2.0*10 movido)
+                {"total": 22.0},                # recalc_total(novo_pedido)
+                {"total": 22.0},                # recalc_total(pedido original)
+            ],
+            many=[itens],
+        )
+        _patch(monkeypatch, cur)
+        req = self._req([self._grupo((1, 2.0))])
+        r = svc._dividir_pedido_sync(req, 77)
+        assert r["success"] is True
+        assert r["novos_pedidos"] == [501]
+
+        inserts_taxa_novo = [
+            p for q, p in cur.queries
+            if q.startswith("INSERT INTO pedido_venda_prod") and p[0] == 501 and p[1] == "S002"
+        ]
+        assert len(inserts_taxa_novo) == 1
+        # (pedido, produto, valor, valor, descricao) — 10% de 20.0 movido = 2.0
+        assert inserts_taxa_novo[0][2] == 2.0
+        assert inserts_taxa_novo[0][3] == 2.0
+        assert inserts_taxa_novo[0][4] == "Taxa de Serviço"
+
+    def test_sem_taxa_servico_no_original_pedido_novo_nao_ganha_taxa(self, monkeypatch):
+        """Sem Taxa de Serviço no pedido original, o comportamento antigo se
+        mantém — nenhuma linha S002 é criada no pedido novo."""
+        itens = [
+            {"codauto": 1, "produto": "P001", "qtd_pedida": 4.0, "p_venda": 10.0, "p_normal": 10.0,
+             "desconto": 0.0, "acrescimo": 0.0, "custo_ped": 5.0, "descricao_produto": "", "unidade_pedido": "UN"},
+        ]
+        cur = FakeCursor(
+            one=[
+                self._header(), {"pedido": 501},
+                None,             # sincroniza(pedido original) — sem S002, no-op
+                None,              # sincroniza(novo_pedido) — sem S002, no-op
+                {"total": 20.0},   # recalc_total(novo_pedido)
+                {"total": 20.0},   # recalc_total(pedido original)
+            ],
+            many=[itens],
+        )
+        _patch(monkeypatch, cur)
+        req = self._req([self._grupo((1, 2.0))])
+        r = svc._dividir_pedido_sync(req, 77)
+        assert r["success"] is True
+        assert not any(
+            q.startswith("INSERT INTO pedido_venda_prod") and p[1] == "S002"
+            for q, p in cur.queries
+        )
+
+    def test_pedido_geral_permite_dividir_s002_manualmente(self, monkeypatch):
+        """Pedido explícito do usuário, 2026-07-24: "o rateio da taxa s002
+        só se aplica pro pedido Bar. Para o pedido Geral tem que ser
+        listado tudo Produtos e serviço, e só aplica pro pedido novo aquilo
+        que for informado" — no Pedido Geral (tela="PEDIDO_COMP"), S002 não
+        é bloqueado nem tem rateio automático: move exatamente a
+        qtd/valor informado, igual qualquer outro item."""
+        itens = [
+            {"codauto": 1, "produto": "P001", "qtd_pedida": 4.0, "p_venda": 10.0, "p_normal": 10.0,
+             "desconto": 0.0, "acrescimo": 0.0, "custo_ped": 5.0, "descricao_produto": "", "unidade_pedido": "UN"},
+            {"codauto": 9, "produto": "S002", "qtd_pedida": 1.0, "p_venda": 4.0, "p_normal": 4.0,
+             "desconto": 0.0, "acrescimo": 0.0, "custo_ped": 0.0, "descricao_produto": "Taxa de Serviço", "unidade_pedido": "UN"},
+        ]
+        cur = FakeCursor(
+            one=[self._header(), {"pedido": 501}, {"total": 22.0}, {"total": 18.0}],
+            many=[itens],
+        )
+        _patch(monkeypatch, cur)
+        req = self._req([self._grupo((1, 2.0), (9, 0.5))])
+        r = svc._dividir_pedido_sync(req, 77, tela="PEDIDO_COMP")
+        assert r["success"] is True
+
+        # Nenhuma consulta a `servicos` (descrição da taxa) — não faz parte
+        # do fluxo automático no Pedido Geral.
+        assert not any(q.startswith("SELECT descricao FROM servicos") for q, _ in cur.queries)
+        # A linha S002 movida pro pedido novo veio só do laço genérico de
+        # itens (mesmo INSERT usado pra P001), com a qtd exata informada —
+        # não um valor recalculado a 10%.
+        inserts_s002_novo = [
+            p for q, p in cur.queries
+            if q.startswith("INSERT INTO pedido_venda_prod") and p[0] == 501 and p[1] == "S002"
+        ]
+        assert len(inserts_s002_novo) == 1
+        assert inserts_s002_novo[0][2] == 0.5  # qtd_pedida informada, não recalculada
+
+    def test_pedido_geral_sem_taxa_selecionada_nao_gera_rateio_automatico(self, monkeypatch):
+        """No Pedido Geral, se o usuário NÃO incluir S002 no grupo, o
+        pedido novo não ganha nenhuma linha de taxa automaticamente
+        (diferente do Pedido Bar)."""
+        itens = [
+            {"codauto": 1, "produto": "P001", "qtd_pedida": 4.0, "p_venda": 10.0, "p_normal": 10.0,
+             "desconto": 0.0, "acrescimo": 0.0, "custo_ped": 5.0, "descricao_produto": "", "unidade_pedido": "UN"},
+            {"codauto": 9, "produto": "S002", "qtd_pedida": 1.0, "p_venda": 4.0, "p_normal": 4.0,
+             "desconto": 0.0, "acrescimo": 0.0, "custo_ped": 0.0, "descricao_produto": "Taxa de Serviço", "unidade_pedido": "UN"},
+        ]
+        cur = FakeCursor(
+            one=[self._header(), {"pedido": 501}, {"total": 20.0}, {"total": 24.0}],
+            many=[itens],
+        )
+        _patch(monkeypatch, cur)
+        req = self._req([self._grupo((1, 2.0))])
+        r = svc._dividir_pedido_sync(req, 77, tela="PEDIDO_COMP")
+        assert r["success"] is True
+        assert not any(
+            q.startswith("INSERT INTO pedido_venda_prod") and p[1] == "S002"
+            for q, p in cur.queries
+        )
+        assert not any(q.startswith("SELECT codauto FROM pedido_venda_prod") and "S002" in str(p) for q, p in cur.queries)
 
     def test_bloqueia_dividir_taxa_de_servico(self, monkeypatch):
         itens = [
@@ -774,6 +932,61 @@ class TestSetQtdPessoas:
         assert r["success"] is True
         _, params = cur.queries[-1]
         assert params == (None, 17605)
+
+
+def _tipo_pedido_req(**over):
+    base = dict(servidor="srv", banco="bd", tipo=2, usuario_alteracao=1, classe=1, plataforma="web")
+    base.update(over)
+    return TipoPedidoRequest(**base)
+
+
+class TestSetTipoPedido:
+    """Painel de Pedidos — troca de Tipo arrastando o card entre colunas
+    (mesmo raciocínio de TestSetQtdPessoas), incluindo a regra de override
+    de cliente reservado (mesma de `_resolve_tipo_pedido`, já testada em
+    outro módulo — aqui só confirma que o service passa por ela)."""
+
+    def test_grava_com_pedido_aberto(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "A", "fantasia": None, "cliente_forn": 1}])
+        _patch(monkeypatch, cur)
+        r = svc._set_tipo_pedido_sync(_tipo_pedido_req(tipo=2), 17605)
+        assert r["success"] is True
+        assert r["tipo"] == 2
+        update_q, params = cur.queries[-1]
+        assert "UPDATE pedido_venda SET tipo=%s WHERE pedido=%s" == update_q
+        assert params == (2, 17605)
+
+    def test_grava_com_pedido_fechado(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "F", "fantasia": None, "cliente_forn": 1}])
+        _patch(monkeypatch, cur)
+        r = svc._set_tipo_pedido_sync(_tipo_pedido_req(), 17605)
+        assert r["success"] is True
+
+    def test_bloqueia_pedido_faturado(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "PG", "fantasia": None, "cliente_forn": 1}])
+        _patch(monkeypatch, cur)
+        r = svc._set_tipo_pedido_sync(_tipo_pedido_req(), 17605)
+        assert r["success"] is False
+        assert "não pode ser alterado" in r["message"].lower()
+
+    def test_pedido_nao_encontrado(self, monkeypatch):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        r = svc._set_tipo_pedido_sync(_tipo_pedido_req(), 999)
+        assert r["success"] is False
+        assert "não encontrado" in r["message"].lower()
+
+    def test_cliente_reservado_sobrescreve_tipo_solicitado(self, monkeypatch):
+        # Cliente "MESA 7" (fantasia contém MESA) — arrastar o card pra
+        # coluna Entrega (tipo=4) não muda o tipo gravado, sempre volta pro
+        # próprio tipo do cliente (cliente_forn), mesma regra do combobox.
+        cur = FakeCursor(one=[{"situacao": "A", "fantasia": "MESA 7", "cliente_forn": 1}])
+        _patch(monkeypatch, cur)
+        r = svc._set_tipo_pedido_sync(_tipo_pedido_req(tipo=4), 17605)
+        assert r["success"] is True
+        assert r["tipo"] == 1
+        _, params = cur.queries[-1]
+        assert params == (1, 17605)
 
 
 class TestListEGetExpoemLocalizacaoEQtdPessoas:

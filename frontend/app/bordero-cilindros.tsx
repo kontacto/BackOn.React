@@ -247,7 +247,17 @@ export default function BorderoCilindrosScreen() {
             <View style={styles.rowFields}>
               <View style={styles.colNarrow}>
                 <Text style={styles.label}>Saída de</Text>
-                <WebDateField value={saidaDe} onChange={setSaidaDe} testID="bordero-saida-de" />
+                <WebDateField
+                  value={saidaDe}
+                  onChange={(v) => {
+                    setSaidaDe(v || null);
+                    if (v) setSaidaAte(v);
+                  }}
+                  testID="bordero-saida-de"
+                  onSubmitEditing={() => {
+                    document.querySelector<HTMLInputElement>('[data-testid="bordero-saida-ate"]')?.focus();
+                  }}
+                />
               </View>
               <View style={styles.colNarrow}>
                 <Text style={styles.label}>Saída até</Text>
@@ -255,7 +265,17 @@ export default function BorderoCilindrosScreen() {
               </View>
               <View style={styles.colNarrow}>
                 <Text style={styles.label}>Retorno de</Text>
-                <WebDateField value={retornoDe} onChange={setRetornoDe} testID="bordero-retorno-de" />
+                <WebDateField
+                  value={retornoDe}
+                  onChange={(v) => {
+                    setRetornoDe(v || null);
+                    if (v) setRetornoAte(v);
+                  }}
+                  testID="bordero-retorno-de"
+                  onSubmitEditing={() => {
+                    document.querySelector<HTMLInputElement>('[data-testid="bordero-retorno-ate"]')?.focus();
+                  }}
+                />
               </View>
               <View style={styles.colNarrow}>
                 <Text style={styles.label}>Retorno até</Text>

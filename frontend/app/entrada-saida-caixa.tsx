@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
-} from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -303,7 +301,6 @@ export default function EntradaSaidaCaixaScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Entrada/Saída de Caixa</Text>
         <View style={{ width: 40 }} />
       </View>
@@ -313,7 +310,17 @@ export default function EntradaSaidaCaixaScreen() {
           <View style={styles.filterRow}>
             <View style={styles.colNarrow}>
               <Text style={styles.label}>De</Text>
-              <WebDateField value={dataDe} onChange={setDataDe} testID="esc-filtro-data-de" />
+              <WebDateField
+                value={dataDe}
+                onChange={(v) => {
+                  setDataDe(v);
+                  if (v) setDataAte(v);
+                }}
+                testID="esc-filtro-data-de"
+                onSubmitEditing={() => {
+                  document.querySelector<HTMLInputElement>('[data-testid="esc-filtro-data-ate"]')?.focus();
+                }}
+              />
             </View>
             <View style={styles.colNarrow}>
               <Text style={styles.label}>Até</Text>

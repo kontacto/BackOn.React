@@ -182,6 +182,54 @@ class TraySyncRequest(AuditFields):
     id_tray_existente: Optional[int] = None
 
 
+class PrecoQtdSaveRequest(AuditFields):
+    servidor: str
+    banco: str
+    qtd: float
+    p_venda: float
+
+
+class PrecoQtdDeleteRequest(AuditFields):
+    servidor: str
+    banco: str
+    qtd: float
+
+
+class PromocaoSaveRequest(AuditFields):
+    servidor: str
+    banco: str
+    sequencia: Optional[int] = None
+    qtd: float
+    p_venda: float
+    codigo_promocao: str = ""
+    descricao_promocao: str = ""
+    # Período opcional, combinável — tudo em branco = promoção sem
+    # restrição de período (sempre válida, comportamento anterior a esta
+    # extensão). Ver docstring de `_ensure_promocao_periodo_cols`.
+    dias_semana: str = ""  # "0,1,2,3,4,5,6" (0=domingo..6=sábado), "" = todos os dias
+    data_inicio: Optional[str] = None  # ISO yyyy-mm-dd
+    data_fim: Optional[str] = None
+    hora_inicio: str = ""  # "HH:MM"
+    hora_fim: str = ""
+
+
+class PromocaoDeleteRequest(AuditFields):
+    servidor: str
+    banco: str
+    sequencia: int
+
+
+class DiasSemanaWebSaveRequest(AuditFields):
+    """Botão "Dias da Semana" ao lado do checkbox "Produto Web" — só
+    habilitado com `Produto_web=True`. Configura em quais dias da semana
+    este produto aparece no cardápio do Web Convidado (módulo ainda em
+    fase de análise, ver WebConvidado.md — este cadastro em si foi
+    liberado pro usuário implementar desde já, 2026-07-30)."""
+    servidor: str
+    banco: str
+    dias: list[int] = []
+
+
 @router.get("/produto-completo")
 async def list_produtos(servidor: str, banco: str, search: str = "", page: int = 1, size: int = 20):
     return await produto_completo_service.list_produtos(servidor, banco, search, page, size)
@@ -250,6 +298,90 @@ async def enviar_site(codigo_int: str, req: TraySyncRequest, request: Request):
             req.servidor, req.banco, tela="PRODUTO_COMP", comando="ENVIAR_SITE",
             usuario=req.usuario_alteracao, classe=req.classe, referencia=codigo_int,
             descricao=f"Produto {codigo_int} enviado à Tray (id_tray={result.get('id_tray')}).",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.get("/produto-completo/{codigo_int}/preco-qtd")
+async def list_preco_qtd(codigo_int: str, servidor: str, banco: str):
+    return await produto_completo_service.list_preco_qtd(servidor, banco, codigo_int)
+
+
+@router.post("/produto-completo/{codigo_int}/preco-qtd")
+async def save_preco_qtd(codigo_int: str, req: PrecoQtdSaveRequest, request: Request):
+    result = await produto_completo_service.save_preco_qtd(req.servidor, req.banco, codigo_int, req.qtd, req.p_venda)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PRODUTO_COMP", comando="PRECO_QTD",
+            usuario=req.usuario_alteracao, classe=req.classe, referencia=codigo_int,
+            descricao=f"Preço por quantidade ({req.qtd}) gravado para {codigo_int}.",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/produto-completo/{codigo_int}/preco-qtd/excluir")
+async def delete_preco_qtd(codigo_int: str, req: PrecoQtdDeleteRequest, request: Request):
+    result = await produto_completo_service.delete_preco_qtd(req.servidor, req.banco, codigo_int, req.qtd)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PRODUTO_COMP", comando="PRECO_QTD_EXCLUIR",
+            usuario=req.usuario_alteracao, classe=req.classe, referencia=codigo_int,
+            descricao=f"Preço por quantidade ({req.qtd}) excluído de {codigo_int}.",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.get("/produto-completo/{codigo_int}/promocoes")
+async def list_promocoes(codigo_int: str, servidor: str, banco: str):
+    return await produto_completo_service.list_promocoes(servidor, banco, codigo_int)
+
+
+@router.post("/produto-completo/{codigo_int}/promocoes")
+async def save_promocao(codigo_int: str, req: PromocaoSaveRequest, request: Request):
+    result = await produto_completo_service.save_promocao(
+        req.servidor, req.banco, codigo_int, req.sequencia, req.qtd, req.p_venda,
+        req.codigo_promocao, req.descricao_promocao,
+        req.dias_semana, req.data_inicio, req.data_fim, req.hora_inicio, req.hora_fim,
+    )
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PRODUTO_COMP", comando="PROMOCAO",
+            usuario=req.usuario_alteracao, classe=req.classe, referencia=codigo_int,
+            descricao=f"Promoção gravada para {codigo_int}.",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/produto-completo/{codigo_int}/promocoes/excluir")
+async def delete_promocao(codigo_int: str, req: PromocaoDeleteRequest, request: Request):
+    result = await produto_completo_service.delete_promocao(req.servidor, req.banco, req.sequencia)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PRODUTO_COMP", comando="PROMOCAO_EXCLUIR",
+            usuario=req.usuario_alteracao, classe=req.classe, referencia=codigo_int,
+            descricao=f"Promoção (sequência {req.sequencia}) excluída de {codigo_int}.",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.get("/produto-completo/{codigo_int}/dias-semana-web")
+async def list_dias_semana_web(codigo_int: str, servidor: str, banco: str):
+    return await produto_completo_service.list_dias_semana_web(servidor, banco, codigo_int)
+
+
+@router.post("/produto-completo/{codigo_int}/dias-semana-web")
+async def save_dias_semana_web(codigo_int: str, req: DiasSemanaWebSaveRequest, request: Request):
+    result = await produto_completo_service.save_dias_semana_web(req.servidor, req.banco, codigo_int, req.dias)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="PRODUTO_COMP", comando="DIAS_SEMANA_WEB",
+            usuario=req.usuario_alteracao, classe=req.classe, referencia=codigo_int,
+            descricao=f"Dias da Semana (Web Convidado) gravados para {codigo_int}: {req.dias}.",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

@@ -1,5 +1,5 @@
 // Toast leve, local à tela (não bloqueia interação, some sozinho) — usado por
-// pedido-form.tsx/pedido-completo.tsx. Renderizado dentro de um <Modal> só pra
+// pedido-form.tsx/pedido-geral.tsx. Renderizado dentro de um <Modal> só pra
 // herdar o portal do react-native-web (document.body) e sempre desenhar por
 // cima de qualquer <Modal> de tela já aberto (ex.: AddItemModal) — mesma causa
 // raiz já documentada em FeedbackProvider.tsx: o Modal do react-native-web não

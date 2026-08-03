@@ -31,6 +31,27 @@ async def produto_reservas(codigo: str, servidor: str, banco: str, tipo: str = "
     return await produtos_service.reservas_produto(servidor, banco, codigo, tipo)
 
 
+@router.get("/produtos/{codigo}/preco-promocional")
+async def produto_preco_promocional(codigo: str, servidor: str, banco: str, qtd: float = 1):
+    return await produtos_service.preco_promocional(servidor, banco, codigo, qtd)
+
+
+@router.get("/produtos/{codigo}/tipos-preco-m2")
+async def produto_tipos_preco_m2(codigo: str, servidor: str, banco: str):
+    return await produtos_service.tipos_preco_m2(servidor, banco, codigo)
+
+
+@router.get("/produtos/{codigo}/preco-m2-preview")
+async def produto_preco_m2_preview(
+    codigo: str, servidor: str, banco: str, tipo_preco: int, comprimento: float, largura: float,
+    comprimento_chapa: float = 0, largura_chapa: float = 0, controla_num_serie: bool = False,
+):
+    return await produtos_service.preco_m2_preview(
+        servidor, banco, codigo, tipo_preco, comprimento, largura,
+        comprimento_chapa, largura_chapa, controla_num_serie,
+    )
+
+
 @router.get("/produtos/foto/{codigo}")
 async def get_produto_foto(codigo: str):
     # Sanitiza pra evitar path traversal

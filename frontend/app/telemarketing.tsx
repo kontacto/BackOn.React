@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
-} from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -286,7 +284,6 @@ export default function TelemarketingScreen() {
           <Pressable onPress={() => setView("main")} hitSlop={12} style={styles.back}>
             <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
           </Pressable>
-          <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
           <Text style={styles.headerTitle}>Selecionar Clientes</Text>
           <View style={{ width: 40 }} />
         </View>
@@ -375,7 +372,17 @@ export default function TelemarketingScreen() {
               <View style={styles.rowFields}>
                 <View style={styles.colNarrow}>
                   <Text style={styles.label}>Últ. Contato de</Text>
-                  <WebDateField value={fUltContatoDe} onChange={setFUltContatoDe} testID="tele-filtro-ult-contato-de" />
+                  <WebDateField
+                    value={fUltContatoDe}
+                    onChange={(v) => {
+                      setFUltContatoDe(v);
+                      if (v) setFUltContatoAte(v);
+                    }}
+                    testID="tele-filtro-ult-contato-de"
+                    onSubmitEditing={() => {
+                      document.querySelector<HTMLInputElement>('[data-testid="tele-filtro-ult-contato-ate"]')?.focus();
+                    }}
+                  />
                 </View>
                 <View style={styles.colNarrow}>
                   <Text style={styles.label}>até</Text>
@@ -383,7 +390,17 @@ export default function TelemarketingScreen() {
                 </View>
                 <View style={styles.colNarrow}>
                   <Text style={styles.label}>Agendamento de</Text>
-                  <WebDateField value={fAgendDe} onChange={setFAgendDe} testID="tele-filtro-agend-de" />
+                  <WebDateField
+                    value={fAgendDe}
+                    onChange={(v) => {
+                      setFAgendDe(v);
+                      if (v) setFAgendAte(v);
+                    }}
+                    testID="tele-filtro-agend-de"
+                    onSubmitEditing={() => {
+                      document.querySelector<HTMLInputElement>('[data-testid="tele-filtro-agend-ate"]')?.focus();
+                    }}
+                  />
                 </View>
                 <View style={styles.colNarrow}>
                   <Text style={styles.label}>até</Text>
@@ -444,7 +461,6 @@ export default function TelemarketingScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Telemarketing</Text>
         <View style={{ width: 40 }} />
       </View>

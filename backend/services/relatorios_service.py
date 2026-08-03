@@ -43,10 +43,14 @@ def _ratear_totais_por_pedido(rows: list) -> dict:
 
 
 def _relatorio_pedidos_sync(servidor: str, banco: str, data_ini: str, data_fim: str,
-                            vendedor: Optional[str], situacao: Optional[str]) -> dict:
-    """Lista de pedidos por período + filtros (vendedor/situação) para o Relatório de Pedidos.
-    Campos: pedido, cliente, data, vendedor (nome), situacao. A análise (descontos/margem)
-    é carregada sob demanda pelos endpoints já existentes ao expandir cada registro."""
+                            vendedor: Optional[str], situacao: Optional[str],
+                            projeto: Optional[int] = None) -> dict:
+    """Lista de pedidos por período + filtros (vendedor/situação/projeto) para o Relatório
+    de Pedidos. Campos: pedido, cliente, data, vendedor (nome), situacao. A análise
+    (descontos/margem) é carregada sob demanda pelos endpoints já existentes ao expandir
+    cada registro. Filtro `projeto` — Fase 4 do Gestor de Projetos (recurso extra, sem
+    equivalente no legado) — restringe aos Pedidos vinculados àquele projeto
+    (`projetos_documentos`, tipo_doc='PED')."""
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
@@ -61,6 +65,12 @@ def _relatorio_pedidos_sync(servidor: str, banco: str, data_ini: str, data_fim: 
         if situacao not in (None, "", "all"):
             where.append("pv.situacao = %s")
             params.append(situacao)
+        if projeto:
+            where.append(
+                "pv.pedido IN (SELECT pd.num_doc FROM projetos_documentos pd "
+                "WHERE pd.projeto=%s AND pd.tipo_doc='PED')"
+            )
+            params.append(projeto)
         cur.execute(
             "SELECT TOP 300 pv.pedido, pv.data, pv.situacao, ISNULL(pv.total,0) AS total, "
             "       c.nome AS cliente, pv.vendedor AS vendedor_cod, "
@@ -129,12 +139,15 @@ def _relatorio_pedidos_sync(servidor: str, banco: str, data_ini: str, data_fim: 
 
 def _relatorio_desc_margem_sync(servidor: str, banco: str, data_ini: str, data_fim: str,
                                 vendedor: Optional[str], pedido: Optional[int],
-                                cliente_nome: Optional[str] = None) -> dict:
+                                cliente_nome: Optional[str] = None,
+                                projeto: Optional[int] = None) -> dict:
     """Relatório consolidado: por pedido (agrupado por vendedor) com venda, desconto,
     custo e margem. O CUSTO usa o custo de reposição do cadastro (pecas.custo_reposicao /
     servicos.custo_hora), com fallback para pedido_venda_prod.custo_ped. A venda é líquida
     (p_venda já é descontado), então desconto E custo influenciam a margem.
-    Filtros: período + vendedor + pedido + nome do cliente (todos opcionais)."""
+    Filtros: período + vendedor + pedido + nome do cliente + projeto (todos opcionais).
+    Filtro `projeto` — Fase 4 do Gestor de Projetos, mesma restrição via
+    `projetos_documentos` já usada em `_relatorio_pedidos_sync`."""
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
@@ -149,6 +162,12 @@ def _relatorio_desc_margem_sync(servidor: str, banco: str, data_ini: str, data_f
         if pedido:
             where.append("pv.pedido = %s")
             params.append(pedido)
+        if projeto:
+            where.append(
+                "pv.pedido IN (SELECT pd.num_doc FROM projetos_documentos pd "
+                "WHERE pd.projeto=%s AND pd.tipo_doc='PED')"
+            )
+            params.append(projeto)
         if cliente_nome and cliente_nome.strip():
             # Busca por nome também bate no nome fantasia — [GLOBAL] em toda
             # busca de cliente do sistema, pedido explícito do usuário,
@@ -420,14 +439,17 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
 
 
 async def relatorio_pedidos(servidor: str, banco: str, data_ini: str, data_fim: str,
-                            vendedor: Optional[str], situacao: Optional[str]) -> dict:
-    return await asyncio.to_thread(_relatorio_pedidos_sync, servidor, banco, data_ini, data_fim, vendedor, situacao)
+                            vendedor: Optional[str], situacao: Optional[str],
+                            projeto: Optional[int] = None) -> dict:
+    return await asyncio.to_thread(
+        _relatorio_pedidos_sync, servidor, banco, data_ini, data_fim, vendedor, situacao, projeto
+    )
 
 async def relatorio_desc_margem(servidor: str, banco: str, data_ini: str, data_fim: str,
                                 vendedor: Optional[str], pedido: Optional[int],
-                                cliente_nome: Optional[str]) -> dict:
+                                cliente_nome: Optional[str], projeto: Optional[int] = None) -> dict:
     return await asyncio.to_thread(
-        _relatorio_desc_margem_sync, servidor, banco, data_ini, data_fim, vendedor, pedido, cliente_nome
+        _relatorio_desc_margem_sync, servidor, banco, data_ini, data_fim, vendedor, pedido, cliente_nome, projeto
     )
 
 

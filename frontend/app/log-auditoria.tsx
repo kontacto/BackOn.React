@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
-} from "react-native";
+import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import SelectField, { SelectOption } from "@/src/components/SelectField";
@@ -46,6 +44,7 @@ function formatDataHora(iso: string | null): string {
 // continuam sendo gravadas pelo VB6 e não têm relação com esta tela). Web-only.
 export default function LogAuditoriaScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ tela?: string; referencia?: string }>();
   const { can, isMaster, classe } = usePermissions();
   const isWeb = Platform.OS === "web";
 
@@ -62,15 +61,22 @@ export default function LogAuditoriaScreen() {
     return <LockedView testID="log-auditoria-locked" />;
   }
 
-  return <LogAuditoriaWebScreen router={router} isMaster={isMaster} classe={classe} />;
+  return (
+    <LogAuditoriaWebScreen
+      router={router} isMaster={isMaster} classe={classe}
+      telaInicial={params.tela} referenciaInicial={params.referencia}
+    />
+  );
 }
 
 function LogAuditoriaWebScreen({
-  router, isMaster, classe,
+  router, isMaster, classe, telaInicial, referenciaInicial,
 }: {
   router: ReturnType<typeof useRouter>;
   isMaster: boolean;
   classe: number | null;
+  telaInicial?: string;
+  referenciaInicial?: string;
 }) {
   const [conn, setConn] = useState<Connection | null>(null);
   const [catalogo, setCatalogo] = useState<CatNode[]>([]);
@@ -92,6 +98,7 @@ function LogAuditoriaWebScreen({
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  const [paramsApplied, setParamsApplied] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -102,13 +109,30 @@ function LogAuditoriaWebScreen({
       setConn(c);
 
       const catR = await apiGet(c, "/api/permissoes/catalogo");
-      if (catR?.catalogo) setCatalogo(catR.catalogo);
+      if (catR?.catalogo) {
+        setCatalogo(catR.catalogo);
+        if (telaInicial) {
+          const achar = (nodes: CatNode[]): CatNode | null => {
+            for (const n of nodes) {
+              if (n.tipo === "TELA" && n.tela === telaInicial) return n;
+              const found = achar(n.children);
+              if (found) return found;
+            }
+            return null;
+          };
+          const node = achar(catR.catalogo);
+          if (node) setFiltroNode(node);
+        }
+      }
+      if (referenciaInicial) setReferencia(String(referenciaInicial));
+      setParamsApplied(true);
 
       const funcR = await apiGet(c, "/api/funcionarios");
       if (funcR?.success && Array.isArray(funcR.items)) {
         setFuncionarioOptions(funcR.items.map((f: { codigo: number; nome: string }) => ({ value: f.codigo, label: f.nome })));
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);
 
   // remove os nós BOTAO "Abrir Tela" — não faz sentido filtrar log por abertura de tela
@@ -196,9 +220,9 @@ function LogAuditoriaWebScreen({
   }, [conn, filtroNode, usuarioSel, dataDe, dataAte, referencia, descricaoLike, classe, isMaster]);
 
   useEffect(() => {
-    if (conn) buscar(1);
+    if (conn && paramsApplied) buscar(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conn]);
+  }, [conn, paramsApplied]);
 
   const toggleRow = (id: number) => {
     setExpandedRows((prev) => {
@@ -255,7 +279,6 @@ function LogAuditoriaWebScreen({
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.iconBtn} testID="log-auditoria-back-button">
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
         <Text style={styles.headerTitle} numberOfLines={1}>Log de Auditoria</Text>
         <View style={{ width: 40 }} />
       </View>

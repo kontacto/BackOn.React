@@ -10,9 +10,7 @@
 // + Imprimir/Gerar Planilha do mesmo tamanho, resultado em cards com o
 // mesmo `WEB_FILTER_CARD`.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View,
-} from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -193,7 +191,6 @@ export default function RelatorioCaixaAnaliticoScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backBtn} testID="relcxa-back">
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Caixa Analítico</Text>
         <View style={{ width: 40 }} />
       </View>
@@ -207,11 +204,13 @@ export default function RelatorioCaixaAnaliticoScreen() {
                 {isWeb ? (
                   <WebDateField
                     value={dataIni}
-                    onChange={(v) => setDataIni(v || null)}
+                    onChange={(v) => {
+                      setDataIni(v || null);
+                      if (v) setDataFim(v);
+                    }}
                     icon="calendar-outline"
                     testID="relcxa-data-ini"
                     onSubmitEditing={() => {
-                      if (dataIni) setDataFim(dataIni);
                       document.querySelector<HTMLInputElement>('[data-testid="relcxa-data-fim"]')?.focus();
                     }}
                   />

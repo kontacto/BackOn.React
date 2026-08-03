@@ -7,7 +7,7 @@
 // fora de escopo). Esta tela funciona normalmente, só que a lista de
 // "Abastecimentos Pendentes" fica vazia até essa automação existir.
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -148,7 +148,6 @@ export default function PostoAfericoesScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Aferições/Despesas</Text>
         <View style={{ width: 40 }} />
       </View>
@@ -196,7 +195,19 @@ export default function PostoAfericoesScreen() {
             <View style={styles.rowFields}>
               <View style={styles.colFlex}>
                 <Text style={styles.label}>De</Text>
-                <WebDateField value={dataIni} onChange={(v) => setDataIni(v || todayIso())} type="date" testID="posto-afericoes-data-ini" />
+                <WebDateField
+                  value={dataIni}
+                  onChange={(v) => {
+                    const nv = v || todayIso();
+                    setDataIni(nv);
+                    setDataFim(nv);
+                  }}
+                  type="date"
+                  testID="posto-afericoes-data-ini"
+                  onSubmitEditing={() => {
+                    document.querySelector<HTMLInputElement>('[data-testid="posto-afericoes-data-fim"]')?.focus();
+                  }}
+                />
               </View>
               <View style={styles.colFlex}>
                 <Text style={styles.label}>Até</Text>

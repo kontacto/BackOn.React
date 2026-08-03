@@ -36,10 +36,15 @@ type ConfirmState = {
 };
 
 type FeedbackApi = {
-  showError: (message: string, title?: string) => void;
-  showWarning: (message: string, title?: string) => void;
-  showSuccess: (message: string, title?: string) => void;
-  showInfo: (message: string, title?: string) => void;
+  // `durationMs` opcional: sobrescreve a duração padrão do tipo (ver
+  // `DURACAO` abaixo) só nesta chamada — usado por telas com mensagem mais
+  // longa/importante de ler (ex.: resultado da consulta de índice no Banco
+  // Central em "Alteração de Preço", que tem números pro usuário conferir
+  // antes de gravar — pedido explícito do usuário, 2026-07-20).
+  showError: (message: string, title?: string, durationMs?: number) => void;
+  showWarning: (message: string, title?: string, durationMs?: number) => void;
+  showSuccess: (message: string, title?: string, durationMs?: number) => void;
+  showInfo: (message: string, title?: string, durationMs?: number) => void;
   hide: () => void;
   // Diálogo de confirmação (Sim/Não) centralizado, funciona igual em web e
   // mobile — NUNCA usar `Alert.alert` do react-native pra confirmação:
@@ -86,13 +91,13 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
     setVisible(false);
   }, []);
 
-  const notify = useCallback((t: FeedbackType, msg: string, ttl?: string) => {
+  const notify = useCallback((t: FeedbackType, msg: string, ttl?: string, durationMs?: number) => {
     clearTimer();
     setType(t);
     setMessage(msg);
     setTitle(ttl);
     setVisible(true);
-    timerRef.current = setTimeout(() => setVisible(false), DURACAO[t]);
+    timerRef.current = setTimeout(() => setVisible(false), durationMs ?? DURACAO[t]);
   }, []);
 
   useEffect(() => () => clearTimer(), []);
@@ -111,10 +116,10 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
   const hideConfirm = useCallback(() => setConfirm(null), []);
 
   const api: FeedbackApi = {
-    showError: useCallback((m, t) => notify("error", m, t), [notify]),
-    showWarning: useCallback((m, t) => notify("warning", m, t), [notify]),
-    showSuccess: useCallback((m, t) => notify("success", m, t), [notify]),
-    showInfo: useCallback((m, t) => notify("info", m, t), [notify]),
+    showError: useCallback((m, t, d) => notify("error", m, t, d), [notify]),
+    showWarning: useCallback((m, t, d) => notify("warning", m, t, d), [notify]),
+    showSuccess: useCallback((m, t, d) => notify("success", m, t, d), [notify]),
+    showInfo: useCallback((m, t, d) => notify("info", m, t, d), [notify]),
     hide,
     showConfirm,
   };

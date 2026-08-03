@@ -121,7 +121,6 @@ export default function ConfiguracoesScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="configuracoes-screen">
       <View style={styles.header}>
-        <Image source={require("../../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
         <Text style={styles.headerTitle}>Configurações</Text>
         <View style={styles.headerLogoSpacer} />
       </View>

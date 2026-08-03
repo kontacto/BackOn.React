@@ -1,4 +1,4 @@
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -29,6 +29,8 @@ export default function FluxoCaixaScreen() {
   const tiles = [
     { key: "plano-contas", label: "Plano de Contas", hint: "Classes e subclasses de receitas e despesas", icon: "git-branch-outline" as const, route: "/plano-contas", visible: can("PLANO_CONTAS.ABRIR") },
     { key: "centro-custo", label: "Centro de Custo", hint: "Centros de custo e vínculo com o plano de contas", icon: "layers-outline" as const, route: "/centro-custo", visible: can("CENTRO_CUSTO.ABRIR") },
+    { key: "contas", label: "Contas", hint: "Contas de caixa/banco (saldo, situação, conta padrão)", icon: "wallet-outline" as const, route: "/contas", visible: can("CONTAS.ABRIR") },
+    { key: "conta-funcionario", label: "Contas x Funcionário", hint: "Configura quais contas cada funcionário pode visualizar", icon: "people-outline" as const, route: "/conta-funcionario", visible: can("CONTA_FUNC.ABRIR") },
   ].filter((t) => t.visible).sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
 
   return (
@@ -37,7 +39,6 @@ export default function FluxoCaixaScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Fluxo de Caixa</Text>
         <View style={{ width: 40 }} />
       </View>

@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View,
-} from "react-native";
+import { ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -12,6 +10,8 @@ import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import LockedView from "@/src/components/LockedView";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import DateField from "@/src/components/DateField";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
@@ -25,6 +25,69 @@ const TABS: { key: TabKey; label: string; icon: keyof typeof Ionicons.glyphMap }
   { key: "horarios", label: "Horários", icon: "time-outline" },
   { key: "ausencias", label: "Ausências", icon: "calendar-outline" },
   { key: "especialidades", label: "Especialidades", icon: "ribbon-outline" },
+];
+
+// Modo Didático (CLAUDE.md) — ícone único de Ajuda no cabeçalho, reunindo a
+// explicação de campos/abas com efeito não-óbvio em linguagem de usuário
+// final. Reaproveita o mesmo `AjudaPedidoModal` do Pedido Bar/Geral (já
+// parametrizável por `titulo`/`itens`) em vez de duplicar o componente.
+const FUNCIONARIO_AJUDA_ITENS: HelpItem[] = [
+  {
+    titulo: "Libera Pedido de Cliente na Lista Negra",
+    texto: "Permite que este funcionário grave um Pedido/O.S. para um cliente marcado como Lista Negra, ignorando o bloqueio padrão.",
+    icon: { lib: "ion", name: "shield-outline" },
+  },
+  {
+    titulo: "Libera Cliente com Limite de Crédito Excedido",
+    texto: "Permite que este funcionário grave um Pedido/O.S. para um cliente que já ultrapassou o limite de crédito cadastrado.",
+    icon: { lib: "ion", name: "card-outline" },
+  },
+  {
+    titulo: "Controla Carteira de Clientes",
+    texto: "Marca este funcionário como vendedor com carteira própria de clientes. Ao ligar, aparece uma lista para escolher quais clientes pertencem à carteira dele.",
+    icon: { lib: "ion", name: "briefcase-outline" },
+  },
+  {
+    titulo: "Controla Agenda (profissional de Agendamento)",
+    texto: "Habilita este funcionário para aparecer como opção de profissional ao agendar um atendimento (módulo Clínica ou Assistência). Sem esse switch ligado, ele não aparece na lista de profissionais do Agendar. Também exige que o serviço e o funcionário compartilhem a mesma Especialidade (aba Especialidades) e que o dia/horário do agendamento esteja dentro da grade configurada na aba Horários.",
+    icon: { lib: "ion", name: "calendar-outline" },
+  },
+  {
+    titulo: "Área(s) de Atuação / Área(s) de Estoque",
+    texto: "Define em quais áreas da loja/estoque este funcionário pode atuar ou movimentar produtos.",
+    icon: { lib: "ion", name: "grid-outline" },
+  },
+  {
+    titulo: "Aba Comissões",
+    texto: "Configura o percentual/valor de comissão deste funcionário como Vendedor, Executor e Atendente, separado por Produto e Serviço, além de exceções de comissão por item específico.",
+    icon: { lib: "ion", name: "cash-outline" },
+  },
+  {
+    titulo: "Aba Horários",
+    texto: "Grade semanal de disponibilidade — dias e horários em que o funcionário atende, com pausa e tempo de encaixe entre atendimentos. Usada pelo Agendar para validar se um horário escolhido está dentro do expediente dele. Ao ligar um dia ainda vazio, o horário do dia anterior já preenchido é copiado automaticamente.",
+    icon: { lib: "ion", name: "time-outline" },
+  },
+  {
+    titulo: "Aba Ausências",
+    texto: "Cadastra períodos em que o funcionário não está disponível (férias, folga, atestado) — bloqueia esses dias/horários na Agenda.",
+    icon: { lib: "ion", name: "airplane-outline" },
+  },
+  {
+    titulo: "Aba Especialidades",
+    texto: "Marca quais especialidades este funcionário domina. Um serviço só pode ser agendado com um profissional que tenha a mesma especialidade cadastrada no Serviço (aba Principal do cadastro de Serviço).",
+    icon: { lib: "ion", name: "ribbon-outline" },
+  },
+  {
+    titulo: "Ícone de engrenagem (aba Especialidades)",
+    texto: "Abre o cadastro de Especialidades (criar, renomear ou excluir) — a mesma lista usada tanto aqui quanto no campo \"Especialidade do Serviço\".",
+    icon: { lib: "ion", name: "settings-outline" },
+  },
+  {
+    titulo: "Excluir Funcionário",
+    texto: "Remove definitivamente o cadastro deste funcionário. Ação não pode ser desfeita.",
+    icon: { lib: "ion", name: "trash-outline" },
+    cor: colors.error,
+  },
 ];
 
 const TIPO_COMISSAO_OPTS: SelectOption[] = [
@@ -121,6 +184,7 @@ function FuncionarioCompletoWeb({
   const [conn, setConn] = useState<Connection | null>(null);
   const [loadingInit, setLoadingInit] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [ajudaOpen, setAjudaOpen] = useState(false);
 
   const [situacaoOptions, setSituacaoOptions] = useState<SelectOption[]>([]);
   const [funcaoOptions, setFuncaoOptions] = useState<SelectOption[]>([]);
@@ -162,6 +226,11 @@ function FuncionarioCompletoWeb({
   const [telProf, setTelProf] = useState("");
   const [controlaCarteira, setControlaCarteira] = useState(false);
   const [carteiras, setCarteiras] = useState<number[]>([]);
+  // Controla Agenda — decide se o funcionário aparece como profissional
+  // elegível no fluxo de Agendar (Pedido Geral, módulo Clínica). Adicionado
+  // 2026-07-28, fora do escopo original desta tela — ver PENDENCIAS.md >
+  // "Transações" > "Pedido Geral — Fase B: Clínica (Agendamento)".
+  const [controlaAgenda, setControlaAgenda] = useState(false);
 
   // ---- Aba Comissões ----
   const [tipoComissao, setTipoComissao] = useState<string | null>("S");
@@ -275,6 +344,7 @@ function FuncionarioCompletoWeb({
       setEstProf(d.est_prof || "");
       setTelProf(d.tel_prof || "");
       setControlaCarteira(!!d.Controla_Carteira);
+      setControlaAgenda(!!d.Controla_Agenda);
       setCarteiras(d.carteiras || []);
 
       setTipoComissao(d.tipo_comissao || "S");
@@ -361,6 +431,7 @@ function FuncionarioCompletoWeb({
         codcargo, cep_prof: cepProf.trim(), bairr_prof: bairrProf.trim(), endereco: endereco.trim(),
         cid_prof: cidProf.trim(), est_prof: estProf.trim().toUpperCase(), tel_prof: telProf.trim(),
         controla_carteira: controlaCarteira,
+        controla_agenda: controlaAgenda,
         tipo_comissao: tipoComissao, comissaop: parseFloat(comissaop || "0"), comissaos: parseFloat(comissaos || "0"),
         comissao_prioridade_vendedor: prioridadeVendedor,
         tipo_comissao_e: tipoComissaoE, comissaop_e: parseFloat(comissaopE || "0"), comissaos_e: parseFloat(comissaosE || "0"),
@@ -535,15 +606,23 @@ function FuncionarioCompletoWeb({
         <Pressable onPress={() => router.back()} style={styles.iconBtn} hitSlop={12} testID="funcionario-completo-back">
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
         <Text style={styles.headerTitle} numberOfLines={1}>{editing ? `Funcionário — ${nomeGuerra}` : "Novo Funcionário"}</Text>
-        {canSave ? (
-          <Pressable onPress={handleSave} disabled={saving} style={[styles.saveBtn, saving && { opacity: 0.7 }]} hitSlop={8} testID="funcionario-completo-salvar">
-            {saving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : (
-              <><Ionicons name="checkmark" size={18} color={colors.onBrandPrimary} /><Text style={styles.saveLabel}>Gravar</Text></>
-            )}
-          </Pressable>
-        ) : <View style={{ width: 40 }} />}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+          <IconButtonWithTooltip
+            icon="information-circle-outline"
+            label="Ajuda"
+            onPress={() => setAjudaOpen(true)}
+            color={colors.onBrandPrimary}
+            testID="funcionario-completo-ajuda"
+          />
+          {canSave ? (
+            <Pressable onPress={handleSave} disabled={saving} style={[styles.saveBtn, saving && { opacity: 0.7 }]} hitSlop={8} testID="funcionario-completo-salvar">
+              {saving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : (
+                <><Ionicons name="checkmark" size={18} color={colors.onBrandPrimary} /><Text style={styles.saveLabel}>Gravar</Text></>
+              )}
+            </Pressable>
+          ) : null}
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={[styles.scroll, styles.scrollWeb]} showsVerticalScrollIndicator={false}>
@@ -575,6 +654,17 @@ function FuncionarioCompletoWeb({
             <View style={styles.switchRow}>
               <Switch value={liberarLimiteExcedido} onValueChange={setLiberarLimiteExcedido} testID="func-libera-limite" />
               <Text style={styles.switchLabel}>Libera Cliente com Limite de Crédito Excedido</Text>
+            </View>
+            <View style={styles.switchRow}>
+              <Switch value={controlaCarteira} onValueChange={setControlaCarteira} testID="func-controla-carteira" />
+              <Text style={styles.switchLabel}>Controla Carteira de Clientes</Text>
+            </View>
+            {controlaCarteira ? (
+              <ChecklistBox options={vendedorOptions} selected={carteiras} onToggle={(id) => toggleInList(carteiras, setCarteiras, id)} testIDPrefix="func-carteira" />
+            ) : null}
+            <View style={styles.switchRow}>
+              <Switch value={controlaAgenda} onValueChange={setControlaAgenda} testID="func-controla-agenda" />
+              <Text style={styles.switchLabel}>Controla Agenda (profissional de Agendamento)</Text>
             </View>
 
             <View style={styles.formGrid}>
@@ -658,14 +748,6 @@ function FuncionarioCompletoWeb({
 
                 <Field label="Telefone" style={styles.fullWidth}><TextInput value={telProf} onChangeText={setTelProf} style={styles.input} maxLength={15} testID="func-telefone" /></Field>
               </View>
-
-              <View style={styles.switchRow}>
-                <Switch value={controlaCarteira} onValueChange={setControlaCarteira} testID="func-controla-carteira" />
-                <Text style={styles.switchLabel}>Controla Carteira de Clientes</Text>
-              </View>
-              {controlaCarteira ? (
-                <ChecklistBox options={vendedorOptions} selected={carteiras} onToggle={(id) => toggleInList(carteiras, setCarteiras, id)} testIDPrefix="func-carteira" />
-              ) : null}
             </View>
           ) : null}
 
@@ -699,7 +781,7 @@ function FuncionarioCompletoWeb({
                   {comissaoExcecoes.map((ex) => (
                     <View key={ex.cod_comissao_excecao} style={styles.gridRow} testID={`func-excecao-${ex.cod_comissao_excecao}`}>
                       <Text style={styles.gridRowText}>{ex.item} · {ex.descricao} · {tipoExcecaoLabel(ex.tipo)} · {ex.comissao.toFixed(2)}%</Text>
-                      <Pressable onPress={() => excluirExcecao(ex)} hitSlop={8}><Ionicons name="trash-outline" size={18} color={colors.error} /></Pressable>
+                      <IconButtonWithTooltip icon="trash-outline" label="Excluir exceção" onPress={() => excluirExcecao(ex)} color={colors.error} />
                     </View>
                   ))}
                   <View style={styles.formGrid}>
@@ -734,7 +816,32 @@ function FuncionarioCompletoWeb({
                 return (
                   <View key={d.dia} style={styles.horarioDiaBox}>
                     <View style={styles.switchRow}>
-                      <Switch value={h.ativo} onValueChange={(v) => set({ ativo: v })} testID={`func-horario-ativo-${d.dia}`} />
+                      <Switch
+                        value={h.ativo}
+                        onValueChange={(v) => {
+                          // Ao habilitar um dia ainda sem horário preenchido, copia os
+                          // valores do dia anterior da semana (se ele estiver ativo e
+                          // preenchido) — evita redigitar o mesmo horário dia a dia.
+                          // Não sobrescreve se este dia já tiver dado (toggle off/on).
+                          if (v && !h.dispIni && i > 0) {
+                            const anterior = horarios[i - 1];
+                            if (anterior.ativo && anterior.dispIni) {
+                              set({
+                                ativo: v,
+                                dispIni: anterior.dispIni,
+                                dispFim: anterior.dispFim,
+                                intervalo1: anterior.intervalo1,
+                                pausaIni: anterior.pausaIni,
+                                pausaFim: anterior.pausaFim,
+                                encaixe: anterior.encaixe,
+                              });
+                              return;
+                            }
+                          }
+                          set({ ativo: v });
+                        }}
+                        testID={`func-horario-ativo-${d.dia}`}
+                      />
                       <Text style={styles.switchLabel}>{d.label}</Text>
                     </View>
                     {h.ativo ? (
@@ -778,7 +885,7 @@ function FuncionarioCompletoWeb({
                       <Text style={styles.gridRowText}>
                         {a.data_ini} a {a.data_fim} · {a.hora_ini}-{a.hora_fim} · {a.obs}
                       </Text>
-                      <Pressable onPress={() => excluirAusencia(a)} hitSlop={8}><Ionicons name="trash-outline" size={18} color={colors.error} /></Pressable>
+                      <IconButtonWithTooltip icon="trash-outline" label="Excluir ausência" onPress={() => excluirAusencia(a)} color={colors.error} />
                     </View>
                   ))}
                 </>
@@ -791,9 +898,13 @@ function FuncionarioCompletoWeb({
               <View style={styles.sectionTitleRow}>
                 <Text style={styles.sectionTitle}>Especialidades do Profissional</Text>
                 {canEspecialidades ? (
-                  <Pressable onPress={() => setEspecialidadesModalOpen(true)} hitSlop={8} testID="func-especialidades-cadastro-btn">
-                    <Ionicons name="settings-outline" size={20} color={colors.brandPrimary} />
-                  </Pressable>
+                  <IconButtonWithTooltip
+                    icon="settings-outline"
+                    label="Cadastrar especialidades"
+                    size={20}
+                    onPress={() => setEspecialidadesModalOpen(true)}
+                    testID="func-especialidades-cadastro-btn"
+                  />
                 ) : null}
               </View>
               <ChecklistBox options={especialidadeOptions} selected={especialidades} onToggle={(id) => toggleInList(especialidades, setEspecialidades, id)} testIDPrefix="func-especialidade" />
@@ -814,6 +925,13 @@ function FuncionarioCompletoWeb({
         conn={conn}
         auditCtx={auditCtx}
         onChanged={() => conn && loadLookups(conn)}
+      />
+
+      <AjudaPedidoModal
+        visible={ajudaOpen}
+        onClose={() => setAjudaOpen(false)}
+        titulo="Funcionário"
+        itens={FUNCIONARIO_AJUDA_ITENS}
       />
     </SafeAreaView>
   );

@@ -1,16 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  FlatList,
-  Image,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { ActivityIndicator, FlatList, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -29,6 +18,7 @@ import AccordionSection from "@/src/components/pedido/AccordionSection";
 import { ClienteRow } from "@/src/components/pedido/types";
 import { clienteSearchParams } from "@/src/hooks/useClienteForm";
 import PainelPedidoCard from "@/src/components/pedido/PainelPedidoCard";
+import { DraggablePedidoCard, DroppableColuna } from "@/src/components/pedido/PainelDragDrop";
 import { ORDEM_COLUNAS_TIPO, TIPO_COLOR, normalizaDescricao, tipoClienteKey } from "@/src/components/pedido/painelTipos";
 import { loadPedidosFiltros, pedidosFiltrosKey, savePedidosFiltros } from "@/src/utils/storage/pedidosFilters";
 
@@ -60,6 +50,7 @@ type Pedido = {
   qtd_pessoas: number | null;
   taxa_servico_incluida: boolean;
   tem_itens: boolean;
+  taxa_servico_valor: number;
 };
 
 const SITUACOES = [
@@ -360,6 +351,39 @@ export default function PedidosScreen() {
     load(search, situacao, effVendedor, dataIni, dataFim, 1, false, tiposClienteSel, dataEntrega, ordenarPor);
   }, [load, search, situacao, effVendedor, dataIni, dataFim, tiposClienteSel, dataEntrega, ordenarPor]);
 
+  // Arrastar um card do Painel pra outra coluna troca o Tipo do pedido
+  // (mesmo campo do combobox "Tipo" da tela cheia, ver CLAUDE.md > "Campo
+  // 'Tipo' do Pedido Bar") sem precisar abrir o pedido. Passa pela mesma
+  // regra de override de cliente reservado no backend (arrastar uma
+  // "MESA 7" física pra Entrega não muda o tipo gravado) — por isso não dá
+  // pra confiar cegamente no drop e já mover o card no estado local antes
+  // da resposta: só recarrega a lista depois do backend confirmar, pra
+  // sempre refletir o tipo REAL gravado (que pode ter sido sobrescrito).
+  // Sem toast de sucesso (mesmo padrão do stepper de Qtd. Pessoas em
+  // `PainelPedidoCard` — o próprio card "pulando" de coluna já confirma
+  // visualmente), só erro quando falha. Pedido explícito do usuário,
+  // 2026-07-30.
+  const handleDropTipo = useCallback(
+    async (pedidoId: number, destCodigo: number, destKey: string) => {
+      if (!conn) return;
+      const atual = items.find((i) => i.pedido === pedidoId);
+      if (atual && tipoClienteKey(atual.tipo_cliente_descricao) === destKey) return;
+      try {
+        const j = await apiSend(conn, `/api/pedidos/${pedidoId}/tipo`, "POST", {
+          tipo: destCodigo, usuario_alteracao: usuarioCod, classe, plataforma: Platform.OS,
+        });
+        if (!j?.success) {
+          feedback.showError(j?.message || "Falha ao alterar o tipo do pedido.");
+          return;
+        }
+        refreshList();
+      } catch (e) {
+        feedback.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [conn, items, usuarioCod, classe, feedback, refreshList],
+  );
+
   // "Novo Pedido" por coluna — botão dedicado abre a busca de cliente pra
   // criar o pedido direto, sem passar pela tela cheia. `novoPedidoCodigoTipo`
   // só decide QUAL coluna abriu o modal (visibilidade) — a busca em si NÃO
@@ -436,16 +460,14 @@ export default function PedidosScreen() {
 
   const hasDateFilter = !!(dataIni || dataFim);
 
-  // Quem tem a pré-venda rápida (PEDIDO) continua indo pro formulário
-  // rápido, sem mudança de comportamento — quem só tem PEDIDO_COMP abre o
-  // Pedido Completo (web). Ver CLAUDE.md > "Transações Screens Strategy".
-  // Compartilhado entre o card padrão (FlatList) e o card compacto das "2
-  // colunas" abaixo, pra não duplicar a regra de navegação.
+  // pedidos.tsx é exclusiva do Pedido Bar desde 2026-07-20 (user-directed) —
+  // quem só tem PEDIDO_COMP nem acessa esta tela (ver gate de acesso acima),
+  // abre em `pedido-lista.tsx`/`pedido-geral.tsx` em vez daqui. Compartilhado
+  // entre o card padrão (FlatList) e o card compacto das "2 colunas" abaixo,
+  // pra não duplicar a regra de navegação.
   const abrirPedido = useCallback((item: Pedido) => {
     if (can("PEDIDO.ABRIR")) {
       router.push({ pathname: "/pedido-form", params: { pedido: String(item.pedido) } });
-    } else if (can("PEDIDO_COMP.ABRIR")) {
-      router.push({ pathname: "/pedido-completo", params: { pedido: String(item.pedido) } });
     }
   }, [can, router]);
 
@@ -460,6 +482,11 @@ export default function PedidosScreen() {
   // única; 1 = 1 coluna; 2 = 2 colunas; etc.), não mais um par fixo Mesa/
   // Outros. Pedido explícito do usuário, 2026-07-17.
   const colunasAtivas = barColunasView && tiposClienteSel.length > 0;
+
+  // Arrastar card entre colunas troca o Tipo do pedido — mesma permissão
+  // já usada pra editar o pedido (botão "Novo Pedido" da coluna usa a
+  // mesma checagem).
+  const canDragDrop = can("PEDIDO.GRAVAR");
 
   const isStale = useCallback((item: Pedido) => item.situacao === "A" && !!item.data && item.data < todayISO(), []);
 
@@ -511,8 +538,16 @@ export default function PedidosScreen() {
       }
     }
     const totalGeral = ORDEM_COLUNAS_TIPO.reduce((acc, k) => acc + porTipo[k].valor, 0);
-    return { porTipo, totalGeral };
+    // Soma da Taxa de Serviço (S002) de todos os pedidos do dia/filtro
+    // atual — mostrado no tooltip do pill "Total". Pedido explícito do
+    // usuário, 2026-07-18.
+    const totalTaxaServico = items.reduce((acc, item) => acc + (item.taxa_servico_valor || 0), 0);
+    return { porTipo, totalGeral, totalTaxaServico };
   }, [items]);
+
+  // Tooltip do pill "Total" (Taxa de Serviço do dia/filtro) — hover no web,
+  // mesmo padrão já usado nos cards do painel.
+  const [totalTooltipVisible, setTotalTooltipVisible] = useState(false);
 
   const listHeader = (
     <View style={styles.headerBlock}>
@@ -586,7 +621,13 @@ export default function PedidosScreen() {
       </AccordionSection>
 
       {barColunasView ? (
-        <View testID="pedidos-totais-tipo">
+        // zIndex explícito — sem isso o tooltip do pill "Total" (absoluto,
+        // escapa pra cima do pill) renderiza atrás da lista/colunas de
+        // pedidos logo abaixo, mesma causa raiz já corrigida no card do
+        // Painel de Pedidos e na Sidebar (irmão mais tarde no DOM pinta
+        // por cima por padrão no react-native-web). Pedido explícito do
+        // usuário, 2026-07-18.
+        <View testID="pedidos-totais-tipo" style={{ zIndex: 5 }}>
           <View style={styles.totaisRow}>
             {ORDEM_COLUNAS_TIPO.map((k) => (
               <View key={k} style={styles.totalPill} testID={`pedidos-total-${k}`}>
@@ -595,10 +636,24 @@ export default function PedidosScreen() {
                 <Text style={styles.totalPillMoney}>{formatBRL(totaisPorTipo.porTipo[k].valor)}</Text>
               </View>
             ))}
-            <View style={[styles.totalPill, styles.totalPillGeral]} testID="pedidos-total-geral">
+            <Pressable
+              onHoverIn={() => setTotalTooltipVisible(true)}
+              onHoverOut={() => setTotalTooltipVisible(false)}
+              style={[styles.totalPill, styles.totalPillGeral, { position: "relative" }]}
+              testID="pedidos-total-geral"
+            >
               <Text style={[styles.totalPillLabel, styles.totalPillLabelGeral]}>Total</Text>
               <Text style={[styles.totalPillMoney, styles.totalPillMoneyGeral]}>{formatBRL(totaisPorTipo.totalGeral)}</Text>
-            </View>
+              {totalTooltipVisible ? (
+                <View style={styles.totalTooltip} pointerEvents="none">
+                  <View style={styles.totalTooltipInner}>
+                    <Text style={styles.totalTooltipText}>
+                      Taxa de Serviço: {formatBRL(totaisPorTipo.totalTaxaServico)}
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+            </Pressable>
           </View>
         </View>
       ) : null}
@@ -706,7 +761,7 @@ export default function PedidosScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="pedidos-screen">
-      {!(can("PEDIDO.ABRIR") || can("PEDIDO_COMP.ABRIR")) ? (
+      {!can("PEDIDO.ABRIR") ? (
         <LockedView testID="pedidos-locked" />
       ) : (
       <>
@@ -719,7 +774,6 @@ export default function PedidosScreen() {
         >
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Pedidos ({total})</Text>
         <Pressable
           onPress={() => setShowFilters((v) => !v)}
@@ -754,7 +808,12 @@ export default function PedidosScreen() {
           ) : (
             <View style={styles.colsRow}>
               {partitioned.map((col) => (
-                <View key={col.codigo} style={styles.col} testID={`pedidos-col-${col.codigo}`}>
+                <DroppableColuna
+                  key={col.codigo}
+                  style={styles.col}
+                  testID={`pedidos-col-${col.codigo}`}
+                  onDropPedido={(pedidoId) => canDragDrop && handleDropTipo(pedidoId, col.codigo, col.key)}
+                >
                   <View style={[styles.colHeader, { borderBottomColor: TIPO_COLOR[col.key] || colors.border }]}>
                     <Text style={[styles.colTitle, { color: TIPO_COLOR[col.key] || colors.muted }]}>
                       {col.label.toUpperCase()} ({col.itens.length})
@@ -772,29 +831,36 @@ export default function PedidosScreen() {
                   {col.itens.length === 0 ? (
                     <Text style={styles.emptyCol}>Nenhum pedido.</Text>
                   ) : (
-                    col.itens.map((item) => (
-                      <PainelPedidoCard
-                        key={item.pedido}
-                        item={item}
-                        tipoKey={col.key}
-                        stale={isStale(item)}
-                        nowMs={nowMs}
-                        conn={conn as Connection}
-                        usuarioCod={usuarioCod}
-                        funcaoCod={funcaoCod}
-                        classe={classe}
-                        isMaster={isMaster}
-                        canAddItem={can("PEDIDO.ADD_ITEM")}
-                        canFaturar={can("PEDIDO.FATURAR")}
-                        canImprimir={can("PEDIDO.IMPRIMIR")}
-                        canTaxaServico={can("PEDIDO.TX_SERVICO")}
-                        formasPagamento={formasPagamento}
-                        onAbrir={() => abrirPedido(item)}
-                        onChanged={refreshList}
-                      />
-                    ))
+                    <View style={styles.colCardsGrid}>
+                      {col.itens.map((item) => (
+                        <DraggablePedidoCard
+                          key={item.pedido}
+                          pedidoId={item.pedido}
+                          enabled={canDragDrop && (item.situacao === "A" || item.situacao === "F")}
+                        >
+                        <PainelPedidoCard
+                          item={item}
+                          tipoKey={col.key}
+                          stale={isStale(item)}
+                          nowMs={nowMs}
+                          conn={conn as Connection}
+                          usuarioCod={usuarioCod}
+                          funcaoCod={funcaoCod}
+                          classe={classe}
+                          isMaster={isMaster}
+                          canAddItem={can("PEDIDO.ADD_ITEM")}
+                          canFaturar={can("PEDIDO.FATURAR")}
+                          canImprimir={can("PEDIDO.IMPRIMIR")}
+                          canTaxaServico={can("PEDIDO.TX_SERVICO")}
+                          formasPagamento={formasPagamento}
+                          onAbrir={() => abrirPedido(item)}
+                          onChanged={refreshList}
+                        />
+                        </DraggablePedidoCard>
+                      ))}
+                    </View>
                   )}
-                </View>
+                </DroppableColuna>
               ))}
             </View>
           )}
@@ -836,9 +902,9 @@ export default function PedidosScreen() {
         />
       )}
 
-      {can("PEDIDO.GRAVAR") || can("PEDIDO_COMP.GRAVAR") ? (
+      {can("PEDIDO.GRAVAR") ? (
         <Pressable
-          onPress={() => router.push(can("PEDIDO.GRAVAR") ? "/pedido-form" : "/pedido-completo")}
+          onPress={() => router.push("/pedido-form")}
           style={({ pressed }) => [styles.fab, FAB_SHADOW_STYLE, pressed && { opacity: 0.85 }]}
           hitSlop={8}
           testID="pedidos-fab-new"
@@ -950,13 +1016,40 @@ const styles = StyleSheet.create({
   totalPillGeral: { backgroundColor: colors.brandTertiary, borderColor: colors.brandPrimary },
   totalPillLabelGeral: { color: colors.onSurface, fontWeight: "700" },
   totalPillMoneyGeral: { fontSize: 13 },
-  // Layout "2 colunas" (Mesa | Outros)
+  // Tooltip do pill "Total" (Taxa de Serviço do dia/filtro) — acima do
+  // pill, centralizado, mesmo padrão visual já usado nos tooltips do card
+  // do Painel de Pedidos.
+  totalTooltip: {
+    position: "absolute", bottom: "100%", left: 0, right: 0,
+    marginBottom: 6, alignItems: "center", zIndex: 20,
+  },
+  totalTooltipInner: {
+    backgroundColor: "#1a1a1a", borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm, paddingVertical: 4,
+  },
+  totalTooltipText: { color: "#fff", fontSize: 11, fontWeight: "600" },
+  // Layout "2 colunas" (Mesa | Outros) — colunas SEMPRE lado a lado, na
+  // mesma linha, nunca quebram pra linha de baixo (pedido explícito do
+  // usuário, 2026-07-18: "quero uma coluna do lado da outra"). `flex: 1`
+  // deixa cada coluna dividir a largura disponível como antes; quem NÃO
+  // estica mais é o card em si (largura fixa, ver `PainelPedidoCard`) — com
+  // poucas colunas ativas, a coluna fica larga mas os cards daquele tipo só
+  // se organizam lado a lado dentro dela (`colCardsGrid`, mais abaixo), em
+  // vez de 1 card esticado preenchendo a coluna inteira.
   colsRow: { flexDirection: "row", gap: spacing.sm },
   col: { flex: 1, gap: 8, minWidth: 0 },
   colHeader: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     borderBottomWidth: 2, paddingBottom: 4, marginBottom: 2,
   },
+  // Cards do card rico (PainelPedidoCard) têm largura FIXA (ver seu próprio
+  // `ps.card.width`) — este container quebra linha (`flexWrap`) em vez de
+  // esticar cada card pra preencher a coluna. Com poucos tipos marcados no
+  // filtro (ex.: só MESA), a própria coluna ocupa a largura toda da tela e
+  // os cards desse tipo se espalham lado a lado preenchendo o espaço, em
+  // vez de 1 card só esticado (bug reportado com print, 2026-07-18: "caso
+  // tenha uma coluna, ocupe as outras com o tipo que ficou").
+  colCardsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   colTitle: { fontSize: 12, fontWeight: "700", color: colors.muted, letterSpacing: 0.3 },
   compactCard: {
     flexDirection: "row", alignItems: "center", gap: 6,

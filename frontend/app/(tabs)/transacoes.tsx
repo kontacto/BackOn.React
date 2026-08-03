@@ -1,17 +1,23 @@
-// Aba "Transações" — nova área web-only pras versões COMPLETAS de Pedido
-// e O.S. (distintas das versões rápidas de pré-venda usadas no mobile,
-// `pedido-form.tsx`/`os-form.tsx`, que continuam inalteradas). Ver
+// Aba "Transações" — nova área web-only pras versões COMPLETAS/GERAIS de
+// Pedido e O.S. (distintas das versões rápidas de pré-venda usadas no
+// mobile, `pedido-form.tsx`/`os-form.tsx`, que continuam inalteradas). Ver
 // CLAUDE.md > "Transações Screens Strategy" pro racional completo.
 //
 // Mesmo padrão estrutural de app/(tabs)/cadastros.tsx: lista de `entries`
 // filtrada por permissão via `can`, cada uma vira um card clicável.
-// As telas de lista (`/pedidos`, `/os`) servem tanto a versão Mobile
-// quanto a Completa — os cards abaixo apontam pra elas também; só o
-// clique num item específico da lista ainda não abre nada pra quem só
-// tem a permissão Completo, até a tela de edição completa existir de
-// verdade (ver pedidos.tsx/os.tsx — decisão do usuário 2026-07-13).
+//
+// **Atualizado 2026-07-20, user-directed**: "Pedido Completo" foi renomeado
+// "Pedido Geral" e ganhou lista PRÓPRIA (`pedido-lista.tsx`) — não abre
+// mais em `/pedidos` (que agora é exclusiva do Pedido Bar). `pedido-lista.tsx`
+// é desenhada pra ser compartilhada por futuras versões de Pedido também
+// (qualquer uma que não seja do segmento Bar), não só o Pedido Geral.
+//
+// **Atualizado 2026-07-31**: "O.S. Completa" ganhou a mesma separação —
+// tela própria `os-geral.tsx` + lista própria `os-lista.tsx` (Fase 1,
+// núcleo — ver PENDENCIAS.md > "O.S. Completa"). `os.tsx` volta a ser
+// exclusiva da O.S. Mobile, mesmo padrão já aplicado ao Pedido.
 import { useMemo } from "react";
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -32,7 +38,7 @@ type Entry = {
 
 export default function TransacoesScreen() {
   const router = useRouter();
-  const { can } = usePermissions();
+  const { can, moduleOn } = usePermissions();
 
   if (Platform.OS !== "web") {
     return (
@@ -47,11 +53,11 @@ export default function TransacoesScreen() {
   const entries = useMemo<Entry[]>(
     () => [
       {
-        key: "pedido-completo",
-        label: "Pedido Completo",
+        key: "pedido-geral",
+        label: "Pedido de Venda",
         hint: "Versão completa do Pedido de Venda (back-office, web)",
         icon: "receipt-outline",
-        route: "/pedidos",
+        route: "/pedido-lista",
         visible: can("PEDIDO_COMP.ABRIR"),
       },
       {
@@ -67,11 +73,96 @@ export default function TransacoesScreen() {
         label: "O.S. Completa",
         hint: "Versão completa da Ordem de Serviço (back-office, web)",
         icon: "construct-outline",
-        route: "/os",
+        route: "/os-lista",
         visible: can("OS_COMP.ABRIR"),
       },
+      {
+        key: "envio-terceiros",
+        label: "Envio para Terceiros",
+        hint: "Envio e retorno de equipamentos enviados para conserto externo",
+        icon: "swap-vertical-outline",
+        route: "/envio-terceiros",
+        visible: can("RETIFICA.ABRIR"),
+      },
+      {
+        key: "movimentacoes",
+        label: "Movimentações",
+        hint: "Movimentação de Produtos e Requisição",
+        icon: "swap-horizontal-outline",
+        route: "/movimentacoes",
+        visible: can("MOV_PRODUTOS.ABRIR") || can("REQUISICAO.ABRIR"),
+      },
+      {
+        key: "inventario",
+        label: "Inventário",
+        hint: "Abertura, Digitação de Estoque, Fechamento e Cancelamento de balanço",
+        icon: "cube-outline",
+        route: "/inventario",
+        visible: can("INVENTARIO.ABRIR"),
+      },
+      {
+        key: "gestao-compras",
+        label: "Gestão de Compras",
+        hint: "Pedido de Compra, Curva ABC e Estoques, Ressuprimento",
+        icon: "cart-outline",
+        route: "/gestao-compras",
+        // Módulo "Curva ABC" (controle_configuracao.Curva_abc) gateia todo
+        // o submenu Compra — pedido explícito do usuário, 2026-07-19.
+        // `moduleOn` explícito (não só `can`) porque master bypassa
+        // `disabledTelas` dentro de `can()`, mas módulo vale igual pra
+        // todo mundo (ver "Master Has Full Permission" no CLAUDE.md).
+        visible: moduleOn("Curva_abc") && (can("PEDIDO_COMPRA.ABRIR") || can("CURVA_ABC.ABRIR") || can("GESTAO_COMPRAS.ABRIR")),
+      },
+      {
+        key: "gestor-comandas",
+        label: "Gestor de Comandas",
+        hint: "Consulta de vendas finalizadas (comandas) e alteração/cancelamento",
+        icon: "list-outline",
+        route: "/gestor-comandas",
+        visible: can("COMANDA.ABRIR"),
+      },
+      {
+        key: "agenda",
+        label: "Agenda",
+        hint: "Grade semanal de atendimentos por profissional (módulo Clínica ou Assistência)",
+        icon: "calendar-outline",
+        route: "/agenda",
+        // Módulo "Clínica" (controle_configuracao.CLINICA) OU "Assistência"
+        // (controle_configuracao.Assistencia) — os dois habilitam a MESMA
+        // tela/fluxo de Agenda, user-directed 2026-07-28 ("é só chamar a
+        // tela"). Mesmo racional de `moduleOn` explícito acima.
+        visible: (moduleOn("CLINICA") || moduleOn("Assistencia")) && can("AGENDA.ABRIR"),
+      },
+      {
+        key: "projetos",
+        label: "Gestor de Projetos",
+        hint: "Vincula Pedidos, O.S. e Requisições a um projeto do cliente",
+        icon: "briefcase-outline",
+        route: "/projetos",
+        // Módulo "gestor_projetos" (controle_configuracao.gestor_projetos)
+        // — coluna própria, não reaproveita Assistência/Oficina. Ver
+        // PENDENCIAS.md > "Gestor de Projetos".
+        visible: moduleOn("gestor_projetos") && can("PROJETOS.ABRIR"),
+      },
+      {
+        key: "contratos",
+        label: "Contratos",
+        hint: "Cadastro de contratos, itens, produtos disponíveis e tabelas auxiliares",
+        icon: "document-text-outline",
+        route: "/contratos",
+        // Módulo "Contratos" (controle_configuracao.contratos) — pedido
+        // explícito do usuário, 2026-07-19. Mesmo racional de `moduleOn`
+        // explícito acima.
+        visible:
+          moduleOn("contratos") &&
+          (can("CONTRATO.ABRIR") ||
+            can("CONTR_PROD_DISP.ABRIR") ||
+            can("TIPO_CONTRATO.ABRIR") ||
+            can("TIPO_REAJUSTE.ABRIR") ||
+            can("INDICE_REAJUSTE.ABRIR")),
+      },
     ],
-    [can]
+    [can, moduleOn]
   );
 
   const visible = entries.filter((e) => e.visible).sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
@@ -79,7 +170,6 @@ export default function TransacoesScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="transacoes-screen">
       <View style={styles.header}>
-        <Image source={require("../../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
         <Text style={styles.headerTitle}>Transações</Text>
         <View style={styles.headerLogoSpacer} />
       </View>
@@ -118,7 +208,7 @@ export default function TransacoesScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
+  safe: { flex: 1, backgroundColor: colors.surface },
   header: {
     flexDirection: "row",
     alignItems: "center",

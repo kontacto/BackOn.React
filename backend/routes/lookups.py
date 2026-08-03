@@ -59,6 +59,16 @@ async def list_status_cliente(servidor: str, banco: str):
     return await lookups_service.list_status_cliente(servidor, banco)
 
 
+@router.get("/status-os")
+async def list_status_os(servidor: str, banco: str):
+    return await lookups_service.list_status_os(servidor, banco)
+
+
+@router.get("/tipo-os")
+async def list_tipo_os(servidor: str, banco: str):
+    return await lookups_service.list_tipo_os(servidor, banco)
+
+
 @router.get("/centro-custo")
 async def list_centro_custo(servidor: str, banco: str):
     return await lookups_service.list_centro_custo(servidor, banco)

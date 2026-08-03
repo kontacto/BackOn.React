@@ -73,6 +73,7 @@ class FuncionarioSaveRequest(AuditFields):
     est_prof: Optional[str] = ""
     tel_prof: Optional[str] = ""
     controla_carteira: bool = False
+    controla_agenda: bool = False
     tipo_comissao: Optional[str] = "S"
     comissaop: Optional[float] = 0
     comissaos: Optional[float] = 0
@@ -121,6 +122,7 @@ class ComissaoExcecaoSaveRequest(AuditFields):
 _FIELD_TO_COLUNA = {
     "codigo_dep": "CODIGO_DEP",
     "controla_carteira": "Controla_Carteira",
+    "controla_agenda": "Controla_Agenda",
     "comissao_prioridade_vendedor": "COMISSAO_PRIORIDADE_VENDEDOR",
     "comissao_prioridade_executor": "COMISSAO_PRIORIDADE_EXECUTOR",
     "comissao_prioridade_atendente": "COMISSAO_PRIORIDADE_ATENDENTE",
@@ -132,7 +134,7 @@ _CAMPOS_DIFF = [
     "admissao", "cpf_prof", "ident_prof", "cart_prof", "data_nasc", "sexo_prof",
     "codigo_dep", "docespecial", "numespecial", "conselho", "numconselho", "codcargo",
     "cep_prof", "bairr_prof", "endereco", "cid_prof", "est_prof", "tel_prof",
-    "controla_carteira",
+    "controla_carteira", "controla_agenda",
     "tipo_comissao", "comissaop", "comissaos", "comissao_prioridade_vendedor",
     "tipo_comissao_e", "comissaop_e", "comissaos_e", "comissao_prioridade_executor",
     "tipo_comissao_a", "comissaop_a", "comissaos_a", "comissao_prioridade_atendente",

@@ -154,3 +154,48 @@ class TestListCoresGrade:
         r = svc._list_cores_grade_sync("srv", "bd", "P1")
         assert r["success"] is True
         assert r["items"] == [{"codigo": "001", "descricao": "Preto"}]
+
+
+class TestDiasSemanaWeb:
+    """Botão "Dias da Semana" ao lado do checkbox "Produto Web" — tabela
+    nova `Web_DiasSemana`, ver PENDENCIAS.md/WebConvidado.md."""
+
+    def test_list_vazio(self, monkeypatch):
+        cur = FakeCursor(many=[[]])
+        _patch(monkeypatch, cur)
+        r = svc._list_dias_semana_web_sync("srv", "bd", "P1")
+        assert r["success"] is True and r["dias"] == []
+
+    def test_list_retorna_dias_ordenados(self, monkeypatch):
+        cur = FakeCursor(many=[[{"dia_semana": 0}, {"dia_semana": 3}, {"dia_semana": 6}]])
+        _patch(monkeypatch, cur)
+        r = svc._list_dias_semana_web_sync("srv", "bd", "P1")
+        assert r["success"] is True and r["dias"] == [0, 3, 6]
+
+    def test_save_grava_replace_all(self, monkeypatch):
+        cur = FakeCursor()
+        conn = _patch(monkeypatch, cur)
+        r = svc._save_dias_semana_web_sync("srv", "bd", "P1", [1, 3, 1])  # duplicata proposital
+        assert r["success"] is True
+        assert conn.committed is True
+        deletes = [q for q, p in cur.queries if q.strip().startswith("DELETE FROM Web_DiasSemana")]
+        inserts = [(q, p) for q, p in cur.queries if q.strip().startswith("INSERT INTO Web_DiasSemana")]
+        assert len(deletes) == 1
+        # duplicata (1,1) e ordenação (3 depois de 1) — só 2 inserts, em ordem
+        assert [p for _, p in inserts] == [("P1", 1), ("P1", 3)]
+
+    def test_save_ignora_dias_fora_da_faixa(self, monkeypatch):
+        cur = FakeCursor()
+        _patch(monkeypatch, cur)
+        r = svc._save_dias_semana_web_sync("srv", "bd", "P1", [-1, 7, 2])
+        assert r["success"] is True
+        inserts = [p for q, p in cur.queries if q.strip().startswith("INSERT INTO Web_DiasSemana")]
+        assert inserts == [("P1", 2)]
+
+    def test_save_lista_vazia_so_limpa(self, monkeypatch):
+        cur = FakeCursor()
+        _patch(monkeypatch, cur)
+        r = svc._save_dias_semana_web_sync("srv", "bd", "P1", [])
+        assert r["success"] is True
+        inserts = [q for q, p in cur.queries if q.strip().startswith("INSERT INTO Web_DiasSemana")]
+        assert inserts == []

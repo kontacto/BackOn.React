@@ -6,7 +6,7 @@
 // pasta) — aquele é um rascunho abandonado que grava na tabela Bomba,
 // nunca chega a tocar combustivel_meta (ver PENDENCIAS.md).
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -156,7 +156,6 @@ export default function PostoMetaScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Metas Combustível</Text>
         {canSave ? (
           <Pressable onPress={gravar} disabled={saving} style={styles.saveBtn} testID="posto-meta-gravar">

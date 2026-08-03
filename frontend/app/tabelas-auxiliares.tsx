@@ -1,4 +1,4 @@
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -10,7 +10,7 @@ import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/the
 
 export default function TabelasAuxiliaresScreen() {
   const router = useRouter();
-  const { can } = usePermissions();
+  const { can, moduleOn } = usePermissions();
   const isWeb = Platform.OS === "web";
 
   if (!isWeb) {
@@ -28,6 +28,7 @@ export default function TabelasAuxiliaresScreen() {
     { key: "area-atuacao", label: "Área de Atuação", hint: "Classificação de Pedidos e O.S.", icon: "git-network-outline" as const, route: "/area-atuacao", visible: can("AREA_ATUACAO.ABRIR") },
     { key: "marcas", label: "Marcas", hint: "Marcas de veículos e produtos", icon: "pricetag-outline" as const, route: "/marcas", visible: can("MARCAS.ABRIR") },
     { key: "modelos", label: "Modelos", hint: "Modelos por marca", icon: "car-outline" as const, route: "/modelos", visible: can("MODELOS.ABRIR") },
+    { key: "modificadores", label: "Modificadores", hint: "Categorias de modificador (ex.: Ponto da Carne) associáveis a Produtos e Serviços", icon: "options-outline" as const, route: "/modificadores", visible: moduleOn("Bar") && can("MODIFICADORES.ABRIR") },
     { key: "forma-pagamento", label: "Forma de Pagamento", hint: "Formas de pagamento e condições de recebimento", icon: "card-outline" as const, route: "/forma-pagamento", visible: can("FORMA_PAGAMENTO.ABRIR") },
     { key: "grupo-usuario", label: "Grupo de Usuário", hint: "Grupos/funções de usuário e permissões de cadastro", icon: "people-circle-outline" as const, route: "/grupo-usuario", visible: can("GRUPO_USUARIO.ABRIR") },
     { key: "grupo-mercadologico", label: "Grupo Mercadológico", hint: "Árvore de níveis para classificar produtos e serviços", icon: "git-commit-outline" as const, route: "/grupo-mercadologico", visible: can("GRUPO_MERCAD.ABRIR") },
@@ -67,7 +68,6 @@ export default function TabelasAuxiliaresScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
-        <Image source={require("../assets/images/kontacto-logo.png")} style={{ width: 56, height: 16, marginRight: 8 }} resizeMode="contain" />
         <Text style={styles.headerTitle}>Tabelas Auxiliares</Text>
         <View style={{ width: 40 }} />
       </View>

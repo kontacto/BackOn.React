@@ -147,6 +147,20 @@ export default function ConnectionsScreen() {
     await reload();
   };
 
+  const handleCopy = async (item: Connection) => {
+    await addConnection({
+      empresa: `${item.empresa} (cópia)`,
+      servidor: item.servidor,
+      banco: item.banco,
+      api: item.api,
+      logo: item.logo,
+      imagensUrl: item.imagensUrl,
+      permitirBiometria: item.permitirBiometria,
+    });
+    await reload();
+    feedback.showSuccess(`Conexão "${item.empresa}" copiada.`);
+  };
+
   const handleBack = () => {
     if (items.length === 0) return;
     if (router.canGoBack()) {
@@ -155,6 +169,21 @@ export default function ConnectionsScreen() {
       router.replace("/login");
     }
   };
+
+  // Tooltip dos botões que são só ícone (sem texto ao lado) — hover no web,
+  // um só de cada vez. Mesmo padrão de PainelPedidoCard.tsx (`hoverBtn` +
+  // `renderTooltip`), regra [GLOBAL] em CLAUDE.md > "Padrões de UI".
+  const [hoverBtn, setHoverBtn] = useState<string | null>(null);
+  // `below`: o botão de voltar fica colado no topo da tela — um tooltip
+  // "acima" do ícone ficaria fora da viewport, invisível.
+  const renderTooltip = (key: string, label: string, below = false) =>
+    hoverBtn === key ? (
+      <View style={[styles.tooltip, below && styles.tooltipBelow]} pointerEvents="none">
+        <View style={styles.tooltipInner}>
+          <Text style={styles.tooltipText}>{label}</Text>
+        </View>
+      </View>
+    ) : null;
 
   const renderItem = ({ item }: { item: Connection }) => (
     <View style={[styles.card, Platform.OS === "web" && styles.cardWeb]} testID={`connection-card-${item.id}`}>
@@ -175,22 +204,45 @@ export default function ConnectionsScreen() {
           API: {item.api || "—"}
         </Text>
       </View>
-      <Pressable
-        onPress={() => openEdit(item)}
-        style={({ pressed }) => [styles.cardAction, pressed && styles.pressed]}
-        hitSlop={8}
-        testID={`connection-edit-${item.id}`}
-      >
-        <Ionicons name="create-outline" size={18} color={colors.onSurfaceTertiary} />
-      </Pressable>
-      <Pressable
-        onPress={() => setConfirmDelete(item)}
-        style={({ pressed }) => [styles.cardAction, pressed && styles.pressed]}
-        hitSlop={8}
-        testID={`connection-delete-${item.id}`}
-      >
-        <Ionicons name="trash-outline" size={18} color={colors.error} />
-      </Pressable>
+      <View style={[styles.cardActionWrap, hoverBtn === `edit-${item.id}` && styles.wrapHovered]}>
+        <Pressable
+          onPress={() => openEdit(item)}
+          onHoverIn={() => setHoverBtn(`edit-${item.id}`)}
+          onHoverOut={() => setHoverBtn(null)}
+          style={({ pressed }) => [styles.cardAction, pressed && styles.pressed]}
+          hitSlop={8}
+          testID={`connection-edit-${item.id}`}
+        >
+          <Ionicons name="create-outline" size={18} color={colors.onSurfaceTertiary} />
+        </Pressable>
+        {renderTooltip(`edit-${item.id}`, "Editar conexão")}
+      </View>
+      <View style={[styles.cardActionWrap, hoverBtn === `copy-${item.id}` && styles.wrapHovered]}>
+        <Pressable
+          onPress={() => handleCopy(item)}
+          onHoverIn={() => setHoverBtn(`copy-${item.id}`)}
+          onHoverOut={() => setHoverBtn(null)}
+          style={({ pressed }) => [styles.cardAction, pressed && styles.pressed]}
+          hitSlop={8}
+          testID={`connection-copy-${item.id}`}
+        >
+          <Ionicons name="copy-outline" size={18} color={colors.onSurfaceTertiary} />
+        </Pressable>
+        {renderTooltip(`copy-${item.id}`, "Copiar conexão")}
+      </View>
+      <View style={[styles.cardActionWrap, hoverBtn === `delete-${item.id}` && styles.wrapHovered]}>
+        <Pressable
+          onPress={() => setConfirmDelete(item)}
+          onHoverIn={() => setHoverBtn(`delete-${item.id}`)}
+          onHoverOut={() => setHoverBtn(null)}
+          style={({ pressed }) => [styles.cardAction, pressed && styles.pressed]}
+          hitSlop={8}
+          testID={`connection-delete-${item.id}`}
+        >
+          <Ionicons name="trash-outline" size={18} color={colors.error} />
+        </Pressable>
+        {renderTooltip(`delete-${item.id}`, "Excluir conexão")}
+      </View>
     </View>
   );
 
@@ -201,19 +253,35 @@ export default function ConnectionsScreen() {
           {isInitial && items.length === 0 ? (
             <View style={styles.iconBtn} />
           ) : (
-            <Pressable
-              onPress={handleBack}
-              style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
-              hitSlop={12}
-              testID="connections-back-button"
-            >
-              <Ionicons name="chevron-back" size={22} color={colors.onSurface} />
-            </Pressable>
+            <View style={[styles.cardActionWrap, hoverBtn === "back" && styles.wrapHovered]}>
+              <Pressable
+                onPress={handleBack}
+                onHoverIn={() => setHoverBtn("back")}
+                onHoverOut={() => setHoverBtn(null)}
+                style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed]}
+                hitSlop={12}
+                testID="connections-back-button"
+              >
+                <Ionicons name="chevron-back" size={22} color={colors.onSurface} />
+              </Pressable>
+              {renderTooltip("back", "Voltar", true)}
+            </View>
           )}
           <AppImage source={require("../assets/images/kontacto-logo.png")} style={styles.headerLogo} contentFit="contain" />
         </View>
         <Text style={styles.headerTitle}>Conexões</Text>
-        <View style={styles.headerSide} />
+        <View style={[styles.headerSide, { justifyContent: "flex-end" }]}>
+          {Platform.OS === "web" && !loading && items.length > 0 ? (
+            <Pressable
+              onPress={openCreate}
+              style={({ pressed }) => [styles.headerNewBtn, pressed && styles.primaryBtnPressed]}
+              testID="connections-new-button-top"
+            >
+              <Ionicons name="add" size={16} color={colors.onBrandPrimary} />
+              <Text style={styles.headerNewBtnText}>Nova Conexão</Text>
+            </Pressable>
+          ) : null}
+        </View>
       </View>
 
       {loading ? (
@@ -257,11 +325,14 @@ export default function ConnectionsScreen() {
         </View>
       )}
 
-      {!((Platform.OS === "web" || Platform.OS === "windows") && items.length === 0) ? (
-        <View style={[styles.footer, Platform.OS === "web" && styles.footerWeb]}>
+      {/* No web, o botão "Nova Conexão" subiu pro topo (header) — pedido
+          explícito do usuário, 2026-07-18. Footer fixo continua só pra
+          mobile (comportamento inalterado, per "Platform Scope"). */}
+      {Platform.OS !== "web" && !(Platform.OS === "windows" && items.length === 0) ? (
+        <View style={styles.footer}>
           <Pressable
             onPress={openCreate}
-            style={({ pressed }) => [styles.primaryBtn, Platform.OS === "web" && styles.primaryBtnWeb, pressed && styles.primaryBtnPressed]}
+            style={({ pressed }) => [styles.primaryBtn, pressed && styles.primaryBtnPressed]}
             testID="connections-new-button"
           >
             <Ionicons name="add" size={20} color={colors.onBrandPrimary} />
@@ -488,6 +559,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   pressed: { opacity: 0.7 },
+  headerNewBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: colors.brandPrimary,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+  },
+  headerNewBtnText: {
+    color: colors.onBrandPrimary,
+    fontWeight: "500",
+    fontSize: 13,
+  },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   emptyWrap: {
     flexGrow: 1,
@@ -599,6 +684,25 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  // Wrapper com position:relative pra ancorar o tooltip absoluto — mesmo
+  // padrão de PainelPedidoCard.tsx.
+  cardActionWrap: { position: "relative" },
+  // Eleva o wrap (e seu tooltip absoluto) por cima dos irmãos seguintes —
+  // sem isso, o tooltip ficava visualmente atrás do próximo botão-ícone
+  // por causa da ordem no DOM. Só aplicado enquanto o tooltip está visível.
+  wrapHovered: { zIndex: 20 },
+  tooltip: {
+    position: "absolute", bottom: "100%", left: 0, right: 0, marginBottom: 4,
+    alignItems: "center", zIndex: 10,
+  },
+  // Variante pro botão de voltar (colado no topo — "acima" ficaria fora
+  // da viewport).
+  tooltipBelow: { bottom: undefined, marginBottom: 0, top: "100%", marginTop: 4 },
+  tooltipInner: {
+    backgroundColor: "#1a1a1a", borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm, paddingVertical: 4,
+  },
+  tooltipText: { color: "#fff", fontSize: 11, fontWeight: "600" },
   footer: {
     position: "absolute",
     left: 0,
@@ -610,21 +714,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopWidth: 1,
     borderTopColor: colors.divider,
-  },
-  footerWeb: {
-    position: "relative",
-    left: undefined,
-    right: undefined,
-    bottom: undefined,
-    paddingHorizontal: 0,
-    paddingTop: spacing.lg,
-    paddingBottom: 0,
-    backgroundColor: "transparent",
-    borderTopWidth: 0,
-    alignSelf: "center",
-    width: "100%",
-    maxWidth: 760,
-    alignItems: "center",
   },
   sheetWeb: {
     position: "relative",

@@ -11,11 +11,21 @@ type Props = {
   displayName: string;
   nomeGuerra: string | null;
   classe: string | null;
+  // Usado quando a Tela Principal mostra este card ao lado do card de
+  // Alertas de Estoque (`EstoqueAlertasCard`, mesma linha) em vez de
+  // sozinho em largura cheia — o `View` pai (`principal.tsx`) já limita a
+  // largura total nesse caso, então aqui só cede espaço (`flex: 1`) em vez
+  // de repetir o próprio `maxWidth: 920`. Pedido explícito do usuário,
+  // 2026-07-20 ("coloque ao lado desse card").
+  compact?: boolean;
 };
 
-export default function WelcomeHero({ empresa, logo, displayName, nomeGuerra, classe }: Props) {
+export default function WelcomeHero({ empresa, logo, displayName, nomeGuerra, classe, compact }: Props) {
   return (
-    <View style={[styles.hero, Platform.OS === "web" && styles.heroWeb]} testID="principal-welcome">
+    <View
+      style={[styles.hero, Platform.OS === "web" && (compact ? { flex: 1 } : styles.heroWeb)]}
+      testID="principal-welcome"
+    >
       {logo ? (
         <Image source={{ uri: logo }} style={styles.avatar} resizeMode="cover" testID="principal-logo" />
       ) : (

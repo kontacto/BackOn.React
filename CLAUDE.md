@@ -333,6 +333,51 @@ below, and the Controle do Sistema screen work).
   set once at app startup and read everywhere afterward as an in-memory global for
   the lifetime of that VB6 process.
 
+### Nunca marcar uma rotina como "não implementada" sem checar o `.vbp` + módulos globais `[GLOBAL]`
+
+**Adicionado 2026-07-20, user-directed** ("Armazene esse path do módulo, para
+que nenhuma função não seja implementada" — "para que as funções que estejam
+nos módulos sejam implementadas, mesmo em outra sessão"). Caso concreto que
+motivou a regra: o botão "Rateio Valor" do módulo Contratos (modal Centro de
+Custo, `FrmCustoContrato.frm`) chamava `Acerta_Contrato_Custo(...)` — uma
+`Sub` que não estava definida no próprio `.frm`. Como o usuário só colou o
+`.frm` do form principal (`FrmManContra.frm`) e não esse modal filho, a
+rotina ficou registrada em PENDENCIAS.md como "não implementada — corpo
+nunca apareceu no código colado". Na verdade a rotina sempre existiu, só
+não tinha sido procurada no lugar certo: `Geral\mdl_proc.bas:2416`.
+
+**Antes de concluir que uma função/rotina chamada por um botão/evento não foi
+implementada porque "o código não veio"**, seguir esta sequência (não grep
+solto pela árvore inteira — risco real de pegar a versão errada, já que o
+mesmo nome de form/função se repete em várias pastas de linha de negócio):
+
+1. Achar o `.vbp` (projeto VB6) do módulo em questão — `grep -l` pelo nome do
+   `.frm` já conhecido em `**/*.vbp` dentro de
+   `C:\Desenv\VB6\SQLSERVER\`. Vários `.vbp` costumam referenciar o mesmo
+   `.frm` (um por linha de negócio); qualquer um serve para achar os
+   `Form=`/`Module=` vizinhos, mas prefira o que também referencia `Geral\`
+   quando houver escolha, pelo mesmo motivo de "`Geral` é a versão canônica"
+   acima.
+2. No `.frm` já conhecido, achar o botão/evento (`Command##_Click`) que
+   chama a rotina em questão. Se a chamada for a uma `Sub`/`Function` que
+   **não** está definida nesse mesmo `.frm` (nem é um Form modal cujo nome
+   você ainda não conhece — nesse caso, procurar por `Form=..\...\NomeDoModal.frm`
+   no mesmo `.vbp`, é o mesmo padrão do achado do modal
+   `FrmCustoContrato.frm` a partir de `FrmManContra.frm` nesta sessão), ela
+   está em um dos `Module=` listados no `.vbp` — geral mente
+   `..\Geral\mdl_proc.bas` ou `..\Geral\<algum_outro>.bas`.
+3. `Grep` o nome exato da rotina nesse(s) `.bas` (arquivo grande — usar
+   `output_mode: "content"` explícito, não confiar no modo default).
+4. Só registrar como "não implementada / sem equivalente" em PENDENCIAS.md
+   depois de esgotar essa busca — nunca só porque o trecho colado pelo
+   usuário não incluía o corpo.
+5. **Isto vale retroativamente**: qualquer pendência já registrada como "não
+   implementada por falta de código"/"corpo nunca apareceu" (ex.: outras
+   entradas em PENDENCIAS.md) deve ser revisitada com este método antes de
+   assumir que a lacuna é real, se o módulo for retomado — pode ser só uma
+   busca que não foi longe o suficiente da primeira vez, não uma limitação
+   real de escopo.
+
 ### Porting VB6 global state (no backend-side globals)
 
 **Added 2026-07-13, user-directed** (arose from `DATESIST` — Posto de Combustível's
@@ -511,6 +556,29 @@ Shared logic between the two screens (CPF/CNPJ validation, ViaCEP lookup, telefo
 list management, save/load) lives in `frontend/src/hooks/useClienteForm.ts` — extend that
 hook rather than duplicating logic when both screens need the same behavior.
 
+## Regras Globais de Pré-venda
+
+**Added 2026-08-02, user-directed `[GLOBAL]`** ("todo pedido aberto é um
+orçamento").
+
+- Nesta migração, **Orçamento não é uma entidade separada**. Um Pedido de
+  Venda (`pedido_venda`) com `situacao = 'A'` (Aberto) já cumpre o papel de
+  Orçamento/proposta — pode ser digitado e revisado sem gerar compromisso
+  de faturamento, e só vira de fato uma venda quando fechado/faturado.
+  Isso difere do legado VB6, que tem tela e tabelas próprias
+  (`orcamento`/`orc_produto`, `FrmTraOrcNv.frm`) totalmente separadas de
+  `pedido_venda`/`pedido_venda_prod`.
+- Ao portar qualquer funcionalidade do legado que trate "Orçamento" como
+  um tipo de documento distinto (ex.: `tipo_doc='ORC'` no Gestor de
+  Projetos, "Orçamento" como item separado no menu Transações > Compra),
+  mapear para "Pedido com situação Aberto" em vez de construir uma
+  tabela/tela nova de Orçamento — a menos que o usuário peça
+  explicitamente uma tela de Orçamento separada no futuro.
+- Isso resolve o bloqueio de escopo que tinha sido registrado em
+  PENDENCIAS.md > "Transações — Pedido Geral" e > "Gestor de Projetos"
+  sobre "Orçamento não existe nesta migração" — deixa de ser lacuna de
+  escopo, vira só uma questão de qual `situacao` filtrar.
+
 ## Transações Screens Strategy
 
 **Added 2026-07-13, user-directed `[GLOBAL]`.** Same split pattern as "Cliente
@@ -585,6 +653,177 @@ mobile pre-sales, and a full version for web-only back-office use.
   "Pedidos Mobile" and `OS` as "OS Mobile" (previously "Pedidos"/"Ordem de
   Serviço") — distinguishes them from "Pedido Completo"/"O.S. Completa" in
   the tree UI. Pure label change, no key/behavior change.
+
+### Atualização 2026-07-20, user-directed — Pedido ganha múltiplas versões; lista deixa de ser compartilhada com o Bar
+
+Reverte a decisão de 2026-07-13 acima ("list screens are shared") **só para
+Pedido** (O.S. continua como estava — `os.tsx` ainda compartilhada entre
+Mobile/Completa, sem mudança). Motivo: "Ao longo desse projeto vamos ter 2
+ou mais versões de tela de Pedido" — o plano agora é ter uma versão de
+Pedido por segmento de negócio (hoje: Bar e Geral; futuras versões podem
+aparecer), cada uma eventualmente com sua própria versão mobile simplificada
+também (ainda não construída — "que veremos mais tarde").
+
+- **"Pedido Completo" foi renomeado "Pedido Geral"** — arquivo/rota
+  `frontend/app/pedido-completo.tsx` (`/pedido-completo`) viraram
+  `frontend/app/pedido-geral.tsx` (`/pedido-geral`). **Só o arquivo/rota
+  mudaram** — a permissão continua `PEDIDO_COMP` e os endpoints de backend
+  continuam `/api/pedido-completo/...` (decisão explícita do usuário: mudar
+  esses dois é decisão à parte, não pedida ainda). testIDs internos do
+  arquivo (`pedido-completo-*`) foram renomeados pra `pedido-geral-*`
+  (não afetam nada fora do próprio arquivo).
+- **`frontend/app/pedidos.tsx` volta a ser exclusiva do Pedido Bar** —
+  removido o fallback pra `PEDIDO_COMP.ABRIR`/`PEDIDO_COMP.GRAVAR` no gate de
+  acesso, em `abrirPedido` e no FAB "novo pedido". Quem só tem
+  `PEDIDO_COMP.ABRIR` (sem `PEDIDO.ABRIR`) não acessa mais `/pedidos`.
+- **Nova tela `frontend/app/pedido-lista.tsx`** — lista COMPARTILHADA por
+  toda versão de Pedido que não seja Bar (hoje só o Geral, mas desenhada
+  pra acomodar futuras versões sem precisar de outra tela nova). Reaproveita
+  o mesmo endpoint `POST /api/pedidos` que `pedidos.tsx` já usa (já suporta
+  busca/situação/vendedor/período — nenhum endpoint novo foi necessário),
+  mas sem nenhum componente específico de Bar (sem colunas Mesa/Comanda/
+  Balcão/Entrega/Fiado, sem totalizadores por tipo). Filtros: busca (cliente/
+  nº do pedido), situação (chips), período (De/Até, `WebDateField`, já
+  seguindo a regra global "data inicial repete na final"), vendedor (só pra
+  quem `isManagerFuncao`, mesmo critério de `pedidos.tsx`). Toque numa linha
+  → `/pedido-geral`; botão "+" → `/pedido-geral` (novo).
+- **`transacoes.tsx`**: card "Pedido Completo" renomeado "Pedido Geral",
+  rota trocada de `/pedidos` pra `/pedido-lista`. Card "Pedido Bar" continua
+  apontando pra `/pedidos`, inalterado. "O.S. Completa" continua apontando
+  pra `/os` (compartilhada), sem mudança — só Pedido foi afetado nesta
+  rodada.
+- **Correção o mesmo dia, user-directed**: "na tela" (texto visível pro
+  usuário final) o nome vira **"Pedido de Venda"**, não "Pedido Geral" —
+  "Pedido Geral" continua sendo o nome do arquivo/rota/conceito interno
+  (`pedido-geral.tsx`, comentários de código), só o texto exibido muda:
+  título da tela (`"Pedido de Venda #123"`/`"Novo Pedido de Venda"`),
+  mensagem do `LockedView`, e o card em `transacoes.tsx` (label "Pedido de
+  Venda", hint "Versão completa do Pedido de Venda").
+- **`ModuleTiles.tsx`** (Tela Principal): o tile "Pedidos" agora resolve a
+  rota dinamicamente por permissão (`PEDIDO.ABRIR` → `/pedidos`, senão
+  `/pedido-lista`) em vez de sempre `/pedidos` — sem isso, quem só tem
+  `PEDIDO_COMP.ABRIR` cairia no gate de acesso de `pedidos.tsx` (agora
+  Bar-exclusivo) e via um `LockedView` sem sentido. O tile "Ordem de
+  Serviço" continua sempre `/os`, sem mudança.
+- **Não é um padrão a generalizar sozinho pra O.S. ainda** — esta seção
+  documenta uma mudança pedida especificamente pra Pedido; O.S. só ganha o
+  mesmo tratamento (lista própria por segmento) se/quando for pedido
+  explicitamente, não presumir.
+
+### Pedido Geral ganha as funções do Pedido Bar (2026-07-20, mesmo dia)
+
+Pedido explícito do usuário: aplicar ao Pedido Geral "o layout e as
+funções do pedido bar (com exceção da taxa de serviço)". Confirmado por
+`AskUserQuestion` que TUDO deveria ser trazido — Faturar, Reabrir,
+Distribuir, campo Tipo, Pedido Totalizado (mesmo o legado
+`frmmanpedfor.frm` não tendo esse botão), Anexo, Imprimir/Imprimir Item,
+Pedido Entregue, e o ícone único de Ajuda ("Modo Didático").
+
+- **Nenhuma regra de negócio foi duplicada** (pedido explícito do usuário,
+  "tente usar as mesmas funções") — `pedidos_service.py` ganhou parâmetro
+  `tela` (e `acao` no Cancelar) em `_faturar_pedido_sync`/
+  `_reabrir_pedido_sync`/`_dividir_pedido_sync`/`_cancelar_pedido_sync`,
+  default `"PEDIDO"` (zero mudança de comportamento pro Bar).
+  `pedido_completo_service.py` chama essas MESMAS funções com
+  `tela="PEDIDO_COMP"` (Cancelar usa `acao="SITUACAO"`, preservando a
+  permissão já concedida em instalações existentes — o Completo já
+  cancelava reaproveitando SITUACAO antes desta rodada). A regra de
+  override do campo Tipo (cliente reservado Mesa/Comanda/Balcão sempre
+  sobrescreve) foi extraída pra `pedido_common._resolve_tipo_pedido`,
+  compartilhada pelos dois lados.
+- **Conflito de schema resolvido com o usuário**: `pedido_venda.
+  num_ped_cliente` é ao mesmo tempo "Referência" (Bar, inclusive rastreio
+  do pedido-pai ao Distribuir) e "Nº Pedido do Cliente" (Geral, campo real
+  desde a Fase A). Decisão: reaproveitar a mesma coluna nos dois lados
+  também no Geral (sem coluna nova) — mas **pedidos FILHOS de uma
+  distribuição travam esse campo na tela**; só o pedido ORIGINAL mantém
+  liberdade pra guardar seu próprio nº de referência do cliente. Por isso
+  o Pedido Geral **não tem um campo "Referência" separado** de "Nº Pedido
+  do Cliente" — seria um campo duplicado apontando pra mesma coluna.
+- **Componentes generalizados, não duplicados**: `ItemList.tsx` trocou os
+  vários `tela === "PEDIDO"` por `isPedidoOuCompleto = tela === "PEDIDO" ||
+  tela === "PEDIDO_COMP"` pra Dividir/Faturar/Anexos/Reabrir/Cancelar/
+  Imprimir/Imprimir Item/Pedido Totalizado — **Tx Serviço continua só
+  `tela === "PEDIDO"`**, única exceção deliberada. `PedidoHeader.tsx`
+  ganhou prop `showLogo` (as duas telas de Pedido agora usam o MESMO
+  componente de cabeçalho, incluindo o ícone de Ajuda). `AjudaPedidoModal.tsx`
+  virou parametrizável (`titulo`/`itens`, default = conteúdo do Bar
+  exportado como `PEDIDO_BAR_AJUDA_ITENS`) — o Geral monta sua própria
+  lista filtrando "Tx Serviço"/"Campo Referência" do Bar e acrescentando
+  seus próprios campos (Nº Pedido do Cliente/Local de Entrega/Informações
+  de Entrega). `usePedidoItens`'s `printPorFinalidade` também ligado pro
+  Geral.
+- **`pedido-geral.tsx`**: header próprio removido em favor do
+  `PedidoHeader` compartilhado; os botões soltos de Fechar/Cancelar que a
+  tela desenhava por conta própria foram removidos — agora vêm todos do
+  `ItemList` (mesma barra de pills do Bar), Cancelar ganhou confirmação
+  (antes agia direto). Campos novos: Tipo, Hora de Entrega + checkbox
+  Pedido Entregue, bloco "Pedidos da mesma distribuição" (chips
+  navegáveis, mesmos estilos `filhoChip`/etc. de `pedido/styles.ts`).
+- Ver memória `project_transacoes` (sessão 2026-07-20) pro detalhe
+  completo — inclusive os testes de backend (delegação, não duplicação de
+  cenário) e o fato de que isto ainda **não foi testado ao vivo**.
+- **Regras finas confirmadas na revisão visual, mesmo dia**: o botão
+  "Distribuir" só aparece com o pedido em situação Aberto (já era assim,
+  `canDividir` em `ItemList.tsx` já exigia `isAberto` — confirmado, não
+  precisou de correção); "Faturar Pedido" no Pedido Geral exige o pedido
+  já **Fechado** (diferente do Bar, que fecha-e-fatura num clique só) —
+  `_faturar_pedido_sync` ganhou parâmetro `exigir_fechado` (default
+  `False`, só o Pedido Geral passa `True`), e `ItemList.tsx` só habilita
+  o botão pro Geral quando `isFechado`.
+
+### Botão Anexos (Gestor de Documentos) sempre no cabeçalho `[GLOBAL]`
+
+**Adicionado 2026-07-20, user-directed `[GLOBAL]`** ("o botão anexos
+(gestor de Documentos) ficará sempre no título da Janela"). Em toda tela
+que tem um botão dedicado de Anexos por cima de um modal (o padrão
+`AnexosPedidoModal`-like, não a aba "Anexos" do Full CRUD Form Screen
+Standard, que já vive dentro do próprio formulário) — esse botão fica no
+**cabeçalho da tela** (junto com o ícone de Ajuda e o botão Gravar), nunca
+numa barra de ação de conteúdo cujos outros botões dependem do estado do
+registro (Fechar/Faturar/Cancelar mudam com a situação do pedido; Anexos
+não é uma ação de estado, é uma ação de tela).
+
+- Implementado em `PedidoHeader.tsx` (compartilhado por Pedido Bar e
+  Pedido Geral): nova prop `onAnexos`, renderizada como ícone
+  `attach-outline` com tooltip "Anexos" no hover — mesmo padrão do ícone de
+  Ajuda, ambos agora usando um `HeaderIconButton` local extraído dentro do
+  próprio arquivo (evita duplicar a lógica de hover uma terceira vez).
+  Removido de `ItemList.tsx` (não faz mais parte da barra de pills de
+  ação) — `onAnexos`/`canAnexos` tirados do componente.
+- Ordem no cabeçalho: Voltar → logo (se houver) → título → conteúdo extra
+  (ex.: Vendedor) → **Anexos** → Ajuda → Gravar.
+- Vale pra toda tela NOVA com Anexos desse formato — não é gatilho de
+  varredura retroativa de telas antigas que ainda tenham um botão de
+  Anexos solto em outro lugar (mesmo princípio de não-retroatividade já
+  usado nas outras regras `[GLOBAL]` deste arquivo).
+
+**Atualização 2026-07-29, user-directed — a exceção acima foi revertida**:
+"Anexo é uma tela única (modal) para todas as telas do sistema, que muda as
+regras e tratamento de acordo com a entidade que o chamou" + "colocar os
+botões inclusive anexo na barra de título". A ressalva original ("não a
+aba 'Anexos' do Full CRUD Form Screen Standard") deixou de valer — Produto
+Completo (`produto-completo.tsx`) teve sua aba "Anexos" removida e
+substituída por `AnexosModal` (ícone `attach-outline` no cabeçalho, mesmo
+padrão do Pedido Bar/Geral). **Fornecedores/Fotografia/Excluir também
+migraram** do corpo da aba "Dados Principais" (antes um `toolbarRow` com
+botões texto+ícone) pro cabeçalho, como ícones com tooltip
+(`IconButtonWithTooltip`) — mesma lógica: essas não são ações de estado do
+registro, são ações de tela, cabem no mesmo grupo do ícone de Ajuda.
+- **Modais que embutem `GestorDocumentosSection` precisam do tier de modal
+  mais largo**: o tier "seleção" padrão (560px,`modalCardWebCompact`) deixa
+  o painel lista+preview lado a lado da seção cramped — `produto-
+  completo.tsx` criou `modalCardWebWide` (960px) e aplicou tanto no novo
+  `AnexosModal` quanto no `FotografiaModal` já existente (que também embute
+  `GestorDocumentosSection` e tinha o mesmo problema, só não tinha sido
+  notado até o Anexos virar modal e expor a comparação lado a lado). Ao
+  criar um modal novo que embuta `GestorDocumentosSection` em qualquer
+  outra tela, usar `modalCardWebWide` desde o início, não o compacto padrão.
+- Esta atualização não generaliza pra outras telas "Full CRUD Form Screen
+  Standard" (Cliente/Fornecedores/Serviços) sozinha — foi um pedido
+  específico pra Produto Completo. Se pedido de novo pra outra tela desse
+  padrão, aplicar o mesmo tratamento (remover aba, ícones no cabeçalho,
+  `AnexosModal`-like com `modalCardWebWide`).
 
 ## Campo "Tipo" do Pedido Bar (`pedido_venda.tipo`)
 
@@ -999,6 +1238,109 @@ don't invent a new variant per screen:
   style on web should get the same treatment — this is a standing
   project-wide requirement, not a one-off fix per screen.
 
+## Campos de Identidade Precisam de Mecanismo de Busca `[GLOBAL]`
+
+**Added 2026-07-29, user-directed `[GLOBAL]`** ("Campos provenientes de
+identidade: Cliente, Produto, Serviços, Fornecedores, Funcionários, Níveis
+e etc, tem que possuir mecanismo de busca"). Nenhum campo que referencia
+uma entidade de identidade por código pode ser um `TextInput`/`Num` de
+digitação livre — precisa de um mecanismo de busca (modal de busca por
+nome/código, ou combobox alimentado por uma tabela auxiliar, dependendo do
+volume de registros da entidade referenciada).
+
+- **Entidades de identidade cobertas pela regra**: Cliente, Produto,
+  Serviço, Fornecedor, Funcionário, Nível (Classificação Mercadológica) —
+  "e etc", ou seja, qualquer entidade cadastrável por código que apareça
+  como referência (FK) em outra tela.
+- **Já cobertas antes desta regra ser escrita explicitamente**: Cliente
+  (`ClientSearchModal.tsx`, ver "Padrão de Campo Cliente" acima), Nível
+  (`NiveisModal.tsx`, ver seção logo acima).
+- **Primeira aplicação concreta desta regra, 2026-07-29**: campo
+  "Fabricante/Distribuidor" (Cadastro de Produtos, grupo Classificação
+  Mercadológica/Fabricante — referencia `fornecedor.codigo_int` via
+  `pecas.fornecedor`) era um `Num` de código cru; virou um box tipo
+  "Definir Nível" (mesmo padrão visual) que abre
+  `frontend/src/components/FornecedorSearchModal.tsx` — **novo componente
+  reaproveitável** (fora de `pedido/`, já que Fornecedor não é exclusivo de
+  Pedido/O.S.), clone do padrão de `pedido/ClientSearchModal.tsx` (busca
+  debounced 350ms, `GET /api/fornecedores?search=`, já existia no backend
+  como busca multi-resultado por nome/fantasia/código — nenhum endpoint
+  novo precisou ser criado). O nome do fornecedor escolhido é exibido ao
+  lado do código (`fornecedor_nome`, resolvido no backend em
+  `_get_produto_sync`/`produto_completo_service.py` só pra exibição — não é
+  coluna real de `pecas` — e espelhado no hook
+  `useProdutoCompletoForm.ts` como `fornecedorNome`/`setFornecedorNome`,
+  atualizado localmente também ao escolher pelo modal, sem precisar
+  recarregar o produto).
+- **Quando a entidade referenciada é uma tabela auxiliar pequena** (dezenas
+  de linhas, não milhares — ex.: Unidade de Medida, Origem, Tipo Garantia)
+  a forma certa NÃO é um modal de busca por nome, é um **combobox
+  (`SelectField`, sempre com `compactWeb`) alimentado pela lista completa**
+  — ver próxima seção.
+- Vale pra toda tela NOVA com campo desse tipo — não é gatilho de
+  varredura retroativa automática de toda tela já existente (mesmo
+  princípio das outras regras `[GLOBAL]` deste arquivo), mas ao tocar numa
+  tela antiga com esse gap por outro motivo, aplicar de passagem.
+
+## Comboboxes de Tabela Auxiliar — Sempre `compactWeb`, Sempre com Descrição `[GLOBAL]`
+
+**Added 2026-07-29, user-directed**, motivado por 2 achados concretos no
+Cadastro de Produtos: (1) o campo **Origem** mostrava só o código cru
+(`0`..`8`) num `SelectField` sem `compactWeb` — a lista de opções abria
+como modal antigo full-bleed, sem o card centralizado/raio forte já padrão
+no resto do app (ver "Modal/Selector Standard (Web)"); (2) revisão pedida
+de TODOS os comboboxes da tela, não só o de Origem.
+
+- **Toda entidade/tabela auxiliar referenciada por um combobox mostra a
+  descrição, nunca só o código cru** — Origem passou a puxar
+  `GET /api/tabelas/origem` (endpoint CRUD já existente, `{codigo,
+  descricao}`) em vez do array hardcoded `0..8` que só mostrava números.
+  Mesmo padrão já aplicado a Unidade Compra/Venda (`GET /api/tabelas/unid`)
+  e Nível (breadcrumb, seção acima) no mesmo dia.
+- **Todo `SelectField` desta tela (e por extensão, qualquer tela) usa
+  `compactWeb`** — sem essa prop, o seletor cai no bottom-sheet antigo
+  mesmo no web (ver "Modal/Selector Standard (Web)" acima, regra já
+  existente desde 2026-07-10 mas não aplicada consistentemente aqui).
+  Produto Completo tinha 2 campos sem a prop (Situação, Origem) — corrigido
+  junto com a mudança de Origem. Ao criar/tocar QUALQUER `SelectField`
+  novo, sempre incluir `compactWeb`.
+
+## Nível (Classificação Mercadológica) — Sempre Exibir o Caminho Completo `[GLOBAL]`
+
+**Added 2026-07-29, user-directed `[GLOBAL]`** ("todos os níveis devem ser
+exibidos com a descrição de cada nó de nível... Isso deve refletir em
+cadastros e filtros de relatórios onde existe essa tabela auxiliar").
+Motivado por um screenshot do legado (`NIVEIS.SelectedItem.FullPath` no
+`FrmManPec.frm`) mostrando `"Kontacto\Produto\Microcomputadores"` — o
+caminho completo, não só a descrição do nó-folha (`"Microcomputadores"`
+sozinho, que era o que a tela mostrava antes desta correção).
+
+- **Implementação centralizada**: `buildNivelBreadcrumb(lista, codigo)` em
+  `frontend/src/utils/nivelTree.ts` — dado o `codigo` concatenado
+  (segmentos fixos de 3 caracteres por nível, mesmo esquema já usado por
+  `_nivel_clause` no backend) e a lista flat de níveis (cada ancestral já
+  existe como sua própria linha na tabela `niveis`), resolve a descrição de
+  cada ancestral por prefixo e junta com `"\"`.
+- **Ponto único de correção**: `frontend/src/components/NiveisModal.tsx`
+  (o seletor de nível compartilhado por toda tela que usa essa tabela
+  auxiliar) monta o `label` retornado em `onPick` já com o breadcrumb
+  completo — como todo consumidor (`servicos.tsx`, `produto-completo.tsx`,
+  `relatorio-margem-lucro.tsx`, `gestao-compras-ressuprimento.tsx`,
+  `contrato-produtos-disponiveis.tsx`) só guarda o `label` recebido do
+  modal, corrigir esse ponto único propaga pra todos automaticamente — não
+  precisou tocar nos 3 últimos. `servicos.tsx`/`produto-completo.tsx`
+  reconstruíam o label localmente a partir de `nivel1..nivel5` (pra
+  resolver o label ao reabrir um registro já salvo) — também trocados pra
+  usar `buildNivelBreadcrumb` em vez do antigo `${codigo} · ${descricao}`.
+- **Não altera a listagem em árvore dentro do próprio modal** — cada linha
+  da árvore continua mostrando só a própria descrição, indentada pela
+  profundidade (é uma lista/árvore normal, a indentação já comunica a
+  hierarquia; repetir o caminho completo em cada linha seria redundante).
+  A regra vale pro **valor final exibido depois de escolhido**, não pra
+  cada linha da lista de seleção.
+- Vale pra toda tela NOVA que reaproveitar `NiveisModal`/essa tabela
+  auxiliar — herda automaticamente por já consumir o `label` do modal.
+
 ## Padrão de Campo Cliente (Pedido/O.S.)
 
 **Added 2026-07-16, user-directed `[GLOBAL]`** ("a regra para a busca no
@@ -1103,6 +1445,57 @@ into an otherwise polished, custom-themed UI.
   the same treatment when touched next — same standing project-wide
   requirement precedent as the Modal/Selector Standard above.
 
+### Filtro de período — data inicial sempre repete na final `[GLOBAL]`
+
+**Added 2026-07-18, user-directed `[GLOBAL]`** ("Todo filtro de campo tipo
+período de data, ao digitar a data inicial e der enter a mesma data deverá
+ser preenchida na data final" — **estendido no mesmo pedido**: "se a data
+for selecionada no calendário, também repetirá a data"). Em **todo** par
+De/Até (ou Inicial/Final) de filtro de período por data — não só o que
+motivou o pedido — definir a data inicial, **por qualquer meio** (digitar
+e apertar Enter, OU escolher no seletor de calendário do navegador), copia
+esse valor pro campo da data final. Não sobrescreve se o valor ficar vazio.
+
+- **A cópia mora no `onChange` do campo inicial, não no `onSubmitEditing`**
+  — essa é a parte que corrige a extensão do pedido: digitar+Enter e
+  escolher no calendário nativo são dois fluxos diferentes no
+  `<input type="date">` (o calendário nunca dispara Enter, só `onChange`),
+  então só um handler em `onSubmitEditing` cobria o primeiro caso e não o
+  segundo. Colocando a cópia em `onChange` cobre os dois de uma vez —
+  `onSubmitEditing` fica só pra mover o foco pro campo final (UX, não
+  núcleo da regra).
+  ```tsx
+  <WebDateField
+    value={dataIni}
+    onChange={(v) => {
+      setDataIni(v || null);
+      if (v) setDataFim(v);
+    }}
+    testID="tela-data-ini"
+    onSubmitEditing={() => {
+      document.querySelector<HTMLInputElement>('[data-testid="tela-data-fim"]')?.focus();
+    }}
+  />
+  ```
+  Quando o `onChange` original da tela já fazia algo além de um `set` puro
+  (ex.: `onChange={(v) => setDataIni(v || todayIso())}`, fallback pra hoje
+  quando o campo é limpo), preservar esse comportamento e só ACRESCENTAR o
+  `if (v) setDataFim(v)` — não substituir a lógica existente.
+- **Aplicada retroativamente em 2026-07-18** a todo par De/Até já existente
+  no app: `requisicao.tsx`, `movimentacao-produtos.tsx`,
+  `posto-afericoes.tsx`, `telemarketing.tsx` (dois pares: Último Contato e
+  Agendamento), `contatos.tsx` (dois pares: período e previsão),
+  `bordero-cilindros.tsx` (dois pares: saída e retorno),
+  `entrada-saida-caixa.tsx`, `notas-fiscais.tsx` (dois pares: data de
+  movimento e data da NF), `relatorio-caixa.tsx`/
+  `relatorio-caixa-analitico.tsx` (já tinham a versão só-Enter, atualizadas
+  pra também cobrir o calendário). Qualquer par De/Até criado depois desta
+  data já nasce com a cópia no `onChange` — não é opcional por tela.
+- Não se aplica a pares de campos que não são "período de uma busca" (ex.:
+  Data de Saída/Data de Retorno de uma viagem, Data de Compra/Fabricação/
+  Entrada/Revisão de um número de série de cilindro) — esses são datas de
+  eventos distintos, não um intervalo De/Até de filtro.
+
 ## Padrões de UI — Modais, Mensagens e Formulários (Web) `[GLOBAL]`
 
 **Added 2026-07-15, user-directed** (pasted as a standalone checklist to stop
@@ -1172,6 +1565,83 @@ Para os dois tiers:
 - Somem sozinhas (toast) ou têm botão único de confirmação (alerta
   bloqueante) — sem elementos extras.
 
+**Duração de exibição — mensagens com informação grande/importante ficam
+5s `[GLOBAL]`, adicionado 2026-07-20, user-directed.** A duração padrão de
+cada tipo (`DURACAO` em `FeedbackProvider.tsx` — hoje `{success: 600,
+info: 600, warning: 2000, error: 3000}` ms, já reduzida antes por pedido
+explícito do usuário) é pensada pra mensagem curta de confirmação simples
+("Registro gravado.", etc.) — curta demais pra mensagem que carrega
+**informação grande/importante que o usuário precisa ler e conferir**
+(números, resultado de cálculo, texto longo) antes de agir. Nesses casos,
+passar `durationMs` explícito (5000) no 3º parâmetro de
+`showSuccess`/`showWarning`/`showError`/`showInfo` — parâmetro já existe em
+`FeedbackProvider.tsx` (`notify(t, msg, ttl, durationMs)`), sobrescreve só
+aquela chamada, não muda o padrão global do tipo.
+
+- Referência já aplicada: `contrato-completo.tsx`'s
+  `consultarIndiceBacen` — o toast de sucesso mostra o percentual/índice
+  consultado no Banco Central e quantos meses foram considerados, texto
+  que o usuário precisa ler com calma antes de clicar "Gravar Reajuste"
+  (`fb.showSuccess(texto, undefined, 5000)`).
+- Regra vale daqui pra frente pra toda mensagem NOVA desse tipo — não é
+  gatilho de varredura retroativa de toda mensagem já existente no
+  sistema (mesmo princípio das outras regras `[GLOBAL]` deste arquivo),
+  mas ao tocar numa tela que já tem uma mensagem assim (números, resumo de
+  operação, texto longo) por outro motivo, aplicar `durationMs: 5000` de
+  passagem.
+- Critério pra decidir se uma mensagem se qualifica: ela tem número(s) pro
+  usuário conferir, resume o resultado de uma operação não-trivial, ou
+  passa de ~80 caracteres? Se sim, é "grande/importante" — usar 5000.
+  Mensagem curta de confirmação simples continua no padrão do tipo.
+
+**Reforçado 2026-07-18, user-directed `[GLOBAL]`** ("todas as mensagens do
+sistema deverão ser exibidas no meio da tela" — motivado por um banner de
+erro inline aparecendo fora do centro na Tela Principal). Auditoria pontual
+achou (e corrigiu) violações reais desta regra já existente:
+
+- **Tela Principal / Movimento de Hoje**: `PedidosTable.tsx` renderizava
+  `dashError` como um `<View style={styles.errorBox}>` cru dentro do fluxo
+  da página (não-centralizado, exatamente o padrão proibido acima). Corrigido
+  movendo a chamada pra dentro do próprio hook (`useDashboard.ts`, via
+  `useFeedback().showError(...)`) e removendo o state/prop/estilo
+  `dashError`/`errorBox`/`errorText` inteiramente — a tela não sabe mais
+  renderizar esse erro, só o hook decide mostrar via toast centralizado.
+  Cuidado ao fazer esse retrofit noutro lugar: usar `feedback.showError`
+  (o método específico, não o objeto `feedback` inteiro) nas dependências
+  de `useCallback` — o objeto `feedback` retornado por `useFeedback()` é um
+  objeto NOVO a cada render do `FeedbackProvider` (dispara em QUALQUER
+  toast do app inteiro), mas cada método nele (`showError` etc.) é
+  referencialmente estável; usar o objeto inteiro como dependência arrisca
+  recriar o callback (e reexecutar o `useEffect` que depende dele) toda vez
+  que qualquer outro toast do sistema dispara.
+- **Relatório de Descontos & Margem** (`relatorio-descontos.tsx`) e
+  **Relatório de Pedidos** (`relatorio-pedidos.tsx`/
+  `useRelatorioPedidos.ts`): mesmo padrão de banner inline
+  (`styles.errorBox`), mesma correção. Em `useRelatorioPedidos.ts` o state
+  `error` foi mantido (só parou de ser renderizado) porque a tela também
+  usa `!r.error` pra suprimir a mensagem "Nenhum pedido..." depois de uma
+  busca que falhou — nesse caso, `setError(msg)` e
+  `feedback.showError(msg)` são chamados juntos, um pro state interno de
+  controle, outro pro toast visível.
+- `errorBox` (estilo) removido de `src/components/principal/styles.ts` e
+  `src/components/relatorio/styles.ts` (não usado em mais nenhum lugar após
+  os retrofits acima). `errorText` continua existindo nesse último — ainda
+  usado por `PedidoCard.tsx` pra um erro CONTEXTUAL de uma linha expandida
+  específica (não um alerta de sistema global), decisão consciente de não
+  mexer nesse caso.
+- **Exceção conhecida, NÃO corrigida nesta rodada**: `app/login.tsx` tem seu
+  próprio banner inline (`styles.banner`/`styles.bannerError`,
+  `testID="login-error"`) pra erro de autenticação, também fora do padrão
+  centralizado. Deixado de propósito fora desta correção — é uma tela
+  sensível (fluxo de login) e a escolha de manter o erro inline ali (perto
+  do formulário, sem depender de um toast que soma sozinho) pode ter sido
+  deliberada; fica pra confirmar com o usuário antes de mexer, não presumir.
+- Campos de validação inline junto ao próprio campo do formulário (ex.:
+  `cliente-completo.tsx`/`fornecedores.tsx`'s `errorText` sob um `TextInput`
+  específico) **não são** "mensagens de sistema" no sentido desta regra —
+  são feedback de validação de UM campo, convenção já estabelecida em
+  "Padrões de UI" acima, não precisam virar toast.
+
 ### 3. Campos de formulário
 
 Extensão de "Field Width Standard (Form Rows)" acima (mesma regra geral —
@@ -1196,7 +1666,176 @@ numéricas explícitas:
   `fieldLabel`/`sectionTitle` em `pedido/styles.ts` e nas telas
   "Completo".
 
-### 4. Checklist rápido antes de entregar qualquer tela/modal novo
+**Reforçado 2026-07-18, user-directed `[GLOBAL]`** ("aplicar em todas as
+telas formatação de redução dos campos e botões. Reaproveitamento de
+espaços agrupando os campos um do lado do outro, para minimizar o tamanho
+da tela"). A regra acima já cobria campos — esta reforça que **botões**
+seguem o mesmo princípio: nunca um botão de ação (Incluir/Gravar/Buscar/
+etc.) esticado `full-width` sozinho quando cabe agrupado com os outros
+botões da mesma tela na mesma linha, do mesmo tamanho deles (mesmo padding
+horizontal/vertical, mesma fonte) — não um botão "de destaque" maior que
+os demais só por ser a ação principal. Referência já aplicada:
+`requisicao.tsx`/`movimentacao-produtos.tsx` (`incluirBtn` alinhado ao
+tamanho de `actionBtn`/`ps.secondaryBtn`, `buscarBtnInline` movido pra
+dentro da própria linha de filtros em vez de embaixo). Toda tela NOVA a
+partir de agora nasce assim — campos e botões sempre agrupados/lado a
+lado, largura mínima que o conteúdo pede, nunca esticados por padrão.
+**Não é gatilho pra uma varredura retroativa de todas as telas já
+existentes** (mesmo princípio de "Permissions + Audit Log Coverage" acima
+— aplica quando a tela é tocada por outro motivo, não uma tarefa própria
+disparada sozinha) — mas ao tocar em qualquer tela antiga por outro
+motivo, ajustar de passagem se ela ainda tiver campo/botão esticado sem
+necessidade.
+
+### 4-5. "Modo Didático" (ícone único de Ajuda + ajuda em linguagem de usuário final)
+
+**Apelido definido 2026-07-20, user-directed** — o usuário pode pedir só
+"aplique o Modo Didático nessa tela" (ou "essa tela precisa de Modo
+Didático") pra disparar as duas regras abaixo (4 e 5) juntas, sem precisar
+reexplicar cada uma. Ao ouvir esse termo em qualquer sessão futura,
+aplicar ambas.
+
+### 4. Ícone único "i"/Ajuda reunindo a explicação de todos os botões da tela
+
+**Adicionado 2026-07-20, user-directed `[GLOBAL]`** ("Todo os
+botões(icones) de tela, devem conter tooltip com informações da ação do
+botão" — **promovido a padrão-mestre no mesmo dia**, depois de validado no
+Pedido Bar: "O ícone Botão 'i' Ficou muito bom. Adicione isso ao Modo
+Didático"). A forma padrão de explicar o que cada botão da tela faz é **um
+único ícone "i"/Ajuda** no cabeçalho, que abre **um único modal** reunindo
+a explicação de todos os botões/campos com efeito não-óbvio — não mais
+tooltip espalhado por botão como implementação default (isso era a versão
+inicial da regra, testada no mesmo dia e substituída pela consolidada,
+depois de o usuário aprovar o resultado). Referência de implementação:
+`AjudaPedidoModal.tsx` (`frontend/src/components/pedido/`) — lista de
+itens `{titulo, texto, icon}` em linguagem de usuário final, dentro do
+tier de modal "seleção" (560px, `modalCardWebCompact`); `PedidoHeader.tsx`
+ganhou prop opcional `onHelp` que renderiza o ícone
+`information-circle-outline` ao lado do botão Gravar/salvar da tela, com
+tooltip curto "Ajuda" no próprio ícone (hover, web) — o único tooltip que
+resta nesse padrão é esse, no ícone que abre o modal.
+
+- **Todo botão de ação da tela** (não só os que são "só ícone" — inclui
+  pills com ícone+texto como "Fechar Pedido"/"Faturar Pedido") ganha uma
+  entrada no modal de Ajuda, não um tooltip individual. Campos com efeito
+  não-óbvio (ex.: campo Tipo, campo Referência) também entram na mesma
+  lista — não precisam necessariamente de um `helper`/`hint` próprio sob o
+  campo (regra 5 abaixo) se já estão cobertos aqui; usar as duas formas
+  juntas só quando um campo específico se beneficiar de ajuda visível ali
+  mesmo, sem precisar abrir o modal.
+- Vale pra **toda tela nova** a partir de agora — ao criar uma tela com 2+
+  botões de ação cujo efeito não é óbvio só pelo rótulo, adicionar o ícone
+  "i"/Ajuda no cabeçalho + `*AjudaModal.tsx` próprio (mesmo formato do
+  Pedido Bar), em vez de tooltip por botão.
+- **Correção 2026-07-21, user-directed — tooltip por botão VOLTOU, como
+  complemento do modal, não substituto**: "Tem que incluir no modo
+  didático, os tooltip em todos os botões do tipo ícones." As duas coisas
+  coexistem agora: o ícone único "i" continua abrindo o modal com a
+  explicação de tudo (pra quem quer o detalhe completo de uma vez), **e**
+  todo botão que é só ícone (sem rótulo de texto ao lado) ganha também um
+  tooltip curto no hover (web), mesmo padrão já usado no ícone de Ajuda —
+  não é mais só o precedente histórico do `PainelPedidoCard.tsx`. Componente
+  compartilhado: `frontend/src/components/IconButtonWithTooltip.tsx`
+  (extraído do `HeaderIconButton` local de `PedidoHeader.tsx`) — usar esse
+  em vez de recriar `onHoverIn`/`onHoverOut` cru por tela. Aplicado em
+  `gestor-comandas.tsx`/`alterar-comanda.tsx` (2026-07-21) como referência.
+  - **Gotcha de stacking descoberto ao aplicar isso** (tooltip "Abrir O.S."
+    aparecendo ATRÁS do próximo ícone da mesma linha, não por cima): um
+    `zIndex` alto só no `View` absoluto da tooltip não basta quando ela tem
+    um **irmão** (outro botão-ícone na mesma `View` pai de nível mais alto,
+    ex.: `itemActions` com `flexDirection: "row"`) que vem depois no DOM —
+    `zIndex` só reordena entre filhos do MESMO pai, e o botão seguinte é
+    irmão do WRAPPER da tooltip, não da tooltip em si, então ele pinta por
+    cima independente do zIndex dela. Fix: o `View` wrapper (`position:
+    "relative"`) precisa ELE MESMO subir de `zIndex` durante o hover (não
+    só o filho absoluto) — é assim que `IconButtonWithTooltip.tsx` faz
+    (`zIndex: hover ? 1000 : 1` no wrapper, `zIndex: 1000` na tooltip).
+    **Regra geral**: tooltip tem que aparecer por cima de QUALQUER outro
+    elemento da tela — ao construir um tooltip novo (ou revisar um
+    existente), sempre elevar o zIndex do container/wrapper posicionado
+    durante o hover, não só do elemento absoluto da tooltip em si.
+- **Não é gatilho de varredura retroativa** de toda tela já existente
+  (mesmo princípio já usado nas outras regras `[GLOBAL]` deste arquivo) —
+  aplica a toda tela nova desde já, e ao tocar numa tela antiga por outro
+  motivo, adicionar o ícone/modal de Ajuda que estiver faltando de
+  passagem.
+
+### 5. Telas complexas — texto de ajuda em linguagem de usuário final
+
+**Adicionado 2026-07-20, user-directed `[GLOBAL]`** ("Telas complexas,
+como o módulo de compras e suas telas, devem conter informações didática
+sobre o uso dos campos e informações de regra de negócio, com uma
+linguagem para usuário final"). Telas com fluxo não-óbvio, várias etapas,
+ou campos cujo efeito não é evidente só pelo rótulo (ex.: telas do módulo
+Gestão de Compras/Curva ABC/Cotação/Pedido de Compra, painéis com
+filtros+regras de cálculo, cadastros com campos que disparam efeitos
+colaterais) precisam de texto de apoio explicando **o que aquele campo/
+ação faz e por quê**, escrito pro usuário final do ERP (comprador,
+vendedor, financeiro) — nunca jargão técnico de programação (nada de
+"endpoint", "payload", nomes de coluna de banco, nomes de função).
+
+- Formato: texto de ajuda curto abaixo do campo/seção (mesmo estilo já
+  usado em `helper`/`hint` — `WebDateField`, `cliente-completo.tsx` — só
+  estendendo o USO pra telas complexas de fluxo/regra, não só formatação
+  de campo) ou um ícone de "informação" (`information-circle-outline`)
+  com tooltip/popover explicando a regra, quando o texto for longo demais
+  pra caber sob o campo sem poluir a tela.
+- Exemplo do padrão certo: em vez de rotular um campo só "Rateio" (termo
+  técnico), explicar "Redistribui a diferença entre os centros de custo
+  já lançados e o valor atual do contrato, proporcionalmente" — a mesma
+  ideia usada no aviso de divergência do modal Centro de Custo em
+  `contrato-completo.tsx`.
+- Aplica a toda tela NOVA classificável como "complexa" a partir de agora
+  — não é obrigatório em cadastro simples de 2-3 campos óbvios (Tipo de
+  Contrato, Tipo de Reajuste, etc.), mas é obrigatório em qualquer tela de
+  fluxo/relatório/motor de regra de negócio (faturamento, rateio, cálculo
+  de reajuste, ressuprimento, cotação).
+- Mesmo princípio de não-retroatividade automática das demais regras
+  `[GLOBAL]` — ao tocar numa tela complexa já existente por outro motivo,
+  adicionar o texto de ajuda que estiver faltando de passagem.
+
+### 6. Feedback visual em processos demorados (>3s) `[GLOBAL]`
+
+**Adicionado 2026-07-23, user-directed** — achado ao vivo no Painel de
+Inventário: o botão "Fechar Inventário" ficava só desabilitado+esmaecido
+(`opacity` reduzida) enquanto processava, sem spinner nem mudança de
+texto. Contra uma conexão de rede real (não localhost), a operação levou
+tempo suficiente pro usuário reportar "cliquei e não aconteceu nada" —
+mesmo a ação tendo concluído com sucesso. Regra: **todo botão/ação que
+dispara uma chamada ao backend cujo tempo de resposta pode passar de ~3
+segundos precisa de feedback visual claro de que está processando**, não
+só o estado desabilitado. **Vale pra gravação (Gravar/Incluir/Fechar/
+Excluir) E pra busca/leitura (Buscar/Gerar Relatório/carregar lista) —
+qualquer chamada à API, não só as que escrevem no banco** — reforçado
+pelo usuário no mesmo pedido, 2026-07-23.
+
+- **Padrão de referência**: `app/inventario.tsx` (botões Abrir/Fechar/
+  Cancelar Inventário) — troca o ícone por `<ActivityIndicator size="small"
+  color={...} />` e o texto do botão por um verbo no gerúndio ("Fechando…"/
+  "Abrindo…"/"Cancelando…") enquanto a ação está em andamento, além de
+  manter `disabled`+`opacity` reduzida. Precisa de um state que saiba QUAL
+  ação está rodando (não só um booleano genérico `processando`), pra
+  colocar o spinner só no botão certo quando a tela tem mais de uma ação
+  possível.
+- Vale pra qualquer tela nova com um botão que salva/processa/fecha/
+  cancela — não só Inventário. Ao tocar numa tela antiga que só desabilita
+  o botão sem spinner/texto, ajustar de passagem (mesmo princípio de
+  não-retroatividade automática das demais regras `[GLOBAL]` deste
+  arquivo).
+- Não confundir com a seção "Mensagens de sistema (alertas, toasts,
+  confirmações)" acima — aquela é sobre o resultado final (sucesso/erro)
+  depois que a ação termina; esta é sobre o **durante**, enquanto ainda
+  está em andamento.
+- Complementar, não substitui, corrigir a causa raiz de lentidão quando
+  ela for genuinamente corrigível — no caso do Fechar Inventário, a demora
+  real vinha de um loop fazendo até 3 idas ao banco por item divergente
+  (achado no mesmo incidente); a correção foi reescrever pra 2 comandos
+  SQL set-based (`INSERT...SELECT` + `UPDATE...FROM`) em vez de só
+  mascarar a lentidão com um spinner. O spinner cobre a espera residual
+  que sempre existe (latência de rede, catálogos muito grandes), não é
+  desculpa pra deixar uma operação lenta sem otimizar.
+
+### 7. Checklist rápido antes de entregar qualquer tela/modal novo
 
 1. Modal está centralizado e na largura certa pro seu tier (560 seleção /
    360–480 confirmação pontual), não full-width?
@@ -1207,8 +1846,17 @@ numéricas explícitas:
    lado na mesma linha?
 4. Os campos numéricos estão com largura reduzida (80–120px), não
    esticados?
+5. A tela tem 2+ botões de ação com efeito não-óbvio? Existe um ícone
+   único "i"/Ajuda no cabeçalho abrindo um modal que reúne a explicação de
+   todos eles (padrão `AjudaPedidoModal.tsx`/`PedidoHeader.onHelp`), em vez
+   de tooltip espalhado por botão?
+6. Se a tela é complexa (fluxo de várias etapas, regra de negócio não-
+   óbvia), existe texto de ajuda em linguagem de usuário final pros
+   campos/ações que precisam?
+7. Algum botão dispara uma ação que pode passar de ~3s? Tem spinner +
+   texto no gerúndio enquanto processa, não só `disabled`+opacidade?
 
-### 5. Notas de manutenção
+### 8. Notas de manutenção
 
 - Sempre que o usuário pedir pra ajustar formatação de tela/modal/campo,
   refletir a mudança **nesta seção**, não só no código — é assim que essas
@@ -1316,9 +1964,12 @@ implementation — not a modal/dialog popup:
   always the *container* (a cramped modal vs. a full-width card), not the
   component itself.
 - Generic error messages are not acceptable: when a save fails, surface
-  the backend's actual `message` (or, for a raw FastAPI 422 payload with
-  no `message`/`success` key, join `detail[].msg`) instead of falling
-  straight to a hardcoded fallback string.
+  the backend's actual `message`, or — for a raw FastAPI 422 payload with
+  no `message`/`success` key — use `friendlyApiError(j, fallback)` from
+  `frontend/src/utils/api.ts` (never join `detail[].msg` directly; that
+  dumps Pydantic's raw English validation jargon, e.g. "Input should be a
+  valid string", straight at the end user with no indication of which
+  field is wrong — see "Mensagens de Erro — Linguagem Não-Técnica" below).
 - **Exception — compact single-view screens**: not every entity needs tabs.
   When the legacy VB6 form itself is compact (everything visible on one
   screen, no tab control — e.g. `FrmmanForn.frm`/Fornecedores, unlike
@@ -1410,6 +2061,230 @@ read that before touching this screen again, don't re-derive from scratch.
   barcodes per product (`codbarra_auxiliar`), the "PAF-ECF" fiscal-printer
   hooks referenced in the legacy delete flow, and NCM/CEST dedicated lookup
   screens (`FrmCesNCM`) — NCM/CEST are plain text fields here for now.
+
+### "Dados Principais" tab — grupos replicam o legado (2026-07-29, user-directed)
+
+O usuário colou um screenshot do `FrmManPec.frm` mostrando 6 frames lado a
+lado (Estoques, Unidades de Medida, Margens, Preço de Compra e Custos,
+Preços, Classificação Mercadológica/Fabricante) e pediu pra seguir essa
+mesma disposição na aba "Dados Principais". Rastreado campo-a-campo de
+volta no `.frm` (por `Campo(n)`/posição) pra confirmar qual coluna cada
+rótulo do screenshot realmente é, antes de mexer:
+
+- **Estoques**: Estoque Atual/Reservado OS/Reservado (somente leitura,
+  `qtd`/`reservado_os`/`reservado`) + **Estoque Mínimo** (editável,
+  `estoque_minimo`) — este último **movido** da aba "Dados Secundários"
+  pra cá, é onde o legado (`Campo(22)`, sem `Enabled=0`) realmente fica.
+- **Unidades de Medida**: Unidade Compra (`un_compra`), **Unidade Venda**
+  (reaproveita o campo já existente `unidade_medida`, relabelado — o
+  legado usa uma coluna própria `Uni` pra isso que nunca foi migrada
+  nesta tela; `unidade_medida` é o campo mais próximo já implementado e
+  testado, decisão pragmática pra não introduzir uma coluna nova sem
+  validação — revisitar se o usuário confirmar que são coisas
+  diferentes), Qtd Unid Compra (`qtd_un_compra`) — movidos de "Dados
+  Secundários".
+- **Margens**: "Margem Real de Venda"/"Margem Real de Tabela" são
+  **calculadas no frontend, somente leitura, não persistidas** —
+  `((preço − custo_reposicao) / custo_reposicao) × 100`. Isso é a
+  variante SIMPLES do legado (`Margem_Praticada`/`MP_Tabela`,
+  branch sem desconto de PIS/COFINS/Simples/Outras Despesas) — a variante
+  completa depende de globais de config (`pis`, `cofins`, `Simples`,
+  `Outras_Despesas`) que não existem neste schema; não implementada de
+  propósito, ver "Não replicar truques VB6"/"Nunca assumir regra de
+  negócio". "Margem Preço Venda"/"Margem Preço Tabela" são os campos
+  editáveis reais (`margem_lucro`/`margem_tabela`, `Campo(17)`/`Campo(65)`
+  no legado) — **antes desta mudança estavam mal rotulados** como "Margem
+  Real de Venda/Tabela" na aba "Dados Secundários"; corrigido e movido
+  pra cá.
+- **Preço de Compra e Custos**: Desconto Compra (`desconto_compra`, movido
+  de Secundários), Perc. IPI (`perc_ipi`, **movido da aba Configurações
+  Fiscais** — no legado esse campo só existe no Frame15 desta aba, a
+  colocação anterior em Fiscal era uma escolha nossa, não do legado),
+  Substituição Tributária (`valor_substituicao`, idem, movido de Fiscal),
+  "Preço Unidade Compra" (somente leitura, calculado = `p_custo ×
+  qtd_un_compra` — no legado é um campo editável que recalcula
+  `p_custo` de trás pra frente ao ser digitado; não replicado esse
+  cálculo bidirecional aqui, ficou só como display informativo — se o
+  usuário pedir a edição reversa, é trabalho novo), Preço Compra
+  (Unitário) (`p_custo`, relabelado de "Preço de Custo", movido da antiga
+  seção Preços), Custo Reposição/Custo Inventário (movidos de
+  Secundários), Custo Médio (somente leitura, `custo_medio`, movido da
+  antiga linha "Estoque (somente leitura)").
+- **Preços**: Preço de Venda (`p_venda`), Preço de Tabela (`preco_lista`),
+  **Tipo Preço** (reaproveita `politica_preco`, `Campo(33)` no legado —
+  **antes rotulado "Política de Preço" na aba Descontos**, movido e
+  relabelado pra cá). Os outros preços do Frame "Preços" do legado
+  (Garantia/Base/Lista/MVA) ficam `Visible=0` por padrão lá também — não
+  fazem parte deste grupo, continuam existindo na tela sob "Outras
+  Informações" (nome novo, sem correspondente direto no legado, só pra
+  não perder os campos que já existiam aqui antes desta reorganização).
+- **Classificação Mercadológica / Fabricante**: "Fabricante/Distribuidor"
+  reaproveita o campo `fornecedor` já existente (confirmado via
+  `Campo(27)` no legado — é o mesmo FK de fornecedor, só reexibido com
+  esse rótulo neste frame) + botão/box **"Definir Nível"** substituindo os
+  5 campos de texto crus "Nível 1..5" que existiam antes — agora abre o
+  mesmo `NiveisModal` já usado em Serviços (ver "Padrão de Campo Cliente"/
+  seção Serviços acima), grava em `nivel1..nivel5` via seleção na árvore
+  em vez de digitação livre.
+- Pra viabilizar reaproveitar `NiveisModal` fora de Serviços (que usa o
+  tipo `Connection` completo de `listConnections()`, enquanto
+  `useProdutoCompletoForm`'s `conn` é só `{servidor,banco,api}`), as
+  funções de `frontend/src/utils/api.ts` (`apiBase`/`connQS`/`apiGet`/
+  `apiSend`/`apiDelete`) e `NiveisModal`'s prop `conn` foram re-tipadas pra
+  aceitar um novo tipo estrutural mínimo `ConnLike = {servidor, banco,
+  api}` em vez de `Connection` — `Connection` continua satisfazendo esse
+  tipo (nenhuma chamada existente quebra), só passou a aceitar também
+  formas reduzidas como a de Produto Completo.
+
+**Ajustes ao vivo, mesmo dia** — usuário revisou cada card por screenshot e
+corrigiu 3 problemas:
+
+1. **Bug de layout — campos "esticados" com espaço vazio enorme entre eles**
+   (visível principalmente em "Unidades de Medida"/"Margens"): causa raiz
+   era usar uma única `View` (`groupGrid`, `flexDirection:"row",
+   flexWrap:"wrap"`) com vários cards de altura desigual — o comportamento
+   padrão do flexbox (`alignItems: "stretch"`) força TODO card da mesma
+   linha a esticar até a altura do mais alto ("Preço de Compra e Custos",
+   8 campos), e os campos internos (`colFlex`, `flex:1`, dentro de uma
+   coluna) absorvem esse espaço sobrando, abrindo lacunas gigantes entre
+   label e campo seguinte. Trocado por **2 colunas explícitas**
+   (`groupColumns` → dois `groupColumn`, cada um só uma pilha vertical
+   simples de cards, sem stretch cross-card) + dentro de cada card, os
+   campos entram numa `groupFieldsRow` (`flexWrap:"wrap"`) com largura
+   `colHalf` (~45%) — 2 por linha, sem sobra de espaço porque a altura do
+   card agora é só o conteúdo real. Efeito colateral desejado: cards com
+   poucos campos (ex.: Estoques, 4 campos) viram um card compacto de 2
+   linhas × 2 colunas, exatamente o que foi pedido.
+2. **Posição dos cards** — o usuário reposicionou card a card, ao vivo,
+   até chegar em 2 colunas fixas (não a grade 3-colunas do legado):
+   **coluna esquerda** = Estoques, Margens, Unidades de Medida, Preço de
+   Compra e Custos; **coluna direita** = Preços (topo), Classificação
+   Mercadológica/Fabricante (logo abaixo de Preços). Se o usuário pedir
+   pra mexer na posição de novo, editar a ordem dentro de cada
+   `groupColumn` em vez de tentar prever posição via `flexWrap` livre —
+   ficou claro que a ordem de wrap "natural" não é previsível o
+   suficiente pra esse tipo de pedido específico de posição.
+3. **2 casas decimais em campos de Preço/percentual** — motivado por um
+   valor bruto de ponto flutuante vazando na tela (`"Preço de Venda:
+   118.19999694824219"`, artefato de `REAL`/`FLOAT` do SQL Server).
+   `Num` ganhou prop `money` — enquanto o campo tem foco mostra o texto
+   cru (não atrapalha digitação), no `onBlur` (e sempre que sem foco)
+   formata via `fmtMoedaInput`/`fmtMoeda` pra `"0,00"`. Aplicado em todo
+   campo de Preço/margem/custo/desconto/IPI/substituição tributária desta
+   aba (não nas outras abas — fora do escopo pedido desta vez). Os
+   displays somente-leitura calculados (Margem Real, Preço Unidade
+   Compra, Custo Médio) usam a mesma formatação de 2 casas
+   (`fmtPct`/`fmtMoeda`, ambas trocadas de 3→2 e mantidas em 2 casas).
+
+**Modo Didático aplicado** (CLAUDE.md > "Padrões de UI" > seção 4-5):
+ícone "i" no cabeçalho (`IconButtonWithTooltip`, ao lado do Gravar) abre
+`AjudaPedidoModal` reaproveitado (não duplicado) com `PRODUTO_AJUDA_ITENS`
+— explica em linguagem de usuário final os campos calculados/somente-
+leitura (Estoque, Margem Real, Preço Unidade Compra, Custo Médio), o botão
+Definir Nível, Fabricante/Distribuidor, e os botões Fornecedores/
+Fotografia/Grade/Anexos/Excluir.
+
+**Campos que viraram combobox, 2026-07-29, user-directed**:
+
+- **Unidade Compra / Unidade Venda** (`un_compra`/`unidade_medida`) — antes
+  texto livre, agora `SelectField` puxando da tabela auxiliar Unidade de
+  Medida (`GET /api/tabelas/unid` — CRUD já existente em
+  `unidade-medida.tsx`/`tabelas_aux_service.py`, não existe um endpoint de
+  lookup mais enxuto pra essa tabela ainda, então a tela chama o CRUD
+  direto, que já é leve o bastante). **"UN" como padrão só em produto
+  NOVO** (nunca sobrescreve edição de produto já gravado) — efeito
+  colateral: se "UN" não existir na tabela `unid` de uma instalação
+  específica, o combobox mostra "UN" selecionado mas sem opção
+  correspondente na lista até o usuário abrir e escolher outra.
+- **Tipo Preço** (`politica_preco`, 1 char no banco — `Left(Campo(33), 1)`
+  no legado) — antes texto livre de 1 caractere, agora `SelectField` com 2
+  opções fixas: **"Entrada" (`E`)** — o preço do produto é recalculado
+  automaticamente toda vez que dá entrada dele no Recebimento de Produto —
+  e **"Controlado" (`C`)** — a mudança de preço é sempre manual. Regra de
+  negócio explicada diretamente pelo usuário (não inferida do legado); a
+  tela ainda **não implementa** o recálculo automático em si (Recebimento
+  de Produto/entrada de estoque não migrado nesta sessão) — só o campo de
+  configuração foi adicionado. Registrar em PENDENCIAS.md se/quando o
+  Recebimento de Produto for migrado, pra lembrar de checar esse campo.
+
+**Rodada seguinte, mesmo dia (2026-07-29) — mais mecanismos de busca +
+auto-cálculo de preço**:
+
+- **Preço de Venda/Tabela vazios se auto-calculam no blur** a partir de
+  Custo Reposição × Margem — réplica da fórmula `CalculaPrecoVenda` do
+  legado (variante simples, sem dedução de PIS/COFINS/Simples/Outras
+  Despesas — mesma decisão já tomada pra "Margem Real" acima, o legado tem
+  uma segunda variante com dedução gated por um flag `preco_cld` que não
+  existe neste schema). Implementado como prop genérica `onEmptyBlur` no
+  componente `Num` (só dispara quando o campo perde o foco **vazio** — nunca
+  sobrescreve um valor já digitado).
+- **Produtos Similares/Secundários (aba Similares e Equivalentes) ganharam
+  busca de produto** — antes só um campo de código de fábrica cru +
+  "Vincular". Novo componente reaproveitável
+  `frontend/src/components/ProdutoSearchModal.tsx` (mesmo padrão de
+  `FornecedorSearchModal.tsx`, busca em `GET /api/produtos-servicos?tipo=P`
+  — endpoint já existente, o mesmo usado pelo picker de item de Pedido/O.S.
+  em `AddItemModal.tsx`). Rastreado no legado (`Geral\frmvendas.frm`):
+  **Similares** = substitutos oferecidos só quando falta estoque na venda
+  (`pecaseq`, consulta bidirecional); **Secundários** = alternativas
+  sempre oferecidas, independente de estoque (`pecas_secundaria`) — regras
+  diferentes, texto de ajuda (`sectionHint`) adicionado em cada seção pra
+  deixar isso claro pro usuário final.
+- **Busca de Fornecedor também no modal "Fornecedores"** (lista de
+  fornecedores que também vendem este produto, `pecas_fornecedor`) —
+  reaproveita o MESMO `FornecedorSearchModal` já criado pro campo
+  Fabricante/Distribuidor, em vez de duplicar. Ícone "Fornecedores" no
+  cabeçalho ganhou uma bolinha de sinalização (`IconButtonWithTooltip`
+  ganhou prop `badge`/`badgeColor`, reaproveitável por qualquer ícone do
+  header de qualquer tela) quando `fornecedores.length > 0` — pedido
+  explícito do usuário pra dar visibilidade sem precisar abrir o modal.
+- **Fotografia trava o sub-grupo em "Imagens"** — `GestorDocumentosSection`
+  já suportava essa trava via prop `codSubGrupo` (usada em outras telas),
+  só não estava sendo passada aqui. Resolve/cria o sub-grupo "Imagens" do
+  grupo Produtos via `POST /api/gestor-documentos/sub-grupos` (find-or-
+  create já existente no backend) na abertura do modal — não hardcoda o
+  `cod_sub_grupo` porque esse id é por instalação/empresa, não uma
+  constante global como `GESTOR_DOC_GRUPO_PRODUTO`.
+
+**Preço por Quantidade / Variações de Preços implementados, mesmo dia** —
+os 2 ícones do card Preços que antes mostravam "ainda não disponível"
+agora abrem modais reais (`PrecoQtdModal`/`PromocaoModal`). Rastreados em
+`Geral\frmvalqtd.frm` (`pecas_preco_qtd`) e `Geral\FrmValPro.frm`
+(`pecas_promocao`) — nenhuma cópia existe em `Kontacto\`. Ver
+PENDENCIAS.md > "Produtos (Cadastro Completo)" pro rastreio completo,
+inclusive a confirmação de que "Código Promoção" NÃO é um agrupador real
+entre produtos diferentes (é só um rótulo sequencial por produto, mesmo no
+legado) e que nenhum dos dois preços é aplicado automaticamente no Pedido
+ainda (só o cadastro foi portado).
+
+**Promoção ganhou período opcional/combinável, mesmo dia, SEM precedente
+no legado** — dias da semana (chips Dom-Sáb), período de data
+(`WebDateField`) e período de hora (`WebDateField type="time"`), tudo
+opcional e combinável entre si (vazio = sem restrição naquele critério).
+3 colunas novas em `pecas_promocao` (`dias_semana`, `data_inicio`/
+`data_fim`, `hora_inicio`/`hora_fim`) via migração idempotente (mesmo
+padrão de `_ensure_qtd_pessoas_col`). Pedido explícito do usuário — a
+tela legada (`FrmValPro.frm`) nunca teve esses campos, não é gap de
+migração. Só o cadastro foi feito — nenhuma tela de venda valida esses
+critérios ainda (mesma pendência já registrada acima).
+
+**Dias da Semana (Web Convidado) — 2026-07-30, user-directed, SEM
+precedente no legado.** Ícone de calendário ao lado do checkbox "Produto
+Web" (Dados Principais), só habilitado quando esse checkbox está marcado
+— abre `DiasSemanaWebModal`, chips Dom-Sáb (mesmo padrão visual de
+`PromocaoModal`), replace-all-on-save numa tabela nova,
+**`Web_DiasSemana`** (`codigo_int`, `dia_semana` — uma linha por
+produto+dia marcado; nenhum dia marcado = produto aparece todos os dias).
+Backend: `produto_completo_service.py`
+(`list_dias_semana_web`/`save_dias_semana_web`, migração idempotente
+`_ensure_web_dias_semana_table`), rotas
+`GET/POST /produto-completo/{codigo_int}/dias-semana-web`. Este cadastro é
+uma peça do módulo **Web Convidado** (cardápio via QR Code sem cadastro —
+ver `WebConvidado.md`, ainda em FASE DE ANÁLISE/não implementado como um
+todo), mas foi liberado pelo usuário pra implementar desde já ("esse
+recurso já poderá ser implementado agora") — não é uma exceção geral à
+regra "não implementar Web Convidado sem liberação explícita", só este
+cadastro específico.
 
 ## Cilindros
 
@@ -1584,6 +2459,51 @@ mecanismo novo. Plano de implementação faseado da tela "Pedido Completo"
 registrado em PENDENCIAS.md — aguardando confirmação do usuário antes de
 iniciar a implementação.
 
+## Contratos
+
+**Added 2026-07-19, user-directed.** Novo card "Contratos" em Transações
+(`app/contratos.tsx`, hub no mesmo padrão de `app/movimentacoes.tsx`).
+Migração de 7 telas legadas (`FrmManTPC.frm`, `FrmManRea.frm`,
+`FrmManInd.frm`, `FrmConPDI.frm`, `FrmManContra.frm`, `FrmFatContrato2.frm`,
+`FrmEnvCob.frm`) — faseada por decisão explícita do usuário via
+`AskUserQuestion`, dada a diferença de complexidade entre as 5 telas de
+cadastro/contrato e as 2 telas de faturamento (NF-e/Boleto/remessa
+bancária/e-mail em massa). **Fase A implementada** (Tipo de Contrato, Tipo
+de Reajuste, Índices de Reajuste, Produtos Disponíveis, Contrato completo
+com itens/centro de custo/reajuste/acréscimo-desconto/encerramento, Anexos
+via Gestor de Documentos, Rateio de Centro de Custo). **Faturar Contratos
+implementado 2026-07-20** (Faturar + Recibo — motor de faturamento grava
+fiel ao legado em `comanda`/`Receber`/`Duplicata_Receber`, decisão
+explícita do usuário, **não** em `pedido_venda`; Nota Fiscal e Boleto
+ficam de fora) — ver PENDENCIAS.md > "Contratos" pro rastreio completo, o
+que foi decidido, e o que ainda fica de fora (Nota Fiscal, Boleto, Envio
+de Cobrança). **Não re-derivar do zero** — ler a seção do PENDENCIAS.md
+antes de retomar este módulo.
+
+- **Reajuste por índice via API do Banco Central** — feature nova, sem
+  equivalente no VB6 (que só aceitava digitar o valor/percentual na mão).
+  `GET /api/contratos/indice-reajuste/{codigo}/bacen` consulta a série SGS
+  pública (IGP-M=189, IPCA=433 — variação mensal, acumulado do período
+  calculado compondo os meses), mesmo princípio de chamada pública direta
+  já usado pro ViaCEP. Nunca aplica sozinho — só sugere na tela, usuário
+  confirma antes de gravar.
+- Resolver de produto próprio (`contratos_service._resolve_produto_
+  contrato_sync`), cascata Cilindro → Equipamentos → Peças → Serviços —
+  não reaproveita `pedido_common._resolve_produto` (esse só cobre
+  peças/serviços); se outra tela precisar dessa mesma cascata de 4
+  tabelas no futuro, considerar extrair pra um helper compartilhado em vez
+  de duplicar de novo.
+- **Módulo gateado** (2026-07-19, user-directed) — `controle_configuracao.
+  contratos` (coluna legada já existente), mesmo padrão de `_modulo_
+  servicos_ativo` (ver "Regra de Módulo Ativo" abaixo): `_modulo_contratos_
+  ativo(cur)` checado no topo de TODAS as ~21 funções `_*_sync` de
+  `contratos_service.py`, mais `moduleOn("contratos")` explícito em cada
+  tela + no card de `transacoes.tsx` (ver PENDENCIAS.md > "Contratos" pro
+  detalhe). O mesmo dia, o submenu inteiro "Transações > Compra" (Curva
+  ABC, Ressuprimento, Cotação, Pedido de Compra) também passou a ser
+  gateado, pelo flag legado `Curva_abc` — ver PENDENCIAS.md > "Gestão de
+  Compras".
+
 ## Global Entity Rules
 
 **Added 2026-07-10/11, user-directed ("[GLOBAL]")** — apply these to
@@ -1701,6 +2621,120 @@ not just the screen being worked on when the rule was stated.
     sections to unlock and returning to the calling Pedido/O.S. flow
     immediately is the correct behavior there, don't "fix" it to match
     cliente-completo's flow.
+
+## Mensagens de Erro — Linguagem Não-Técnica `[GLOBAL]`
+
+**Added 2026-07-18, user-directed `[GLOBAL]`** (screenshot mostrando
+"Falha conexão: (20002, b'DB-Lib error message 20002, severity 9:\nAdaptive
+Server connection failed (DESKTOP-TDK482U)\n')" na Tela Principal —
+"Trate as mensagens do sistema, passando uma linguagem menos técnica para o
+usuário final"). Nenhuma mensagem de erro voltada ao usuário final deve
+expor texto cru de driver/SQL Server (DB-Lib, códigos numéricos tipo
+20002/18456, nomes de host da máquina, stack trace) — deve ser traduzida
+pra uma frase curta em português, sem jargão técnico.
+
+- **Falhas de conexão** (servidor fora do ar, credenciais erradas, timeout,
+  host não encontrado) já tinham um tradutor pronto — `friendly_db_error()`
+  em `backend/db/connection.py` — mas só era usado na tela de Login
+  (`auth_service.py`, que abre conexão direto via `pymssql.connect` pra
+  validar credenciais antes de qualquer coisa, fora do helper comum). Os
+  outros ~70 services do backend abrem conexão via `_open_conn()` (mesmo
+  arquivo) e nunca passavam pelo tradutor — o erro cru do driver vazava
+  direto pro campo `message` de qualquer endpoint (`except Exception as e:
+  return {"success": False, "message": f"Falha conexão: {e}"}`, o mesmo
+  padrão repetido ~71 vezes pelos services).
+- **Corrigido no ÚNICO ponto de abertura de conexão** (`_open_conn`), não
+  nos 71 call sites: agora ela mesma captura a exceção do `pymssql.connect`
+  e relança como `ConnectionError(friendly_db_error(e))` — como todo call
+  site já faz `except Exception as e: ...{e}...` (não um tipo específico),
+  o texto amigável já chega pronto em toda parte do sistema
+  automaticamente, sem precisar tocar em cada service. Ver
+  `backend/tests/unit/test_db_connection.py` pra cobertura.
+- **Escopo desta correção**: só o caminho de FALHA DE CONEXÃO (servidor/
+  rede/credenciais) — o caso reproduzido no screenshot e o mais comum em
+  produção (rede instável, VPN caindo, servidor de banco desligado). Erros
+  de QUERY já executando com conexão aberta (ex.: violação de constraint,
+  chave duplicada) continuam podendo vazar texto técnico do SQL Server —
+  não foram tocados nesta rodada, é um problema mais heterogêneo (cada
+  erro de query precisa de tradução própria, não tem um ponto único como
+  `_open_conn`) que fica pra quando/se aparecer um caso concreto.
+- Ao adicionar um NOVO tradutor de erro técnico→amigável (frontend ou
+  backend), seguir o mesmo princípio: texto curto, sem números de erro,
+  sem nome de driver/host, em português — ver os `if`s de
+  `friendly_db_error()` como referência de tom.
+
+### Extensão 2026-07-18 — erros de validação (422) no FRONTEND
+
+**Reforçado pelo usuário** (screenshot de `produto-completo.tsx`
+mostrando "Erro: Input should be a valid string" — texto cru de
+validação do Pydantic, sem indicar qual campo, em inglês). Motivo raiz
+do caso concreto: `useProdutoCompletoForm.ts`'s `NUM_FIELDS` tinha
+`"cod_grupo_pis_cofins"` **duplicado** (também presente em `TEXT_FIELDS`)
+— o campo é string no backend (`routes/produto_completo.py`,
+`cod_grupo_pis_cofins: str = ""`, é um código de classificação fiscal,
+não um número), mas o loop de `NUM_FIELDS` rodava por último e
+sobrescrevia o valor com `toFloat(...)`, mandando um número onde o
+backend esperava string. Corrigido removendo o campo de `NUM_FIELDS`
+(fica só em `TEXT_FIELDS`, onde já pertencia). Ao adicionar um campo
+novo num form desse tipo (dict `TEXT_FIELDS`/`NUM_FIELDS`/`BOOL_FIELDS`,
+padrão usado em `useProdutoCompletoForm.ts`/`useControleSistemaForm.ts`),
+conferir que ele não está duplicado em duas listas de tipos diferentes —
+é exatamente esse tipo de erro que gera um 422 e mostra a mensagem crua
+pro usuário.
+
+- **Tradutor pronto**: `friendlyApiError(j, fallback)` em
+  `frontend/src/utils/api.ts` — prioriza `j.message` (mensagem de negócio
+  já em português, escrita pelo service do backend); na ausência dela,
+  traduz `j.detail[]` (payload cru de validação do FastAPI/Pydantic) pra
+  frases tipo `Campo "cod_grupo_pis_cofins": valor com tipo inválido para
+  este campo.` — sempre aponta o campo (extraído de `d.loc`), nunca o
+  texto em inglês do Pydantic (`_VALIDATION_TYPE_MESSAGES` mapeia os
+  `type`s mais comuns: `string_type`, `int_type`/`int_parsing`,
+  `float_type`/`float_parsing`, `bool_type`/`bool_parsing`, `missing`,
+  `value_error`, etc.).
+- **Substitui o padrão antigo** `j.detail.map(d => d.msg).join("; ")`
+  (era a orientação anterior desta mesma seção "Full CRUD Form Screen
+  Standard" — ficou tecnicamente correta mas não amigável o suficiente).
+  Já corrigido nos 2 lugares que usavam esse padrão antigo
+  (`useProdutoCompletoForm.ts`, `app/servicos.tsx`) — qualquer outra tela
+  que ainda tiver esse padrão deve trocar por `friendlyApiError` quando
+  for tocada por outro motivo (mesmo princípio de "não é gatilho de
+  varredura retroativa sozinho" já usado em outras regras `[GLOBAL]` deste
+  arquivo — ex.: "Permissions + Audit Log Coverage").
+- Toda tela NOVA com Gravar deve usar `friendlyApiError` desde o início,
+  nunca reintroduzir o `detail.map(...).join(...)` cru.
+
+### Extensão 2026-07-24 — falha de rede (`fetch` cru falhando) no FRONTEND
+
+**Reforçado pelo usuário** (screenshot de `app/servicos.tsx` mostrando
+"Erro: Failed to fetch" ao abrir o cadastro de um serviço — texto cru do
+`TypeError` que o `fetch()` do navegador lança quando a requisição falha
+**antes** de chegar a ter uma resposta HTTP, nunca traduzido). Diferente do
+caso 422 acima (que trata a RESPOSTA de erro de uma chamada bem-sucedida),
+este é o caso em que a própria chamada nunca completa — servidor fora do
+ar, sem rede, CORS bloqueando, timeout. O texto da exceção varia por
+motor/plataforma ("Failed to fetch" no Chrome, "NetworkError when
+attempting to fetch resource" no Firefox, "Load failed" no Safari,
+"Network request failed" no React Native) — nenhum diz algo útil pro
+usuário final, e nenhum é traduzível campo-a-campo como o 422.
+
+- **Tradutor pronto**: `friendlyCatchError(e, fallback)` em
+  `frontend/src/utils/api.ts` — `fetch()` sempre rejeita com `TypeError`
+  nesse cenário (independente de motor/plataforma), então basta checar
+  `e instanceof TypeError` pra saber que é falha de conexão, sem precisar
+  enumerar o texto exato de cada navegador. Retorna "Falha de conexão com
+  o servidor. Verifique sua internet/rede e tente novamente."; pra
+  qualquer outra exceção (não-`TypeError`), devolve `e.message` se houver,
+  senão o `fallback`.
+- **Substitui o padrão antigo** `` `Erro: ${e instanceof Error ? e.message : String(e)}` ``
+  usado em praticamente todo `catch` de chamada à API espalhado pelo
+  projeto — mesmo princípio de "não é gatilho de varredura retroativa
+  sozinho" das outras regras `[GLOBAL]` deste arquivo: trocar quando a
+  tela for tocada por outro motivo, não uma tarefa própria disparada
+  sozinha. Já corrigido em `app/servicos.tsx` (3 pontos:
+  `openEdit`/`save`/`remove`) nesta rodada.
+- Toda tela NOVA com chamada à API deve usar `friendlyCatchError(e)` no
+  `catch`, nunca reintroduzir o `` `Erro: ${e.message}` `` cru.
 
 ## Nome do Vendedor — sempre `nome_guerra` `[GLOBAL]`
 

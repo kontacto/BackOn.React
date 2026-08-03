@@ -55,28 +55,47 @@ CAMPOS = [
 
 _CAMPOS_SET = {c for c, _ in CAMPOS}
 
-# "Bar", "Cilindro" e "Pedido de Venda" são 3 versões diferentes da mesma tela
-# de Pedido de Venda (segmentos de negócio distintos) — mutuamente exclusivos,
-# nunca mais de um ligado ao mesmo tempo. [GLOBAL], 2026-07-15, user-directed.
-# Reforço aqui é defesa em profundidade — a tela já impede isso interativamente
-# (marcar um desmarca os outros dois), ver modulos-recursos.tsx.
-SEGMENTOS_PEDIDO_EXCLUSIVOS = ["Bar", "Cilindro", "Pedido_venda"]
+# "Bar", "Cilindro", "Pedido de Venda", "Metro Quadrado" e "Clínica" são 5
+# versões/segmentos diferentes da mesma tela de Pedido de Venda — mutuamente
+# exclusivos, nunca mais de um ligado ao mesmo tempo. [GLOBAL], 2026-07-15,
+# user-directed (Metro Quadrado e Clínica adicionados 2026-07-27, também
+# user-directed — rastreados a partir do `frmmanpedfor.frm` legado: cada um
+# liga um comportamento próprio dentro da MESMA tela "Pedido Geral"
+# — Metro Quadrado habilita Comprimento/Largura + seleção de tipo de preço
+# por m² nos itens; Clínica habilita agendamento por item de serviço e
+# desdobra quantidade > 1 em linhas individuais agendáveis — não são telas
+# à parte). Reforço aqui é defesa em profundidade — a tela já impede isso
+# interativamente (marcar um desmarca os outros quatro), ver
+# modulos-recursos.tsx.
+SEGMENTOS_PEDIDO_EXCLUSIVOS = ["Bar", "Cilindro", "Pedido_venda", "metro_quadrado", "CLINICA"]
 
 # Mapa: módulo (coluna) -> telas do catálogo de permissões que ele controla.
 # Conforme novos módulos forem desenvolvidos, adicionar aqui.
 #
-# "PEDIDO" (tela "Pedido Bar") e "PEDIDO_COMP" (tela "Pedido Completo") são as
+# "PEDIDO" (tela "Pedido Bar") e "PEDIDO_COMP" (tela "Pedido Geral") são as
 # duas versões da tela de Pedido de Venda ligadas aos segmentos mutuamente
 # exclusivos acima ([GLOBAL], 2026-07-15, user-directed): com o módulo "Bar"
-# ligado, só "Pedido Bar" aparece no catálogo de permissões; com "Pedido de
-# Venda" ligado, só "Pedido Completo" aparece — nunca os dois ao mesmo tempo,
-# já que Bar/Pedido_venda são exclusivos entre si (SEGMENTOS_PEDIDO_EXCLUSIVOS
-# acima). Cilindro tem sua própria versão de Pedido (ver unificação Pedido de
-# Cilindro em CLAUDE.md) mas ainda não trocou de tela própria — segue sem
-# entrada aqui até essa unificação ser implementada.
+# ligado, só "Pedido Bar" aparece no catálogo de permissões; com qualquer um
+# de "Pedido de Venda"/"Metro Quadrado"/"Clínica" ligado, "Pedido Geral"
+# aparece — nunca junto com "Pedido Bar", já que são exclusivos entre si
+# (SEGMENTOS_PEDIDO_EXCLUSIVOS acima). Como PEDIDO_COMP precisa ficar
+# habilitado se QUALQUER UM dos 3 estiver ligado (não dá pra expressar "OU"
+# nesta estrutura de dict, que só faz "E" implícito ao unir os disabled de
+# cada módulo), só "Pedido_venda" aparece como chave aqui — a correção pro
+# caso Metro Quadrado/Clínica ligado é feita explicitamente logo abaixo, em
+# `disabled_telas()` (permissoes_service.py), do mesmo jeito que a regra de
+# Ordem de Serviço (Oficina OU Assistência) já faz. Cilindro tem sua própria
+# versão de Pedido (ver unificação Pedido de Cilindro em CLAUDE.md) mas
+# ainda não trocou de tela própria — segue sem entrada aqui até essa
+# unificação ser implementada.
 MODULE_TELAS = {
     "Pedido_venda": ["PEDIDO_COMP"],
-    "Bar": ["PEDIDO"],
+    # "MODIFICADORES" (Tabelas Auxiliares > Modificadores) entrou aqui
+    # 2026-07-23, user-directed: "colocar o modificador ligado ao módulo de
+    # Pedido Bar. Só aparecerá para esse módulo ativo em configurações" —
+    # hoje o único lugar com o seletor de modificador na venda é o Pedido
+    # Bar (ver modificadores_service.py e PENDENCIAS.md > "Modificadores").
+    "Bar": ["PEDIDO", "MODIFICADORES"],
     "Clientes": ["CLIENTE"],
     "servicos": ["SERVICO", "TIPO_SERVICO"],
     "Posto": [
@@ -85,6 +104,18 @@ MODULE_TELAS = {
         "POSTO_CUSTO", "POSTO_ILHA", "POSTO_TANQUE", "POSTO_TQ_EST", "POSTO_TQ_NF",
     ],
     "Cilindro": ["CILINDRO", "CIL_CLIENTE", "CILINDRO_SERIE", "BORDERO_CIL"],
+    # "Contratos" (2026-07-19, user-directed) — gateia as telas do
+    # submenu Transações > Contratos. FATURAR_CONTR adicionado
+    # 2026-07-20 junto com o motor de faturamento.
+    "contratos": ["TIPO_CONTRATO", "TIPO_REAJUSTE", "INDICE_REAJUSTE", "CONTR_PROD_DISP", "CONTRATO", "FATURAR_CONTR"],
+    # "Curva_abc" (2026-07-19, user-directed — "o módulo Compras deve ser
+    # habilitado em Configurações > Módulo Curva ABC") — gateia todo o
+    # submenu Transações > Compra. Não existe um flag "Compras" separado;
+    # o flag legado já existente pra essa área é literalmente Curva_abc.
+    "Curva_abc": ["CURVA_ABC", "GESTAO_COMPRAS", "COTACAO_COMPRA", "PEDIDO_COMPRA"],
+    # "gestor_projetos" (2026-08-02, user-directed) — gateia a tela
+    # Transações > Gestor de Projetos.
+    "gestor_projetos": ["PROJETOS"],
 }
 
 
@@ -117,8 +148,8 @@ def _save_config_sync(servidor: str, banco: str, valores: dict) -> dict:
     if len(ligados) > 1:
         return {
             "success": False,
-            "message": "Bar, Cilindro e Pedido de Venda são segmentos diferentes da mesma "
-                       "tela de Pedido de Venda — só um pode ficar ativo por vez.",
+            "message": "Bar, Cilindro, Pedido de Venda, Metro Quadrado e Clínica são segmentos "
+                       "diferentes da mesma tela de Pedido de Venda — só um pode ficar ativo por vez.",
         }
     try:
         conn = _open_conn(servidor, banco)

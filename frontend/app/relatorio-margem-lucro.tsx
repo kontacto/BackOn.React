@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -279,11 +279,6 @@ export default function RelatorioMargemLucroScreen() {
           <Pressable onPress={() => router.back()} hitSlop={8} style={styles.headerIconBtn} testID="ml-back">
             <Ionicons name="chevron-back" size={26} color={colors.onSurface} />
           </Pressable>
-          <Image
-            source={require("../assets/images/kontacto-logo.png")}
-            style={[styles.headerLogo, isWeb && styles.headerLogoWeb]}
-            resizeMode="contain"
-          />
         </View>
         <Text style={[styles.headerTitle, isWeb && styles.headerTitleWeb]}>Margem de Lucro</Text>
         <View style={styles.headerRight}>

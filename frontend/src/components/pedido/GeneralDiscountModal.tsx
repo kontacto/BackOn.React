@@ -7,11 +7,27 @@ import { Ionicons } from "@/src/components/Ionicons";
 import { colors, spacing } from "@/src/theme/colors";
 import { formatBRL, parseNum, fmtNum } from "@/src/utils/format";
 import { styles } from "./styles";
-import { UsePedidoItens } from "./usePedidoItens";
 
 const isWeb = Platform.OS === "web";
 
-export default function GeneralDiscountModal({ it }: { it: UsePedidoItens }) {
+// Superfície mínima usada aqui — o retorno de `usePedidoItens` (Pedido) E
+// de `useOSItens` (O.S. Completa) satisfazem essa interface, permitindo
+// reaproveitar este modal nos dois fluxos sem duplicar (mesmo raciocínio
+// de `ItemListItens` em `ItemList.tsx`).
+type GeneralDiscountItens = {
+  geralModalOpen: boolean;
+  setGeralModalOpen: (open: boolean) => void;
+  geralLimite: number;
+  geralValor: string;
+  setGeralValor: (v: string) => void;
+  baseGeral: number;
+  geralAtual: number;
+  geralSaving: boolean;
+  submitGeral: (valor: number) => void;
+  handleApplyGeral: () => void;
+};
+
+export default function GeneralDiscountModal({ it }: { it: GeneralDiscountItens }) {
   return (
     <Modal visible={it.geralModalOpen} transparent animationType="slide" onRequestClose={() => it.setGeralModalOpen(false)}>
       <Pressable style={[styles.modalBg, isWeb && styles.modalBgWebCompact]} onPress={() => it.setGeralModalOpen(false)}>

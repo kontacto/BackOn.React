@@ -6,11 +6,21 @@ import { colors } from "@/src/theme/colors";
 import { formatBRL, fmtNum } from "@/src/utils/format";
 import { styles } from "./styles";
 import { DescontoRow } from "./types";
-import { UsePedidoItens } from "./usePedidoItens";
 
 const isWeb = Platform.OS === "web";
 
-export default function DiscountsReportModal({ it }: { it: UsePedidoItens }) {
+// Superfície mínima usada aqui — mesmo raciocínio de `GeneralDiscountModal`/
+// `ItemListItens`: tanto `usePedidoItens` (Pedido) quanto `useOSItens` (O.S.
+// Completa) satisfazem essa interface.
+type DiscountsReportItens = {
+  descModalOpen: boolean;
+  setDescModalOpen: (open: boolean) => void;
+  descLoading: boolean;
+  descItems: DescontoRow[];
+  descTotalApi: number;
+};
+
+export default function DiscountsReportModal({ it }: { it: DiscountsReportItens }) {
   return (
     <Modal visible={it.descModalOpen} transparent animationType="slide" onRequestClose={() => it.setDescModalOpen(false)}>
       <Pressable style={[styles.modalBg, isWeb && styles.modalBgWebCompact]} onPress={() => it.setDescModalOpen(false)}>

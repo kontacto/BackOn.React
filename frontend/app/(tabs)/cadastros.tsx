@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -151,7 +151,6 @@ export default function CadastrosScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="cadastros-screen">
       <View style={styles.header}>
-        <Image source={require("../../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
         <Text style={styles.headerTitle}>Cadastros</Text>
         <View style={styles.headerLogoSpacer} />
       </View>

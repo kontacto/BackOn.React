@@ -1,10 +1,10 @@
-// Bloco de filtros do Relatório de Pedidos (período, vendedor, situação, botão).
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+// Bloco de filtros do Relatório de Pedidos (período, vendedor, situação, projeto, botão).
+import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import DateField from "@/src/components/DateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
-import { colors } from "@/src/theme/colors";
+import { colors, radius, spacing } from "@/src/theme/colors";
 import { styles } from "./styles";
 
 const SITUACOES = [
@@ -20,6 +20,10 @@ type Props = {
   dataFim: string | null; setDataFim: (v: string | null) => void;
   vendedorOpts: SelectOption[]; vendedor: string | number | null; setVendedor: (v: string | number | null) => void;
   situacao: string; setSituacao: (v: string) => void;
+  // Filtro "Projeto" — Gestor de Projetos Fase 4 (recurso extra, sem
+  // equivalente no legado). Opcional — só passado por telas que suportam
+  // o filtro (Relatório de Pedidos); `undefined` esconde o campo.
+  projeto?: string; setProjeto?: (v: string) => void;
   loading: boolean; onBuscar: () => void;
 };
 
@@ -45,6 +49,24 @@ export default function Filtros(p: Props) {
         allowClear
         testID="relpedidos-vendedor"
       />
+
+      {p.setProjeto ? (
+        <>
+          <Text style={styles.fieldLabel}>Projeto (nº, opcional)</Text>
+          <TextInput
+            value={p.projeto || ""}
+            onChangeText={(v) => p.setProjeto?.(v.replace(/\D/g, ""))}
+            keyboardType="number-pad"
+            placeholder="Nº do Projeto"
+            placeholderTextColor={colors.muted}
+            style={{
+              width: 140, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm,
+              paddingHorizontal: spacing.md, paddingVertical: 10, fontSize: 14, color: colors.onSurface,
+            }}
+            testID="relpedidos-projeto"
+          />
+        </>
+      ) : null}
 
       <Text style={styles.fieldLabel}>Situação</Text>
       <View style={styles.sitRow}>

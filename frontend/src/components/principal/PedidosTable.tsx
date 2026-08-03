@@ -1,18 +1,21 @@
-// Tabela de movimento do dia (Pedidos + OS) + erro de dashboard + linha de total.
+// Tabela de movimento do dia (Pedidos + OS) + linha de total. Erros de
+// carga do dashboard são mostrados via useFeedback() (toast centralizado)
+// direto no hook (useDashboard.ts) — não renderizados inline aqui, regra
+// [GLOBAL] "mensagens do sistema sempre no meio da tela", pedido explícito
+// do usuário, 2026-07-18.
 import { ActivityIndicator, Platform, Pressable, Text, View } from "react-native";
-import { Ionicons } from "@/src/components/Ionicons";
 import { useRouter } from "expo-router";
 
 import { colors } from "@/src/theme/colors";
 import { formatBRL } from "@/src/utils/format";
 import { SIT_COLOR } from "@/src/components/relatorio/styles";
+import { usePermissions } from "@/src/permissions";
 import { styles } from "./styles";
 import { MovimentoItem } from "./useDashboard";
 
 type Props = {
   movimento: MovimentoItem[];
   dashLoading: boolean;
-  dashError: string | null;
   totalMovimento: number;
   // Filtro de situação ativo na tela ("" = Todos). Selo de situação por
   // linha só aparece com "Todos" — com um filtro específico já selecionado
@@ -20,12 +23,20 @@ type Props = {
   situacaoFiltro: string;
 };
 
-export default function PedidosTable({ movimento, dashLoading, dashError, totalMovimento, situacaoFiltro }: Props) {
+export default function PedidosTable({ movimento, dashLoading, totalMovimento, situacaoFiltro }: Props) {
   const mostrarSituacao = !situacaoFiltro;
   const router = useRouter();
+  const { can } = usePermissions();
   const openItem = (m: MovimentoItem) => {
-    if (m.tipo === "OS") router.push({ pathname: "/os-form", params: { codigo: String(m.doc) } });
-    else router.push({ pathname: "/pedido-form", params: { pedido: String(m.doc) } });
+    if (m.tipo === "OS") { router.push({ pathname: "/os-form", params: { codigo: String(m.doc) } }); return; }
+    // Pedido Bar (PEDIDO.ABRIR) x Pedido Geral (PEDIDO_COMP.ABRIR) — antes
+    // sempre ia pra `/pedido-form` (Bar), mesmo pra empresa usando o
+    // segmento Geral/Clínica/Assistência; a tela Bar não tem os dados de
+    // Agenda (só existem no lado Completo), então agendamentos configurados
+    // simplesmente não apareciam ao abrir por aqui. Mesmo critério já usado
+    // em `ModuleTiles.tsx`'s tile "Pedidos" — achado ao vivo 2026-07-28.
+    const pathname = can("PEDIDO.ABRIR") ? "/pedido-form" : "/pedido-geral";
+    router.push({ pathname, params: { pedido: String(m.doc) } } as never);
   };
   return (
     <>
@@ -33,13 +44,6 @@ export default function PedidosTable({ movimento, dashLoading, dashError, totalM
         <Text style={[styles.sectionTitle, Platform.OS === "web" && styles.sectionTitleWeb]}>Movimento de Hoje</Text>
         {dashLoading ? <ActivityIndicator size="small" color={colors.brandPrimary} /> : null}
       </View>
-
-      {dashError ? (
-        <View style={[styles.errorBox, Platform.OS === "web" && styles.errorBoxWeb]} testID="principal-dash-error">
-          <Ionicons name="alert-circle-outline" size={16} color={colors.error} />
-          <Text style={styles.errorText}>{dashError}</Text>
-        </View>
-      ) : null}
 
       <View style={[styles.pedidosCard, Platform.OS === "web" && styles.pedidosCardWeb]} testID="principal-pedidos-list">
         <View style={styles.pedidosHead}>

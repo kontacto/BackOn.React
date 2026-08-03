@@ -150,6 +150,21 @@ async def list_status_cliente(servidor: str, banco: str) -> dict:
     return await asyncio.to_thread(_list_codigo_descricao_sync, servidor, banco, "STATUS_CLIENTE")
 
 
+async def list_status_os(servidor: str, banco: str) -> dict:
+    # status_os(codigo smallint PK, descricao) — combobox "Status O.S." da
+    # O.S. Completa (FrmTraOsNew.frm). Confirmada ao vivo em KONTACTO-TESTE
+    # (2026-07-31). A O.S. Mobile continua usando a lista hardcoded local
+    # (os-form.tsx's STATUS_OS) por enquanto — troca não pedida ainda.
+    return await asyncio.to_thread(_list_codigo_descricao_sync, servidor, banco, "status_os")
+
+
+async def list_tipo_os(servidor: str, banco: str) -> dict:
+    # tipo_os(codigo smallint PK, descricao) — combobox "Tipo O.S." da O.S.
+    # Completa (os.posicao_os). Confirmada ao vivo em KONTACTO-TESTE
+    # (2026-07-31).
+    return await asyncio.to_thread(_list_codigo_descricao_sync, servidor, banco, "tipo_os")
+
+
 async def list_centro_custo(servidor: str, banco: str) -> dict:
     return await asyncio.to_thread(_list_codigo_descricao_sync, servidor, banco, "centro_custo")
 

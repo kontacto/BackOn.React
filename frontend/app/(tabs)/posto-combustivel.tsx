@@ -18,7 +18,7 @@
 // O catálogo de permissões (`POSTO_*` em permissoes_service.py) tem a
 // entrada de cada uma, então o gating por card já funciona.
 import { useMemo } from "react";
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -163,8 +163,7 @@ export default function PostoCombustivelScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]} testID="posto-combustivel-screen">
       <View style={styles.header}>
-        <Image source={require("../../assets/images/kontacto-logo.png")} style={styles.headerLogo} resizeMode="contain" />
-        <Text style={styles.headerTitle}>Painel Posto de Combustível</Text>
+      <Text style={styles.headerTitle}>Painel Posto de Combustível</Text>
         <View style={styles.headerLogoSpacer} />
       </View>
 
