@@ -880,7 +880,7 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
                   </>
                 ) : null}
               </View>
-              {os.revisoes_programadas.length > 0 ? (
+              {(os.revisoes_programadas || []).length > 0 ? (
                 <View style={{ gap: 2, marginTop: spacing.xs }}>
                   <Text style={styles.topLabel}>Datas programadas por esta O.S.</Text>
                   {os.revisoes_programadas.map((r) => (

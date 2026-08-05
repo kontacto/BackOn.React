@@ -29,7 +29,7 @@ from starlette.middleware.cors import CORSMiddleware  # noqa: E402
 
 from db import mongo  # noqa: E402
 from routes import (  # noqa: E402
-    afericao_abastecimento, agenda, auth, bancos, bomba, bordero, cilindro, clientes, combustivel, combustivel_meta, comanda, conta_func, contas, contatos,
+    afericao_abastecimento, agenda, auth, bancos, bomba, bordero, checkout, cilindro, clientes, combustivel, combustivel_meta, comanda, conta_func, contas, contatos,
     contratos, controle, controle_config, controle_sistema, cotacao_compra, curva_abc, custo_combustivel, descontos,
     entrada_saida_caixa, equipamentos, estoque_combustivel, fechamento_turno, financeiro, fornecedores, funcionarios,
     geracao_boletos, gestao_compras, gestor_documentos, ilha, impressao, inventario, layout, log_auditoria, lookups, margem_lucro, misc, modificadores, movimentacao_produtos,
@@ -76,6 +76,7 @@ api_router.include_router(contatos.router)
 api_router.include_router(equipamentos.router)
 api_router.include_router(cilindro.router)
 api_router.include_router(comanda.router)
+api_router.include_router(checkout.router)
 api_router.include_router(movimentacao_produtos.router)
 api_router.include_router(inventario.router)
 api_router.include_router(modificadores.router)

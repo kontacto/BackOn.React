@@ -794,6 +794,149 @@ class ProjetoDocumentoKey(BaseModel):
     num_doc: int
 
 
+class CheckoutAbrirRequest(BaseModel):
+    """Abre uma venda direta nova (Checkout — migração de FrmPafOFF.frm,
+    "Emissão de Cupom Fiscal"/PDV). Diferente do legado (que só cria a linha
+    em `comanda` na inclusão do 1º item, `Vende_Item`/"gera comanda no
+    primeiro item"), esta migração cria o cabeçalho `comanda` (situacao='A')
+    já na abertura da tela — mesmo padrão já usado por Pedido/O.S.
+    (`POST /pedidos/create`), mais adequado a uma API stateless/SPA do que
+    depender de "isso é o 1º item?" implícito no fluxo."""
+    servidor: str
+    banco: str
+    atendente: int  # funcionarios.codigo_int logado
+    cliente: Optional[int] = None  # None = "Clientes Diversos" (mesmo fallback do legado)
+    area_atuacao: Optional[int] = 0
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    master: Optional[bool] = False
+    plataforma: Optional[str] = None
+
+
+class CheckoutClienteRequest(BaseModel):
+    servidor: str
+    banco: str
+    cliente: Optional[int] = None  # None = volta pra "Clientes Diversos"
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class CheckoutItemRequest(BaseModel):
+    """Adicionar item ao Checkout — réplica simplificada de `Vende_Item`
+    (busca produto/serviço por código interno/fábrica/barras, aplica
+    promoção/preço por quantidade, grava `movimentacao` tipo S01/CM).
+    Desconto/acréscimo do item podem vir já neste mesmo request (o legado
+    faz em 2 passos — inclui o item, depois abre `FrmDescItem` — aqui é 1
+    só, mais direto pra uma tela web)."""
+    servidor: str
+    banco: str
+    codigo: str          # código digitado (interno, fábrica, barras ou serviço)
+    qtd: float = 1
+    vendedor: Optional[int] = None
+    funcao: Optional[int] = None  # 1=gerente,2=supervisor,3=vendedor (p/ validar limite de desconto do item)
+    desconto_percentual: Optional[float] = 0
+    acrescimo_percentual: Optional[float] = 0
+    # Bypass de limite de desconto (senha de gerente/supervisor — mesmo
+    # padrão de AuthorizationSlide já usado em outras telas do projeto):
+    # código do funcionário que autorizou, quando o desconto pedido excede
+    # o limite do próprio vendedor.
+    autorizado_por: Optional[int] = None
+    master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class CheckoutCancelarItemRequest(BaseModel):
+    servidor: str
+    banco: str
+    autorizado_por: Optional[int] = None  # senha superior — cancelamento de item também exige (mesmo padrão do legado)
+    master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class CheckoutDescontoGeralRequest(BaseModel):
+    """Desconto Geral da Venda (`FrmDescGeral`/`ProcessaDescontoGeral`) —
+    redistribui percentualmente entre os itens não cancelados."""
+    servidor: str
+    banco: str
+    desconto_percentual: float = 0
+    funcao: Optional[int] = None  # 1=gerente,2=supervisor,3=vendedor (p/ validar limite geral, controle.desconto_pdv_*)
+    autorizado_por: Optional[int] = None
+    master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class CheckoutFormaPagamentoItem(BaseModel):
+    tipo: str        # DI/CH/CC/CD/DU/TI/VA/FI
+    forma_pag: str   # forma_pagamento.codigo
+    valor: float
+    vencimento: Optional[str] = None
+    # Cheque
+    cod_banco: Optional[int] = None
+    agencia: Optional[int] = None
+    conta: Optional[str] = None
+    numero_ch: Optional[int] = None
+    nome_cheque: Optional[str] = None
+    telefone: Optional[str] = None
+    # Cartão crédito/débito
+    num_cartao1: Optional[int] = None
+    num_cartao2: Optional[int] = None
+    num_cartao3: Optional[int] = None
+    num_cartao4: Optional[int] = None
+    mes_validade: Optional[int] = None
+    ano_validade: Optional[int] = None
+    parcelas: Optional[int] = None
+    cod_administradora: Optional[int] = None
+    cod_parcelador: Optional[str] = None  # "L" Loja | "A" Administradora
+
+
+class CheckoutFecharRequest(BaseModel):
+    """Fechamento da venda (`Command4_Click`/`FinalizaVenda`) — 1+ formas de
+    pagamento, gravadas fielmente nas tabelas legadas `comanda_dinheiro`/
+    `comanda_cheque`/`comanda_cartao`/`comanda_debito`/`comanda_duplicata`/
+    `comanda_ticket`/`comanda_vale`/`comanda_financiado` (decisão explícita
+    do usuário — ver PENDENCIAS.md > "Checkout")."""
+    servidor: str
+    banco: str
+    formas: List[CheckoutFormaPagamentoItem]
+    master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class CheckoutCancelarVendaRequest(BaseModel):
+    servidor: str
+    banco: str
+    motivo: Optional[str] = ""
+    master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class CheckoutImportarDavRequest(BaseModel):
+    """Importar Pedido/O.S. como DAV pro Checkout (`Insere_Dav`, FrmPafOFF.frm
+    — F4/F8; F7/Orçamento colapsa em "PED" nesta migração, ver CLAUDE.md >
+    "Regras Globais de Pré-venda"). `documento` já precisa estar Fechado
+    (situação 'F') — mesma exigência do legado, sem atalho de fechar
+    automaticamente."""
+    servidor: str
+    banco: str
+    tipo_dav: str  # "PED" | "OS"
+    documento: int
+    master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
 class ProjetoAjustarValoresRequest(BaseModel):
     """"Ajustar Valores" (Fase 2, migração de `Reprocessa`/`RecalculaDAVS`/
     `Descontos_Acrescimos` em `frmgespro.frm`) — define um novo total-alvo

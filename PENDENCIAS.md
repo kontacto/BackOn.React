@@ -6,6 +6,474 @@ inteira antes de continuar — não reanalisar do zero.
 
 ---
 
+## Checkout
+
+**Status: 🟡 Fase 1 (núcleo) + Fase 2 (importar Pedido/O.S. como DAV) +
+Fase 3 (impressão de cupom/comprovante) implementadas (2026-08-04/05), NÃO
+testadas ao vivo contra banco real.**
+Migração de `FrmPafOFF.frm` ("Emissão de Cupom Fiscal"
+— o PDV/venda direta de balcão do legado, `C:\Desenv\VB6\SQLSERVER\Kontacto\
+backon.vbp`). Escopo faseado confirmado com o usuário via `AskUserQuestion`
+(2026-08-04) dado o tamanho real do form (~14 mil linhas, dezenas de
+subsistemas: cupom fiscal, TEF, cartão com administradora/parcelador,
+cheque, vale-devolução, abastecimento de posto, agenda, importação de
+Pedido/O.S./Orçamento como DAV, venda externa por ficha, NFC-e).
+
+### Redesenho da tela (2026-08-05) — layout moderno + operação 100% teclado/leitor de código de barras
+
+Depois da Fase 3, o usuário colou um screenshot do `FrmPafOFF.frm`
+("Emissão de Cupom Fiscal") e pediu explicitamente pra tela ficar "mais
+parecida" com ele, mais 2 outros exemplos de PDV (um estilo "SysPDV" com
+destaque grande do último item bipado, outro estilo grade colorida
+tipo depósito/estoque) — confirmado via `AskUserQuestion` que a direção
+certa era **sintetizar os 3, não copiar nenhum literalmente**: grade de
+itens com colunas claras (Descrição/Qtd/Unitário/Total), destaque grande
+do último item lançado, mantendo o conceito "Demonstrativo do Cupom
+Fiscal" como o painel principal — layout moderno, não cupom monoespaçado
+nem grade fria de planilha.
+
+Exigências explícitas do usuário, todas endereçadas:
+
+- **"Não quero utilizar o mouse para navegar nos campos"** + "criar um
+  checkout moderno com sua operação por teclado/leitor de barcode": campo
+  Código (`checkout-codigo-input`, `codigoRef`) é o único foco necessário
+  — Enter (ou o Enter automático que um leitor de código de barras manda
+  depois de bipar) já **inclui o item direto na venda** (chama
+  `adicionarItem()` direto, sem etapa de "confirmar" no meio), e o foco
+  volta sozinho pro campo Código em seguida (`codigoRef.current?.focus()`
+  dentro do `then` de sucesso de `adicionarItem`), pronto pro próximo
+  bipe. Campos Quantidade/Desconto % só existem pra quem quer ajustar
+  ANTES de bipar (Tab entre eles, Enter neles só move o foco de volta pro
+  Código) — não fazem parte do caminho rápido padrão.
+- **"Ao clicar no card Checkout, tem que abrir direto a tela"**: novo
+  `useEffect` que chama `abrirVenda()` sozinho assim que `conn`/`vendedor`
+  estão prontos e `comanda` é `null` — a tela "Nenhuma venda em andamento"
+  com botão manual foi removida do caminho normal (só sobra como fallback
+  raríssimo se abrir automaticamente falhar). Dispara de novo sozinho
+  sempre que `comanda` volta a `null` (venda cancelada, ou "Nova Venda"
+  clicado após fechar).
+- **"Quero um demonstrativo de cupom fiscal na tela, com os produtos
+  listados"**: novo componente `frontend/src/components/checkout/
+  DemonstrativoCupomFiscal.tsx` — substitui o antigo card "Itens da
+  Venda" (removido, consolidado num só lugar, mesmo padrão do legado onde
+  a MESMA lista serve de preview E de cancelar item, aqui via ícone por
+  linha em vez de duplo clique). Mostra: destaque grande do último item
+  lançado (descrição + qtd x unitário = total, cores fortes), grade com
+  colunas Descrição/Qtd/Unit./Total pros itens já lançados, badge Pedido/
+  O.S. pra itens importados via DAV, e um box de TOTAL A PAGAR em destaque
+  no rodapé do painel.
+- **"Para listar vendas já temos a tela de Gestão de Comandas"**:
+  confirmado — Checkout nunca teve nem ganhou uma lista de vendas
+  passadas; o Demonstrativo é só da venda EM ANDAMENTO.
+- Preview do campo Código também passou a mostrar **Un. Medida** e
+  **Estoque Atual** (campos que o backend já retornava — `unidade`/
+  `estoque` em `_buscar_produto_sync`/`GET /api/checkout/produto` — só não
+  eram exibidos no frontend antes), junto com preço e limite de desconto.
+- Novo rodapé de totais em 4 caixas (Total Bruto / Descontos / Acréscimos
+  / Total a Pagar), calculados no frontend a partir de `itens` (`qtd ×
+  preco_bruto` / `qtd × desconto_unit` / `qtd × acrescimo_unit`) — nenhum
+  endpoint novo precisou ser criado, os campos já vinham em `_get_venda_
+  sync`.
+- **Não implementado nesta rodada** (fora do escopo do que foi pedido):
+  campo "Área de Atuação" do legado (existe suporte no backend —
+  `comanda.area_atuacao`, `CheckoutAbrirRequest.area_atuacao` — mas não há
+  endpoint pra EDITAR depois de aberta a venda, e expor isso exigiria
+  decidir esse fluxo antes; deixado de fora por ora).
+- **Continua sem testar ao vivo contra banco real** (nem o núcleo, nem o
+  redesenho) — próximo passo natural antes de considerar isso pronto de
+  verdade.
+
+### Decisão de arquitetura confirmada com o usuário
+
+**Precisão importante (corrigida 2026-08-05 — a redação original desta
+seção estava ambígua/incorreta neste ponto)**: Faturar em Pedido/O.S. **já
+grava, sim**, em `comanda` (cabeçalho) e `movimentacao` (itens, tipo='S01',
+serie_nf='CM') — `_faturar_pedido_sync`/`_faturar_os_sync` fazem
+`INSERT INTO comanda ... OUTPUT INSERTED.comanda` seguido de um
+`INSERT INTO movimentacao` por item, exatamente o "molde" que o Checkout
+reaproveita. **O que Pedido/O.S. NUNCA grava** são as 8 tabelas de
+*detalhe de forma de pagamento* — `comanda_dinheiro`/`comanda_cheque`/
+`comanda_cartao`/`comanda_debito`/`comanda_duplicata`/`comanda_ticket`/
+`comanda_vale`/`comanda_financiado` — a forma de pagamento do Pedido/O.S.
+vai pra `pedido_venda_*`/`os_*` (ver "Correção de arquitetura" em
+`fechamento_caixa_service.py`); `comanda_service.py` (Gestor de Comandas)
+só *LÊ* essas 8 tabelas, e ficam vazias quando a comanda se originou de
+Pedido/O.S.
+
+**A diferença real de arquitetura do Checkout, então, é mais estreita do
+que "grava em vez de ler comanda"**: é ser o único caminho do backend que
+grava DIRETAMENTE nessas 8 tabelas de forma de pagamento — o `comanda`/
+`movimentacao` em si o Checkout só replica o mesmo padrão que Faturar já
+usa, não é território novo. Confirmado por investigação de código antes de
+implementar: **hoje nenhum caminho do backend cria uma `comanda` do zero,
+sem um documento (Pedido/O.S./Contrato) por trás** — é essa lacuna
+específica (venda direta, sem Pedido/O.S. prévio) que o Checkout preenche,
+não o ato de gravar em `comanda`/`movimentacao` em si.
+
+**Divergência de schema real, confirmada lendo o legado** (não presumida):
+`comanda_financiado` usa a coluna `valor_pago` (não `valor_pag` como em
+`pedido_venda_financiado`/`os_financiado`) e não tem coluna de vencimento —
+por isso `checkout_service.py` usa um mapa `_CMD_VALOR_COL`/`_CMD_VENC_COL`
+LOCAL, não os dicts genéricos de `pedido_common.py` (evita arriscar o
+código já testado de Pedido/O.S.).
+
+### Fase 1 (implementada) — núcleo
+
+- Backend: `backend/services/checkout_service.py` (abrir venda, resolver
+  produto/serviço com promoção `pecas_promocao` e Preço por Quantidade
+  `pecas_preco_qtd`, adicionar/cancelar item, desconto por item com limite
+  por função do atendente + bypass por autorização, desconto geral da venda
+  redistribuído proporcionalmente, definir cliente, fechar venda com
+  múltiplas formas de pagamento + cálculo de troco, cancelar venda),
+  `backend/routes/checkout.py`, schemas `Checkout*` em `models/schemas.py`.
+- Cartão de Crédito/Débito: validação COMPLETA de Administradora +
+  Parcelador (Loja/Administradora) + Parcelas, réplica fiel de
+  `Cartao_Verifica_Parcelamento` (`Geral\Gestor_Cartoes.bas`) — decisão
+  explícita do usuário (2026-08-04) de incluir isso já na Fase 1, em vez de
+  adiar. Lookups `GET /api/checkout/cartoes/administradoras` e
+  `GET /api/checkout/cartoes/parcelas`. **Não existia nenhum CRUD migrado
+  pra `cartoes_administradoras`/`cartoes_configuracoes` antes desta rodada**
+  — só um delete-guard em `bancos_service.py`; o cadastro dessas 2 tabelas
+  em si (`FrmCadADM.frm`/`FrmGesCar.frm`) continua não migrado (só os
+  lookups de leitura necessários pro Checkout).
+- Permissão `CHECKOUT` no catálogo (menu Transações), ações ABRIR/ADD_ITEM/
+  DEL_ITEM/DESC_ITEM/DESC_GERAL/FECHAR/CANCELAR — `DESC_ITEM` está
+  registrada no catálogo mas ainda **não é checada** por nenhum endpoint
+  (o desconto de item usa só a validação de limite por função, sem gate de
+  permissão de grupo separado — mesma lacuna a fechar se vier a ser
+  pedido).
+- Testes unitários: `backend/tests/unit/test_checkout_service.py` (19
+  testes, cobrindo abrir venda, adicionar item com/sem desconto, bloqueio
+  de desconto acima do limite + bypass por autorização, cancelar item,
+  desconto geral, validação de parcelamento de cartão nos 2 modos,
+  fechamento com Dinheiro/Cartão/Financiado (confirma a divergência
+  `valor_pago`), falta/troco, cancelar venda).
+- Frontend: `frontend/app/checkout.tsx` (tela, web-only) +
+  `frontend/src/components/checkout/FecharVendaModal.tsx` (modal de
+  fechamento com múltiplas formas de pagamento) + card em
+  `app/(tabs)/transacoes.tsx`.
+
+### Simplificações registradas (não são bugs, decisões documentadas)
+
+1. **Baixa de estoque na inclusão do item**: o legado tem essa linha
+   COMENTADA em `Vende_Item` (`FrmPafOFF.frm`) — o VB6 original não baixa
+   `pecas.qtd` por este caminho especificamente (algum outro processo do
+   sistema legado cobria isso, não identificado). Esta migração decide
+   baixar explicitamente no ato da inclusão (`_mover_estoque_direto`),
+   mesmo princípio já usado por Pedido/O.S., só que sem uma fase
+   intermediária de "reservado" — a venda aqui já é definitiva no momento
+   da inclusão do item.
+2. **Código de promoção digitado diretamente** (em vez do código do
+   produto) — não implementado; o Checkout só resolve promoção já
+   vinculada ao PRODUTO (`pecas_promocao`, mesma tabela/regra já usada por
+   Produto Completo), não uma "compra pelo código da promoção" como
+   caso de uso avulso.
+3. **Desconto Geral**: réplica simplificada de `ProcessaDescontoGeral` —
+   redistribui proporcionalmente entre os itens, mas não replica o loop de
+   ajuste centavo-a-centavo nem o "joga a sobra no maior item" do legado;
+   a soma pode divergir em poucos centavos do percentual pedido.
+4. **`aceita_desconto` (pecas/servicos)**: achado real durante o rastreio —
+   o legado usa esse campo de forma INVERTIDA em `FrmPafOFF.frm`
+   (`RegProduto.Permite_Desconto = IIf(tb("aceita_desconto"), False,
+   True)` — truthy BLOQUEIA desconto), enquanto `pedido_common.
+   _linha_peca_completo` (usado pelo Pedido Completo) já interpreta o MESMO
+   campo do jeito oposto (truthy PERMITE desconto). O Checkout desta Fase 1
+   **não usa esse campo em nenhum dos dois sentidos** — só os limites
+   percentuais `desc_g`/`desc_s`/`desc_v` — justamente por essa
+   contradição não estar resolvida. **Pergunta em aberto**: qual das duas
+   leituras é a correta/atual? Vale conferir com o usuário antes de
+   decidir replicar em qualquer uma das duas telas.
+
+### Fase 2 (implementada, 2026-08-05) — Importar Pedido/O.S. como DAV
+
+Migração de `Insere_Dav` (`FrmPafOFF.frm`, F4/F8 — F7/Orçamento não é um
+caso separado nesta migração, ver "Regras Globais de Pré-venda" em
+CLAUDE.md: Orçamento já é só um Pedido em situação Aberto).
+
+- **Backend**: `checkout_service._importar_dav_sync` — puxa um Pedido de
+  Venda ou O.S. já **Fechado** (situação='F', mesma exigência do legado,
+  sem atalho de fechar automaticamente) pra dentro da venda aberta do
+  Checkout. Por item: grava `movimentacao` com `tipo_dav`='P'/'O' e
+  `COD_AUTO_DAV` (mesmas colunas que o legado já usa), copia preço líquido/
+  bruto/desconto/acréscimo já calculados no documento de origem (sem
+  recomputar), grava `comanda_desconto`/`comanda_acresc` quando aplicável,
+  e **libera o reservado** (`reservado`/`reservado_os`) em vez de
+  decrementar `pecas.qtd` de novo — o estoque já foi baixado quando o
+  Pedido/O.S. foi Fechado. Vincula via `COMANDA_PED`/`comanda_os` e marca o
+  documento de origem como `situacao='PG'` (Faturado) — mesmo efeito que
+  Faturar já produz pra Pedido/O.S. avulsos, só que a `comanda` de destino
+  é a venda do Checkout já aberta. O cliente do documento importado
+  substitui o cliente atual da venda (mesmo efeito do legado,
+  `RegVenda.codcliente = TmpClienteDav`).
+- **Itens importados não podem ser cancelados individualmente** — réplica
+  exata da regra do legado ("Este item pertence a um DAV ou Pré-Venda!
+  Cancelamento não permitido!"). `_cancelar_item_sync` bloqueia quando
+  `movimentacao.tipo_dav` está preenchido.
+- **Cancelar a venda inteira com itens importados** reverte o Pedido/O.S.
+  de origem de volta pra Fechado (`situacao='F'`), remove o vínculo
+  `COMANDA_PED`/`comanda_os`, e **re-reserva** o estoque desses itens
+  (`reservado`/`reservado_os` += qtd, sem tocar `pecas.qtd`) — mantém a
+  decisão já tomada na Fase 1 de gerenciar estoque explicitamente em
+  código (o legado deixa o equivalente comentado/incompleto em
+  `CancelaCupom`, não replicado).
+- **Rota**: `POST /api/checkout/{comanda}/importar-dav`. Reaproveita a
+  permissão `CHECKOUT.ADD_ITEM` (importar é conceitualmente "adicionar
+  itens", mesmo raciocínio do legado tratar F4/F7/F8 como formas
+  alternativas de incluir item no cupom) — nenhuma permissão nova.
+- **Frontend**: `frontend/src/components/checkout/ImportarDavModal.tsx`
+  (tipo Pedido/O.S. + número) + botão "Importar Pedido/O.S." em
+  `checkout.tsx` + tag "Pedido"/"O.S." nos itens importados (sem botão de
+  cancelar nesses itens).
+- **Testes**: 7 novos testes unitários (`TestImportarDav`,
+  `TestCancelarItemBloqueiaDav`, mais um caso em `TestCancelarVenda`),
+  26/26 passando.
+
+**Simplificações registradas** (em relação ao `Insere_Dav` completo do
+legado):
+- Itens já cancelados no documento de origem são simplesmente ignorados
+  (não copiados) — o legado tem um comportamento inconsistente aqui (soma
+  no total sem gravar movimentação, `regitens()` populado mas sem INSERT),
+  não replicado de propósito.
+- Área de atuação do funcionário não é checada na importação (o legado
+  restringe quais Pedidos/O.S. um funcionário não-master pode nem
+  consultar por essa regra) — fora de escopo desta rodada.
+- **O.S. com bloco Garantia/Interno/Contrato não é suportada** — só o
+  bloco "cliente" (`os_produto.situacao=0`) é importado. A bifurcação de
+  faturamento Garantia×Cliente (`_faturar_os_sync`, `FrmTraOsNew.frm`) é
+  um subsistema à parte, não replicado aqui.
+- Reconciliação de arredondamento de centavos ao final da importação (o
+  legado ajusta a diferença no maior item) não é replicada — mesma decisão
+  já tomada pro Desconto Geral na Fase 1.
+- `item_paga_comissao` sempre gravado como 1 pros itens importados,
+  independente do que o documento de origem tinha (o legado hardcoda isso
+  pra Pedido também; pra O.S. seria uma coluna própria não confirmada
+  como existente/populada neste schema já migrado).
+
+### Fase 3 (implementada, 2026-08-05) — Impressão de cupom/comprovante
+
+Migração de `Imprime_Comprovante` (`FrmPafOFF.frm`) — preview de recibo +
+impressão via navegador, mesmo padrão já estabelecido em
+`ReciboPedidoModal.tsx` (iframe oculto, `src/utils/printHtml.ts` — nunca o
+truque de CSS "esconde tudo com `body *`", sai em branco) e bobina térmica
+de 80mm já confirmada.
+
+- **Backend**: `_get_venda_sync` (checkout_service.py) estendido pra expor
+  o que o recibo precisa e ainda não vinha: `cliente_cgc_cpf` (CPF/CNPJ do
+  cliente, pro "Doc:" do recibo), `atendente_nome` (sempre `nome_guerra`
+  com fallback pro nome completo — regra `[GLOBAL]` "Nome do Vendedor",
+  aplicada aqui pela primeira vez no Checkout), `descricao` da forma de
+  pagamento (join com `forma_pagamento`, antes só vinha o código cru) e
+  `troco` (soma de `TROCO_COMANDA`). `itens[].preco_bruto` também passou a
+  ser necessário no frontend (já existia no backend, só não estava sendo
+  consumido).
+- **Frontend**: `frontend/src/components/checkout/ReciboCheckoutModal.tsx`
+  — preview (JSX) + `buildHtml()` (string HTML só na hora de imprimir,
+  mesma duplicação deliberada de `ReciboPedidoModal.tsx`, comentada lá:
+  manter as duas versões em sincronia ao alterar o conteúdo). Cabeçalho
+  com dados da empresa (`/api/controle/empresa`) + mensagens de rodapé
+  (`/api/controle/mensagens-pdv`) — mesmas duas chamadas já usadas por
+  Pedido Bar/Geral. Botão "Imprimir" na tela, disponível em QUALQUER
+  situação (Aberta ou Faturada) desde que haja pelo menos 1 item — permite
+  tanto conferir o conteúdo antes de fechar quanto reimprimir depois.
+- **Não implementado nesta fase**: modo "ticket de item único" (o
+  `ReciboPedidoModal` tem um modo separado pra imprimir só 1 item, pra
+  cozinha/bar — não portado aqui, o Checkout não tem o conceito de
+  impressão automática por Finalidade que motivou aquele modo no Pedido
+  Bar). Sem toggle de "imprimir totalizado" (agrupar itens repetidos) —
+  o Checkout lista os itens sempre na ordem lançada, sem agrupamento.
+
+### Fases ainda adiadas
+
+- **TEF real** (integração com maquininha) — nenhum service de TEF existe
+  no projeto; Cartão hoje só captura os dados manualmente (mesmo nível que
+  Forma de Pagamento já faz pra Pedido/O.S.).
+- **Abastecimento de posto** (F5, `Mostra_Abastecimentos`/`Command10_Click`)
+  — módulo Posto de Combustível já migrado em outra tela; a integração
+  "abastecimento vira item de Checkout" não foi portada.
+- **Agenda** (F1/`Command18`, `Mostra_Agenda`/`Command19_Click`) — agenda de
+  atendimentos já migrada em outra tela; a integração "agendamento vira
+  item de Checkout" não foi portada.
+- **Venda Externa por ficha** (`Insere_Dav` tipo 3, leitura de arquivo
+  `.txt` de import de outro sistema) — fora de escopo, não identificado uso
+  atual desta feature.
+- **Cartão Presente / Vale de Devolução** — tabelas `comanda_cartao_
+  presente`/`vale_devolucao` referenciadas no legado, sem cadastro/emissão
+  migrados ainda.
+- **Emissão fiscal automática ao fechar** — o Checkout não emite NFC-e/NFS-e
+  sozinho; reaproveita o botão já existente "Emitir NFC-e"/"Emitir NFS-e"
+  do Gestor de Comandas (`comanda_service.py`) — mesma ressalva já
+  registrada lá: **nunca testado contra o SEFAZ real**.
+- **Impressão térmica SILENCIOSA** (sem diálogo do navegador) — a Fase 3
+  já implementou preview + impressão via `window.print()`/iframe (ver
+  acima). O backend + agente local pra impressão SEM diálogo (mesma
+  pendência já registrada em outras telas — Pedido Bar) foram implementados
+  em 2026-08-05 (ver "Impressão Silenciosa — Fila + Agente Local" logo
+  abaixo), mas **nenhuma tela do app (Checkout incluído) chama
+  `POST /api/impressao/fila` ainda** — a integração "botão Imprimir também
+  enfileira pro agente" continua não feita, só o mecanismo de fila/agente
+  em si existe (ainda não testado ao vivo, ver seção própria).
+- **Ciclo completo não testado ao vivo** — abrir venda → adicionar item →
+  importar Pedido/O.S. → desconto → fechar com múltiplas formas →
+  imprimir recibo → conferir no Gestor de Comandas, nunca rodado contra
+  um banco de teste real (só testes unitários com
+  cursor mockado).
+
+---
+
+## Impressão Silenciosa — Fila + Agente Local
+
+**Status: 🟢 Backend + agente implementados e TESTADOS AO VIVO 2026-08-05
+(2 cupons de teste impressos de verdade, sem diálogo, numa impressora
+térmica USB real) + início automático instalado na máquina `GERDELL`.
+NENHUMA tela do app integrada ainda (ver bullet próprio abaixo).**
+
+Pedido do usuário (durante o trabalho de Checkout Fase 3, impressão de
+cupom): *"implemente o Polling em python. assim que tiver pronto vamos
+testar."* — motivado por explicar antes, em detalhe, a arquitetura de
+"agente local" como solução pra impressão silenciosa (sem diálogo do
+navegador) de impressoras térmicas conectadas por **USB local** numa
+máquina Windows (impressoras de **rede** já são resolvidas sem agente
+nenhum, ver `enviar_rede` abaixo).
+
+- **Backend** (`backend/services/impressao_service.py`, estendido — já
+  tinha `enviar_rede`/`_enviar_rede_sync` de uma rodada anterior, socket
+  TCP cru pra impressoras de rede na porta 9100/RAW-JetDirect):
+  - Tabela nova `impressao_fila` (migração idempotente
+    `_ensure_impressao_fila_table`, mesmo padrão `IF NOT EXISTS (SELECT 1
+    FROM sys.tables ...)` já usado em outras tabelas novas do projeto) —
+    `computador`, `impressora` (opcional), `tipo`, `conteudo`, `status`
+    (`PENDENTE` → `ENVIADO` → `IMPRESSO`/`ERRO`), `mensagem_erro`,
+    `data_criacao`/`data_envio`/`data_conclusao`.
+  - `_enfileirar_sync`/`enfileirar`: valida `computador`/`conteudo` não
+    vazios, insere e retorna o `id` do job.
+  - `_list_pendentes_sync`/`list_pendentes`: retorna jobs `PENDENTE` (ou
+    `ENVIADO` há mais de `RECUPERACAO_ENVIADO_MINUTOS`=2 minutos sem
+    confirmação — recuperação de agente que caiu no meio do processamento
+    de um job e nunca chamou `/confirmar`), e já marca os IDs retornados
+    como `ENVIADO` na mesma chamada (evita 2 agentes pegarem o mesmo job
+    num polling concorrente).
+  - `_confirmar_sync`/`confirmar`: marca `IMPRESSO`/`ERRO` +
+    `mensagem_erro`, bloqueia com "Job não encontrado." se o `id` não
+    existir (`rowcount==0`).
+  - 11 testes unitários novos em `backend/tests/unit/test_impressao_service.py`
+    (`TestEnfileirar`/`TestListPendentes`/`TestConfirmar`), mesmo padrão
+    `FakeCursor`/`FakeConn` já usado em `test_checkout_service.py`.
+- **Rotas** (`backend/routes/impressao.py`, estendido):
+  `POST /api/impressao/fila` (enfileirar — qualquer tela chama),
+  `GET /api/impressao/fila/pendentes?servidor=&banco=&computador=`
+  (só o agente chama), `POST /api/impressao/fila/{id}/confirmar` (só o
+  agente chama). Sem gate de permissão dedicado — mesmo padrão já usado em
+  `POST /impressao/rede` (endpoint de infraestrutura, não uma tela de
+  cadastro); log de auditoria (`tela="IMPRESSAO"`, best-effort, nunca
+  bloqueia a operação) só no `enfileirar`.
+- **Agente Python standalone** (`print-agent/`, fora de `backend/` — roda
+  numa máquina Windows cliente, não no servidor):
+  `agente_impressao.py` (loop de polling configurável via `config.json` —
+  `api_base`/`servidor`/`banco`/`computador`/`impressora_padrao`/
+  `intervalo_segundos`; usa `win32print` em modo `RAW` pra mandar os bytes
+  direto pro spooler, sem diálogo; `cp850` como codepage, mesma escolha já
+  feita em `enviar_rede`), `config.exemplo.json` (template, `config.json`
+  real fica fora do git — `.gitignore` atualizado), `testar_enfileirar.py`
+  (enfileira um cupom de teste sem precisar de nenhuma tela do app),
+  `requirements.txt` (`requests`+`pywin32`), `README.md`+`INSTALACAO.md`
+  (instruções de instalação/uso/erros comuns).
+- **Início automático instalado** (`print-agent/scripts/`,
+  `start-print-agent.ps1`+`install-startup-task.ps1` — mesmo padrão
+  já usado pelo backend em `backend/scripts/`): tarefa agendada
+  `BackOn-PrintAgent` (SYSTEM, `AtStartup`, restart automático em caso de
+  queda, mesmos parâmetros de `RestartCount`/`RestartInterval` do backend)
+  registrada na máquina `GERDELL` (a mesma máquina do backend/banco de
+  teste nesta rodada). `start-print-agent.ps1` é um supervisor com log
+  diário (`print-agent/logs/agent-AAAAMMDD.log`) que reinicia
+  `agente_impressao.py` se ele cair — mesma razão/estrutura do supervisor
+  do backend (`start-backend.ps1`).
+- **Testado ao vivo nesta máquina (2026-08-05)**: `config.json` real
+  (`servidor=GERDELL`, `banco=BARESTELA`, `computador=GERDELL`,
+  `impressora_padrao="EPSON TM-T(203dpi) Receipt6"`) — 2 cupons de teste
+  (`testar_enfileirar.py`) enfileirados e confirmados `IMPRESSO` na tabela
+  `impressao_fila`, um deles já através da tarefa agendada rodando (não só
+  execução manual). `pywin32` funcionou sem precisar de passo extra de
+  pós-instalação (`pywin32_postinstall.py`) neste ambiente.
+- **Observação não investigada a fundo**: tanto o processo do backend
+  quanto o do agente aparecem como um par pai/filho de 2 processos Python
+  com a mesma linha de comando (`Get-CimInstance Win32_Process`) nesta
+  máquina — não é uma duplicação real (só uma porta/único job efetivo
+  fazendo o trabalho, confirmado pelo `netstat`/pelo teste de impressão
+  não sair em dobro), possivelmente um comportamento do ambiente Windows
+  desta máquina na forma como lança o processo filho. Não bloqueia nada,
+  só registrado caso reapareça de forma diferente no futuro.
+- **Checkout já integrado com a fila (2026-08-05)** — pergunta em aberto
+  resolvida via `AskUserQuestion`, depois **confirmada explicitamente pelo
+  usuário**: reaproveitar `direcionamento_impressora` (Controle do Sistema)
+  foi descartado — "no checkout não pode ser chaveado por tipo/finalidade
+  de produto. A impressão é da comanda inteira de produtos e serviços" —
+  aquele cadastro é por Tipo/Finalidade (pensado pra imprimir 1 item de
+  cada vez, por Finalidade, no Pedido Bar), o Checkout sempre imprime a
+  comanda inteira (todos os produtos/serviços do documento) de uma vez, o
+  que já era exatamente como `buildReciboTexto`/`_get_venda_sync` foram
+  implementados (nenhuma mudança de código precisou ser feita por essa
+  parte — só confirma que a decisão original estava certa).
+  Escolhido em vez disso: **configuração local por estação**, salva no
+  navegador (não no banco) — `frontend/src/utils/storage/
+  impressaoSilenciosa.ts` (mesmo padrão de `pedidosFilters.ts`, chaveado por
+  empresa+banco), configurável via ícone "⚙ Configurar Impressão" novo no
+  cabeçalho (`frontend/src/components/checkout/ConfiguracaoImpressaoModal.tsx`
+  — 2 campos, Computador+Impressora). Novo prop `onPrintConfig` em
+  `PedidoHeader.tsx` (mesmo padrão de `onAnexos`/`onHelp`).
+  **Correção no mesmo dia, user-directed — não existe botão "Imprimir"**
+  ("não tem botão imprimir. tudo será de forma silenciosa no final do
+  processo de venda. assim como acontece no legado"): removido por
+  completo o botão manual, o estado `reciboOpen` e
+  `frontend/src/components/checkout/ReciboCheckoutModal.tsx` inteiro
+  (arquivo deletado — órfão depois da remoção, nenhum outro consumidor).
+  Impressão agora é **automática**, disparada dentro de `fecharVenda`
+  logo após `POST /checkout/{comanda}/fechar` ter sucesso — mesma réplica
+  do comportamento do legado (`Imprime_Comprovante` era chamada direto ao
+  fechar a venda no VB6, sem botão dedicado). Nova função
+  `imprimirVendaAutomatico(cmd)` em `checkout.tsx`: busca o estado FINAL da
+  venda direto da API (`GET /checkout/{cmd}`, não o state local — que
+  ainda não refletiu o resultado do fechar no mesmo tick de React),
+  monta o texto via `buildReciboTexto` e chama `POST /impressao/fila`
+  **só se a estação tiver Computador+Impressora configurados**; sem
+  configuração, não tenta imprimir (não existe mais fallback de diálogo do
+  navegador — não faria sentido um diálogo abrir "automaticamente" sem
+  gesto do usuário) e devolve um aviso claro. O resultado (sucesso, falha,
+  ou "não configurado") é concatenado num ÚNICO toast junto com "Venda
+  fechada!"/troco, com `durationMs=5000` (regra `[GLOBAL]` de mensagem
+  grande/importante — carrega texto novo, merece mais tempo de leitura).
+  Conteúdo do cupom em texto puro (não HTML) gerado por
+  `frontend/src/utils/reciboTexto.ts` (`buildReciboTexto`, 42 colunas,
+  reaproveitável por outras telas). Testado ao vivo contra
+  `/api/impressao/fila` (smoke test via curl) — o fluxo completo
+  telinha→fila→agente→impressora física já foi validado antes disso na
+  seção acima, só a chamada nova do Checkout que foi testada isoladamente
+  (nunca clicado "Fechar Venda" de verdade na UI pra disparar o print
+  automático).
+  **Acesso à configuração restrito aos "3 Magníficos"** (pedido explícito
+  do usuário, mesmo dia): o ícone "⚙" só aparece pra quem tem
+  `isManagerFuncao` (Gerente/Supervisor `cod_funcao` 01/02, ou Master —
+  mesmo helper já usado em `pedidos.tsx`/`usuarios_service.py` pra "ver
+  todos os vendedores"/gestão de usuários, reaproveitado aqui sem criar
+  critério novo). Restrição é só de QUEM PODE ABRIR/MUDAR a configuração —
+  uma vez configurada por um gerente naquela estação, o botão "Imprimir"
+  continua enfileirando direto pra QUALQUER operador que usar a máquina
+  depois (a config é da estação, não do usuário logado).
+  **Modo Didático aplicado de passagem** (pedido explícito do usuário no
+  mesmo momento): tooltips adicionados aos 2 ícones-sozinhos que ainda não
+  tinham (buscar cliente, cancelar item — via `IconButtonWithTooltip`,
+  substituindo `Pressable` cru) e `AJUDA_ITENS` ganhou entrada explicando
+  "Configurar Impressão".
+- **Ciclo completo já testado ao vivo nesta máquina** (ver bullets acima)
+  — falta testar em uma SEGUNDA máquina diferente da do backend (validar
+  `api_base` apontando pra IP de rede em vez de `localhost`) e testar a
+  sobrevivência a reboot de verdade (a tarefa foi só iniciada manualmente
+  via `Start-ScheduledTask`, nunca validada num boot real do Windows).
+- **Não substitui nem quebra `enviar_rede`** — impressoras de rede
+  continuam usando o caminho direto (backend → socket, sem fila, sem
+  agente); a fila é só para USB-local.
+
+---
+
 ## Modificadores
 
 **Status: 🟡 Fase 1 (cadastro) implementada e testada ao vivo (2026-07-23)**

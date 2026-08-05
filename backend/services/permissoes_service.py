@@ -139,6 +139,20 @@ ACOES_OS = [
     ("FATURAR", "Faturar O.S."),
 ]
 
+# Ações do Checkout (venda direta de balcão — migração de FrmPafOFF.frm,
+# "Emissão de Cupom Fiscal"/PDV). Fase 1 (núcleo) — ver PENDENCIAS.md >
+# "Checkout" pro rastreio completo e as fases adiadas.
+ACOES_CHECKOUT = [
+    ("ABRIR", "Abrir tela"),
+    ("ADD_ITEM", "Adicionar item"),
+    ("DEL_ITEM", "Cancelar item"),
+    ("DESC_ITEM", "Desconto no item"),
+    ("DESC_GERAL", "Desconto geral"),
+    ("FECHAR", "Fechar venda"),
+    ("CANCELAR", "Cancelar venda"),
+]
+
+
 # Ações da tela "O.S. Completa" (migração de `FrmTraOsNew.frm`, Fase 1 —
 # núcleo, 2026-07-30/31). Mesmo raciocínio de ACOES_PEDIDO_COMP em relação a
 # ACOES_PEDIDO: vocabulário de comando compartilhado com ACOES_OS (mesma
@@ -776,6 +790,7 @@ CATALOGO = [
     _menu("TRANSACOES", "Transações", [
         _tela("PEDIDO", "Pedido Bar", ACOES_PEDIDO),
         _tela("OS", "OS Mobile", ACOES_OS),
+        _tela("CHECKOUT", "Checkout", ACOES_CHECKOUT),
         _tela("PEDIDO_COMP", "Pedido Completo", ACOES_PEDIDO_COMP),
         _tela("OS_COMP", "O.S. Completa", ACOES_OS_COMP),
         # "Envio para Terceiros" (migração de FrmManRet.frm, 2026-08-01,

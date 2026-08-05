@@ -30,6 +30,11 @@ type Props = {
   // pedido, então mora no cabeçalho junto com Ajuda/Gravar. Ícone só
   // aparece se informado (ex.: sem cliente selecionado ainda).
   onAnexos?: () => void;
+  // Abre a configuração de Impressão Silenciosa desta estação (Checkout —
+  // ver ConfiguracaoImpressaoModal.tsx). Ação de tela (não depende do
+  // estado do registro), por isso mora aqui junto com Anexos/Ajuda. Ícone
+  // só aparece se informado.
+  onPrintConfig?: () => void;
   // Abre o modal único de Ajuda da tela (reúne a explicação de todos os
   // botões/campos num só lugar, em vez de tooltip por botão — pedido
   // explícito do usuário, 2026-07-20). Ícone só aparece se informado.
@@ -77,7 +82,7 @@ function HeaderIconButton({
 }
 
 export default function PedidoHeader({
-  title, saving, onBack, onSave, canSave = true, titleExtra, onAnexos, onHelp, vinculoProjeto,
+  title, saving, onBack, onSave, canSave = true, titleExtra, onAnexos, onPrintConfig, onHelp, vinculoProjeto,
 }: Props) {
   return (
     <View style={styles.header}>
@@ -102,6 +107,9 @@ export default function PedidoHeader({
       ) : null}
       {onAnexos ? (
         <HeaderIconButton icon="attach-outline" label="Anexos" onPress={onAnexos} testID="pedido-form-anexos-btn" />
+      ) : null}
+      {onPrintConfig ? (
+        <HeaderIconButton icon="settings-outline" label="Configurar Impressão" onPress={onPrintConfig} testID="pedido-form-print-config-btn" />
       ) : null}
       {onHelp ? (
         <HeaderIconButton icon="information-circle-outline" label="Ajuda" onPress={onHelp} testID="pedido-form-ajuda-btn" />

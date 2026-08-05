@@ -69,6 +69,14 @@ export default function TransacoesScreen() {
         visible: can("PEDIDO.ABRIR"),
       },
       {
+        key: "checkout",
+        label: "Checkout",
+        hint: "Venda direta de balcão, sem precisar de um Pedido/O.S. prévio",
+        icon: "cart-outline",
+        route: "/checkout",
+        visible: can("CHECKOUT.ABRIR"),
+      },
+      {
         key: "os-completa",
         label: "O.S. Completa",
         hint: "Versão completa da Ordem de Serviço (back-office, web)",

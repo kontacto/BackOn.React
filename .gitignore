@@ -4,6 +4,13 @@
 .idea/
 .vscode/
 
+# Agente de impressão local — config.json é por máquina (nome do
+# computador, IP do backend), não deve ser versionado; config.exemplo.json
+# fica como template.
+print-agent/config.json
+print-agent/.venv/
+print-agent/logs/
+
 # Dependencies
 node_modules/
 /node_modules
