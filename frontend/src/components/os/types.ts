@@ -50,6 +50,27 @@ export function osSituacaoItemLabel(v: number): string {
   return OS_SITUACAO_ITEM_OPTIONS.find((o) => o.value === v)?.label || "Cliente paga";
 }
 
+// Equipamento vinculado a uma O.S. (`os_equipamento` — Assistência Técnica,
+// regra 14: "uma OS pode ter vários equipamentos", ver
+// AssistenciaTecnicaCampo.md seção 5). `status_os` reaproveita a MESMA
+// tabela do status da própria OS (decisão explícita do usuário) — aqui é
+// o status DESTE equipamento, independente do `status_os` do cabeçalho.
+export type OSEquipamentoRow = {
+  codigo: number;
+  equipamento: number | null;
+  numero_de_serie: string;
+  principal: boolean;
+  situacao: "A" | "C";
+  defeito_reclamado: string;
+  servico_executado: string;
+  servico_a_executar: string;
+  diagnostico: string;
+  status_os: number | null;
+  status_os_descricao: string | null;
+  marca_descricao: string | null;
+  modelo_descricao: string | null;
+};
+
 export type OSData = {
   codigo: number; cliente: number | null; cliente_nome: string; cliente_cgc: string;
   data: string | null; hora: string; situacao: string; situacao_label: string; total: number;
@@ -94,4 +115,19 @@ export type OSData = {
   // bloco Cliente paga (que usa `forma_pagamento` normal).
   forma_pagamento_garantia: string;
   forma_pagamento_garantia_descricao: string;
+  // Check-in/check-out por geolocalização (Atendimento de Campo — ver
+  // AssistenciaTecnicaCampo.md seção 6) — já vêm de `_get_os_sync` (base),
+  // `os_completo_service` só herda por cima, nenhuma coluna própria aqui.
+  checkin_em: string | null;
+  checkin_lat: number | null;
+  checkin_lng: number | null;
+  checkin_usuario: number | null;
+  checkout_em: string | null;
+  checkout_lat: number | null;
+  checkout_lng: number | null;
+  checkout_usuario: number | null;
+  // Auxiliar do técnico (regra 11 do documento) — opcional, mesmo padrão
+  // soft-FK de `tecnico_responsavel` logo acima.
+  auxiliar_tecnico: number | null;
+  auxiliar_tecnico_nome: string;
 };

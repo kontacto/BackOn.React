@@ -15,8 +15,8 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 
-from models.schemas import OSCompletoSaveRequest, OSItemSaveRequest, DescontoGeralRequest, FecharRequest, FaturarOSRequest, PontuacaoSaveRequest, AutorizacaoItensRequest, OSTempoSaveRequest, AlterarExecutorRequest
-from services import os_itens_service, os_completo_service, os_tempo_service, log_auditoria_service
+from models.schemas import OSCompletoSaveRequest, OSItemSaveRequest, DescontoGeralRequest, FecharRequest, FaturarOSRequest, PontuacaoSaveRequest, AutorizacaoItensRequest, OSTempoSaveRequest, AlterarExecutorRequest, OSEquipamentoSaveRequest
+from services import os_itens_service, os_completo_service, os_tempo_service, os_equipamento_service, log_auditoria_service
 
 router = APIRouter()
 
@@ -325,6 +325,59 @@ async def remover_expedicao_itens(codigo: int, req: AutorizacaoItensRequest, req
             usuario=req.usuario_alteracao, classe=req.classe,
             referencia=str(codigo),
             descricao=_autorizacao_log_desc(f"Remoção de expedição de itens da O.S. Completa {codigo}", result),
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+# ---------- equipamentos (Assistência Técnica — uma OS pode ter vários
+# equipamentos, ver AssistenciaTecnicaCampo.md seção 5/regra 14; tabela
+# nova `os_equipamento`, vincular é ação exclusiva da O.S. Completa) ----------
+@router.get("/os-completo/{codigo}/equipamentos")
+async def list_equipamentos_os(codigo: int, servidor: str, banco: str):
+    return await os_equipamento_service.list_equipamentos(servidor, banco, codigo)
+
+
+@router.post("/os-completo/{codigo}/equipamentos")
+async def add_equipamento_os(codigo: int, req: OSEquipamentoSaveRequest, request: Request):
+    result = await os_equipamento_service.add_equipamento(req, codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS_COMP", comando="EQUIP_ADD",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo),
+            descricao=f"Equipamento {req.equipamento} vinculado à O.S. Completa {codigo}",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.put("/os-completo/{codigo}/equipamentos/{item_codigo}")
+async def update_equipamento_os(codigo: int, item_codigo: int, req: OSEquipamentoSaveRequest, request: Request):
+    result = await os_equipamento_service.update_equipamento(req, codigo, item_codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS_COMP", comando="EQUIP_ADD",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo),
+            descricao=f"Equipamento {item_codigo} da O.S. Completa {codigo} atualizado",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/os-completo/{codigo}/equipamentos/{item_codigo}/cancelar")
+async def cancelar_equipamento_os(
+    codigo: int, item_codigo: int, req: FecharRequest, request: Request,
+):
+    result = await os_equipamento_service.cancelar_equipamento(req.servidor, req.banco, codigo, item_codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS_COMP", comando="EQUIP_CANC",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo),
+            descricao=f"Equipamento {item_codigo} cancelado na O.S. Completa {codigo}",
+            campos_alterados=[{"campo": "situacao", "antes": "A", "depois": "C"}],
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

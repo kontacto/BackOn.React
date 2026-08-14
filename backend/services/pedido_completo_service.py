@@ -35,6 +35,7 @@ from services.pedido_common import (
     _modulo_servicos_ativo, _modulo_agenda_ativo, _resolve_produto_completo, _kit_componentes,
     _ensure_hora_inclusao_item_col, _fechar_pedido_itens, _resolve_tipo_pedido,
     _modulo_metro_quadrado_ativo, _config_m2, _area_preco, TIPOS_PRECO_M2,
+    TIPO_EFETIVO_PEDIDO_SQL,
 )
 from services.permissoes_service import tem_permissao
 from services.itens_service import (
@@ -78,7 +79,7 @@ def _get_pedido_completo_sync(servidor: str, banco: str, pedido: int) -> dict:
             "LEFT JOIN funcionarios f ON f.codigo_int = p.vendedor "
             "LEFT JOIN area_atuacao a ON a.area = p.area_atuacao "
             "LEFT JOIN forma_pagamento fp ON fp.codigo = p.forma_pag "
-            "LEFT JOIN tipo_cliente tc ON tc.codigo = COALESCE(NULLIF(p.tipo, 0), c.cliente_forn) "
+            f"LEFT JOIN tipo_cliente tc ON tc.codigo = {TIPO_EFETIVO_PEDIDO_SQL} "
             "WHERE p.pedido = %s",
             (pedido,),
         )

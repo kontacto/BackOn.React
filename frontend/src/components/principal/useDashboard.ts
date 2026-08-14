@@ -15,10 +15,16 @@ import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { ResumoProjetos } from "@/src/components/principal/ProjetosResumoCard";
 
 export type DashboardTotals = {
-  pedidos: number; os: number; produtos: number; servicos: number; descontos: number; margem: number; margem_pct: number;
+  pedidos: number; os: number;
+  // Vendas lançadas 100% dentro do Checkout, sem Pedido/O.S. por trás —
+  // pedido explícito do usuário, 2026-08-06 ("incluir vendas direto da
+  // tela de vendas tb"). Opcional/`?? 0` no consumo — backends antigos (ou
+  // ainda não reiniciados) não mandam essa chave.
+  checkout?: number;
+  produtos: number; servicos: number; descontos: number; margem: number; margem_pct: number;
 };
 export type MovimentoItem = {
-  tipo: "PED" | "OS"; doc: number; cliente: string; vendedor: string; valor: number;
+  tipo: "PED" | "OS" | "CHECKOUT"; doc: number; cliente: string; vendedor: string; valor: number;
   // Situação do registro (A/F/PG/C + rótulo já traduzido) — usado pra
   // mostrar um selo por linha quando o filtro "Todos" está ativo (sem
   // filtro nenhum, os registros da lista têm situações diferentes entre
@@ -26,7 +32,7 @@ export type MovimentoItem = {
   situacao: string; situacaoLabel: string;
 };
 
-const ZERO: DashboardTotals = { pedidos: 0, os: 0, produtos: 0, servicos: 0, descontos: 0, margem: 0, margem_pct: 0 };
+const ZERO: DashboardTotals = { pedidos: 0, os: 0, checkout: 0, produtos: 0, servicos: 0, descontos: 0, margem: 0, margem_pct: 0 };
 
 // Resumo dos 3 alertas de estoque (Controle do Sistema > aba Diversos) —
 // card na Tela Principal, só pra Gerente/Supervisor/Master. `ativo=false`
@@ -263,7 +269,7 @@ export function useDashboard() {
         const rawMov = Array.isArray(j?.movimento) ? j.movimento : (Array.isArray(j?.pedidos) ? j.pedidos : []);
         const normalizedMov: MovimentoItem[] = rawMov.map((m: any) => {
           const tipoRaw = String(m?.tipo ?? "PED").toUpperCase();
-          const tipo = tipoRaw === "OS" ? "OS" : "PED";
+          const tipo = tipoRaw === "OS" ? "OS" : tipoRaw === "CHECKOUT" ? "CHECKOUT" : "PED";
           const doc = Number(m?.doc ?? m?.documento ?? m?.pedido ?? m?.os ?? 0);
           const cliente = String(m?.cliente ?? m?.nome_cliente ?? "").trim();
           const vendedor = String(
@@ -325,6 +331,19 @@ export function useDashboard() {
     if (session) loadDashboard(session, situacaoFiltro);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [situacaoFiltro]);
+
+  // Atualização automática do "Movimento de Hoje" — pedido explícito do
+  // usuário, 2026-08-11 ("o painel não está atualizando a venda de
+  // checkout"). Vendas fechadas no KPDV (app desktop separado) não têm
+  // nenhum canal de push/websocket pra este painel web — sem isso, o
+  // usuário só via a venda nova ao sair e voltar pra tela (useFocusEffect).
+  // Poll simples a cada 30s enquanto a sessão está ativa, mesmo padrão já
+  // usado noutros painéis do projeto (sem infraestrutura de socket).
+  useEffect(() => {
+    if (!session) return;
+    const id = setInterval(() => loadDashboard(session, situacaoFiltro), 30000);
+    return () => clearInterval(id);
+  }, [session, situacaoFiltro, loadDashboard]);
 
   const handleLogout = useCallback(async () => {
     await clearSession();

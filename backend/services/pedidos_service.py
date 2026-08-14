@@ -2,7 +2,7 @@
 import asyncio
 from typing import Optional
 
-from db.connection import _open_conn
+from db.connection import _open_conn, iso
 from models.schemas import (
     PedidosListRequest, PedidoSaveRequest, FecharRequest, PedidoEntregueRequest, FormaPagSimplesRequest,
     DividirPedidoRequest, QtdPessoasRequest, TipoPedidoRequest,
@@ -11,7 +11,7 @@ from services.constants import SITUACAO_LABEL
 from services.pedido_common import (
     _check_cliente_ativo, _mover_estoque, _liberar_reservado, _fechar_pedido_itens,
     _ensure_hora_inclusao_item_col, _recalc_pedido_total, _ensure_qtd_pessoas_col,
-    _resolve_tipo_pedido,
+    _resolve_tipo_pedido, TIPO_EFETIVO_PEDIDO_SQL,
 )
 from services.itens_service import TAXA_SERVICO_CODIGO, _recalc_valor_taxa_servico, sincroniza_taxa_servico_apos_alteracao
 from services.permissoes_service import tem_permissao
@@ -45,38 +45,39 @@ def _list_pedidos_sync(req: PedidosListRequest) -> dict:
         if req.vendedor and str(req.vendedor).lower() != "all":
             where_parts.append("p.vendedor = %s")
             params.append(req.vendedor)
-        # Pedido tipo FIADO ainda Aberto nunca é escondido pelo filtro de
-        # data — uma comanda fiado (fiado de verdade, tipo do CLIENTE
-        # também prevalece via o mesmo COALESCE/NULLIF já usado pro filtro
-        # de tipo acima) pode ficar aberta por semanas, e a tela de Pedidos
-        # agora carrega sempre com o filtro de data do dia atual (ver
-        # `_list_req`/pedidos.tsx) — sem essa exceção, fiados antigos
-        # sumiriam da lista todo santo dia. Pedido explícito do usuário,
-        # 2026-07-18.
-        fiado_aberto_exempt = (
-            "(p.situacao = 'A' AND (SELECT descricao FROM tipo_cliente wt "
-            "WHERE wt.codigo = COALESCE(NULLIF(p.tipo, 0), c.cliente_forn)) = 'FIADO')"
-        )
+        # Pedido em situação Aberto NUNCA é escondido pelo filtro de data —
+        # um pedido aberto (Mesa/Comanda/Balcão/Entrega/Fiado) pode ficar
+        # assim por dias ou semanas (mesa/comanda esquecida, fiado em
+        # aberto), e a tela de Pedidos carrega sempre com o filtro de data
+        # do dia atual por padrão (`dataIni`/`dataFim` = hoje, ver
+        # `pedidos.tsx`) — sem essa exceção, QUALQUER pedido aberto há mais
+        # de 1 dia sumiria da lista todo santo dia. Já era documentado como
+        # o comportamento pretendido do painel ("pedido aberto há mais de
+        # um dia... nunca é filtrado por data, só reordenado/destacado em
+        # vermelho", ver CLAUDE.md > "Painel de Pedidos"), e é o
+        # comportamento real do legado VB6 ("Pedidos Abertos" não filtra
+        # por data de abertura, só por Data de Entrega — campo separado).
+        # Corrigido 2026-08-11 — achado ao vivo comparando lado a lado com
+        # o VB6 contra "Baixo Brisa Real": só FIADO tinha essa exceção
+        # (implementada 2026-07-18), Mesa/Comanda/Balcão/Entrega abertos há
+        # mais de um dia estavam sumindo do painel enquanto o legado
+        # continuava mostrando todos. Generalizado de "tipo FIADO aberto"
+        # pra "qualquer situação Aberto".
+        aberto_exempt = "p.situacao = 'A'"
         if req.data_ini:
-            where_parts.append(f"(p.data >= %s OR {fiado_aberto_exempt})")
+            where_parts.append(f"(p.data >= %s OR {aberto_exempt})")
             params.append(req.data_ini)
         if req.data_fim:
-            where_parts.append(f"(p.data <= %s OR {fiado_aberto_exempt})")
+            where_parts.append(f"(p.data <= %s OR {aberto_exempt})")
             params.append(req.data_fim)
         if req.tipos_cliente:
-            # Filtra pelo tipo do PEDIDO (pedido_venda.tipo), caindo pro
-            # tipo do cliente quando o pedido não tem tipo próprio definido
-            # — mesma regra da listagem/colunas do Painel de Pedidos.
-            # `NULLIF(p.tipo, 0)` é necessário porque TODO pedido gravado
-            # antes desta feature (2026-07-18) tem `tipo=0` hardcoded (não
-            # NULL) — sem isso, `COALESCE` nunca cai pro tipo do cliente
-            # pra esses pedidos antigos (0 não é NULL), e como não existe
-            # `tipo_cliente.codigo=0`, o JOIN falha silenciosamente e o
-            # pedido some de todas as colunas/filtros por tipo. Bug real
-            # reportado pelo usuário ao ver a lista virar "Pedidos (0)"
-            # depois desta feature. Pedido explícito do usuário, 2026-07-18.
+            # Filtra pelo tipo EFETIVO do pedido (ver TIPO_EFETIVO_PEDIDO_SQL
+            # em pedido_common.py) — tipo do PEDIDO quando gravado, caindo
+            # pro tipo do CLIENTE só quando o pedido não tem tipo próprio,
+            # EXCETO pra Fiado (fallback recusado ali, nunca classifica um
+            # pedido sem tipo próprio como Fiado só por causa do cliente).
             placeholders = ",".join(["%s"] * len(req.tipos_cliente))
-            where_parts.append(f"COALESCE(NULLIF(p.tipo, 0), c.cliente_forn) IN ({placeholders})")
+            where_parts.append(f"{TIPO_EFETIVO_PEDIDO_SQL} IN ({placeholders})")
             params.extend(req.tipos_cliente)
         if req.data_entrega:
             where_parts.append("p.previsao_entrega <= %s")
@@ -145,13 +146,11 @@ def _list_pedidos_sync(req: PedidosListRequest) -> dict:
             f"FROM pedido_venda p "
             f"LEFT JOIN cliente c ON c.codigo = p.cliente "
             f"LEFT JOIN funcionarios f ON f.codigo_int = p.vendedor "
-            # Tipo do PEDIDO prevalece sobre o tipo do cliente — só cai pro
-            # tipo do cliente quando o pedido não tem tipo próprio (NULL OU
-            # 0 — pedidos gravados antes desta feature têm `tipo=0`
-            # hardcoded, tratado como "sem tipo" aqui). Pedido explícito do
-            # usuário, 2026-07-18 ("caso o tipo de pedido seja nulo,
-            # prevalecerá o tipo de cliente").
-            f"LEFT JOIN tipo_cliente tc ON tc.codigo = COALESCE(NULLIF(p.tipo, 0), c.cliente_forn) "
+            # Tipo EFETIVO do pedido — ver TIPO_EFETIVO_PEDIDO_SQL em
+            # pedido_common.py (tipo do PEDIDO prevalece; cai pro tipo do
+            # CLIENTE só quando o pedido não tem tipo próprio, exceto pra
+            # Fiado, onde esse fallback é recusado).
+            f"LEFT JOIN tipo_cliente tc ON tc.codigo = {TIPO_EFETIVO_PEDIDO_SQL} "
             f"LEFT JOIN localizacao l ON l.codigo = p.LOCALIZACAO "
             f"{where} "
             f"ORDER BY {order_by} OFFSET {offset} ROWS FETCH NEXT {req.size} ROWS ONLY",
@@ -173,8 +172,8 @@ def _list_pedidos_sync(req: PedidosListRequest) -> dict:
                 nome = fantasia
             items.append({
                 "pedido": int(r["pedido"] or 0),
-                "data": r["data"].isoformat() if r.get("data") else None,
-                "validade": r["validade"].isoformat() if r.get("validade") else None,
+                "data": iso(r.get("data")),
+                "validade": iso(r.get("validade")),
                 "situacao": sit,
                 "situacao_label": SITUACAO_LABEL.get(sit, sit),
                 "total": float(r.get("total") or 0),
@@ -217,8 +216,8 @@ def _get_pedido_sync(servidor: str, banco: str, pedido: int) -> dict:
             "       fp.descricao AS forma_pag_descricao, l.descricao AS localizacao_descricao, "
             "       c.nome AS cliente_nome, c.cgc_cpf AS cliente_cgc, "
             "       COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS vendedor_nome, a.descricao AS area_descricao, "
-            # Descrição do tipo efetivo do pedido — cai pro tipo do cliente
-            # quando p.tipo é NULL, mesma regra de _list_pedidos_sync.
+            # Descrição do tipo EFETIVO do pedido — ver TIPO_EFETIVO_PEDIDO_SQL
+            # em pedido_common.py, mesma regra de _list_pedidos_sync.
             "       tc.descricao AS tipo_descricao "
             "FROM pedido_venda p "
             "LEFT JOIN cliente c ON c.codigo = p.cliente "
@@ -226,7 +225,7 @@ def _get_pedido_sync(servidor: str, banco: str, pedido: int) -> dict:
             "LEFT JOIN area_atuacao a ON a.area = p.area_atuacao "
             "LEFT JOIN forma_pagamento fp ON fp.codigo = p.forma_pag "
             "LEFT JOIN localizacao l ON l.codigo = p.LOCALIZACAO "
-            "LEFT JOIN tipo_cliente tc ON tc.codigo = COALESCE(NULLIF(p.tipo, 0), c.cliente_forn) "
+            f"LEFT JOIN tipo_cliente tc ON tc.codigo = {TIPO_EFETIVO_PEDIDO_SQL} "
             "WHERE p.pedido = %s",
             (pedido,),
         )
@@ -273,8 +272,8 @@ def _get_pedido_sync(servidor: str, banco: str, pedido: int) -> dict:
                 "cliente": int(row["cliente"] or 0) if row.get("cliente") else None,
                 "cliente_nome": (row.get("cliente_nome") or row.get("NOME_CLIENTE") or "").strip(),
                 "cliente_cgc": (row.get("cliente_cgc") or "").strip(),
-                "data": row["data"].isoformat() if row.get("data") else None,
-                "validade": row["validade"].isoformat() if row.get("validade") else None,
+                "data": iso(row.get("data")),
+                "validade": iso(row.get("validade")),
                 "vendedor": int(row["vendedor"] or 0) if row.get("vendedor") else None,
                 "vendedor_nome": (row.get("vendedor_nome") or "").strip(),
                 "hora_aberto": (row.get("hora_aberto") or "").strip(),
@@ -284,7 +283,7 @@ def _get_pedido_sync(servidor: str, banco: str, pedido: int) -> dict:
                 "total": float(row.get("total") or 0),
                 "area_atuacao": int(row["area_atuacao"]) if row.get("area_atuacao") is not None else None,
                 "area_descricao": (row.get("area_descricao") or "").strip(),
-                "previsao_entrega": row["previsao_entrega"].isoformat() if row.get("previsao_entrega") else None,
+                "previsao_entrega": iso(row.get("previsao_entrega")),
                 "hora_entrega": (row.get("hora_entrega") or "").strip(),
                 "pedido_entregue": bool(row.get("pedido_entregue")),
                 "forma_pag": (row.get("forma_pag") or "").strip(),

@@ -7,6 +7,7 @@ from models.schemas import (
     CheckoutAbrirRequest, CheckoutItemRequest, CheckoutCancelarItemRequest,
     CheckoutDescontoGeralRequest, CheckoutClienteRequest, CheckoutFecharRequest,
     CheckoutCancelarVendaRequest, CheckoutImportarDavRequest,
+    CheckoutImportarAbastecimentoRequest, CheckoutImportarAgendamentoRequest,
 )
 from services import checkout_service, log_auditoria_service
 
@@ -76,6 +77,11 @@ async def cancelar_item(comanda: int, id_mov: int, req: CheckoutCancelarItemRequ
     return result
 
 
+@router.get("/checkout/dav/pendentes")
+async def list_dav_pendentes(servidor: str, banco: str, tipo_dav: str):
+    return await checkout_service.list_dav_pendentes(servidor, banco, tipo_dav)
+
+
 @router.post("/checkout/{comanda}/importar-dav")
 async def importar_dav(comanda: int, req: CheckoutImportarDavRequest, request: Request):
     result = await checkout_service.importar_dav(req, comanda)
@@ -86,6 +92,44 @@ async def importar_dav(comanda: int, req: CheckoutImportarDavRequest, request: R
             usuario=req.usuario_alteracao, classe=req.classe,
             referencia=str(comanda),
             descricao=f"{tipo_label} #{req.documento} importado ({result.get('itens_importados')} item(ns)) na venda {comanda}",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.get("/checkout/abastecimentos/pendentes")
+async def list_abastecimentos_pendentes(servidor: str, banco: str):
+    return await checkout_service.list_abastecimentos_pendentes(servidor, banco)
+
+
+@router.post("/checkout/{comanda}/importar-abastecimento")
+async def importar_abastecimento(comanda: int, req: CheckoutImportarAbastecimentoRequest, request: Request):
+    result = await checkout_service.importar_abastecimento(req, comanda)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="CHECKOUT", comando="ADD_ITEM",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(comanda),
+            descricao=f"Abastecimento #{req.num_abastecimento} importado na venda {comanda}",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.get("/checkout/agendamentos/pendentes")
+async def list_agendamentos_pendentes(servidor: str, banco: str):
+    return await checkout_service.list_agendamentos_pendentes(servidor, banco)
+
+
+@router.post("/checkout/{comanda}/importar-agendamento")
+async def importar_agendamento(comanda: int, req: CheckoutImportarAgendamentoRequest, request: Request):
+    result = await checkout_service.importar_agendamento(req, comanda)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="CHECKOUT", comando="ADD_ITEM",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(comanda),
+            descricao=f"Agendamento #{req.codagenda} importado na venda {comanda}",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

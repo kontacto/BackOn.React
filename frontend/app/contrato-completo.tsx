@@ -1317,7 +1317,9 @@ const styles = StyleSheet.create({
   input: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: 11, fontSize: 14, color: colors.onSurface },
   readonlyStrong: { fontWeight: "700", color: colors.brandPrimary },
   rowFields: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-end", flexWrap: "wrap" },
-  colFlex: { flex: 1, minWidth: 160 },
+  // Design Desktop (CLAUDE.md): maxWidth evita esticar até a largura
+  // inteira do card num monitor grande (container agora 1600px).
+  colFlex: { flex: 1, minWidth: 160, maxWidth: 420 },
   colNarrow: { width: 160 },
   colTiny: { width: 100 },
   switchField: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 11 },

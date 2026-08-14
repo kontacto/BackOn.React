@@ -12,7 +12,19 @@ Schema real (conferido ao vivo em GERDELL/BARESTELA, não assumido do VB6):
   um campo recente, criado só na abertura do sistema (por isso ausente
   neste banco de teste até ser criado manualmente). Adicionado via `ALTER
   TABLE SERVICOS ADD INDOP_NFSE NVARCHAR(10)` em 2026-07-10, agora
-  implementado normalmente.
+  implementado normalmente. Rastreado no VB6/VB.NET em 2026-08-06:
+  alimenta a tag `<cIndOp>` do grupo `<IBSCBS>` na emissão de NFSe
+  (`Backon.Data\DAO_NFE.vb`, `Dados_Servico.Seta_Dados_Servico`) — é o
+  "Indicador de Operação" oficial do leiaute IBS/CBS (Reforma Tributária,
+  art. 11), com 26 códigos possíveis (ex.: "030101" = serviço prestado
+  fisicamente sobre pessoa, local = estabelecimento do fornecedor). Enum
+  fixo por lei — mantido como `nvarchar(10)` livre aqui no banco (sem FK/
+  CHECK), mas a tela (`frontend/app/servicos.tsx`, `INDOP_NFSE_OPTS`)
+  restringe a escolha aos 26 códigos válidos via combobox.
+- **`cod_icms`**: validado contra a tabela auxiliar `dscr_icms` desde
+  2026-08-06 (mesmo crivo que Produtos/`FrmManPec.frm` já faz — o form
+  legado de Serviços nunca validava isso, decisão consciente de não
+  replicar essa lacuna). Ver `_save_servico_sync`.
 - Tabelas auxiliares desta tela ainda fora de escopo nesta primeira leva
   (fase CRUD principal): `servicos_preco_qtd` (Preço por Quantidade),
   `produtos_compostos` (Previsão de Produtos). "Layouts do Serviço" e
@@ -196,6 +208,16 @@ def _save_servico_sync(servidor: str, banco: str, codigo: str, dados: dict) -> d
         cur = conn.cursor(as_dict=True)
         if not _modulo_servicos_ativo(cur):
             return {"success": False, "message": _MODULO_DESATIVADO_MSG}
+        # Código ICMS validado contra `dscr_icms` — pedido explícito do
+        # usuário, 2026-08-06 ("cod_icms deve validar contra Dscr_Icms, como
+        # Produtos já faz" — FrmManPec.frm's Campo(16), ExisteIcms()). O
+        # form de Serviços do legado (FrmManSer2.frm) nunca validava isso;
+        # decisão consciente de não replicar essa lacuna aqui.
+        cod_icms = (dados.get("cod_icms") or "").strip()
+        if cod_icms:
+            cur.execute("SELECT TOP 1 1 AS ok FROM dscr_icms WHERE cod_icms=%s", (cod_icms,))
+            if not cur.fetchone():
+                return {"success": False, "message": f"Código ICMS não cadastrado: '{cod_icms}'."}
         cur.execute("SELECT codigo FROM servicos WHERE codigo=%s", (codigo,))
         existe = cur.fetchone() is not None
 

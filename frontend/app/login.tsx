@@ -340,28 +340,14 @@ export default function LoginScreen() {
                 </Text>
                 <Ionicons name="chevron-down" size={18} color={colors.onSurfaceTertiary} />
               </Pressable>
-              {selected ? (
-                <View style={styles.metaRow}>
-                  <View style={styles.metaItem}>
-                    <Ionicons name="server-outline" size={12} color={colors.muted} />
-                    <Text style={styles.metaText} numberOfLines={1} testID="login-empresa-servidor">
-                      {selected.servidor}
-                    </Text>
-                  </View>
-                  <View style={styles.metaItem}>
-                    <Ionicons name="cube-outline" size={12} color={colors.muted} />
-                    <Text style={styles.metaText} numberOfLines={1} testID="login-empresa-banco">
-                      {selected.banco || "Banco não definido"}
-                    </Text>
-                  </View>
-                  <View style={styles.metaItem}>
-                    <Ionicons name="cloud-outline" size={12} color={colors.muted} />
-                    <Text style={styles.metaText} numberOfLines={1} testID="login-empresa-api">
-                      {selected.api || "API não definida"}
-                    </Text>
-                  </View>
-                </View>
-              ) : null}
+              {/*
+                Só o NOME da conexão é exibido — nunca servidor/banco/API.
+                Regra [GLOBAL] 2026-08-11, pedido explícito do usuário:
+                "o campo conexão na tela de login, tanto da Web quanto do
+                KPDV exibir somente o nome da conexão. o intuito é evitar
+                ataque ao BD" (não expor a superfície de ataque — nome do
+                servidor e do banco — na tela antes mesmo do login).
+              */}
             </View>
 
             <View style={styles.field}>
@@ -470,10 +456,8 @@ export default function LoginScreen() {
                     testID={`login-empresa-option-${c.id}`}
                   >
                     <View style={{ flex: 1 }}>
+                      {/* Só o nome — mesma regra de não expor servidor/banco na tela de Login. */}
                       <Text style={styles.sheetItemTitle}>{c.empresa}</Text>
-                      <Text style={styles.sheetItemSub}>
-                        {c.servidor} · {c.banco || "sem banco"}
-                      </Text>
                     </View>
                     {isSel ? (
                       <Ionicons name="checkmark" size={20} color={colors.brandPrimary} />
@@ -594,14 +578,6 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   inputText: { fontSize: 15, color: colors.onSurface, flex: 1, paddingRight: spacing.sm },
-  metaRow: {
-    marginTop: 8,
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.md,
-  },
-  metaItem: { flexDirection: "row", alignItems: "center", gap: 4 },
-  metaText: { fontSize: 12, color: colors.muted, maxWidth: 200 },
   banner: {
     marginTop: spacing.lg,
     flexDirection: "row",
@@ -726,7 +702,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.brandTertiary,
   },
   sheetItemTitle: { fontSize: 15, fontWeight: "500", color: colors.onSurface },
-  sheetItemSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
   sheetCta: {
     marginTop: spacing.md,
     flexDirection: "row",

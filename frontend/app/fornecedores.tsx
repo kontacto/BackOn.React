@@ -911,7 +911,9 @@ const styles = StyleSheet.create({
   inputError: { borderColor: colors.error },
   errorText: { fontSize: 11, color: colors.error, marginTop: 4 },
   rowFields: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-end", flexWrap: "wrap" },
-  colFlex: { flex: 1, minWidth: 160 },
+  // Design Desktop (CLAUDE.md): maxWidth evita esticar até a largura
+  // inteira do card num monitor grande (container agora 1600px).
+  colFlex: { flex: 1, minWidth: 160, maxWidth: 420 },
   colNarrow: { width: 160 },
   colTiny: { width: 90 },
   switchInline: { paddingVertical: 11, alignItems: "flex-start" },

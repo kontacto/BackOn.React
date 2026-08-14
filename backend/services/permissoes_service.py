@@ -171,9 +171,42 @@ ACOES_CHECKOUT = [
 # reconcessão de permissão, e nem sequer existe instalação usando Cancelar
 # de O.S. ainda). Sem DIVIDIR/ENTREGUE/TX_SERVICO/IMPRIMIR_ITEM/AGENDAR —
 # funcionalidades específicas do Pedido (Bar/Geral), sem equivalente na O.S.
+# Atendimento de Campo (tela mobile, Assistência Técnica — ver
+# AssistenciaTecnicaCampo.md) — tela enxuta separada de OS_COMP, pensada pro
+# técnico em campo: check-in/check-out, edição de campos por equipamento e
+# Formulário Dinâmico já vêm da mesma OS que a retaguarda preparou na O.S.
+# Completa (o técnico nunca vincula equipamento novo, ver regra 8). "SITUACAO"
+# usa o mesmo nome de ação de OS/OS_COMP porque `_fechar_os_sync` já checa
+# `tem_permissao(cur, classe, tela, "SITUACAO")` hardcoded — manter o nome
+# igual evita ter que parametrizar o comando dentro dessa função só por causa
+# desta tela nova. Adicionado 2026-08-14, user-directed.
+ACOES_OS_ATENDIMENTO = [
+    ("ABRIR", "Abrir tela / ler QR Code"),
+    ("CHECKIN", "Fazer check-in"),
+    ("CHECKOUT", "Fazer check-out"),
+    ("REGISTRAR", "Registrar atendimento (campos, status, formulário)"),
+    ("SITUACAO", "Fechar O.S."),
+]
+
 ACOES_OS_COMP = [
     ("ABRIR", "Abrir tela"),
     ("GRAVAR", "Gravar OS"),
+    # Restrição de visibilidade na Lista de Atendimento (`os-lista.tsx`,
+    # ver AssistenciaTecnicaCampo.md) — quem NÃO tem esta ação só vê O.S.
+    # onde é técnico responsável ou auxiliar (ver `_list_os_sync`).
+    # Concedível independente de `ABRIR` (mesmo padrão já usado por
+    # `PONTUACAO`/`AUTORIZAR` — ação própria, não amarrada a outra), pra
+    # permitir dar esta visibilidade ampla a um técnico do Atendimento de
+    # Campo (só `OS_ATENDIMENTO.*`) sem precisar liberar a tela inteira de
+    # O.S. Completa pra ele. Adicionado 2026-08-14, user-directed.
+    ("VER_TODAS", "Ver todas as O.S. (não só as próprias)"),
+    # Remove as coordenadas de GPS de check-in/check-out (mantém os
+    # horários) — ferramenta de conformidade LGPD (direito de exclusão
+    # sobre dado de geolocalização de funcionário), não uma política de
+    # retenção automática. Ação sensível/irreversível, própria (não
+    # amarrada a GRAVAR) — só quem tem essa ação específica pode limpar.
+    # Adicionado 2026-08-14, user-directed.
+    ("LIMPAR_GEO", "Remover localização de check-in/check-out (LGPD)"),
     ("WHATSAPP", "Enviar por WhatsApp"),
     ("ADD_ITEM", "Adicionar item"),
     ("EDIT_ITEM", "Editar item"),
@@ -187,6 +220,11 @@ ACOES_OS_COMP = [
     ("FATURAR", "Faturar O.S."),
     ("REABRIR", "Reabrir O.S."),
     ("ANEXOS", "Anexos"),
+    # Formulário Dinâmico (Motor de Layout, entidade=O.S.) — preencher/
+    # consultar formulários/checklists associados a esta O.S. (ex.:
+    # "RELATÓRIO DE VISITA" importado via IA). Mesmo padrão de ação já
+    # usado em AGENDA.LAYOUTS. Adicionado 2026-08-12, user-directed.
+    ("FORMULARIOS", "Formulários (Layouts)"),
     ("IMPRIMIR", "Imprimir O.S."),
     # Pontuação de Técnicos (migração do frame "Pontuação", Command4_Click
     # em frmtraosa.frm) — nota 0-999 de Executor/Vendedor/Atendente por
@@ -225,6 +263,13 @@ ACOES_OS_COMP = [
     # Fechada ou Faturada, sem reabrir a O.S. Adicionado 2026-08-02,
     # user-directed.
     ("ALT_EXECUTOR", "Alteração de Executor pós-fechamento"),
+    # Múltiplos equipamentos por OS (Assistência Técnica — ver
+    # AssistenciaTecnicaCampo.md seção 5, regra 14: "uma OS pode ter vários
+    # equipamentos"). Vincular/cancelar equipamento são ações exclusivas da
+    # O.S. Completa (retaguarda) — sem equivalente mobile nesta fase.
+    # Adicionado 2026-08-12, user-directed.
+    ("EQUIP_ADD", "Adicionar Equipamento"),
+    ("EQUIP_CANC", "Cancelar Equipamento"),
 ]
 
 # Envio de Equipamentos para Terceiros (migração de `FrmManRet.frm`,
@@ -512,6 +557,13 @@ ACOES_CFOP = ACOES_PADRAO + [
 # (Transações > Contratos). Sem "Imprimir" — a impressão do contrato
 # (`Command16_Click`) pertence ao mesmo motor de Faturar Contratos/emissão
 # fiscal deixado pra uma rodada futura, ver PENDENCIAS.md > "Contratos".
+ACOES_DEVOLUCAO = [
+    ("ABRIR", "Abrir tela"),
+    ("REGISTRAR", "Registrar devolução"),
+    ("EMITIR_VALE", "Emitir Vale de Devolução"),
+    ("CANCELAR", "Cancelar devolução"),
+]
+
 ACOES_CONTRATO = [
     ("ABRIR", "Abrir tela"),
     ("GRAVAR", "Gravar"),
@@ -726,6 +778,10 @@ CATALOGO = [
     _menu("CADASTROS", "Cadastros", [
         _tela("CLIENTE", "Clientes", ACOES_CLIENTE),
         _tela("FORNECEDOR", "Fornecedores"),
+        # Automação Comercial — balança de pré-pesagem (2026-08-10,
+        # user-directed). Gateada por controle_configuracao.balanca_pre_pesagem
+        # (MODULE_TELAS em controle_config_service.py).
+        _tela("BALANCA", "Cadastro de Balanças"),
         _tela("PRODUTO", "Produtos & Serviços"),
         _tela("PRODUTO_COMP", "Produto Completo", ACOES_PRODUTO_COMP),
         _tela("SERVICO", "Serviços", ACOES_SERVICO),
@@ -793,6 +849,7 @@ CATALOGO = [
         _tela("CHECKOUT", "Checkout", ACOES_CHECKOUT),
         _tela("PEDIDO_COMP", "Pedido Completo", ACOES_PEDIDO_COMP),
         _tela("OS_COMP", "O.S. Completa", ACOES_OS_COMP),
+        _tela("OS_ATENDIMENTO", "Atendimento Campo", ACOES_OS_ATENDIMENTO),
         # "Envio para Terceiros" (migração de FrmManRet.frm, 2026-08-01,
         # user-directed) — envio/retorno de equipamento pra conserto
         # externo, vinculado a uma O.S. Tela própria, standalone (mesmo
@@ -850,6 +907,13 @@ CATALOGO = [
             _tela("CONTRATO", "Contratos", ACOES_CONTRATO),
             _tela("FATURAR_CONTR", "Faturar Contratos", ACOES_FATURAR_CONTR),
         ]),
+        # "Gestor de Devolução" (2026-08-05, user-directed — "no sistema vb6
+        # fica também em transações") — Fase 1 enxuta de `Geral\FrmManDev.frm`:
+        # busca de itens de venda paga + registrar devolução + Vale de
+        # Devolução opcional. Emissão de NF de devolução e reposição física
+        # de estoque ficam de fora desta rodada (decisão via AskUserQuestion,
+        # ver PENDENCIAS.md > "Gestor de Devolução").
+        _tela("DEVOLUCAO", "Gestor de Devolução", ACOES_DEVOLUCAO),
     ]),
     _menu("FINANCEIRO", "Financeiro", [
         _tela("CONTAS_PAGAR", "Contas a Pagar"),
@@ -938,6 +1002,30 @@ CATALOGO = [
         _tela("REL_OS", "Relatório de OS"),
         _tela("REL_CAIXA", "Fechamento de Caixa"),
         _tela("REL_CX_ANALIT", "Caixa Analítico"),
+        _tela("REL_ENT_CAIXA", "Entrada de Caixa"),
+        _tela("REL_SAI_CAIXA", "Saída de Caixa"),
+        _tela("REL_APUR_VENDAS", "Apuração Vendas-DRE"),
+        _tela("REL_RES_VENDA", "Resumo de Venda"),
+        _tela("REL_DESC_CONCED", "Desc. Concedidos"),
+        _tela("REL_ITENS_PED", "Itens do Pedido"),
+        _tela("REL_CUSTO_OS", "Custo de O.S"),
+        _tela("REL_ITENS_VEND", "Itens Vendidos"),
+        _tela("REL_BUSCA_OS", "Busca de O.S."),
+        _tela("REL_RES_ATEND", "Resumo Atendimento"),
+        _tela("REL_PROD_RES", "Produtos Reservados"),
+        _tela("REL_ESTOQUE_NIV", "Estoque por Nível"),
+        _tela("REL_ESTOQUE", "Estoque"),
+        _tela("REL_MOV_ITENS", "Movimentação Itens"),
+        _tela("REL_MOV_NIVEL", "Movimentação Nível"),
+        _tela("REL_ITENS_FUNC", "Itens por Func."),
+        _tela("REL_RANKING", "Ranking de Vendas"),
+        _tela("REL_VEN_CLIPRO", "Venda Cliente/Prod."),
+        _tela("REL_VEN_NIVFUN", "Venda Nível/Func"),
+        _tela("REL_VEN_REGIAO", "Venda por Região"),
+        _tela("REL_ETQ_PROD", "Etiqueta de Produto"),
+        _tela("REL_LIST_CLI", "Listagem Clientes"),
+        _tela("REL_INAT_CLI", "Inatividade Cli."),
+        _tela("MALA_DIRETA", "Mala Direta"),
     ]),
     _menu("CONFIG", "Configurações", [
         _tela("CONEXAO", "Conexões"),
@@ -1095,6 +1183,11 @@ def disabled_telas(flags: dict) -> set:
         # Envio para Terceiros (RETIFICA) é sempre vinculado a uma O.S. —
         # mesmo gating. 2026-08-01, user-directed.
         disabled.add("RETIFICA")
+    # Atendimento de Campo (check-in/check-out por geolocalização, QR Code) só
+    # faz sentido pro segmento Assistência Técnica — Oficina não usa essa
+    # tela, diferente do gating combinado de OS/OS_COMP acima. 2026-08-14.
+    if not flags.get("Assistencia", False):
+        disabled.add("OS_ATENDIMENTO")
     # Pedido Geral (PEDIDO_COMP): habilitado se QUALQUER UM dos 3 segmentos
     # não-Bar/não-Cilindro estiver ligado — Pedido de Venda (padrão), Metro
     # Quadrado ou Clínica (os 3 são variações da MESMA tela "Pedido Geral",
@@ -1131,13 +1224,36 @@ def sort_catalogo(nodes: list) -> list:
     return out
 
 
+def _filter_node(node: dict, disabled: set) -> list:
+    """Aplica `filter_catalogo` a um único nó, recursivamente. Retorna `[]`
+    (nó removido) ou `[novo_nó]`."""
+    if node.get("tela") in disabled:
+        return []
+    if node.get("tipo") == "MENU":
+        filhos = []
+        for filho in node.get("children") or []:
+            filhos.extend(_filter_node(filho, disabled))
+        if not filhos:
+            return []
+        novo = dict(node)
+        novo["children"] = filhos
+        return [novo]
+    return [node]
+
+
 def filter_catalogo(disabled: set) -> list:
-    """Remove telas desligadas; menus que ficam sem telas também somem."""
+    """Remove telas desligadas; menus que ficam sem telas também somem.
+
+    **Bug real corrigido (2026-08-13, achado ao vivo contra KONTACTO
+    TESTE)**: a versão anterior só filtrava o 1º nível de cada menu
+    top-level — um menu ANINHADO dentro de outro (ex.: CADASTROS >
+    Tabelas Auxiliares > Modificadores, gateado pelo módulo Bar) nunca
+    tinha seu próprio conteúdo filtrado, então "Modificadores" continuava
+    aparecendo no catálogo de Permissões mesmo com o módulo Bar
+    desligado — pra QUALQUER usuário, master incluso (esta função não
+    diferencia master, então o bug e a correção valem igual pros dois).
+    Agora recursivo (`_filter_node`), mesmo padrão de `sort_catalogo`."""
     out = []
     for menu in CATALOGO:
-        telas = [t for t in menu["children"] if t["tela"] not in disabled]
-        if telas:
-            novo = dict(menu)
-            novo["children"] = telas
-            out.append(novo)
+        out.extend(_filter_node(menu, disabled))
     return out

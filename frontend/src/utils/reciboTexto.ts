@@ -8,6 +8,10 @@
 import { formatBRL, formatDateBR, fmtNum } from "@/src/utils/format";
 
 const LARGURA = 42; // colunas — bobina térmica 80mm em fonte condensada
+// Margem esquerda — sem isso o texto sai colado na borda do papel (achado ao
+// vivo, 2026-08-06). Aplicada uma vez no final (ver `buildReciboTexto`), não
+// em cada `push`, pra não precisar tocar cada linha individualmente.
+const MARGEM_ESQUERDA = "  ";
 
 function centralizar(t: string): string {
   const s = t.slice(0, LARGURA);
@@ -26,6 +30,14 @@ function temDocumentoValido(cgc: string | null | undefined): boolean {
   const v = (cgc || "").replace(/\D/g, "");
   return v.length > 0 && !/^0+$/.test(v);
 }
+
+// CNPJ de uma instalação específica que NÃO quer as linhas de referência
+// "Pedido de Venda <n>"/"Ordem de serviço <n>" no comprovante — gambiarra
+// hardcoded do legado (`FrmPafOFF.frm::FinalizaVenda`, `controle.CGC =
+// "31184997000100"`), rastreada e confirmada 2026-08-06 como customização
+// de UMA instalação, não regra geral — mantida fiel ao legado (o pedido do
+// usuário foi implantar essa exceção também, não só a regra geral).
+const CGC_SEM_REFERENCIA_PEDIDO_OS = "31184997000100";
 
 export type ReciboTextoEmpresa = {
   fantasia?: string | null; rz_social?: string | null; uf?: string | null;
@@ -47,6 +59,12 @@ export type ReciboTextoDados = {
   atendenteNome: string;
   data: string | null;
   mensagens: string[];
+  // Pedidos/O.S. importados pra dentro desta venda (Checkout > "Pedidos"/
+  // "O.S.") — vira linha "Pedido de Venda <n>"/"Ordem de serviço <n>" no
+  // comprovante, réplica de `FinalizaVenda` (FrmPafOFF.frm). Omitido pra
+  // uma instalação específica, ver CGC_SEM_REFERENCIA_PEDIDO_OS acima.
+  pedidosImportados?: number[];
+  osImportadas?: number[];
 };
 
 export function buildReciboTexto(empresa: ReciboTextoEmpresa, d: ReciboTextoDados): string {
@@ -103,6 +121,12 @@ export function buildReciboTexto(empresa: ReciboTextoEmpresa, d: ReciboTextoDado
   linhas.push(`Atendente: ${d.atendenteNome}`);
   if (d.data) linhas.push(formatDateBR(d.data));
 
+  const cgcEmpresa = (empresa?.cgc || "").replace(/\D/g, "");
+  if (cgcEmpresa !== CGC_SEM_REFERENCIA_PEDIDO_OS) {
+    (d.pedidosImportados || []).forEach((n) => linhas.push(`Pedido de Venda ${n}`));
+    (d.osImportadas || []).forEach((n) => linhas.push(`Ordem de serviço ${n}`));
+  }
+
   if (d.mensagens.length > 0) {
     linhas.push(HR);
     d.mensagens.forEach((m) => linhas.push(centralizar(m)));
@@ -110,6 +134,8 @@ export function buildReciboTexto(empresa: ReciboTextoEmpresa, d: ReciboTextoDado
 
   // Margem final — o corte de papel fica a cargo da impressora (ESC/POS de
   // corte automático) ou do operador; não emitimos comando de corte cru
-  // aqui, mesma decisão já tomada em enviar_rede (backend).
-  return linhas.join("\n") + "\n\n\n";
+  // aqui, mesma decisão já tomada em enviar_rede (backend) — o corte em si
+  // é responsabilidade do agente local (print-agent/agente_impressao.py),
+  // que fala RAW ESC/POS direto com a impressora.
+  return linhas.map((l) => MARGEM_ESQUERDA + l).join("\n") + "\n\n\n";
 }

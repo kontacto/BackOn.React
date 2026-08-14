@@ -51,6 +51,13 @@ CAMPOS = [
     ("TSO", "TSO"),
     ("DMC", "DMC"),
     ("Alterdata", "Alterdata"),
+    # Grupo "Automação Comercial" (2026-08-10, user-directed) — balança
+    # conectada ao caixa (leitura ao vivo, protocolo compatível Toledo) e
+    # balança de pré-pesagem com etiqueta (carga de PLU via MGV6/MGV7).
+    # Únicas colunas GENUINAMENTE novas desta tabela até hoje — todo o resto
+    # de CAMPOS já vinha do schema legado VB6 (ver _ensure_balanca_cols).
+    ("balanca_toledo", "Balança Toledo"),
+    ("balanca_pre_pesagem", "Balança de Pré-Pesagem (Etiqueta)"),
 ]
 
 _CAMPOS_SET = {c for c, _ in CAMPOS}
@@ -116,7 +123,26 @@ MODULE_TELAS = {
     # "gestor_projetos" (2026-08-02, user-directed) — gateia a tela
     # Transações > Gestor de Projetos.
     "gestor_projetos": ["PROJETOS"],
+    # "balanca_pre_pesagem" (2026-08-10, user-directed) — gateia o Cadastro
+    # de Balanças (Cadastros > Balanças). "balanca_toledo" não entra aqui —
+    # não gateia nenhuma tela do catálogo, só muda comportamento em runtime
+    # no KPDV (leitura ao vivo de peso).
+    "balanca_pre_pesagem": ["BALANCA"],
 }
+
+
+def _ensure_balanca_cols(cur) -> None:
+    """`balanca_toledo`/`balanca_pre_pesagem` são as primeiras colunas
+    genuinamente novas desta tabela (todo o resto de CAMPOS já vinha do
+    schema legado VB6) — este backend atende múltiplas empresas sem executor
+    de migração central, então a coluna é criada sob demanda (mesmo padrão
+    de `pedido_common._ensure_qtd_pessoas_col`)."""
+    for col in ("balanca_toledo", "balanca_pre_pesagem"):
+        cur.execute(
+            "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+            f"WHERE Name='{col}' AND Object_ID=Object_ID('controle_configuracao')) "
+            f"ALTER TABLE controle_configuracao ADD {col} BIT NULL"
+        )
 
 
 def _read_config_sync(servidor: str, banco: str) -> dict:
@@ -126,6 +152,8 @@ def _read_config_sync(servidor: str, banco: str) -> dict:
         return {"success": False, "message": f"Falha conexão: {e}", "valores": {}}
     try:
         cur = conn.cursor(as_dict=True)
+        _ensure_balanca_cols(cur)
+        conn.commit()
         cur.execute("SELECT TOP 1 * FROM controle_configuracao")
         row = cur.fetchone() or {}
         valores = {c: bool(row.get(c)) for c, _ in CAMPOS}
@@ -157,6 +185,8 @@ def _save_config_sync(servidor: str, banco: str, valores: dict) -> dict:
         return {"success": False, "message": f"Falha conexão: {e}"}
     try:
         cur = conn.cursor()
+        _ensure_balanca_cols(cur)
+        conn.commit()
         sets = ", ".join(f"[{c}] = %s" for c, _ in campos)
         params = [1 if v else 0 for _, v in campos]
         cur.execute(f"UPDATE controle_configuracao SET {sets}", tuple(params))

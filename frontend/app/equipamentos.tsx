@@ -18,6 +18,10 @@ import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { clienteSearchParams } from "@/src/hooks/useClienteForm";
+import { apiBase } from "@/src/utils/api";
+import { fetchEmpresaHeader, buildReportHeaderHtml, REPORT_HEADER_CSS } from "@/src/utils/print-report-header";
+import { printFullHtml } from "@/src/utils/printHtml";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
 
 type Conn = Connection;
 type Tipo = "A" | "C";
@@ -277,6 +281,49 @@ export default function EquipamentosScreen() {
     } catch (e) { fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`); }
   };
 
+  // Impressão do QR Code do equipamento (Assistência Técnica —
+  // AssistenciaTecnicaCampo.md regra 1: "a impressão do Qrcode tem que ser
+  // feito pelo cadastro de equipamento, com a identificação do
+  // equipamento"). A4, cabeçalho da empresa — mesmo padrão já usado no
+  // preenchimento de Layout (`printFullHtml`, não `window.open`, que é o
+  // padrão ad-hoc já usado só pela impressão da LISTA logo acima).
+  const [printingQrCodigo, setPrintingQrCodigo] = useState<number | null>(null);
+  const imprimirQrCode = async (it: Equipamento) => {
+    if (!conn) return;
+    setPrintingQrCodigo(it.codigo);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const qs = new URLSearchParams({ servidor: conn.servidor, banco: conn.banco });
+      const r = await fetch(`${base}/api/equipamentos/${it.codigo}/qrcode?${qs.toString()}`);
+      const j = await r.json();
+      if (!j?.success) { fb.showError(j?.message || "Falha ao gerar o QR Code."); return; }
+      const empresa = await fetchEmpresaHeader(apiBase(conn), conn.servidor, conn.banco);
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8" />
+        <style>
+          @page { size: A4; margin: 16mm; }
+          * { box-sizing: border-box; }
+          body { font-family: -apple-system, Helvetica, Arial, sans-serif; color: #1a1a2e; }
+          ${REPORT_HEADER_CSS}
+          .qr-wrap { display: flex; flex-direction: column; align-items: center; margin-top: 32px; gap: 12px; }
+          .qr-wrap img { width: 260px; height: 260px; }
+          .qr-serie { font-size: 16px; font-weight: 700; }
+          .qr-desc { font-size: 13px; color: #555; }
+        </style></head><body>
+        ${buildReportHeaderHtml(empresa, "QR Code do Equipamento")}
+        <div class="qr-wrap">
+          <img src="data:image/png;base64,${j.png_base64}" />
+          <div class="qr-serie">${j.numero_de_serie}</div>
+          ${j.descricao_equipamento ? `<div class="qr-desc">${j.descricao_equipamento}</div>` : ""}
+        </div>
+      </body></html>`;
+      printFullHtml(html);
+    } catch (e) {
+      fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setPrintingQrCodigo(null);
+    }
+  };
+
   const abrirAlterarSerie = (it: Equipamento) => {
     setAltSerieCodigo(it.codigo);
     setAltSerieNovo(it.numero_de_serie);
@@ -404,6 +451,14 @@ export default function EquipamentosScreen() {
                     <Text style={styles.rowSub}>{it.marca_descricao || it.marca} · {it.modelo_descricao || it.modelo} · Usuário: {it.portador || "-"} · Local: {it.local || "-"}</Text>
                   </Pressable>
                   <View style={styles.rowActions}>
+                    {printingQrCodigo === it.codigo ? (
+                      <ActivityIndicator color={colors.brandPrimary} size="small" />
+                    ) : (
+                      <IconButtonWithTooltip
+                        icon="qr-code-outline" label="Imprimir QR Code"
+                        onPress={() => imprimirQrCode(it)} testID={`qrcode-${it.codigo}`}
+                      />
+                    )}
                     {canDisponibilizar ? (
                       <Pressable onPress={() => disponibilizar(it)} hitSlop={8} testID={`disponibilizar-${it.codigo}`}>
                         <Ionicons name="briefcase-outline" size={20} color={colors.muted} />

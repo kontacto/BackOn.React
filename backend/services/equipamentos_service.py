@@ -52,11 +52,24 @@ Fora de escopo (não implementado, ver PENDENCIAS.md):
     decisão de escopo já tomada em Entrada/Saída de Caixa e Contatos).
 """
 import asyncio
+import base64
+import io
 from typing import Optional
+
+import qrcode
 
 from db.connection import _open_conn, _get_col_sizes, _trunc
 
 TIPOS_VALIDOS = ("A", "C")
+
+# Prefixo do conteúdo do QR Code impresso a partir do Cadastro de
+# Equipamento (Assistência Técnica — AssistenciaTecnicaCampo.md, regra 1:
+# "impressão feita pelo cadastro de equipamento"). Formato simples e
+# documentado aqui de propósito — a Fase 2 (leitura por câmera em campo,
+# ainda não implementada) vai precisar reconhecer esse mesmo prefixo pra
+# distinguir um QR de equipamento de outros tipos de QR que o sistema
+# venha a ter no futuro.
+QRCODE_PREFIXO_EQUIPAMENTO = "EQUIP:"
 
 
 def _find_by_serie_sync(servidor: str, banco: str, numero_de_serie: str) -> dict:
@@ -326,6 +339,62 @@ def _alterar_numero_serie_sync(
         conn.close()
 
 
+def _gerar_qrcode_sync(servidor: str, banco: str, codigo: int) -> dict:
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT numero_de_serie, descricao_equipamento FROM equipamentos WHERE codigo=%s", (codigo,))
+        row = cur.fetchone()
+        cur.close()
+        if not row:
+            return {"success": False, "message": "Equipamento não encontrado."}
+        num_serie = (row.get("numero_de_serie") or "").strip()
+        img = qrcode.make(f"{QRCODE_PREFIXO_EQUIPAMENTO}{num_serie}")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        png_base64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return {
+            "success": True, "png_base64": png_base64,
+            "numero_de_serie": num_serie,
+            "descricao_equipamento": (row.get("descricao_equipamento") or "").strip(),
+        }
+    except Exception as e:
+        return {"success": False, "message": f"Erro ao gerar QR Code: {e}"}
+    finally:
+        conn.close()
+
+
+def _historico_os_sync(servidor: str, banco: str, codigo: int) -> dict:
+    """Histórico de O.S. já atendidas neste equipamento (via `os_equipamento`)
+    — usado pela tela de Atendimento de Campo ao abrir uma OS pelo QR Code
+    (AssistenciaTecnicaCampo.md regra 1: 'carrega... junto com o histórico do
+    equipamento'). Mais recentes primeiro, limitado a 20 (tela de consulta
+    rápida em campo, não um relatório)."""
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT TOP 20 o.codigo, o.data_entrada, o.situacao, o.resumo "
+            "FROM os_equipamento oe "
+            "JOIN os o ON o.codigo = oe.os "
+            "WHERE oe.equipamento=%s "
+            "ORDER BY o.codigo DESC",
+            (codigo,),
+        )
+        items = [{
+            "codigo": int(r["codigo"]),
+            "data": r["data_entrada"].isoformat() if r.get("data_entrada") else None,
+            "situacao": (r.get("situacao") or "").strip(),
+            "resumo": (r.get("resumo") or "").strip(),
+        } for r in cur.fetchall()]
+        cur.close()
+        return {"success": True, "items": items}
+    except Exception as e:
+        return {"success": False, "message": f"Erro: {e}", "items": []}
+    finally:
+        conn.close()
+
+
 # ---------------- async wrappers ----------------
 async def find_by_serie(servidor, banco, numero_de_serie):
     return await asyncio.to_thread(_find_by_serie_sync, servidor, banco, numero_de_serie)
@@ -357,3 +426,11 @@ async def disponibilizar_contrato(servidor, banco, codigo):
 
 async def alterar_numero_serie(servidor, banco, codigo, novo_numero_de_serie, novo_cliente):
     return await asyncio.to_thread(_alterar_numero_serie_sync, servidor, banco, codigo, novo_numero_de_serie, novo_cliente)
+
+
+async def gerar_qrcode(servidor, banco, codigo):
+    return await asyncio.to_thread(_gerar_qrcode_sync, servidor, banco, codigo)
+
+
+async def historico_os(servidor, banco, codigo):
+    return await asyncio.to_thread(_historico_os_sync, servidor, banco, codigo)

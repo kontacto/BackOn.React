@@ -4846,6 +4846,81 @@ def _list_dscr_icms_sync(servidor: str, banco: str) -> dict:
         conn.close()
 
 
+# NFSE_INDOP(codigo nvarchar(6) PK, descricao nvarchar(255),
+# local_fornecimento nvarchar(255)) — Indicador de Operação do leiaute
+# IBS/CBS (Reforma Tributária, art. 11), usado por Serviços
+# (`servicos.INDOP_NFSE`, tag `<cIndOp>` na emissão de NFSe — ver
+# `servicos_service.py`). Tabela nova, criada por esta migração — pedido
+# explícito do usuário, 2026-08-06 ("nome da tabela: NFSE_INDOP" +
+# "ainda não existe, crie e popule"): não existia em nenhum dos bancos de
+# teste nem foi encontrada na fonte VB6/VB.NET, então os 26 códigos foram
+# populados a partir da tabela oficial do regulamento que o usuário
+# forneceu diretamente (não inventados/assumidos).
+_NFSE_INDOP_SEED = [
+    ("020101", "Operação com bem imóvel, bem imaterial, inclusive direito, relacionada a bem imóvel", "Localidade do imóvel"),
+    ("020201", "Serviço prestado fisicamente sobre bem imóvel", "Localidade do imóvel"),
+    ("020301", "Serviço de administração e intermediação de bem imóvel", "Localidade do imóvel"),
+    ("030101", "Serviço prestado fisicamente sobre a pessoa ou fruído presencialmente por pessoa física", "Estabelecimento do fornecedor"),
+    ("030102", "Serviço prestado fisicamente sobre a pessoa ou fruído presencialmente por pessoa física", "Endereço do adquirente"),
+    ("030103", "Serviço prestado fisicamente sobre a pessoa ou fruído presencialmente por pessoa física", "Endereço do destinatário"),
+    ("030104", "Serviço prestado fisicamente sobre a pessoa ou fruído presencialmente por pessoa física", "Endereço diverso do fornecedor, adquirente ou destinatário"),
+    ("040101", "Serviço de planejamento, organização e administração de feiras, exposições, congressos, espetáculos, exibições e congêneres", "Local do Evento"),
+    ("050101", "Serviço prestado fisicamente sobre bem móvel material", "Estabelecimento do fornecedor"),
+    ("050102", "Serviço prestado fisicamente sobre bem móvel material", "Endereço do adquirente"),
+    ("050103", "Serviço prestado fisicamente sobre bem móvel material", "Endereço do destinatário"),
+    ("050104", "Serviço prestado fisicamente sobre bem móvel material", "Endereço diverso do fornecedor, adquirente ou destinatário"),
+    ("050201", "Serviços portuários", "Local da prestação"),
+    ("060101", "Serviço de transporte de passageiros", "Local de início do transporte"),
+    ("070101", "Serviço de transporte de carga", "Endereço fornecido para entrega"),
+    ("070102", "Serviço de transporte de carga", "Local da retirada"),
+    ("080101", "Serviço de exploração de via", "Local da prestação, correspondente à extensão da via explorada e proporcional ao território dos entes tributantes"),
+    ("100101", "Cessão de espaço para prestação de serviços publicitários, em operações onerosas", "Local do domicílio principal do adquirente"),
+    ("100102", "Cessão de espaço para prestação de serviços publicitários, em operações onerosas", "Local do domicílio do destinatário, nos casos de adquirente residente ou domiciliado no exterior"),
+    ("100201", "Cessão de espaço para prestação de serviços publicitários, em operações não onerosas", "Local do domicílio principal do destinatário"),
+    ("100301", "Demais serviços, em operações onerosas", "Local do domicílio principal do adquirente"),
+    ("100302", "Demais serviços, em operações onerosas", "Local do domicílio do destinatário, nos casos de adquirente residente ou domiciliado no exterior"),
+    ("100401", "Demais serviços, em operações não onerosas", "Local do domicílio principal do destinatário"),
+    ("100501", "Demais bens móveis imateriais, inclusive direitos, em operações onerosas", "Local do domicílio principal do adquirente"),
+    ("100502", "Demais bens móveis imateriais, inclusive direitos, em operações onerosas", "Local do domicílio do destinatário, nos casos de adquirente residente ou domiciliado no exterior"),
+    ("100601", "Demais bens móveis imateriais, inclusive direitos, em operações não onerosas", "Local do domicílio principal do destinatário"),
+]
+
+
+def _ensure_nfse_indop_sync(cur) -> None:
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'NFSE_INDOP') "
+        "CREATE TABLE NFSE_INDOP ("
+        "codigo NVARCHAR(6) PRIMARY KEY, "
+        "descricao NVARCHAR(255) NOT NULL, "
+        "local_fornecimento NVARCHAR(255) NOT NULL)"
+    )
+    cur.execute("SELECT COUNT(*) AS c FROM NFSE_INDOP")
+    if int(cur.fetchone()["c"] or 0) == 0:
+        for codigo, descricao, local in _NFSE_INDOP_SEED:
+            cur.execute(
+                "INSERT INTO NFSE_INDOP (codigo, descricao, local_fornecimento) VALUES (%s,%s,%s)",
+                (codigo, descricao, local),
+            )
+
+
+def _list_nfse_indop_sync(servidor: str, banco: str) -> dict:
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        _ensure_nfse_indop_sync(cur)
+        conn.commit()
+        cur.execute("SELECT codigo, descricao, local_fornecimento FROM NFSE_INDOP ORDER BY codigo")
+        items = [{
+            "codigo": (r.get("codigo") or "").strip(),
+            "descricao": (r.get("descricao") or "").strip(),
+            "local_fornecimento": (r.get("local_fornecimento") or "").strip(),
+        } for r in cur.fetchall()]
+        cur.close()
+        return {"success": True, "items": items}
+    finally:
+        conn.close()
+
+
 def _classtrib_lookup_sync(servidor: str, banco: str, cst: str, cclasstrib: str) -> dict:
     cst = (cst or "").strip()
     cclasstrib = (cclasstrib or "").strip()
@@ -4928,6 +5003,10 @@ async def delete_taxa(servidor, banco, variante, sequencia):
 
 async def list_dscr_icms(servidor, banco):
     return await asyncio.to_thread(_list_dscr_icms_sync, servidor, banco)
+
+
+async def list_nfse_indop(servidor, banco):
+    return await asyncio.to_thread(_list_nfse_indop_sync, servidor, banco)
 
 
 async def classtrib_lookup(servidor, banco, cst, cclasstrib):

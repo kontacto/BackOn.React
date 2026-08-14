@@ -29,6 +29,32 @@ from services.permissoes_service import tem_permissao
 from services import os_service
 
 
+def _ensure_os_auxiliar_tecnico_col(cur) -> None:
+    """Auxiliar do Técnico (regra 11, AssistenciaTecnicaCampo.md) — campo
+    OPCIONAL, só o cadastro nesta rodada (o fluxo completo de "auxiliar
+    edita com a credencial do titular" fica pra depois). Sem precedente no
+    legado (diferente de `tecnico_responsavel`, coluna original do schema
+    — que, achado ao vivo em ARGEN-TESTE, já tem índice `os_2`) — precisa
+    de migração de verdade, mesmo padrão de `os_service._ensure_os_
+    checkin_cols`.
+
+    Índice incluído na MESMA migração (não uma função separada) — a
+    coluna é usada em filtro (`_list_os_sync`'s `tecnico`/`auxiliar`) e na
+    restrição de visibilidade (`OS_COMP.VER_TODAS`) desde que nasceu,
+    então "coluna nova pra filtro" e "índice pra esse filtro" são uma
+    unidade só de migração, não duas."""
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='auxiliar_tecnico' AND Object_ID=Object_ID('os')) "
+        "ALTER TABLE os ADD auxiliar_tecnico INT NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.indexes "
+        "WHERE name='IX_os_auxiliar_tecnico' AND object_id=Object_ID('os')) "
+        "CREATE INDEX IX_os_auxiliar_tecnico ON os(auxiliar_tecnico)"
+    )
+
+
 def _get_os_completo_sync(servidor: str, banco: str, codigo: int) -> dict:
     """Chama `os_service._get_os_sync` (cabeçalho base) e ENRIQUECE com os
     campos extras da tela completa — mesmo padrão de "só enriquece, sem
@@ -45,9 +71,11 @@ def _get_os_completo_sync(servidor: str, banco: str, codigo: int) -> dict:
         _ensure_os_doc_origem_cols(cur)
         _ensure_osrevisao_table(cur)
         _ensure_os_forma_pagamento_garantia_col(cur)
+        _ensure_os_auxiliar_tecnico_col(cur)
         cur.execute(
             "SELECT o.referencia_os, o.tecnico_responsavel, "
             "       COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS tecnico_nome, "
+            "       o.auxiliar_tecnico, COALESCE(NULLIF(fa.nome_guerra,''), fa.nome) AS auxiliar_nome, "
             "       o.posicao_os, t.descricao AS tipo_os_descricao, "
             "       o.previsao_termino, o.data_termino, o.hora_entrada, o.hora_fechamento, "
             "       s.descricao AS status_os_descricao, "
@@ -55,6 +83,7 @@ def _get_os_completo_sync(servidor: str, banco: str, codigo: int) -> dict:
             "       o.forma_pagamento_garantia, fpg.descricao AS forma_pagamento_garantia_descricao "
             "FROM os o "
             "LEFT JOIN funcionarios f ON f.codigo_int = o.tecnico_responsavel "
+            "LEFT JOIN funcionarios fa ON fa.codigo_int = o.auxiliar_tecnico "
             "LEFT JOIN tipo_os t ON t.codigo = o.posicao_os "
             "LEFT JOIN status_os s ON s.codigo = o.status_os "
             "LEFT JOIN forma_pagamento fpg ON fpg.codigo = o.forma_pagamento_garantia "
@@ -102,6 +131,10 @@ def _get_os_completo_sync(servidor: str, banco: str, codigo: int) -> dict:
                 int(row["tecnico_responsavel"]) if row.get("tecnico_responsavel") else None
             )
             base["os"]["tecnico_responsavel_nome"] = (row.get("tecnico_nome") or "").strip()
+            base["os"]["auxiliar_tecnico"] = (
+                int(row["auxiliar_tecnico"]) if row.get("auxiliar_tecnico") else None
+            )
+            base["os"]["auxiliar_tecnico_nome"] = (row.get("auxiliar_nome") or "").strip()
             base["os"]["posicao_os"] = int(row["posicao_os"]) if row.get("posicao_os") is not None else None
             base["os"]["tipo_os_descricao"] = (row.get("tipo_os_descricao") or "").strip()
             base["os"]["previsao_termino"] = (
@@ -148,6 +181,7 @@ def _save_os_completo_sync(req: OSCompletoSaveRequest, codigo: Optional[int]) ->
         _ensure_os_doc_origem_cols(cur)
         _ensure_osrevisao_table(cur)
         _ensure_os_forma_pagamento_garantia_col(cur)
+        _ensure_os_auxiliar_tecnico_col(cur)
 
         if codigo is not None:
             cur.execute("SELECT situacao FROM os WHERE codigo=%s", (codigo,))
@@ -226,16 +260,16 @@ def _save_os_completo_sync(req: OSCompletoSaveRequest, codigo: Optional[int]) ->
                 "(codigo, cliente, data_entrada, hora_entrada, situacao, valor, "
                 " area_atuacao, descricao_cliente, obs, resumo, status_os, atendente, "
                 " placa, marca, modelo, km, ano, chassi, numero_de_serie, forma_pagamento, "
-                " forma_pagamento_garantia, referencia_os, tecnico_responsavel, posicao_os, previsao_termino, "
+                " forma_pagamento_garantia, referencia_os, tecnico_responsavel, auxiliar_tecnico, posicao_os, previsao_termino, "
                 " data_termino, hora_fechamento, OS_ORIGINAL, Tipo_Doc_Original, "
                 " VALIDOU_GARANTIA, QtdRevisoes) "
                 "VALUES (%s, %s, CAST(GETDATE() AS DATE), CONVERT(NVARCHAR(8), GETDATE(), 108), "
                 "        %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-                "        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     novo, req.cliente, situacao, req.area_atuacao, descricao_cliente, obs, resumo,
                     status_os, req.atendente, placa, marca, modelo, km, ano, chassi, num_serie, forma_pagamento,
-                    forma_pagamento_garantia, referencia, req.tecnico_responsavel, req.posicao_os, previsao_termino,
+                    forma_pagamento_garantia, referencia, req.tecnico_responsavel, req.auxiliar_tecnico, req.posicao_os, previsao_termino,
                     data_termino, hora_fechamento, os_original, tipo_doc_original,
                     1 if validou_garantia else 0, qtd_revisoes,
                 ),
@@ -246,14 +280,14 @@ def _save_os_completo_sync(req: OSCompletoSaveRequest, codigo: Optional[int]) ->
                 "UPDATE os SET cliente=%s, area_atuacao=%s, descricao_cliente=%s, obs=%s, "
                 " resumo=%s, status_os=%s, atendente=%s, situacao=%s, "
                 " placa=%s, marca=%s, modelo=%s, km=%s, ano=%s, chassi=%s, numero_de_serie=%s, "
-                " forma_pagamento=%s, forma_pagamento_garantia=%s, referencia_os=%s, tecnico_responsavel=%s, posicao_os=%s, "
+                " forma_pagamento=%s, forma_pagamento_garantia=%s, referencia_os=%s, tecnico_responsavel=%s, auxiliar_tecnico=%s, posicao_os=%s, "
                 " previsao_termino=%s, data_termino=%s, hora_fechamento=%s, OS_ORIGINAL=%s, "
                 " Tipo_Doc_Original=%s, VALIDOU_GARANTIA=%s, QtdRevisoes=%s "
                 "WHERE codigo=%s",
                 (
                     req.cliente, req.area_atuacao, descricao_cliente, obs, resumo, status_os,
                     req.atendente, situacao, placa, marca, modelo, km, ano, chassi, num_serie,
-                    forma_pagamento, forma_pagamento_garantia, referencia, req.tecnico_responsavel, req.posicao_os,
+                    forma_pagamento, forma_pagamento_garantia, referencia, req.tecnico_responsavel, req.auxiliar_tecnico, req.posicao_os,
                     previsao_termino, data_termino, hora_fechamento, os_original,
                     tipo_doc_original, 1 if validou_garantia else 0, qtd_revisoes, codigo,
                 ),

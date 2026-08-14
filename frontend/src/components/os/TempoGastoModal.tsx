@@ -46,6 +46,12 @@ type Props = {
   classe: number | null;
   usuarioCod: number;
   onToast: (msg: string, tone: "success" | "error") => void;
+  // Serviço pré-selecionado ao abrir a partir do ícone da linha do item
+  // (2026-08-13, user-directed: "tempo gasto por serviço na linha do
+  // serviço") — o combo de Serviço já nasce preenchido com esse item, sem
+  // precisar reescolher da lista. `null`/omitido = comportamento antigo
+  // (combo vazio, fluxo aberto pelo link genérico).
+  preselectCodigoInterno?: string | null;
 };
 
 function fmtDuracao(min: number | null): string {
@@ -57,7 +63,9 @@ function fmtDuracao(min: number | null): string {
 
 const FORM_VAZIO = { codigoInterno: null as string | number | null, funcionario: null as number | null, data: todayISO(), horaInicio: "", horaFim: "", obsTxt: "" };
 
-export default function TempoGastoModal({ visible, onClose, conn, osId, isAberto, funcOptions, servicosDaOS, classe, usuarioCod, onToast }: Props) {
+export default function TempoGastoModal({
+  visible, onClose, conn, osId, isAberto, funcOptions, servicosDaOS, classe, usuarioCod, onToast, preselectCodigoInterno,
+}: Props) {
   const [items, setItems] = useState<TempoItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -84,7 +92,7 @@ export default function TempoGastoModal({ visible, onClose, conn, osId, isAberto
     if (!visible) return;
     load();
     setEditingCodigo(null);
-    setForm(FORM_VAZIO);
+    setForm(preselectCodigoInterno ? { ...FORM_VAZIO, codigoInterno: preselectCodigoInterno } : FORM_VAZIO);
     if (conn && servicosDaOS.length === 0) {
       apiGet(conn, "/api/produtos-servicos", { search: "", page: 1, size: 200, tipo: "S" })
         .then((j) => {

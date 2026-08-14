@@ -6,6 +6,426 @@ inteira antes de continuar — não reanalisar do zero.
 
 ---
 
+## "Design Desktop" — Varredura de Densidade em Todas as Telas Web
+
+**Status: 🟡 em andamento, iniciado 2026-08-13.** Ver CLAUDE.md > "'Design
+Desktop' — App Web como Substituto do Desktop VB6" para a regra completa e
+`feedback_design_desktop` (memória) para o histórico. Pedido explícito do
+usuário ("varre as outras telas" — Pedido Bar já estava feito antes desta
+rodada) para aplicar retroativamente a todas as ~180 telas web já
+construídas (`frontend/app/**/*.tsx`) — trabalho de várias sessões.
+
+### Mudança global já aplicada (beneficia toda tela de uma vez)
+
+- `frontend/src/theme/webLayout.ts`: `WEB_CONTENT_MAX_WIDTH` 1120 → 1600.
+- Novos tokens `WEB_FIELD_COL_TINY`/`WEB_FIELD_COL_NARROW`/
+  `WEB_FIELD_COL_HALF`/`WEB_FIELD_COL_FLEX` — `flexBasis`+`maxWidth` em vez
+  de `width: "N%"` cru, pra campo curto não esticar proporcionalmente à
+  largura do container num monitor grande.
+
+### Telas já corrigidas (2026-08-13)
+
+- `OSEquipamentoCard.tsx` — exemplo concreto que motivou a regra (campos
+  empilhados full-width + botão "Salvar" do tamanho da tela); virou
+  `fieldsRow`/`colHalf` 2 colunas + botão pill pequeno à direita.
+- `cliente-completo.tsx` (tela de referência do "Full CRUD Form Screen
+  Standard") — `colHalf` trocado pro token compartilhado
+  `WEB_FIELD_COL_HALF`; campos genuinamente curtos (Sexo, Situação,
+  Status, Data Nascimento/Abertura, Limite de Crédito, Desconto%, Valor do
+  Frete, Prazo de Faturamento, Dia de Contato/Entrega) movidos pro
+  `colNarrow` novo (`WEB_FIELD_COL_NARROW`) — antes todos ficavam a 49% do
+  container (~780px num monitor largo) mesmo sendo um combo de 2 opções.
+- `funcionario-completo.tsx`, `produtos-niveis.tsx`, `log-auditoria.tsx`
+  — mesmo padrão exato de `colHalf: { width: "49%" }` encontrado e
+  trocado pro token compartilhado (fix mecânico, sem revisão
+  campo-a-campo individual ainda).
+- `produto-completo.tsx`, `fornecedores.tsx`, `servicos.tsx`,
+  `contrato-completo.tsx` — padrão `rowFields`/`colFlex`/`colHalf` local
+  (`flex: 1` sem `maxWidth`) ganhou `maxWidth` (280–420px conforme o
+  arquivo) pra parar de esticar em container largo.
+- `tsc --noEmit`: baseline de 12 erros pré-existentes inalterado em todo o
+  lote (nenhum novo erro introduzido).
+
+### Não testado visualmente ainda
+
+Todas as mudanças acima foram só verificadas por `tsc`/leitura de código —
+**nenhuma foi vista rodando no navegador** (sem ferramenta de automação de
+navegador disponível neste ambiente). Antes de considerar este lote
+definitivamente concluído, abrir cada tela corrigida no navegador
+(`npm run web`/skill `run`) e conferir visualmente que os campos ficaram
+agrupados corretamente, sem quebra de layout.
+
+### `os-geral.tsx` — 2ª rodada de correções ao vivo (2026-08-13)
+
+Usuário testou a tela de verdade (screenshot da O.S. #294) e apontou 5
+problemas concretos, todos corrigidos na mesma rodada:
+
+1. **Cliente aparecia tarde demais na tela** (depois do card "Revisão
+   Programada") — movido pra logo depois do cabeçalho principal, mesma
+   posição de destaque que tem no VB6 (`FrmTraOsNew.frm`, campo "Cliente:"
+   dentro do próprio frame "Dados da OS").
+2. **Faltavam campos**: `previsao_termino`/`data_termino`/
+   `hora_fechamento` já existiam no state (carregados do backend e
+   enviados no Gravar) mas **nunca tinham controle de tela** — achado real
+   ao investigar, não só percepção do usuário. Adicionados 3 campos novos
+   (Previsão de Término, Data de Término, Hora de Fechamento) no cabeçalho
+   principal, ao lado dos demais, via `WebDateField`.
+3. **Texto de ajuda ocupando ~metade da tela** (parágrafo fixo sob
+   "Revisão Programada") — trocado por `InfoTooltip` (componente novo,
+   `frontend/src/components/InfoTooltip.tsx`, tooltip no hover com texto
+   multilinha, diferente de `IconButtonWithTooltip` que trunca em 1
+   linha). Reaproveitar este componente no resto da varredura sempre que
+   aparecer um texto de ajuda longo demais pra caber sob o campo.
+4. **Cada equipamento precisa de accordion** — `OSEquipamentoCard.tsx`
+   ganhou estado de expandir/recolher (nasce aberto, não regride o caso
+   comum de 1 equipamento só) — importante quando a OS tem vários
+   equipamentos vinculados, pra não forçar scroll gigante.
+5. **Campo multilinha do banco (nvarchar(500)) não parecia multilinha na
+   tela** — regressão da 1ª rodada de densidade (`inputMulti.minHeight`
+   tinha sido reduzido de 44 pra 36, ficando parecendo campo de 1 linha).
+   Corrigido pra 64 — ainda compacto, mas visivelmente um textarea.
+
+`tsc --noEmit`: baseline de 12 erros inalterado.
+
+**Ajuste no mesmo dia**: "Revisão Programada" (título+tooltip+campo
+Revisões, e os campos condicionais de Doc. Origem) saiu do card próprio
+e entrou na MESMA linha do cabeçalho principal, ao lado de "Hora de
+Fechamento" — pedido explícito do usuário. O card `os-geral-doc-origem`
+próprio deixou de existir; tudo isso agora vive dentro do card
+`os-geral-topo`.
+
+**Mais 2 ajustes no mesmo dia, mesma sessão**:
+- **Cliente movido pro final do 1º card** (economia de espaço) — só
+  quando a OS já existe (`editing && os`, quando o card do topo de fato
+  renderiza). `ClienteSection` foi extraído pra uma variável
+  (`clienteSectionEl`) reaproveitada em 2 lugares: dentro do card do
+  topo (caso comum) e num card avulso, só como fallback pro caso raro de
+  OS ainda não gravada (senão não haveria como escolher cliente pra
+  criar a 1ª vez — o card do topo só existe depois do 1º Gravar).
+- **"Serviço Executado" e "Diagnóstico" trocaram de posição** em
+  `OSEquipamentoCard.tsx` — "Defeito Reclamado"/"Diagnóstico" na 1ª
+  linha, "Serviço a Executar"/"Serviço Executado" na 2ª. "Defeito
+  Reclamado" e "Serviço a Executar" não mudaram de lugar.
+
+`tsc --noEmit`: baseline de 12 erros inalterado nos dois ajustes.
+
+**Bug real corrigido, mesma sessão — "Erro: Converting circular structure
+to JSON" ao clicar Gravar de verdade no navegador.** Achado ao vivo pelo
+usuário (1º clique real no botão Gravar desta tela — toda validação
+anterior desta sessão foi via API direta). Causa raiz: `Pressable.onPress`
+do cabeçalho (`PedidoHeader.tsx`) sempre chama a função com o evento de
+clique; `onSave={handleSave}` direto fazia esse evento (nó do DOM) virar o
+1º argumento de `handleSave(autorizadoPor?: string)`, que ia parar dentro
+do corpo JSON gravado (`autorizado_por: autorizadoPor || null`) — daí
+"Converting circular structure to JSON" ao serializar. Corrigido com
+`onSave={() => handleSave()}` (zero argumentos passados adiante). Também
+corrigido o `catch` de `handleSave` pra usar `friendlyCatchError` em vez
+do texto cru de exceção (violava "Mensagens de Erro — Linguagem
+Não-Técnica" `[GLOBAL]` do CLAUDE.md). **Checado e confirmado que Pedido
+Bar/Geral NÃO têm o mesmo bug** — seus `handleSave` não recebem
+parâmetro nenhum, o evento forwarded é só ignorado.
+
+**3 ajustes adicionais, mesma sessão**:
+- **Requisições Vinculadas / Criar Cópia movidos pro 1º card** — antes
+  ficavam soltos abaixo dos totais junto dos itens; são ações de nível OS
+  (não de item), fazem mais sentido perto do resto do cabeçalho.
+- **Pontuação de Técnicos inline na linha do serviço** — novo componente
+  local `PontuacaoInline` em `ItemList.tsx` (componente COMPARTILHADO com
+  Pedido Bar/Geral, editado de forma aditiva e gated por `tela ===
+  "OS_COMP"` — zero mudança de comportamento pro Pedido, mesmo padrão já
+  usado pra Agendar/Imprimir Item). 3 campos numéricos estreitos
+  (Técnico/Vendedor/Atendente) + ícone de salvar, direto na linha —
+  `PontuacaoModal.tsx` (edição em lote) continua existindo, só deixou de
+  ser o único caminho. `ItemRow` (`pedido/types.ts`) ganhou 4 campos
+  opcionais novos (`cod_os_prod`/`pontuacao_e/v/a`) pra viabilizar isso
+  sem importar o tipo `OSItemRow` no componente genérico — mesmo padrão
+  já usado pros campos Fase B do Pedido Geral (`num_serie`/`agendamento`/
+  `comprimento` etc.).
+- **Tempo Gasto acessível direto da linha do serviço** — ícone novo na
+  linha (só item tipo Serviço) abre `TempoGastoModal` já com o serviço
+  pré-selecionado (prop nova `preselectCodigoInterno`), em vez do fluxo
+  antigo (link genérico abaixo dos totais + reescolher o serviço num
+  combo). O modal em si não mudou de formato (continua listando TODOS os
+  lançamentos da OS, não só do item clicado — só o ponto de entrada
+  ficou mais direto).
+
+`tsc --noEmit`: baseline de 12 erros inalterado em todo o lote.
+
+**Mais 1 ajuste, mesma sessão — espaçamento vertical geral reduzido**:
+`styles.card` (usado por TODOS os cards desta tela) teve `padding`
+reduzido de `spacing.lg`(16) pra `spacing.md`(12) e `marginBottom` de
+`spacing.lg`(16) pra `spacing.sm`(8); o `gap` interno do card do topo
+caiu de `spacing.md`(12) pra `spacing.sm`(8); e um `marginTop` redundante
+que eu tinha deixado no bloco do Cliente (empilhava em cima do `gap` que
+o card já aplicava) foi removido. Efeito: espaçamento visivelmente mais
+compacto em toda a tela, não só ao redor do Cliente. `tsc` limpo.
+
+### Fora do escopo desta rodada — pontos em aberto maiores
+
+- **Pedido (Bar e Geral) fica de fora desta varredura por enquanto,
+  user-directed 2026-08-13** ("vamos deixar o pedido por enquanto fora
+  dessa alteração") — inclui `pedido-form.tsx`, `pedido-geral.tsx`,
+  `pedido-lista.tsx`, `pedidos.tsx`, e por extensão `PedidoHeader.tsx`
+  (compartilhado também por O.S. Geral, mas não deve ser tocado enquanto
+  Pedido estiver fora de escopo, já que mexer nele afeta Pedido também).
+  `pedido-geral.tsx` chegou a receber o fix mecânico de `colHalf` nesta
+  sessão e foi **revertido** na mesma rodada pra respeitar esta exclusão
+  — não reaplicar sem pedido explícito do usuário liberando Pedido de
+  novo.
+- **Redesenho da barra de ação (`PedidoHeader.tsx`)**: ícones de Ajuda/
+  Anexos/Formulários escondidos atrás de tooltip-no-hover, quando o
+  padrão VB6 (ver referência `FrmTraOsNew.frm` no CLAUDE.md) é uma coluna
+  de botões rotulados SEMPRE visível. Bloqueado pelo ponto acima (Pedido
+  fora de escopo) — não iniciar.
+- **Grade de itens como tabela densa** (em vez de card grande por linha)
+  — não avaliado ainda em nenhuma tela.
+- **Painéis independentes lado a lado** (ex.: bloco de texto + bloco de
+  checkboxes na mesma faixa horizontal, como no VB6) — não avaliado ainda.
+
+### Telas restantes da varredura (não tocadas ainda)
+
+Lista completa de `frontend/app/*.tsx` ainda não revisada quanto a
+densidade — grande demais pra revisar de uma vez, retomar por categoria:
+
+- **Cadastro completo / formulário denso** (maior prioridade, mesmo
+  formato do que já foi corrigido): `veiculos.tsx`, `cilindro-cadastro.tsx`,
+  `envio-terceiros.tsx`, `viagem-cadastro.tsx`, `num-serie.tsx`,
+  `notas-fiscais.tsx`, `telemarketing.tsx`, `contatos.tsx`,
+  `entrada-saida-caixa.tsx`, `equipamentos.tsx`, `controle-sistema.tsx`,
+  `agenda.tsx`, `gestor-comandas.tsx`, `alterar-comanda.tsx`,
+  `os-form.tsx`, `contas.tsx`, `conta-funcionario.tsx`,
+  `bancos.tsx`, `cobrancas.tsx`, `geracao-boletos.tsx`,
+  `modificadores.tsx`, `requisicao.tsx`, `pedido-compra.tsx`,
+  `cotacao-compra.tsx`. **Excluído por enquanto**: toda a família Pedido
+  (`pedido-form.tsx`, `pedido-geral.tsx`, `pedido-lista.tsx`,
+  `pedidos.tsx`, `PedidoHeader.tsx`) — ver "Fora do escopo" acima.
+- **Tabelas Auxiliares** (prioridade menor — telas pequenas, geralmente
+  lista + modal compacto, já usam o "Compact Size Variant"):
+  `area.tsx`, `area-atuacao.tsx`, `cfop.tsx`, `cfop-pis-cofins.tsx`,
+  `centro-custo.tsx`, `cores.tsx`, `marcas.tsx`, `modelos.tsx`,
+  `origem.tsx`, `regioes.tsx`, `rotas.tsx`, `segmentos.tsx`,
+  `situacao.tsx`, `status-os.tsx`, `tamanho.tsx`, `taxas.tsx`,
+  `tipo-cliente.tsx`, `tipo-doc.tsx`, `tipo-mov.tsx`,
+  `tipo-mov-mensagens.tsx`, `tipo-os.tsx`, `tipo-os-prod.tsx`,
+  `tipo-peca.tsx`, `tipo-servico.tsx`, `tributacao.tsx`,
+  `unidade-medida.tsx`, `icms.tsx`, `grupo-mercadologico.tsx`,
+  `grupo-pis-cofins.tsx`, `grupo-usuario.tsx`, `funcoes.tsx`,
+  `executor-padrao.tsx`, `forma-pagamento.tsx`, `mensagens.tsx`,
+  `mensagens-pdv.tsx`, `plano-contas.tsx`, `tabelas-auxiliares.tsx`
+  (hub).
+- **Posto de Combustível** (13 telas, prioridade a avaliar):
+  `posto-afericoes.tsx`, `posto-bombas.tsx`, `posto-combustiveis.tsx`,
+  `posto-custo.tsx`, `posto-estoque.tsx`, `posto-fechamento-turno.tsx`,
+  `posto-ilhas.tsx`, `posto-meta.tsx`, `posto-mov-encerrantes.tsx`,
+  `posto-reabertura-turno.tsx`, `posto-tanque-estoque.tsx`,
+  `posto-tanque-nf.tsx`, `posto-tanques.tsx`.
+- **Relatórios** (prioridade menor — já são filtro+tabela, naturalmente
+  mais densos; conferir se algum filtro ainda usa campo esticado):
+  todas as ~28 `relatorio-*.tsx`.
+- **Listas/painéis** (já são tabela/card de lista, prioridade menor):
+  `clientes.tsx`, `produtos.tsx`, `fornecedores` (lista já coberta acima
+  como cadastro), `os.tsx`, `os-lista.tsx`, `pedidos.tsx`,
+  `pedido-lista.tsx`, `movimentacoes.tsx`, `movimentacao-produtos.tsx`,
+  `inventario*.tsx`, `gestao-compras*.tsx`, `curva-abc.tsx`,
+  `bordero-cilindros.tsx`, `contrato-lista.tsx`,
+  `contrato-produtos-disponiveis.tsx`, `contrato-tipo*.tsx`,
+  `contrato-indice-reajuste.tsx`, `contrato-faturar.tsx`, `contratos.tsx`,
+  `funcionarios.tsx`, `permissoes.tsx` (árvore, padrão próprio),
+  `whatsapp-config.tsx`, `perfil-usuario.tsx`, `connections.tsx`.
+- Hubs/tabs (`(tabs)/*.tsx`) — já são grade de cards (`Card List
+  Ordering`), prioridade baixa, mas conferir se cabem mais colunas por
+  linha no container mais largo.
+
+---
+
+## Catálogo de Permissões não filtrava telas em submenus aninhados `[GLOBAL]` — CORRIGIDO
+
+**Status: 🟢 Corrigido e testado ao vivo, 2026-08-13.** Pedido do usuário:
+"Módulos que não estão habilitados, que carregam telas pertinentes, não
+devem aparecer nem para o Master... muito menos na Lista de permissão" —
+exemplos dados: Envio para Terceiros (deveria exigir Oficina OU
+Assistência) e Modificadores (deveria exigir Bar).
+
+### Achado ao investigar
+
+O mecanismo de gating já existia inteiro e corretamente desenhado
+(`MODULE_TELAS` em `controle_config_service.py` + `disabled_telas()`/
+`filter_catalogo()` em `permissoes_service.py`, incluindo a lógica OR pra
+Oficina/Assistência) — **não era um problema de Master bypassar nada**
+(nenhuma das duas funções sequer sabe o que é "master", filtram igual pra
+todo mundo). O bug real: `filter_catalogo()` só filtrava o **1º nível**
+de cada menu do catálogo — um menu ANINHADO dentro de outro (ex.:
+`CADASTROS > Tabelas Auxiliares > Modificadores`) nunca tinha seu próprio
+conteúdo filtrado de fato. Confirmado ao vivo contra `KONTACTO-TESTE`
+(Bar=false): "Modificadores" continuava aparecendo no catálogo filtrado.
+
+**Escopo do bug era maior que os 2 exemplos citados** — todo menu
+aninhado tinha o mesmo problema: `COMPRA` (dentro de Transações — Curva
+ABC/Gestão de Compras/Cotação/Pedido de Compra) e `CONTRATOS` (dentro de
+Transações — 6 telas) também nunca eram filtrados por
+`Curva_abc`/`contratos`, mesmo com esses módulos desligados.
+
+### Correção
+
+`filter_catalogo()` virou recursivo (`_filter_node`, mesmo padrão já
+usado por `sort_catalogo`) — percorre menus aninhados em qualquer
+profundidade, removendo tela por tela e o menu inteiro se ficar vazio.
+3 testes novos em `test_permissoes_service.py`
+(`TestFilterCatalogoRecursaoEmMenuAninhado`).
+
+**Testado ao vivo** contra `KONTACTO-TESTE` (Bar=false/Oficina=false/
+Assistencia=true) e `GERDELL`/`BARESTELA` (Bar=false/Oficina=true/
+Assistencia=false/Curva_abc=true/contratos=false): Modificadores some,
+OS/OS_COMP aparece (Oficina OU Assistência, OR confirmado dos dois
+lados), Curva ABC aparece, todo o submenu Contratos some por inteiro
+(os 6 filhos + o próprio menu). Suíte completa (1825 testes) sem
+regressão.
+
+---
+
+## Gestor de Devolução
+
+**Status: 🟢 Fase 1 enxuta implementada e TESTADA AO VIVO (2026-08-05)**
+contra GERDELL/BARESTELA — ciclo completo (buscar → registrar com Vale →
+sumir da busca → consultar → cancelar → volta a aparecer na busca)
+validado ponta a ponta.
+
+Migração de `Geral\FrmManDev.frm` ("Gestor de Devolução...") — pedido
+explícito do usuário: "implemente em Transações a tela de Gestor
+devolução. no sistema vb 6 fica também em transações". Rastreado via
+agente de pesquisa antes de implementar (mesma disciplina de "Legacy VB6
+Source Reference" no CLAUDE.md).
+
+### Escopo confirmado via `AskUserQuestion` (2026-08-05)
+
+1. **Fase 1 enxuta** (não o completo com emissão de NF) — o próprio
+   legado já delega a emissão de NF de devolução inteira a um subsistema
+   fiscal à parte (`FrmTraNFe.ImportaDevolucao`); esta migração faz o
+   mesmo: busca + registro + Vale de Devolução, sem emitir NF.
+2. **Não devolve estoque** (`pecas.qtd`) — confirmado no código real do
+   `.frm` que esta tela NUNCA toca em `pecas.qtd`; quem devolve estoque de
+   verdade é outro caminho do legado (Recebimento de Mercadoria/
+   `FrmConDev.frm`, ao dar entrada na NF de devolução) — fora de escopo
+   aqui, fiel ao rastreio.
+
+### Achados do rastreio (3 forms relacionados no `.vbp` canônico)
+
+- **`FrmManDev.frm`** = tela principal ("Gestor de Devolução..."). Busca
+  itens de venda já **PAGA** (`comanda.situacao='PG'`) — devolução
+  independe de qual documento originou a venda (Pedido, O.S., Cupom,
+  NFC-e, Contrato — todos convergem pra `comanda`/`movimentacao` no
+  fechamento). Filtros reais: data/cupom/NFC-e/NF/comanda/cliente/
+  produto/valor unitário.
+- **`FrmConDev.frm`** ("Selecionar Itens para Devolução") — **não** é
+  chamado a partir do Gestor de Devolução — é um segundo caminho de
+  entrada, invocado de dentro do Recebimento de Mercadoria
+  (`FrmtraRec.frm`) quando o usuário cadastra uma NF de entrada tipo
+  "Devolução" (`tipo_nf=6`), pra vincular vendas correspondentes — **é
+  esse caminho que efetivamente marca `movimentacao.Estornado=1`** (não
+  implementado nesta migração, fica pro dia em que o Recebimento de
+  Mercadoria com NF tipo Devolução for revisitado).
+- **`FrmItensDevolucao.frm`** — apesar do nome, **sem relação real** com o
+  fluxo de devolução (não referencia `devolucao_itens`/`vale_devolucao`/
+  `devolucao_config` em lugar nenhum) — é um relatório genérico de vendas,
+  provavelmente nome remanescente de versão antiga repropositada. Não
+  usado como fonte.
+
+### Achado importante sobre `devolucao_itens.Status`
+
+**NÃO é um estado de fluxo** (pendente/concluído) como o nome sugeriria —
+confirmado contra dado real (GERDELL/BARESTELA): é o **motivo/tipo da
+devolução**, lookup `devolucao_status` com só 2 linhas reais cadastradas
+(`1="Devolução Normal"`, `2="Devolução por Defeito"`). Implementado
+exatamente assim — campo obrigatório por item ao registrar.
+
+### Backend
+
+- `backend/services/devolucao_service.py`: `_list_motivos_sync` (lookup
+  `devolucao_status`), `_list_itens_venda_sync` (busca itens elegíveis —
+  reaproveita `_resolver_cliente_termo`/`_resolver_produto_termo` de
+  `comanda_service.py`, mesma base do Gestor de Comandas, não duplicado),
+  `_registrar_devolucao_sync` (grava `devolucao_itens` + `vale_devolucao`
+  opcional, valida quantidade contra saldo ainda não devolvido),
+  `_list_devolucoes_sync` (consulta, réplica simplificada de
+  `FrmConDev.frm`), `_cancelar_devolucao_sync` (reversão: cancela o Vale
+  vinculado se houver, bloqueia se já tiver NF vinculada — mesma regra do
+  legado "excluir da fila cancela o vale").
+- Módulo gateado por `controle_configuracao.devolucao` (coluna já
+  existente, já cadastrada em `controle_config_service.py` antes desta
+  rodada — só faltava a tela nova checar) — `_modulo_devolucao_ativo`
+  checado em TODAS as funções do service (mesmo padrão de "Regra de
+  Módulo Ativo" no CLAUDE.md).
+- Rotas em `backend/routes/devolucao.py`: `GET /devolucao/motivos`,
+  `POST /devolucao/buscar-itens`, `POST /devolucao/registrar`,
+  `POST /devolucao/consulta`, `POST /devolucao/{id}/cancelar`. Registrado
+  em `server.py`.
+- Permissão `DEVOLUCAO` no catálogo (menu Transações, dentro do mesmo
+  `_menu("TRANSACOES", ...)` que já tem Contratos/Compra), ações
+  ABRIR/REGISTRAR/EMITIR_VALE/CANCELAR.
+- Schemas novos em `models/schemas.py`: `DevolucaoBuscarItensRequest`,
+  `DevolucaoItemRegistrar`/`DevolucaoRegistrarRequest`,
+  `DevolucaoConsultaRequest`, `DevolucaoCancelarRequest`.
+- **Simplificação registrada**: o valor do item devolvido é
+  `qtd_devolvida × p_unit`, sem o rateio de frete/outras despesas/desconto
+  que o legado aplica — `devolucao_itens.frete/outras/descontos` sempre
+  gravados como 0 nesta fase.
+- **14 testes novos** em `test_devolucao_service.py` (busca com exclusão
+  de saldo já devolvido, registrar com/sem vale, bloqueio de quantidade
+  acima do saldo, bloqueio sem cliente ao emitir vale, consulta, cancelar
+  com reversão de vale, bloqueio se já tem NF, gating de módulo em todas
+  as operações) — 1501 testes de backend passando no total (mesmos 67
+  pré-existentes de Gestão de Compras, não relacionados).
+
+### Bug real encontrado e corrigido de passagem (não relacionado à feature nova)
+
+Ao testar ao vivo, a descrição do produto voltava **em branco** pra itens
+com `pecas.descricao_pdv` = string vazia (não NULL) — `ISNULL(p.
+descricao_pdv, p.descricao)` só cai pro fallback quando o valor é NULL,
+nunca quando é `''`. **Esse exato padrão já existia em 2 lugares do
+`checkout_service.py`** (`_get_venda_sync` e `_buscar_produto_sync`) desde
+antes desta sessão — corrigido nos 4 lugares (2 no Checkout, 2 na
+Devolução) pra `ISNULL(NULLIF(p.descricao_pdv,''), p.descricao)`. Vale
+revisar se esse mesmo padrão aparece em outro service que leia
+`descricao_pdv` no futuro.
+
+### Frontend
+
+- `frontend/app/devolucao.tsx` (web-only, tela única com 2 abas internas
+  — "Buscar e Registrar" / "Consulta" — não é o padrão "Full CRUD Form
+  Screen Standard" porque não é um cadastro de registro único, é mais
+  parecido com um relatório/utilitário, mesma categoria de Movimentação
+  de Produtos/Requisição).
+- Card "Gestor de Devolução" em `transacoes.tsx`, dentro do menu
+  Transações (gateado por `moduleOn("devolucao") && can("DEVOLUCAO.ABRIR")`),
+  ordenado alfabeticamente junto dos demais.
+- Seleção de cliente pro Vale de Devolução via `ClientSearchModal`
+  (mecanismo de busca obrigatório pra campo de identidade, regra
+  `[GLOBAL]` já registrada) — auto-preenchido com o cliente do primeiro
+  item marcado, editável.
+- "Modo Didático" aplicado: ícone de Ajuda no cabeçalho + modal único
+  (`AjudaPedidoModal` reaproveitado) explicando cada ação.
+- `tsc --noEmit` sem erro novo (mesmos 12 pré-existentes de sempre).
+
+### Fora de escopo desta fase (não são bugs)
+
+- Emissão de NF de devolução (delegada no legado a `FrmTraNFe`) — se
+  pedido depois, avaliar reaproveitar o módulo Notas Fiscais.
+- Reposição física de estoque — fica pro Recebimento de Mercadoria (NF de
+  entrada tipo Devolução), quando/se essa tela for revisitada.
+- Vale de Devolução como forma de pagamento **consumível** numa venda
+  futura (Checkout) — só a emissão foi implementada; o Checkout ainda não
+  sabe consumir um `vale_devolucao` como forma de pagamento (mesma
+  pendência já registrada em "Checkout" > "Cartão Presente/Vale de
+  Devolução").
+- Painel "Manutenção da Devolução" do legado (fila de itens já
+  registrados aguardando NF) — coberto pela aba "Consulta" desta
+  implementação, formato mais simples.
+- Config de CFOP/Código ICMS por tipo de movimento/destino
+  (`devolucao_config`) — só é necessária pra emissão de NF, fora de
+  escopo nesta fase.
+
+---
+
 ## Checkout
 
 **Status: 🟡 Fase 1 (núcleo) + Fase 2 (importar Pedido/O.S. como DAV) +
@@ -115,7 +535,8 @@ não o ato de gravar em `comanda`/`movimentacao` em si.
 `pedido_venda_financiado`/`os_financiado`) e não tem coluna de vencimento —
 por isso `checkout_service.py` usa um mapa `_CMD_VALOR_COL`/`_CMD_VENC_COL`
 LOCAL, não os dicts genéricos de `pedido_common.py` (evita arriscar o
-código já testado de Pedido/O.S.).
+código já testado de Pedido/O.S.). **Confirmado pelo usuário (2026-08-05):
+"é isso mesmo"** — abordagem validada, sem mudança necessária.
 
 ### Fase 1 (implementada) — núcleo
 
@@ -135,7 +556,8 @@ código já testado de Pedido/O.S.).
   pra `cartoes_administradoras`/`cartoes_configuracoes` antes desta rodada**
   — só um delete-guard em `bancos_service.py`; o cadastro dessas 2 tabelas
   em si (`FrmCadADM.frm`/`FrmGesCar.frm`) continua não migrado (só os
-  lookups de leitura necessários pro Checkout).
+  lookups de leitura necessários pro Checkout). **Confirmado pelo usuário
+  (2026-08-05): "ok"** — escopo aceito, sem pendência aqui.
 - Permissão `CHECKOUT` no catálogo (menu Transações), ações ABRIR/ADD_ITEM/
   DEL_ITEM/DESC_ITEM/DESC_GERAL/FECHAR/CANCELAR — `DESC_ITEM` está
   registrada no catálogo mas ainda **não é checada** por nenhum endpoint
@@ -179,10 +601,21 @@ código já testado de Pedido/O.S.).
    _linha_peca_completo` (usado pelo Pedido Completo) já interpreta o MESMO
    campo do jeito oposto (truthy PERMITE desconto). O Checkout desta Fase 1
    **não usa esse campo em nenhum dos dois sentidos** — só os limites
-   percentuais `desc_g`/`desc_s`/`desc_v` — justamente por essa
-   contradição não estar resolvida. **Pergunta em aberto**: qual das duas
-   leituras é a correta/atual? Vale conferir com o usuário antes de
-   decidir replicar em qualquer uma das duas telas.
+   percentuais `desc_g`/`desc_s`/`desc_v`.
+   **Resolvido pelo usuário (2026-08-05)**: "não importa como hoje é lido,
+   se invertido ou não, a finalidade é a mesma, se o produto ou serviço
+   aceitam ou não desconto" — ou seja, o valor de verdade que interessa é
+   só o FATO de negócio ("este item aceita desconto?"), não a convenção de
+   bit usada pra representá-lo. Isso fecha a pergunta em aberto: não é uma
+   contradição real entre Pedido Completo e o legado, são só 2
+   implementações lendo o mesmo fato por convenções opostas — cada uma já
+   resolve corretamente PRA SI. **Fica registrado como orientação pra
+   quando o Checkout (ou qualquer tela nova) precisar checar esse campo**:
+   implementar perguntando "este item aceita desconto?" como fato de
+   negócio, conferindo contra dado real (ex.: um produto com
+   `aceita_desconto` num valor conhecido, comparado ao comportamento
+   esperado) antes de decidir o sentido do `if`, em vez de copiar a
+   convenção de qualquer um dos dois lados sem verificar.
 
 ### Fase 2 (implementada, 2026-08-05) — Importar Pedido/O.S. como DAV
 
@@ -249,74 +682,390 @@ legado):
   pra Pedido também; pra O.S. seria uma coluna própria não confirmada
   como existente/populada neste schema já migrado).
 
-### Fase 3 (implementada, 2026-08-05) — Impressão de cupom/comprovante
+### Fase 3 (implementada, 2026-08-05, DEPOIS SUBSTITUÍDA no mesmo dia) — Impressão de cupom/comprovante
 
-Migração de `Imprime_Comprovante` (`FrmPafOFF.frm`) — preview de recibo +
-impressão via navegador, mesmo padrão já estabelecido em
-`ReciboPedidoModal.tsx` (iframe oculto, `src/utils/printHtml.ts` — nunca o
-truque de CSS "esconde tudo com `body *`", sai em branco) e bobina térmica
-de 80mm já confirmada.
+Migração original de `Imprime_Comprovante` (`FrmPafOFF.frm`): preview de
+recibo (JSX) + impressão via navegador (iframe oculto,
+`src/utils/printHtml.ts`), atrás de um botão manual "Imprimir" —
+`ReciboCheckoutModal.tsx`.
 
-- **Backend**: `_get_venda_sync` (checkout_service.py) estendido pra expor
-  o que o recibo precisa e ainda não vinha: `cliente_cgc_cpf` (CPF/CNPJ do
-  cliente, pro "Doc:" do recibo), `atendente_nome` (sempre `nome_guerra`
-  com fallback pro nome completo — regra `[GLOBAL]` "Nome do Vendedor",
-  aplicada aqui pela primeira vez no Checkout), `descricao` da forma de
-  pagamento (join com `forma_pagamento`, antes só vinha o código cru) e
-  `troco` (soma de `TROCO_COMANDA`). `itens[].preco_bruto` também passou a
-  ser necessário no frontend (já existia no backend, só não estava sendo
-  consumido).
-- **Frontend**: `frontend/src/components/checkout/ReciboCheckoutModal.tsx`
-  — preview (JSX) + `buildHtml()` (string HTML só na hora de imprimir,
-  mesma duplicação deliberada de `ReciboPedidoModal.tsx`, comentada lá:
-  manter as duas versões em sincronia ao alterar o conteúdo). Cabeçalho
-  com dados da empresa (`/api/controle/empresa`) + mensagens de rodapé
-  (`/api/controle/mensagens-pdv`) — mesmas duas chamadas já usadas por
-  Pedido Bar/Geral. Botão "Imprimir" na tela, disponível em QUALQUER
-  situação (Aberta ou Faturada) desde que haja pelo menos 1 item — permite
-  tanto conferir o conteúdo antes de fechar quanto reimprimir depois.
-- **Não implementado nesta fase**: modo "ticket de item único" (o
-  `ReciboPedidoModal` tem um modo separado pra imprimir só 1 item, pra
-  cozinha/bar — não portado aqui, o Checkout não tem o conceito de
-  impressão automática por Finalidade que motivou aquele modo no Pedido
-  Bar). Sem toggle de "imprimir totalizado" (agrupar itens repetidos) —
-  o Checkout lista os itens sempre na ordem lançada, sem agrupamento.
+**Substituída no mesmo dia, user-directed** ("não tem botão imprimir.
+tudo será de forma silenciosa no final do processo de venda. assim como
+acontece no legado"): `ReciboCheckoutModal.tsx` foi **deletado por
+completo** (órfão, nenhum outro consumidor) — não existe mais preview
+HTML nem diálogo de impressão do navegador nesta tela. Ver "Impressão
+Silenciosa — Fila + Agente Local" abaixo pro que substituiu isso:
+impressão automática (silenciosa, via `POST /impressao/fila`) disparada
+sozinha dentro de `fecharVenda`, sem qualquer botão. `_get_venda_sync`
+(estendido nesta fase com `cliente_cgc_cpf`, `atendente_nome` sempre
+`nome_guerra`, `descricao` da forma de pagamento e `troco`) continua
+valendo — só o consumo no frontend mudou.
+
+- **Não implementado**: modo "ticket de item único" (cozinha/bar) nem
+  toggle de "imprimir totalizado" (agrupar itens repetidos) — o Checkout
+  não tem o conceito de impressão automática por Finalidade que motivou
+  isso no Pedido Bar, e sempre imprime a comanda inteira de uma vez.
 
 ### Fases ainda adiadas
 
 - **TEF real** (integração com maquininha) — nenhum service de TEF existe
   no projeto; Cartão hoje só captura os dados manualmente (mesmo nível que
   Forma de Pagamento já faz pra Pedido/O.S.).
-- **Abastecimento de posto** (F5, `Mostra_Abastecimentos`/`Command10_Click`)
-  — módulo Posto de Combustível já migrado em outra tela; a integração
-  "abastecimento vira item de Checkout" não foi portada.
-- **Agenda** (F1/`Command18`, `Mostra_Agenda`/`Command19_Click`) — agenda de
-  atendimentos já migrada em outra tela; a integração "agendamento vira
-  item de Checkout" não foi portada.
-- **Venda Externa por ficha** (`Insere_Dav` tipo 3, leitura de arquivo
-  `.txt` de import de outro sistema) — fora de escopo, não identificado uso
-  atual desta feature.
-- **Cartão Presente / Vale de Devolução** — tabelas `comanda_cartao_
-  presente`/`vale_devolucao` referenciadas no legado, sem cadastro/emissão
-  migrados ainda.
+- **Abastecimento de posto e Agenda — IMPLEMENTADOS 2026-08-05**
+  (`Mostra_Abastecimentos`/`Command10_Click` e `Mostra_Agenda`/
+  `Command19_Click`, rastreados campo-a-campo em `Geral\FrmPafOFF.frm`
+  antes de implementar). 2 botões INDEPENDENTES na barra de ações (não
+  replica o slot único contextual F5 do legado — decisão de UI já
+  registrada antes, ver histórico desta seção): "Abastecimento"
+  (`moduleOn("Posto")`) e "Agendamento" (`moduleOn("CLINICA") ||
+  moduleOn("Assistencia")`) — cada um só aparece com seu módulo ativo,
+  podem aparecer os 2 juntos se a empresa tiver ambos.
+  - **Backend** (`checkout_service.py`): `_list_abastecimentos_pendentes_
+    sync`/`_importar_abastecimento_sync` e `_list_agendamentos_pendentes_
+    sync`/`_importar_agendamento_sync` + rotas `GET /checkout/
+    abastecimentos/pendentes`, `POST /checkout/{comanda}/importar-
+    abastecimento`, `GET /checkout/agendamentos/pendentes`,
+    `POST /checkout/{comanda}/importar-agendamento` (schemas
+    `CheckoutImportarAbastecimentoRequest`/`CheckoutImportarAgendamentoRequest`).
+  - **Diferente do legado, ambos gravam `movimentacao.tipo_dav`** ('ABA'/
+    'AGE') + `COD_AUTO_DAV` (nº do abastecimento/agenda) — mesmo padrão já
+    usado por `_importar_dav_sync` ('P'/'O'). O legado só marca a origem
+    numa ListBox em memória (Abastecimento) ou não marca nada em
+    `movimentacao` (Agenda, só a tabela de vínculo `agenda_comanda`) —
+    decisão deliberada de NÃO replicar esse esquema frágil (ver "Não
+    replicar truques VB6" em CLAUDE.md), pra poder bloquear cancelamento
+    individual e reverter corretamente ao cancelar a venda inteira, igual
+    já acontece com DAV.
+  - **Abastecimento**: query real de `Mostra_Abastecimentos`
+    (`abastecimento`/`bomba`/`pecas`, filtro `status_abastecimento=
+    'PENDENTE'`). Importar marca `status_abastecimento='EMITIDO CF'`;
+    cancelar a venda reverte pra `'PENDENTE'`. **Não decrementa
+    `pecas.qtd`** — o combustível já saiu fisicamente do tanque
+    (contabilizado por Mov. Encerrantes/Tanque-Estoque, outro caminho),
+    mesmo princípio já usado pra itens de DAV. **Tabela `abastecimento`
+    nunca é populada nesta migração** (só a integração de hardware Wayne
+    Fusion, Fase 2, faria isso) — confirmado ao vivo contra GERDELL/
+    BARESTELA (`GET /checkout/abastecimentos/pendentes` retorna
+    `items: []`, módulo Posto ativo, query roda sem erro). O botão/tela
+    funciona normalmente, só fica sem dado real pra mostrar até essa
+    automação existir.
+  - **Agenda**: query real de `Mostra_Agenda` (`AGENDA`/`servicos`/
+    `funcionarios`/`cliente`, filtro `situacao_caixa='A'` + não vinculado
+    a `AGENDA_PEDIDO`/`AGENDA_OS` — agendamentos presos a Pedido/O.S. só
+    faturam por lá). Item lançado é o SERVIÇO do próprio agendamento
+    (qtd=1, valor=`agenda.valor`). Grava o vínculo real `agenda_comanda`
+    (mesma tabela já usada por `agenda_service._faturar_avulso_sync` —
+    reaproveitada só como referência de schema, NÃO como função chamada
+    diretamente: aquela fecha uma comanda NOVA de 1 item só; esta soma o
+    item numa comanda JÁ aberta do Checkout). **Diferente do legado
+    (`RegVenda.codcliente = agendamento.cliente`), NÃO troca o cliente da
+    venda automaticamente** — decisão deliberada (trocar cliente "por
+    baixo" silenciosamente é comportamento implícito demais; o operador
+    usa o campo Cliente do Checkout se quiser).
+  - **Frontend**: `AbastecimentoModal.tsx`/`AgendamentoModal.tsx` (tier
+    "seleção", 560px) — lista + seleção direta por toque (sem etapa de
+    confirmação extra, já que a lista em si já é filtrada por "pendente").
+    `DemonstrativoCupomFiscal.tsx` ganhou `labelOrigem()` pra badges
+    "Abastec."/"Agenda" (antes só tratava "Pedido"/"O.S.").
+  - **13 testes novos** em `test_checkout_service.py` (listagem +
+    importação + gating de módulo + bloqueio de cancelamento individual +
+    reversão ao cancelar a venda inteira) — 40/40 passando no arquivo,
+    1487 no total (mesmos 67 pré-existentes não relacionados). `tsc
+    --noEmit` sem erro novo.
+  - **Testado ao vivo contra GERDELL/BARESTELA**: `GET /checkout/
+    abastecimentos/pendentes` (sucesso, lista vazia, módulo ativo),
+    `GET /checkout/agendamentos/pendentes` (bloqueado corretamente, módulo
+    Agenda inativo nesta conexão), `POST /checkout/{comanda}/importar-
+    abastecimento` com número inexistente (erro tratado, sem crash) — mas
+    **o caminho de sucesso completo de importação nunca rodou contra dado
+    real** (abastecimento sempre vazio nesta conexão; agendamento nunca
+    testado por falta de módulo ativo numa conexão de teste disponível).
+- ~~**Venda Externa por ficha**~~ (`Insere_Dav` tipo 3, leitura de arquivo
+  `.txt` de import de outro sistema) — **removida do escopo do projeto,
+  confirmado pelo usuário (2026-08-05): "não é mais utilizada"**. Não é
+  mais uma fase adiada — é uma feature do legado que não será portada,
+  ponto final. Não revisitar.
+- **Cartão Presente / Vale de Devolução — IMPLEMENTADO 2026-08-06**, como
+  formas de pagamento consumíveis no fechamento da venda (`POST /checkout/
+  {comanda}/fechar`). Pedido explícito do usuário: "implantar Cartão
+  Presente / Vale de Devolução" + "na tela de checkout" + **"TEM QUE SER
+  FIEL AO LEGADO"** (aplicado ao análogo mais próximo que o legado de fato
+  implementou — Vale de Devolução — já que o resgate de Cartão Presente em
+  si nunca existiu lá, ver abaixo). Rastreado via agente de pesquisa em
+  `FrmPafOFF.frm::Finaliza_Pagamento`, `FrmManGFC.frm`, `mdl_proc.bas`
+  antes de implementar; 3 decisões de design confirmadas via
+  `AskUserQuestion`.
+  - **Achado real do rastreio**: o legado só grava a VENDA de um Cartão
+    Presente (`comanda_cartao_presente`, `situacao` nunca sai de 'A') — o
+    resgate nunca foi implementado (`comanda_venda`/`id_movimentacao_venda`
+    são colunas mortas, confirmado por busca exaustiva em toda a árvore
+    VB6). Vale de Devolução, ao contrário, tem um ciclo de vida real e
+    completo no legado — é ele que foi usado como referência de fidelidade.
+  - **Vale de Devolução** (companheiro opcional de DI/DU/VA, nunca um
+    "tipo" próprio): campo `codigo_vale_devolucao` em
+    `CheckoutFormaPagamentoItem` — ao portador (não checa cliente da
+    venda), bloqueia reuso do mesmo vale duas vezes na mesma venda, bloqueia
+    vale não encontrado/já utilizado (`situacao='F'`)/cancelado
+    (`situacao='C'`)/valor maior que o saldo. **Assimetria real do legado,
+    replicada fielmente** (decisão do usuário, "replicar a assimetria
+    exata"): só DU e VA geram um vale RESIDUAL novo (`vale_devolucao`
+    clonado, mesmo cliente, `situacao='A'`, saldo = diferença) quando o
+    valor lançado é menor que o saldo do vale — DI sempre consome o vale
+    inteiro, nunca gera resíduo, mesmo havendo sobra. Consumo grava em
+    `comanda_vale_devolucao` (tabela real do legado, só nunca usada até
+    agora).
+  - **Cartão Presente**: novo tipo de forma de pagamento **`CP`** (só existe
+    no Checkout, sem `forma_pagamento` cadastrada — campo `forma_pag` fica
+    vazio) — campo `codigo_cartao_presente` (código do cartão físico,
+    `pecas_cartao_presente.cartao_presente`). Resgate **tudo ou nada** (não
+    aceita usar menos que o saldo sem gerar resíduo — decisão do usuário,
+    "fiel ao padrão do Vale de Devolução"), **ao portador** (decisão do
+    usuário, "consistente com Vale de Devolução" — não existe conceito de
+    "dono" de cartão presente no schema), bloqueia reuso do mesmo cartão
+    duas vezes na mesma venda, cartão não encontrado, já resgatado
+    (`situacao='F'`, reaproveitando a coluna já existente e até então morta),
+    valor maior que o saldo. Quando o valor lançado é menor que o saldo, gera
+    **cartão residual** — novo `pecas_cartao_presente` (código
+    `"<original>-R<auto>"`) + novo `comanda_cartao_presente` (`situacao='A'`,
+    saldo = diferença) — mesma mecânica do Vale de Devolução, sem a
+    assimetria por tipo (Cartão Presente não tem DI/DU/VA próprios, é um
+    tipo único `CP`). Consumo grava numa tabela nova,
+    **`comanda_cartao_presente_resgate`** (autonum, comanda,
+    comanda_cartao_presente, valor_usado — não existe no legado, espelha o
+    formato de `comanda_vale_devolucao` por simetria; criada via migração
+    idempotente `_ensure_cartao_presente_resgate_table`, mesmo padrão de
+    `_ensure_qtd_pessoas_col`).
+  - **Backend**: tudo em `checkout_service.py` — `_validar_vale_devolucao`/
+    `_consumir_vale_devolucao`/`_validar_cartao_presente`/
+    `_consumir_cartao_presente`, chamadas de dentro de
+    `_fechar_venda_sync` (1º laço valida TODAS as formas antes de gravar
+    qualquer uma — mesmo padrão já usado pra Administradora/Parcelador de
+    cartão de crédito/débito; 2º laço grava, reaproveitando o resultado já
+    validado, não reconsulta). `CheckoutFormaPagamentoItem` (schemas.py)
+    ganhou os 2 campos novos, ambos opcionais — zero mudança pros tipos
+    DI/CH/CC/CD/DU/TI/VA/FI já existentes quando não usados.
+  - **20 testes novos** em `test_checkout_service.py`
+    (`TestFecharVendaValeDevolucao`/`TestFecharVendaCartaoPresente` — total
+    sem/com resíduo, todos os bloqueios, duplicidade na mesma venda) — 54/54
+    passando no arquivo, 1515 no total (mesmos 67 pré-existentes não
+    relacionados, Gestão de Compras). `tsc --noEmit` sem erro novo.
+  - **Testado ao vivo, ciclo completo, contra GERDELL/BARESTELA**: abriu
+    venda real (comanda 10093, cliente 90) → item real (P392, R$18) →
+    semeou 1 vale de teste (R$50) + 1 cartão presente de teste (R$50) →
+    fechou a venda com VA parcial (R$10 do vale) + CP parcial (R$8 do
+    cartão) → confirmado: vale original `situacao='F'`, vale residual criado
+    (R$40, mesmo cliente); cartão original `situacao='F'`, cartão residual
+    criado (`TESTE-CP-001-R1`, R$42); `comanda_vale_devolucao`/
+    `comanda_cartao_presente_resgate` gravados com o valor usado; venda
+    fechada `situacao='PG'`. Todo o dado de teste foi removido ao final
+    (nenhum registro pré-existente tocado).
+  - **Frontend**: `FecharVendaModal.tsx` — tipo "Cartão Presente" na lista
+    de tipos (troca "Forma de Pagamento" por um campo de texto "Código do
+    Cartão Presente" quando selecionado, já que não tem forma cadastrada);
+    campo opcional "Código do Vale de Devolução" aparece embaixo de
+    qualquer linha DI/DU/VA. **Não existe (nem foi criado) um flag
+    `forma_pagamento.vale_devolucao` no schema desta migração** — a coluna
+    equivalente do legado nunca foi portada (ver comentário em
+    `forma_pagamento_service.py`); o campo aparece pelo TIPO da linha
+    (mesmo critério que o próprio backend usa), não por uma flag de
+    cadastro — mais simples e já é o que a regra de negócio real exige.
+    Novos itens no ícone de Ajuda do Checkout (`AJUDA_ITENS`) explicando os
+    dois em linguagem de usuário final.
+  - **Fora de escopo desta rodada**: nenhuma tela de consulta/relatório de
+    Cartões Presentes emitidos/resgatados (só existe hoje via SQL direto);
+    nenhuma tela de emissão/venda de Cartão Presente em si (pressupõe que a
+    linha em `pecas_cartao_presente` já existe — de onde ela nasce
+    normalmente não foi rastreado nesta rodada, só o resgate).
 - **Emissão fiscal automática ao fechar** — o Checkout não emite NFC-e/NFS-e
   sozinho; reaproveita o botão já existente "Emitir NFC-e"/"Emitir NFS-e"
   do Gestor de Comandas (`comanda_service.py`) — mesma ressalva já
   registrada lá: **nunca testado contra o SEFAZ real**.
-- **Impressão térmica SILENCIOSA** (sem diálogo do navegador) — a Fase 3
-  já implementou preview + impressão via `window.print()`/iframe (ver
-  acima). O backend + agente local pra impressão SEM diálogo (mesma
-  pendência já registrada em outras telas — Pedido Bar) foram implementados
-  em 2026-08-05 (ver "Impressão Silenciosa — Fila + Agente Local" logo
-  abaixo), mas **nenhuma tela do app (Checkout incluído) chama
-  `POST /api/impressao/fila` ainda** — a integração "botão Imprimir também
-  enfileira pro agente" continua não feita, só o mecanismo de fila/agente
-  em si existe (ainda não testado ao vivo, ver seção própria).
-- **Ciclo completo não testado ao vivo** — abrir venda → adicionar item →
-  importar Pedido/O.S. → desconto → fechar com múltiplas formas →
-  imprimir recibo → conferir no Gestor de Comandas, nunca rodado contra
-  um banco de teste real (só testes unitários com
-  cursor mockado).
+- **Impressão térmica SILENCIOSA**: já integrada (ver "Fase 3" acima e
+  "Impressão Silenciosa — Fila + Agente Local" abaixo) — o mecanismo de
+  fila/agente em si já foi testado ao vivo contra uma impressora física
+  (máquina `GERDELL`), mas a chamada específica que o Checkout faz
+  (`imprimirVendaAutomatico`, dentro de `fecharVenda`) **só foi testada
+  isoladamente via curl contra o endpoint** — nunca clicado "Fechar Venda"
+  de verdade na UI do Checkout pra confirmar que o cupom sai sozinho na
+  impressora.
+- **Ciclo completo não testado ao vivo** — abrir venda (automática) →
+  adicionar item (teclado/barcode) → importar Pedido/O.S. → desconto →
+  fechar com múltiplas formas → confirmar impressão automática do cupom →
+  conferir no Gestor de Comandas, nunca rodado contra um banco de teste
+  real (só testes unitários com cursor mockado). Este é o item que
+  destrava todo o resto — sem isso, a Fase 1 (núcleo) não pode ser
+  considerada "pronta de verdade".
+
+### Ajustes de UI 2026-08-06 — revisão a partir de screenshots (PDV de referência + `FrmPafOFF.frm`)
+
+Pedido explícito do usuário, comparando um screenshot de PDV de referência
+(YZIDRO) e o próprio `FrmPafOFF.frm` legado lado a lado com a tela atual:
+
+- **Demonstrativo do Cupom Fiscal — destaque do último item REMOVIDO**
+  ("não exibir o último produto em destaque para a lista de produto ficar
+  maior"). O bloco `destaque`/`destaqueVazio` (fonte grande do último item
+  lançado) foi tirado por completo de `DemonstrativoCupomFiscal.tsx` — a
+  grade de itens ganhou o espaço de volta.
+- **Lista de itens — tamanho FIXO com barra de rolagem** ("quero a lista
+  com tamanho fixo com barra de rolagem"). `gridBody` trocou de
+  `maxHeight: 260` pra `height: 440` (fixo) — antes já usava `ScrollView`
+  internamente, só a altura era um teto variável, não um tamanho fixo.
+- **Campo Vendedor, que faltava em "Registro de Itens"** ("em registro de
+  venda, faltou o vendedor" — rastreado no screenshot do `FrmPafOFF.frm`,
+  combobox "Vendedor: CARLOS" acima do campo Código). Novo `SelectField`
+  "Vendedor" (`itemVendedor`, estado próprio) acima do campo de código em
+  `checkout.tsx` — sai preenchido com o próprio atendente (sessão), mas o
+  operador pode trocar por qualquer outro funcionário
+  (`GET /api/funcionarios`, mesmo padrão de `pedido-form.tsx`). Esse valor
+  é o que vai em `vendedor` no `POST /checkout/{comanda}/itens` e nos
+  imports de Abastecimento/Agenda — **antes desta mudança, todo item era
+  sempre gravado com o vendedor = sessão logada**, sem opção de trocar.
+- **Atendente do caixa (usuário logado) na barra de título** ("informar o
+  atendente do caixa (usuário logado), na barra de título, que pode ser
+  diferente do vendedor"). Badge translúcido no `titleExtra` do
+  `PedidoHeader` ("Atendente: NOME") — nome vem direto da sessão
+  (`funcionario.nome_guerra`/`nome`, disponível de imediato, sem esperar
+  round-trip de rede), não mais do card no corpo da tela (removido — o
+  card "Cliente" ficou sozinho onde antes tinha Atendente+Cliente juntos).
+  Estado `atendenteNome` (resolvido via `_get_venda_sync`, só usado nesse
+  card) removido por ficar órfão — a impressão automática do cupom
+  continua lendo `atendente_nome` direto da API, sem depender desse
+  estado.
+- **Botão "Pedidos" separado de "O.S.", cada um já abre uma LISTA** ("Botão
+  de Pedidos separado da O.S. Ao clicar, listar as pré-venda sem precisar
+  procurar, conforme no legado"). O único botão "Importar Pedido/O.S."
+  (que abria um modal pra DIGITAR o número do documento —
+  `ImportarDavModal.tsx`, agora deletado por ficar órfão) virou 2 botões
+  independentes na barra de ações: "Pedidos" e "O.S.", cada um abrindo o
+  novo `DavPendentesModal.tsx` (parametrizado por `tipoDav`) já
+  preenchido com a lista de documentos Fechados prontos pra importar —
+  mesmo padrão visual de `AbastecimentoModal.tsx`/`AgendamentoModal.tsx`
+  (lista + toque direto, sem etapa de busca). Endpoint novo
+  `GET /checkout/dav/pendentes?tipo_dav=PED|OS`
+  (`_list_dav_pendentes_sync`, `checkout_service.py`) — mesmo critério de
+  elegibilidade já usado por `_importar_dav_sync` (`situacao='F'`), só
+  como listagem em vez de busca por número; a validação real de novo
+  continua acontecendo no import (nada muda em `_importar_dav_sync`). 3
+  testes novos (`TestListDavPendentes`). **Testado ao vivo contra
+  GERDELL/BARESTELA**: `GET /checkout/dav/pendentes?tipo_dav=PED` retornou
+  4 Pedidos Fechados reais, `tipo_dav=OS` retornou 1 O.S. Fechada real —
+  ambos com dados corretos (cliente, valor, data).
+- **Campo Produto/Serviço ganhou mecanismo de busca** (pedido explícito do
+  usuário, mid-turn: "tem que possibilitar consulta no campo produto/
+  serviço" — regra `[GLOBAL]` "Campos de identidade precisam de mecanismo
+  de busca", que já cobria Cliente/Fornecedor/Nível mas não tinha sido
+  aplicada ainda no campo de código do Checkout, pensado originalmente só
+  pra bipe/digitação direta). Ícone de lupa (`IconButtonWithTooltip`) ao
+  lado do campo Código abre `ProdutoSearchModal` (componente já existente,
+  reaproveitado sem duplicar — mesmo usado em Produto Completo pra
+  Similares/Secundários), buscando em `GET /api/produtos-servicos` com
+  `tipo` respeitando o módulo Serviços ativo (`moduleOn("servicos") ?
+  "all" : "P"`, mesmo critério já usado em `usePedidoItens.ts`). Ao
+  escolher um resultado, o código é preenchido e o preview é buscado na
+  hora — o fluxo de bipe/digitação com Enter continua idêntico, a busca é
+  só um caminho alternativo pra quem não sabe o código de cor.
+- **Layout confirmado ao vivo pelo usuário (2026-08-06, print da Venda
+  #17838)**: badge "Atendente: CARLOS" no título, combobox Vendedor
+  ("CARLOS · #2 · CARLOS ALBERTO"), lupa no campo Produto/Serviço, botões
+  "Pedidos"/"O.S." separados, lista do Demonstrativo em altura fixa sem o
+  destaque do último item — tudo renderizando certinho. **Isso confirma só
+  o LAYOUT/render** — clicar de fato em "Pedidos"/"O.S." pra importar um
+  documento da lista, trocar o Vendedor e conferir que grava certo no
+  item, e usar a lupa de Produto/Serviço pra adicionar um item ainda não
+  foram clicados/exercidos ao vivo. Continua fazendo parte do "ciclo
+  completo nunca testado ao vivo" registrado no bullet acima pra esses
+  fluxos de ação (só a tela renderizada e a listagem de Pedidos/O.S.
+  pendentes, via chamada direta ao service, foram de fato confirmadas).
+
+### Checagem de Taxa (taxas_nfce) ao adicionar item — implementada 2026-08-06
+
+Pedido explícito do usuário: "buscar e implantar na tela de vendas, a
+rotina que verifica se existe a taxa no momento de adicionar um item" —
+rastreado ao vivo via agente de pesquisa (`FrmPafOFF.frm`), com o usuário
+corrigindo/direcionando a investigação em tempo real (localização exata:
+`Campo_Validate` → `RetornaDadosProduto`, não `FinalizaVenda` como
+inicialmente apontado).
+
+- **Tabela real usada: `taxas_nfce`** (não `Taxas` — essa outra só alimenta
+  um percentual exibido, nunca bloqueia no legado). Query fiel ao legado:
+  `SELECT TOP 1 1 FROM taxas_nfce WHERE Destino=<controle.uf> AND
+  Cod_Icms=<produto/serviço.cod_icms> AND Tipo_Mov='S01'` — `Destino` é a
+  UF do PRÓPRIO estabelecimento (não do cliente da venda).
+- **Mensagem de bloqueio** adaptada do literal do legado ("Operação não
+  Cadastrada na Tabela de Taxas ou Indisponível no ECF !"), removendo a
+  referência a "ECF" (impressora fiscal antiga, não existe nesta
+  arquitetura): "Esta operação não está cadastrada na Tabela de Taxas
+  (NFCe) para este produto/serviço e UF."
+- **Gating por `controle.emite_nf_comanda` — decisão explícita do usuário,
+  DIVERGE do legado de propósito**: no VB6 essa checagem roda SEMPRE,
+  incondicionalmente (confirmado: nenhuma leitura de `emite_nf_comanda`/
+  `IMPRIME_NFCE_NAO_FISCAL` dentro de `RetornaDadosProduto`/
+  `Campo_Validate` — bloqueia até empresa configurada como não-fiscal, uma
+  inconsistência real do legado). Perguntado via `AskUserQuestion`: usuário
+  escolheu **não replicar essa inconsistência** — só bloqueia quando
+  `controle.emite_nf_comanda=true`.
+- **Achado à parte, não portado**: a verificação equivalente na EMISSÃO de
+  NF (`GeraNFe`/`DAO_NFE.vb`) é mais fraca e diferente — um JOIN silencioso
+  só por `cod_icms` (sem `Destino`/`Tipo_Mov`), que omite o item do XML sem
+  nenhum aviso ao usuário quando não bate. Não implementado (fora do
+  pedido desta rodada, que era só o momento de adicionar item).
+- **Gambiarra client-specific identificada e descartada**: `controle.CGC =
+  "31184997000100"` hardcoded dentro de `FinalizaVenda` — decide só se o
+  comprovante impresso inclui referência a Pedido/O.S. vinculado; **sem
+  relação com a checagem de Taxa**, não portado (customização de uma
+  instalação específica, não regra geral).
+- **Implementação**: `cod_icms` adicionado ao retorno de
+  `_resolve_produto_completo`/`_linha_peca_completo` (`pedido_common.py`,
+  função compartilhada com Pedido Completo — mudança aditiva, não afeta o
+  outro consumidor). Nova função `_verifica_taxa_nfce` +
+  chamada em `_add_item_sync`, logo após resolver o produto/serviço
+  (`checkout_service.py`). 4 testes novos (`TestAddItemTaxaNfce`) — 61/61
+  no arquivo, 1534 no total (mesmos 67 pré-existentes não relacionados).
+- **Testado ao vivo contra GERDELL/BARESTELA** (`controle.emite_nf_comanda
+  =true`, `controle.uf='RJ'`, `taxas_nfce` só tem linhas pra `cod_icms`
+  '0'/'6'): produto com `cod_icms='0'` (tem taxa) → incluído com sucesso;
+  serviço com `cod_icms='999'` (todos os serviços deste banco, sem
+  nenhuma linha correspondente em `taxas_nfce`) → bloqueado corretamente
+  com a mensagem amigável. Dado de teste removido ao final.
+- **Achado colateral, não é bug desta feature**: com esta checagem ativa,
+  **nenhum serviço pode ser vendido em GERDELL/BARESTELA** enquanto não
+  houver uma linha em `taxas_nfce` para `cod_icms='999'`/`Tipo_Mov='S01'`/
+  `Destino='RJ'` — a tabela nunca foi populada pra esse código nesta
+  conexão de teste. Isso é esperado (a checagem está fazendo exatamente o
+  que devia), mas vale avisar antes de testar Serviços nessa conexão.
+
+### Referência de Pedido/O.S. no comprovante impresso — implementado 2026-08-06
+
+Achado de passagem enquanto rastreava a checagem de Taxa acima (mesma
+função `FinalizaVenda`, linhas vizinhas) — o usuário confirmou que, apesar
+de ser uma gambiarra client-specific (não relacionada à Taxa), ela
+**precisa ser implantada** também, fielmente (inclusive a exceção).
+
+- **Regra geral** (`FrmPafOFF.frm::FinalizaVenda`, linhas 10750-10775):
+  ao montar o texto complementar do comprovante, se a venda tem Pedido(s)
+  de Venda e/ou O.S. importados (`COMANDA_PED`/`COMANDA_os`), acrescenta
+  uma linha por documento: `"Pedido de Venda <n>"` / `"Ordem de serviço
+  <n>"`.
+- **Exceção fiel ao legado**: `controle.CGC = "31184997000100"` (CNPJ do
+  PRÓPRIO estabelecimento, não de cliente) suprime essas linhas por
+  completo — é uma customização de uma instalação específica, mas o
+  usuário pediu pra replicar exatamente assim (não é regra geral, é
+  exceção hardcoded mesmo).
+- **Implementação**: `frontend/src/utils/reciboTexto.ts` —
+  `CGC_SEM_REFERENCIA_PEDIDO_OS` (constante com o CNPJ, comparado após
+  normalizar pontuação de `empresa.cgc`), novos campos opcionais
+  `pedidosImportados`/`osImportadas` em `ReciboTextoDados`, linhas
+  adicionadas logo após Atendente/Data (mesma posição relativa do
+  legado), antes das mensagens complementares genéricas.
+  `frontend/app/checkout.tsx`'s `imprimirVendaAutomatico` já buscava
+  `pedidos_importados`/`os_importadas` de `GET /checkout/{comanda}` (dado
+  já exposto desde a Fase 2, usado pros badges do Demonstrativo) — só
+  precisou repassar pro `buildReciboTexto`, nenhum endpoint novo.
+- **Verificado por execução direta da função** (Node + Babel, fora do
+  bundler) com dado simulado — confirmado que a exceção do CNPJ
+  suprime as linhas e que qualquer outro CNPJ as inclui corretamente.
+  **Não testado ainda contra uma impressora física de verdade** (fluxo de
+  impressão automática em si já testado antes, essa parte específica não).
 
 ---
 
@@ -747,6 +1496,275 @@ valores já resolvidos); a resolução de tributação real está inteira no VB6
 fica pra Fase 4 (DANFCe em HTML). `EmiteNFSe` não existe na DLL — é
 orquestração VB6 local ainda não localizada.
 
+### Arquitetura de chamada de `FrmTraImpNFE` — esclarecido pelo usuário, 2026-08-06
+
+Informação de arquitetura (não implementação ainda) — como e de onde
+`FrmTraImpNFE` ("tela de impressão de nota fiscal") é chamada no legado,
+pra guiar como conectar as peças já portadas quando isso for retomado:
+
+1. **Faturar direto pelo Pedido de Venda ou O.S.** → gera a `comanda` →
+   em seguida chama `FrmTraImpNFE` já com a comanda carregada. Este é o
+   caminho **"Gerar Nfe Comanda"** do menu (ver abaixo) — o usuário abre a
+   tela de impressão de NF manualmente logo após faturar, pra emitir
+   NFe/NFSe daquela comanda específica.
+2. **Tela de Vendas (Checkout/`FrmPafOFF`)**, ao final da venda, **também**
+   chama `FrmTraImpNFE` — mas só pra **NFe ou NFSe**. Este é o mesmo
+   `FinalizaVenda` já rastreado nesta sessão (checagem de Taxa NFCe,
+   referência de Pedido/O.S. no comprovante) — ou seja, `FinalizaVenda` já
+   faz esse encaminhamento como parte do que ela trata.
+3. **Para NFCe especificamente, o caminho é DIFERENTE**: `FrmPafOFF` não
+   passa por `FrmTraImpNFE` — chama a função da DLL **direto no código**
+   (`Backon_NFe.GeraNFe`, dentro do próprio `FinalizaVenda`, já rastreado
+   e documentado acima na Fase 1). **Pedido explícito do usuário**: esse
+   trecho de código "tem que ser refatorado para ser usado no futuro
+   Pedido Bar" — ou seja, quando o Pedido Bar ganhar sua própria emissão
+   direta de NFCe (faturamento rápido tipo balcão), deve **reaproveitar**
+   essa mesma lógica de emissão direta (hoje só integrada ao Checkout via
+   `comanda_service._emitir_nfce_comanda_sync`/rota `POST /api/comandas/
+   {comanda}/emitir-nfce`), não duplicá-la. Fica registrado como
+   requisito de design pra quando o Pedido Bar for estendido — a função já
+   existe e é chamável de qualquer lugar que tenha uma `comanda`, só
+   precisa ser conectada lá também quando pedido.
+
+### Blueprint do futuro menu "Gestor Fiscal" — rastreio completo das 8 telas, 2026-08-06
+
+Menu real "Transações > Notas Fiscais" do MDI VB6, colado pelo usuário como
+referência pro futuro menu **"Gestor Fiscal"** desta migração. Rastreamento
+campo-a-campo de cada uma das 8 telas concluído nesta rodada (via os Click
+handlers reais do MDI, `mdirevendanv.frm`/`mdi_os_nova.frm`, tags/nomes de
+form confirmados contra `.vbp`). Nenhuma delas foi implementada ainda —
+isto é só o levantamento, seguindo "Legacy VB6 Source Reference".
+
+**Achado de processo, vale para qualquer rastreio futuro nesta área**: o
+`.vbp` "principal" mais antigo de Kontacto (`Kontacto.vbp`, 2014) está
+desatualizado — o `.vbp` realmente em uso é **`Kontacto\backon.vbp`**
+(modificado 2026-07-28, o mais recente de longe), cujo MDI de startup é
+**`mdi_os_nova.frm`** (não `mdirevendanv.frm`). Os handlers de menu batem
+entre os dois (mesmas rotas), mas `mdi_os_nova.frm`/`backon.vbp` tem
+roteamento extra mais novo (ex.: Sefin Nacional, ver item 5 abaixo) — ao
+rastrear esta área de novo, conferir os dois, preferindo `backon.vbp`
+quando divergirem. **Achado extra, mais geral**: `Geral\FrmTraNFe.frm`
+(1046 linhas) está **desatualizado/incompleto** — a versão realmente usada
+em produção (confirmado via grep no `.vbp`) é `NFe\frmtranfe.frm` (9009
+linhas). Ou seja, "Geral é sempre a versão canônica" (regra geral do
+projeto) tem uma exceção conhecida aqui — **sempre confirmar contra o
+`.vbp` antes de tratar uma cópia de `Geral` como definitiva**, especialmente
+se o tamanho do arquivo parecer pequeno demais pra complexidade esperada da
+tela.
+
+1. **Gerar Nfe Comanda** = `NFe\FrmTraImpNFE.frm` — emissão de NFe/NFSe a
+   partir de comanda já faturada. Click handler confirmado:
+   `Tra_nfs_Inf_Click → Exibe_Form(FrmTraImpNFE, "FrmTraImpNFe")`. Já
+   coberto pelas Fases 1/3/4 acima (hoje integrado via botões no Gestor de
+   Comandas, não uma tela dedicada própria ainda) — nenhum rastreio novo
+   necessário.
+
+2. **Recebimento** = `Geral\FrmtraRec.frm` (confirmado canônico via
+   `.vbp`, 14.069 linhas — o maior form do sistema). **Cobre as duas
+   coisas ao mesmo tempo**: digitação manual de nota de entrada
+   (opcionalmente incorporando um Pedido de Compra aberto, Quantidade
+   Pedida/Recebida linha a linha) **e** importação de XML de NF-e de
+   entrada (`Importar XML` → `Inicia_Importacao_XML`,
+   `Geral\Mdl_Imp_XML.bas`). **Isto substitui/confirma** a referência
+   anterior (`FrmConDev.frm`) em [[project_recebimento_mercadoria]] — o
+   form real é este.
+   - **Importação de XML é string-parsing manual** (`InStr`/recorte de
+     texto entre tags, sem MSXML/DOMDocument) — gambiarra de linguagem
+     (VB6 não tinha parser XML DOM confortável), não regra de negócio; a
+     migração deve usar parser XML real (`lxml`/`xml.etree`). Resolve
+     fornecedor por CNPJ (cria se não existir) ou cliente (fluxo de
+     devolução — nunca cria cliente automaticamente). Vincula produto do
+     XML ao cadastro via `pecas_xml` → `codigo_fab` → EAN (nessa ordem de
+     fallback); sem casar, marca pra cadastro manual. Bloqueia
+     reimportação da mesma NF (núm+série+fornecedor).
+   - **Regras reais**: crítica de recebimento (`CmdCritica_Click`) confere
+     cada total do cabeçalho contra `SUM()` dos itens — diferença dentro
+     de `Valor_Libera_Critica` é auto-ajustada, fora da tolerância
+     bloqueia. "Atualizar/Confirmar" promove staging (`nf_recebimento*`) →
+     definitivo (`n_fiscal*`), atualiza estoque só se
+     `tipo_mov.atualiza_est='S'`, calcula **custo médio ponderado**
+     (estoque anterior×custo anterior + recebido×custo recebimento, sobre
+     o total) e custo de reposição/inventário somando frete/seguro/
+     despesas/ICMS-ST rateados, atualiza preço de venda por margem quando
+     `Altera_Venda`+`politica_preco='E'` (Entrada — mesmo campo já portado
+     em Produto Completo, ver seção acima), rateia frete "fora da nota"
+     proporcional ao valor de cada item. **Baixa de Pedido de Compra**
+     (`BaixaPedidoCompra`) é FIFO por `pedido.codigo` mais antigo primeiro,
+     contra pedidos abertos (`situacao IN ('F','RP')`) do mesmo
+     fornecedor/produto. Vencimentos devem somar exatamente o valor total.
+   - **Tabelas**: staging `nf_recebimento`/`_itens`/`_icms`/`_custo`/
+     `_vencimento`/`_pedido`/`_frete`/`_num_serie`/`_liberado`; definitivo
+     `n_fiscal`/`n_fiscal_itens`/`n_fiscal_icms`/`n_fiscal_Custo`/
+     `nf_vencimento`/`pedido_nf`; auxiliares `pecas_xml`/`cfop_xml`/
+     `codbarra_auxiliar`/`ncm_cest`/`tipo_mov`; efeitos colaterais em
+     `pecas`/`pedido`/`pedido_itens`/`movimentacao`/`fornecedor`/
+     `veiculos`/`servicos`/`devolucao_itens`/`consignacao`. Nenhuma
+     chamada a `Backon_Controllers` neste fluxo.
+
+3. **Gerar Nfe** (avulsa) = **`NFe\frmtranfe.frm`** (9009 linhas — não a
+   cópia desatualizada `Geral\FrmTraNFe.frm`, ver aviso de processo acima).
+   Emite NF manualmente pra **qualquer tipo de movimentação** (combo
+   carrega todo `tipo_mov` ativo, entrada e saída) — e também **importa**
+   itens automaticamente de um documento já existente via 6 sub-rotinas:
+   `ImportaPedido`, `ImportaDevolucao`, `ImportaCompraPedido`,
+   `ImportaRequisicao`, `ImportaNF`, `ImportaComplementar` (nota
+   complementar a partir de Comanda).
+   - **Regras reais**: máximo de 4 itens tipo Serviço por NF; Série
+     obrigatória exceto em devolução; tipo de movimento com
+     `transf_pagar='S'` exige vencimentos lançados antes de fechar; alerta
+     de possível NF duplicada (mesma data+destinatário+movimento+valor);
+     reemissão de NF já com chave de acesso consulta o SEFAZ antes de
+     permitir nova tentativa; Cilindro/Estoque de terceiros ajusta
+     `pecas.estoque_for`/`estoque_cli` conforme `tipo_mov.estoque_
+     fornecedor`/`estoque_cliente` (entrada em consignação de/para
+     terceiros); `ExigeContraPartida` — certos tipos de movimento exigem
+     indicar a NF de origem, pra permitir cancelamento automático futuro.
+   - **Gambiarras confirmadas**: `ImportaComplementar` insere um endereço
+     **hardcoded** de uma instalação específica (`'RUA VITOR MEIRELES, Nº
+     221'`, Riachuelo, Rio de Janeiro) em `cliente_end` quando o cliente da
+     Comanda não tem endereço — fallback de uma instalação, não regra
+     geral (mesmo padrão do CNPJ hardcoded já implementado no Checkout,
+     ver seção acima). Tabelas temporárias por hostname (`tempdev`/
+     `tempREQ`, filtradas por `COMPUTADOR = NomeComputador`, com
+     `DROP TABLE`+`CREATE TABLE` a cada uso) — workaround pré-multiusuário
+     real, substituir por parâmetro de sessão/transação real, não portar
+     literalmente.
+   - **Tabelas**: rascunho `nf_aux`/`nf_aux_itens`/`nf_aux_vencimento`;
+     definitivo `n_fiscal`/`n_fiscal_itens`/`n_fiscal_vinculada`/
+     `nf_vencimento` (a criação do registro definitivo em si não foi
+     encontrada neste `.frm` — deve estar num `.bas` compartilhado, não
+     rastreado ainda); `pecas`, `consignacao`/`consignacao_baixa`,
+     `pedido_venda`/`pedido_venda_prod`/`pedido_nf`, `devolucao_itens`/
+     `movimentacao`, `requisicao`/`tempREQ`, `tempdev`, `cliente_end`,
+     `cfops`, `tipo_mov`, `devolucao_config`, `controle`/`controle_aux`.
+   - **DLL**: `Backon_Controllers.Nfe.GeraNFe` (emissão real, contingência
+     tratada) e `.ConsultaNFE` (status SEFAZ) — mesmo padrão já documentado
+     em [[project_nfse_dps_emissao]].
+
+4. **Despacho de NF's** (item extra do menu real, não fazia parte da
+   lista original de 8 que o usuário tinha citado de memória — mas existe
+   de fato no mesmo bloco de menu) = `Geral\FrmDesNf.frm` (806 linhas,
+   confirmado canônico, sem divergência de `.vbp`). Tela compacta:
+   registra dados de **transporte/despacho de uma NF já emitida** (não cria
+   nota nova) — data/hora de saída, placa, transportador (CNPJ/CPF com
+   dígito verificador), motorista, pesos bruto/líquido, volumes, espécie —
+   `UPDATE N_Fiscal SET ...` puro, nunca `INSERT`. Permite agrupar várias
+   notas na mesma "corrida" (mesma Placa+Data+Hora). "Excluir" zera os
+   campos de despacho, não apaga a NF. Código morto identificado
+   (`CmDaltera`/`List1`, handlers de controles que não existem mais no
+   desenho do form) — ignorar na migração.
+
+5. **Gestor NFSe** = `Geral\FrmManNSe.frm` (1367 linhas, confirmado
+   canônico). Tela lista+ação (sem detalhe separado): filtra comandas com
+   item de serviço e cruza com RPS/NFS-e já gerados numa lista com
+   checkbox por linha; 6 ações — Selecionar/Imprimir RPS/Gerar NFSe/Enviar
+   link por e-mail/Validar Estrutura RPS/Consultar Situação na Prefeitura.
+   - **Regras reais**: só permite gerar RPS/NFSe se a comanda tiver item de
+     serviço; bloqueia cliente sem endereço, CPF/CNPJ inválido, ou
+     município não cadastrado antes de qualquer ação; e-mail de link da
+     NFSe é montado por município (Rio, Niterói, Itaguaí, Duque de
+     Caxias, São Gonçalo — cada um com formato próprio de URL de consulta
+     pública —, e um formato Ginfes genérico pros demais).
+   - **Achado arquitetural importante**: o roteamento real do menu (em
+     `mdi_os_nova.frm`, o MDI mais novo) é **condicional**:
+     `If Dados_Controle_Configuracao.Sefin_Nacional Then FrmManNSeSefin
+     Else FrmManNSe` — ou seja, **as duas telas coexistem hoje no
+     legado**, não é que o DPS Nacional substituiu totalmente o fluxo
+     antigo de RPS municipal. Isto é relevante pra
+     [[project_nfse_dps_emissao]]: a Fase 3 já implementada (DPS
+     Nacional) cobre só o caminho novo; o caminho antigo (RPS por
+     prefeitura, `rps`/município a município) descrito aqui **não foi
+     portado** e pode ainda ser necessário pra instalações/municípios que
+     não migraram pro Sefin Nacional — não presumir que Fase 3 é
+     substituto completo sem confirmar com o usuário.
+   - **Tabelas**: `comanda`, `cliente`, `rps`, `n_fiscal` (via `rps.nfse`),
+     `movimentacao`/`servicos`, `controle`. **DLL**:
+     `Backon_Controllers.NFSe` — `ImprimeRPS`, `EnviarLoteRpsEnvio`/
+     `EnviarSaoGoncalo` (São Gonçalo tem classe própria,
+     `NFSe_SaoGoncalo`), `ConsultarNfseRpsEnvio`/`ConsultaSaoGoncalo`,
+     `ConsultarLoteRpsEnvio`.
+
+6. **Gestor NFCe** = `Geral\FrmTraNFC.frm` (2184 linhas, confirmado
+   canônico). Lista+ação mais crítica fiscalmente — cobre emissão/
+   consulta/cancelamento/inutilização de NFC-e com tratamento de
+   contingência. Checkboxes de situação (Transmitida/Não Transmitida/
+   Contingência/Cancelada/Inutilizada/Sem NFCe). Também funciona em **modo
+   picker**: aberta com `FormChamou = "FRMTRANFEVINCULADA"`, devolve itens
+   marcados pro `FrmTraNFe` (item 3) — reaproveitamento de tela pro fluxo
+   de Nota Fiscal de Devolução vinculada a uma NFC-e original.
+   - **Regras reais**: Cancelar/Inutilizar/Consultar bloqueados durante
+     contingência aberta (`Verifica_NFCe_Contingencia`, `NFe.bas`);
+     Cancelar exige todos os itens marcados já com NFC-e emitida;
+     Retransmitir/Validar Contingência exigem que todos os itens marcados
+     estejam no MESMO estado (misturar bloqueia); Inutilização exige
+     motivo com mínimo 15 caracteres e só roda após consultar o SEFAZ e
+     confirmar que a nota não existe lá; detecção de buracos na numeração
+     sequencial por série (`NFE_A_INUTILIZAR`, tabela temporária —
+     workaround de era VB6 sem window functions, mas a regra em si —
+     detectar e inutilizar lacunas — é obrigação fiscal real).
+   - **Suspeitas de copy-paste/gambiarra** (sinalizadas, não confirmadas):
+     captions de alguns checkboxes parecem herdados do clone de
+     `FrmManNSe` sem uso real aqui; um `Case` duplicado morto referencia
+     um `Campo(6)` que não existe nesta tela; um checkbox
+     ("somente tributados") é reaproveitado como flag de modo em outro
+     fluxo — uso duplo do mesmo controle pra dois propósitos não
+     relacionados.
+   - **Tabelas**: `comanda`, `comanda_nfce`, `cliente`, `movimentacao`/
+     `pecas`, `contingencia_nfce`, `Logs`, `inutilizacao_nfe`,
+     `mensagenspdv`, `forma_pagamento`. **DLL**: `Backon_Controllers.Nfe`
+     — `GeraNFe`/`GeraXML`, `ImprimeDanfe`/`ImprimeNFceNaoFiscal`,
+     `ValidaContingencia`, `RetransmiteNFCe`, `InutilizacaoNFe`,
+     `CancelaNFe` (via wrapper local `cancelanfce`, `NFe.bas`).
+
+7. **Contingência NFe** = `Geral\FrmConNFe.frm` (444 linhas, confirmado
+   canônico — única cópia em toda a árvore, sem risco de divergência).
+   Tela simples: abre/encerra um período de contingência (SEFAZ
+   indisponível). CRUD puro em `contingencia_nfe` (data/hora início+fim,
+   motivo 15-256 chars, tipo FS-IA/FS-DA). **Bloqueia abrir contingência
+   nova se já existir uma aberta** (`DATA_FIM IS NULL`); bloqueia excluir
+   contingência já encerrada. **Gambiarra confirmada**: o código legado usa
+   `WHERE DATA_FIM=NULL` (sintaxe SQL tecnicamente incorreta, só funciona
+   por `ANSI_NULLS OFF` legado) — a regra em si (só uma contingência aberta
+   por vez) é real, portar com `IS NULL` correto. **Sem chamada a DLL** —
+   é só um registro informativo local; o efeito real de "emitir em modo
+   contingência" deve ser lido por outra tela (emissão), não confirmado
+   nesta rodada.
+
+8. **Contingência NFCe** = `Geral\FrmConNFC.frm` (467 linhas, confirmado
+   canônico). Mesmo padrão exato de `FrmConNFe`, só que em
+   `contingencia_nfce`. Tipos divergem (FS=5 "Formulário de Segurança"/
+   Off-Line=9 — não confundir com os códigos 2/5 de NFe, são enums fiscais
+   distintos por modelo). **Achado a confirmar com o usuário**: a opção
+   "Formulário de Segurança" está oculta na tela (`Visible=0`) mas o código
+   ainda testa o valor normalmente — pode ser um recurso descontinuado de
+   propósito (só Off-Line usado na prática hoje) ou só um gap de UI; não
+   assumir nenhuma das duas sem perguntar quando esta tela for retomada.
+
+9. **Inutilização de Faixa NFe/NFCe** = `Geral\FrmTraINF.frm` (513 linhas,
+   confirmado canônico). A mais complexa das telas pequenas — inutiliza
+   formalmente junto à SEFAZ uma faixa de numeração não emitida. Escolhe
+   Tipo (NFe/NFCe), Série, Número Inicial/Final, Motivo (mín. 15 chars).
+   - **Regras reais**: bloqueia se Número Final > último número já emitido
+     da série; verificação crítica pré-envio — se qualquer nota dentro da
+     faixa já foi emitida, bloqueia com a lista de números encontrados
+     (nunca deixa inutilizar faixa com notas reais); dupla confirmação
+     explícita (processo é irreversível junto à SEFAZ); só grava em
+     `inutilizacao_nfe` se a resposta do SEFAZ não for erro.
+   - **Ponto em aberto**: `Pos_Sistema`/`Msg_Pos_Sistema` (globais usados
+     num bloqueio inicial da tela) não foram rastreados até `mdl_proc.bas`
+     nesta rodada — localizar antes de implementar essa checagem
+     específica, não assumir o significado.
+   - **Tabelas**: `controle`/`controle_nota_fiscal` (séries de NFe),
+     `controle_aux` (série/número NFCe), `n_fiscal`/`COMANDA_NFCE`
+     (checagem de notas já emitidas na faixa), `inutilizacao_nfe`
+     (registro final), `Logs` (auditoria, só NFCe). **DLL**:
+     `Backon_Controllers.Nfe.InutilizacaoNFe` — monta XML `<inutNFe>`
+     conforme layout SEFAZ, assina com certificado, transmite (serviço 6 =
+     inutilização). Nota: existe também uma cópia quase idêntica dessa
+     função em `NFe2.vb` — mesmo padrão de versionamento paralelo já visto
+     em outras funções desta DLL, conferir qual delas está de fato em uso
+     antes de portar.
+
 ### Fase 1 — Motor de emissão de NFC-e (modelo 65), síncrona — ✅ implementada
 - **`backend/services/nfe_fiscal_common.py`** (novo) — extraído de
   `nfe_cancelamento_service.py`: `carregar_certificado_sync`, `assinar_xml`,
@@ -963,6 +1981,97 @@ real de DANFSe v2.0 colado (PDF) pra referência de layout.
     VB6/VB.NET, revisitar esta seção (mesmo processo de sincronização do
     CLAUDE.md §12) — não presumir que `CalculaIBSCBS`
     (`Geral\mdl_proc.bas`, linha 36432) já alimenta esses campos hoje.
+  - **Atualização 2026-08-05 — equipe VB6/VB.NET terminou, fonte
+    re-rastreada do zero** (mesma disciplina do CLAUDE.md §12): confirmado
+    por `ls -la` que `Geral\mdl_proc.bas` e `Geral\Mdl_Imp_XML.bas` foram
+    modificados depois da sessão anterior (2026-07-27/28), e 3 arquivos
+    VB.NET também (`view_nfse.vb`, `DAO_NFE.vb`, `NFSeDPS.vb`). A seção
+    "TRIBUTAÇÃO IBS/CBS" do `DanfeNFSE` **não imprime mais "-"** — imprime
+    valores reais, lidos por parsing de tags de dentro do XML de RETORNO
+    do ambiente nacional (`tb("path_xml_nfse")`, não do XML que o sistema
+    local monta antes de enviar).
+    - **`CalculaIBSCBS`** (`mdl_proc.bas:36433-36985`, cresceu de ~36432
+      pra essa faixa) agora calcula de verdade: IBS-UF, IBS-Município e
+      CBS como 3 bases/alíquotas independentes (não uma alíquota
+      combinada), com diferimento e "alíquota efetiva de redução" por
+      tributo, 4 variantes de regime monofásico ad rem (`gMonoPadrao`/
+      `gMonoReten`/`gMonoRet`/`gMonoDif` — usado por produtos tipo
+      combustível/bebida por volume), e um grupo opcional "Tributação
+      Regular" (`gTribRegular`, provável comparação alíquota-cheia vs.
+      reduzida durante a transição da reforma — inferência, não confirmada
+      contra a Nota Técnica oficial). Grava o resultado como XML
+      serializado por item (`n_fiscal_itens.XML_IBS_CBS`/
+      `comanda_rtc.XML_IBS_CBS`) + agregado (`N_FISCAL.XML_TOT_IBS_CBS`/
+      `COMANDA.XML_TOT_IBS_CBS`) — não em colunas tipadas por campo.
+    - **Assimetria bens × serviços, achado mais importante**: pra NF-e/
+      NFC-e (bens), o XML completo já calculado (`XML_IBS_CBS`) é embutido
+      literalmente no item da nota (`DAO_NFE.vb`, ~linha 5193). Pro DPS de
+      serviço (NFS-e), `DAO_NFE.vb::Dados_Servico` (linhas 961-1030) manda
+      só `CST`+`cClassTrib`+indicador de operação — **nenhum valor
+      monetário de IBS/CBS é enviado no envio da DPS**. Hipótese (não
+      confirmada): o Ambiente de Dados Nacional calcula o valor pro lado
+      serviços, e o sistema só lê de volta do XML de retorno pra imprimir
+      — precisa confirmação antes de decidir se o backend Python
+      precisaria replicar a fórmula de valor pra serviços ou só a
+      classificação fiscal.
+    - **Imposto Seletivo (IS): schema pronto em 7 tabelas
+      (`TAXAS`/`TAXAS_NFCE`/`N_FISCAL_ITENS`/`NF_AUX_ITENS`/
+      `NF_RECEBIMENTO_ITENS`/`COMANDA_NFCE_DETALHE`/`comanda_rtc`,
+      colunas `CST_IS`/`CLASSTRIB_IS`/`BASE_IS`/`ALQT_IS`/`UNIDADE_IS`/
+      `VALOR_IS`), mas o ÚNICO trecho que os referencia dentro de
+      `CalculaIBSCBS` está COMENTADO** (linhas 36499-36502) — a equipe
+      preparou terreno, não ligou a lógica ainda. **Não portar IS ainda**
+      — aguardar a equipe terminar essa parte também.
+    - Tela de manutenção real já existe: `FrmManTaxas.frm`/
+      `FrmManTaxNFC.frm` ganharam campos de UI (grid `RTC`) pro usuário
+      parametrizar as alíquotas por perfil (`cod_icms`, mesma FK que já
+      resolve ICMS/IPI hoje — não é uma tabela de código de tributação da
+      reforma separada).
+    - **Possível bug real na fonte, não confirmado**: `gMonoDif`
+      (`mdl_proc.bas:36846`) usa `BASE_ADREM_MONO` em vez de
+      `BASE_ADREM_DIFERIMENTO` (atribuída na linha imediatamente anterior)
+      — pode ser intencional ou copy-paste. Não replicar sem perguntar.
+    - **`indDest`/`finNFSe` fixos em `"0"` hardcoded** no envio do DPS
+      (`DAO_NFE.vb:1016/1018) — confirmar se é definitivo antes de portar.
+    - Análise completa (com todas as citações de linha) rodada via agente
+      de pesquisa 2026-08-05 — ver memória `project_ibs_cbs_vb6_pendente`
+      pro relatório na íntegra. **Ainda não portado pro backend Python**
+      — próximo passo, quando/se pedido, é decidir a arquitetura só depois
+      de resolver a pergunta em aberto da assimetria bens×serviços acima.
+    - **Respostas do usuário ao relatório, mesmo dia (2026-08-05)**:
+      1. **"Terminado" é só POR ENQUANTO** — "será mexido novamente até o
+         fim desse ano" (a Reforma Tributária continua em transição em
+         2026, esperar novas rodadas de mudança nesta mesma área — não
+         tratar como definitivo).
+      2. **Assimetria bens×serviços CONFIRMADA, e a causa raiz é diferente
+         da minha hipótese**: não é o Ambiente de Dados Nacional quem
+         calcula o valor pros serviços — **é o próprio sistema local**
+         ("o sistema, que é como está hoje"), a `CalculaIBSCBS` já está
+         pronta/preparada pro cálculo de serviços também. O que acontece é
+         que, **durante a fase de transição da reforma**, o layout do XML
+         de envio da DPS **deliberadamente só informa CST/cClassTrib**,
+         sem mandar o valor monetário calculado — decisão de leiaute da
+         fase de transição, não limitação técnica nem cálculo feito por
+         outro lugar. Deve mudar quando a fase de transição acabar.
+      3. **Imposto Seletivo (IS)**: existe e está preparado (schema +
+         function pronta pra ligar), mas **ainda não tem legislação nem
+         alíquota definida** — não é falta de trabalho da equipe, é
+         esperar definição externa (Comitê Gestor/legislação federal).
+         "Pode entrar a qualquer momento" — continuar monitorando, não
+         assumir prazo.
+      4. **Tributação monofásica (o "possível bug" do `gMonoDif`) segue
+         em aberto, sem trabalho ainda — mas SEM data mínima pra começar**:
+         monofásico é especificamente pra combustíveis. **Correção
+         importante do usuário**: a ENTRADA EM VIGOR da reforma dos
+         monofásicos é que foi adiada pra 01/11/2026 — isso só dá mais
+         prazo, **não é uma trava pra começar a mexer só depois dessa
+         data**. O usuário pode pedir pra revisitar isso antes, inclusive
+         "já no próximo mês" — não interpretar 01/11/2026 como "não tocar
+         antes disso". A pergunta sobre se `BASE_ADREM_MONO` em `gMonoDif`
+         é bug ou intencional, e a inferência sobre `gTribRegular`, ficam
+         em aberto até o usuário (ou a equipe VB6) trazer mais contexto
+         sobre os monofásicos — pode ser a qualquer momento, não
+         necessariamente depois de 01/11.
   - **Tabela `dps` — tentativa de migrar pra ela foi revertida no mesmo
     dia, pedido explícito do usuário**: `DanfeNFSE` (a rotina de
     IMPRESSÃO) lê de `dps` (`SELECT * FROM comanda, dps WHERE
@@ -10313,3 +11422,4852 @@ abrir o `.xlsx` gerado pra conferir as 3 abas; conferir que o card
 Master com o módulo ligado, que o total de Abertos e o saldo a faturar
 batem com a lista real, e que some quando não há permissão/módulo
 desligado.
+
+---
+
+## Assistência Técnica — Atendimento de Campo
+
+**Status: 🟡 Fundação (13/08) + Tela de Atendimento/check-in-check-out
+(14/08) + Lista de Atendimento/Auxiliar/exibição de check-in-check-out
+(14/08, mesma sessão) implementadas e TESTADAS AO VIVO** — múltiplos
+equipamentos por OS + Motor de Layout na O.S. Completa (13/08); check-
+in/check-out por geolocalização + leitura de QR Code + tela mobile enxuta
+`os-atendimento.tsx` (14/08); em seguida, mesma sessão: check-in/check-out
+agora exibidos na O.S. Completa (card + link "Ver no mapa"), campo opcional
+"Auxiliar do técnico" (`os.auxiliar_tecnico`), e `os-lista.tsx` virou
+também a "Lista de Atendimento" — funciona no mobile agora (não mais
+web-only), toque na linha abre O.S. Completa ou Atendimento conforme a
+plataforma, filtros de Técnico/Auxiliar, nova permissão
+`OS_COMP.VER_TODAS` restringindo visibilidade por padrão a "só minhas OS
+(técnico/auxiliar)", cards responsivos com pills, filtros em acordeon, e
+modal de histórico de equipamento por linha. Ver `AssistenciaTecnicaCampo.md`
+seções 6 e 7 pro detalhe técnico completo. O que falta — **Lista de
+Atendimento por data/calendário** (a variante original do documento,
+substituída por essa extensão do `os-lista.tsx` genérico — se o usuário
+quiser a visão por calendário específica, é trabalho novo), sincronização
+offline, fluxo completo de auxiliar (editar com credencial do titular) —
+segue EM ANÁLISE, não implementar sem liberação explícita. **Teste real
+de câmera/GPS em dispositivo físico ainda não feito** (só backend 100%
+verificado via curl contra ARGEN-TESTE + frontend confirmado por
+`tsc`/bundle limpo). Ver `AssistenciaTecnicaCampo.md` (raiz do repo) pro
+documento completo de regras de negócio, e memória
+`project_assistencia_tecnica_campo` pro resumo. Cliente motivador: ARGEN
+Ar Condicionado (conexão de teste dedicada `ARGEN TESTE`, ver
+`reference_conexoes_teste`).
+
+### Decisões de negócio fechadas em 2026-08-13, user-directed
+
+- **Transições de situação no mobile**: só **Fechar** liberado pro técnico
+  em campo (ao concluir o atendimento). Cancelar/Faturar/Reabrir continuam
+  exclusivos da retaguarda (O.S. Completa web, `OS_COMP.SITUACAO`) — ainda
+  não implementado no app mobile (o app de campo em si não existe ainda,
+  só a fundação de backend/O.S. Completa abaixo).
+- **Orçamento recusado/sem resposta**: OS fica aguardando manualmente, sem
+  prazo automático — supervisor cancela na mão quando decidir
+  (`status_os` de aguardando aprovação já existe no cadastro, ver abaixo).
+  Nenhum job/checagem diária necessário.
+- Offline (sync/conflito) e o desenho da "tela de atendimento" mobile
+  continuam deliberadamente adiados pra quando a implementação do app
+  mobile realmente começar — não são lacuna esquecida.
+
+### O que já estava implementado (achado ao retomar a sessão, não desta rodada)
+
+- **QR Code por equipamento** — `equipamentos_service._gerar_qrcode_sync`
+  + `GET /api/equipamentos/{codigo}/qrcode`, impresso a partir do Cadastro
+  de Equipamento (`equipamentos.tsx`). Já existia antes desta análise.
+- **`status_os`** (tabela auxiliar, cadastro CRUD já existente) já está
+  populada em `ARGEN-TESTE` com os valores reais do fluxo de campo
+  (confirmado ao vivo): Aguardando aprovação do Orçamento, Aguardando
+  Liberação de Execução, Pendente, Em execução, Executado, Cancelado.
+
+### Fundação implementada e testada ao vivo nesta rodada (2026-08-13)
+
+Migração de "uma OS tem um único equipamento" (`os.numero_de_serie`,
+coluna escalar) para "uma OS pode ter vários equipamentos" — ver
+`AssistenciaTecnicaCampo.md` seção 5/regra 14. **Tabela nova
+`os_equipamento`** (codigo, os, equipamento FK `equipamentos.codigo`,
+numero_de_serie, principal, situacao, defeito_reclamado/
+servico_executado/servico_a_executar/diagnostico, status_os FK
+`status_os.codigo` — nível equipamento, distinto de `os.status_os` nível
+OS), migração idempotente + **backfill automático** a partir de
+`os.numero_de_serie` (registrada em `schema_ensure.py::_MIGRACOES`,
+mesmo mecanismo integral de todas as outras migrações do projeto).
+`os.numero_de_serie` não foi removida, vira campo histórico.
+
+- **Backend**: `backend/services/os_equipamento_service.py` (CRUD:
+  listar/vincular/atualizar/cancelar — soft, nunca delete físico, mesmo
+  padrão de `os_produto`) + rotas em `os_completo.py`
+  (`GET/POST /api/os-completo/{codigo}/equipamentos`,
+  `PUT .../equipamentos/{item_codigo}`,
+  `POST .../equipamentos/{item_codigo}/cancelar`, log de auditoria
+  `EQUIP_ADD`/`EQUIP_CANC`). Permissões `OS_COMP.EQUIP_ADD`/
+  `OS_COMP.EQUIP_CANC` (vincular/cancelar são ações exclusivas da
+  retaguarda, sem equivalente mobile nesta fase). 17 testes unitários em
+  `test_os_equipamento_service.py`.
+- **Frontend**: `useOSEquipamentos.ts` + `OSEquipamentoCard.tsx`
+  (card por equipamento: Status/Defeito Reclamado/Serviço Executado/
+  Serviço a Executar/Diagnóstico + Salvar/Cancelar por linha), integrados
+  em `os-geral.tsx` — vincular reaproveita `EquipamentoSearchModal` já
+  existente (escopado por cliente).
+- **Motor de Layout (Formulário Dinâmico) integrado à O.S.** —
+  `LayoutPreenchimentoModal` já reaproveitado tal e qual (mesmo componente
+  do módulo Agenda), `entidade=O.S.`, `codentidade=osId`, botão no
+  cabeçalho (`PedidoHeader.onFormularios`) gated por
+  `OS_COMP.FORMULARIOS`. Cobre a regra 15 (checklist do atendimento) —
+  preenchimento no nível da OS inteira, como decidido no documento.
+
+### Bug real encontrado e corrigido no teste ao vivo (2026-08-13)
+
+**Fan-out no backfill**: `equipamentos.numero_de_serie` é documentado como
+único globalmente, mas nunca foi de fato uma constraint de banco — dado
+legado sujo tem duplicatas reais (confirmado ao vivo em `KONTACTO-TESTE`:
+15 equipamentos com `numero_de_serie='1'`). O `LEFT JOIN equipamentos e ON
+e.numero_de_serie = o.numero_de_serie` original casava com TODOS os
+duplicados, multiplicando 1 OS em N linhas de backfill (OS 20494 virou 15
+linhas, todas `principal=1`). Corrigido trocando o JOIN por uma subquery
+correlacionada que resolve o `MIN(codigo)` entre os duplicados —
+determinístico, no máximo 1 equipamento por OS no backfill, sem perder
+dado (ainda cria a linha com `equipamento=NULL` se não achar nenhum
+match). Teste novo cobrindo o cenário em
+`test_os_equipamento_service.py::test_backfill_nao_faz_fan_out_com_numero_de_serie_duplicado`.
+
+### Testado ao vivo (2026-08-13)
+
+Contra `ARGEN-TESTE` (OS #294) e `KONTACTO-TESTE` (OS #20494, verificação
+específica do backfill): criação da tabela + backfill, vincular
+equipamento (com resolução de nome/marca/modelo via JOIN), bloqueio de
+vínculo duplicado, vincular um segundo equipamento na mesma OS, atualizar
+campos + status, cancelar (soft, confirmado que não usa `DELETE`),
+confirmar que o backfill não corrompe mais com número de série duplicado.
+Suíte completa (1822 testes) sem regressão (1 falha pré-existente e não
+relacionada em `test_cnab_itau_service.py`, teste com data hardcoded).
+`tsc --noEmit`: baseline de 12 erros pré-existentes inalterado, nenhum
+erro novo introduzido pelas telas/componentes desta feature.
+
+**Achado operacional, não é bug de código**: durante o teste, o processo
+supervisionado do backend (porta 8081, sem `--reload`) foi encontrado com
+requisições a banco travadas/represadas (nenhuma chamada tocando o banco
+completava, mesmo após 90s). Reiniciado (mesmo procedimento de
+`feedback_backend_supervisor_duplicado`) e voltou a responder normalmente
+em segundos — causa raiz não investigada a fundo (pode ter sido conexão
+travada represada de sessão anterior); se acontecer de novo, considerar
+investigar timeout/pool de conexão do lado do `pymssql`.
+
+### Fora do escopo desta rodada (não implementado)
+
+- **Check-in/check-out por geolocalização** (regra 2) — nenhuma tabela/
+  endpoint/tela criada ainda.
+- **Lista de Atendimento** (tela inicial do app do técnico, regra 6/7/10)
+  — não iniciada.
+- **Tela de atendimento mobile** (layout completo, regra 1/9) — desenho
+  adiado deliberadamente, ver decisões acima.
+- **Offline** (regra 4) — adiado deliberadamente, ver decisões acima.
+- **Técnico auxiliar** (regra 5/11) — não iniciado.
+- **Fechar a OS a partir do mobile** (decisão desta rodada: só Fechar,
+  ver acima) — ainda não implementado, não existe app/tela mobile de
+  atendimento pra expor essa ação ainda.
+- **Cadastro dos valores de `status_os` por equipamento** ("Não
+  atendido", etc., ver seção 5 do documento) — o mecanismo (coluna FK)
+  está pronto, falta só popular os valores adicionais na tabela auxiliar
+  quando o cliente/negócio definir o catálogo completo.
+
+---
+
+## Painel de Relatórios (VB6) — Rastreio Completo por Grupo
+
+**Status: rastreio concluído (2026-08-07), implementação NÃO iniciada.**
+Motivado por um screenshot do painel `FrmRelatorios` (menu "Relatórios" do
+sistema legado) — usuário pediu pra rastrear todos os relatórios por grupo
+antes de expandir a tela `frontend/app/(tabs)/relatorios.tsx` (hoje só 6
+cards em 3 grupos: Caixa, Margens, Pré Vendas — ver CLAUDE.md > "Card List
+Ordering" > "Relatórios groups" pro padrão de grupos alfabéticos já
+adotado nessa tela).
+
+**Fonte**: `C:\Desenv\VB6\SQLSERVER\Geral\FrmRelatorios.frm` (único form
+com esse nome na árvore — confirmado via busca, não há variante por linha
+de negócio como em outros forms). Form MDIChild com 15 `Frame3(n)`
+(grupos), cada um contendo `CommandButton`s cuja propriedade `Tag` é o
+nome do form de destino (confirmado cruzando com o `Call
+Exibe_Form(FormDestino, "...")` de cada `_Click` handler — em praticamente
+todos os casos `Tag` bate exatamente com o form chamado no handler).
+
+### Regras de visibilidade/gating encontradas no `Form_Load`/`SetaCores` (não são bugs — regras reais do legado)
+
+- **Grupo "Combustíveis" (Frame3(10))** só fica visível se
+  `Dados_Controle_Configuracao.Posto = True` — mesmo flag de módulo
+  Posto já usado neste app (`controle_configuracao.Posto`). Por isso não
+  aparece no screenshot colado pelo usuário (empresa sem módulo Posto).
+- **Largura do form inteiro** varia com `Dados_Controle_Configuracao.kash`
+  (módulo "KA$H", não presente/mapeado ainda nesta migração) — `Width =
+  15200` (revela as colunas mais à direita: Contas a Pagar, Contas a
+  Receber, Movimentação, Previsão) vs `Width = 9100` (essas colunas ficam
+  fora da área visível do MDIChild). Não confundir com um `Visible=False`
+  — é só recorte de viewport; o dado clicável some do alcance do mouse mas
+  os controles continuam existindo.
+- **Permissão por botão**: no load, lê `SELECT * FROM permissoes WHERE
+  nome LIKE '%rel_%' AND (sistema=CodSistema OR sistema=CODKASH) AND
+  classe=ClasseAtual` e desabilita (`.Enabled = False`) todo
+  `CommandButton` cujo `Name` não aparecer nessa lista — granularidade é
+  **por botão individual** (nome do controle = nome da permissão), não por
+  grupo/Frame. Usuário `KONTACTO` (master) pula esse bloco inteiro
+  (`Exit Sub` antes do loop) — mesmo padrão já usado nesta migração pra
+  master bypassar `can()` (ver CLAUDE.md > "Master User Has Full
+  Permission").
+- **Caixa Analítico** (`Frm_Rel_CAT`) tem uma segunda trava, além da
+  permissão: só fica habilitado se
+  `Dados_Controle_Configuracao.caixa_analitico = True` (ou usuário
+  master) — já replicada nesta migração (tela atual usa permissão
+  `REL_CX_ANALIT.ABRIR`, mas **não** replica esse segundo flag de módulo;
+  registrar como divergência a confirmar se vale a pena portar).
+- **`VerificaAreaAtuacao`** é chamado antes de abrir "Fechamento de Caixa"
+  (`Rel_Cai_Fca`) e "Margem de Lucro x DAV" (`Rel_Pec_MLd`) — gate de área
+  de atuação do usuário logado, não rastreado em detalhe nesta rodada (fora
+  do escopo do pedido, que era só o rastreio dos relatórios em si).
+- **Botão morto/oculto**: `Rel_Pec_IPN` ("Itens Pendentes Nº de Série",
+  Tag=`FrmNDSPend`) está declarado com `Visible = 0` fixo, fora de
+  qualquer `Frame` — nunca aparece na tela, é código morto (ou recurso
+  desligado deliberadamente). Não portar sem confirmação.
+- **Botão sem controle correspondente**: existe um handler
+  `Rel_Rec_ECO_Click` (abre `FrmEnvCob`, Envio de Cobrança) no código, mas
+  **nenhum** `CommandButton Rel_Rec_ECO` está declarado no form — handler
+  órfão (botão removido da tela em algum momento, handler ficou pra trás).
+  Envio de Cobrança já existe nesta migração dentro do módulo Bancos (ver
+  memória `project_bancos_cobranca`), então não é uma lacuna real.
+- **Hardcode de CNPJ específico de cliente** (gambiarra, não regra de
+  negócio — ver CLAUDE.md > "Não replicar truques VB6"): dentro do grupo
+  Combustíveis, "Contagem de Abastecimentos" e "Mapa de Fechamento Diário"
+  checam `SELECT cgc FROM controle` e, se `cgc = '20786044000104'`, abrem
+  um form alternativo (`FrmRelComPos`/`FrmFecDia2`) em vez do padrão
+  (`FrmResAba`/`FrmFecDia`) — específico de uma instalação, não portar.
+
+### Grupos e relatórios (Caption exibido → controle VB6 → form de destino)
+
+**Caixa**
+- Apuração Vendas - DRE → `Rel_Cai_APV` → `FrmRelAPV`
+- Descontos → `Rel_Cai_Des` → `FrmRelDes`
+- Entrada de Caixa → `Rel_Cai_Eca` → `FrmRelEntCaixa`
+- Fechamento de Caixa → `Rel_Cai_Fca` → `frmFechaCaixa` (gate `VerificaAreaAtuacao`) — ✅ já migrado (`relatorio-caixa.tsx`)
+- Recebimento de Cartões → `Rel_Cai_rdc` → `FrmRelCar`
+- Resumo de Venda → `Rel_Cai_Res` → `FrmRelFec`
+- Saída de Caixa → `Rel_Cai_Sca` → `FrmRelSaiCaixa`
+- Cartões x Vencimento → `Rel_Cai_Ved` → `FrmRelCarVen`
+- Caixa Analítico → `Frm_Rel_CAT` → `FrmTotCaixa` (gate extra `caixa_analitico`) — ✅ já migrado (`relatorio-caixa-analitico.tsx`)
+
+**Vendas**
+- Itens por Funcionário → `Rel_Pec_Ivf` → `FrmRelVenFun`
+- Ranking de Vendas → `rel_pec_rkv` → `FrmRkgCliPro`
+- Vendas x Custo → `Rel_Pec_PVC` → `FrmRelPVC`
+- Venda por Cliente → `Rel_Pec_Vci` → `FrmRelVenCli`
+- Venda por Comanda → `Rel_Pec_Cvc` → `FrmRelComVen`
+- Venda por Produto → `Rel_Pec_Vpr` → `FrmRelVenPro`
+- Venda por Nível → `Rel_Pec_Vpn` → `FrmRelVenNiv`
+- Vendas por Nota → `rel_pec_csn` → `FrmRelCSN`
+- Venda por Vendedor/Executor O.S → `Rel_Pec_VGV` → `FrmRelVenNivFun` (seta `TipoRelatorio = "V"` antes de abrir)
+- Venda por Região/Segmento → `Rel_Pec_VRS` → `FrmVenTot`
+
+**Fiscal**
+- Apuração Fiscal → `Rel_Nfi_AFI` → `FrmCalImp`
+- Apuração Pis Cofins → `Rel_Pec_RPC` → `FrmRelPisCofins`
+- Listagem Notas Fiscais → `Rel_Nfi_Nfc` → `FrmRelNF`
+- Notas Recebidas → `Rel_Nfi_Rec` → `FrmRelNFRec`
+
+**Clientes**
+- Inatividade de Clientes → `Rel_Pec_CSM` → `FrmRelCliSMV`
+- Listagem → `Rel_Cli_Cli` → `FrmRelClie`
+- Mala Direta → `Rel_Cli_Mal` → `FrmMalDir2`
+
+**Apuração das Comissões**
+- Comissão Individual → `Rel_Com_Api` → `FrmCalcComissao`
+- Comissão Geral → `Rel_Com_Apc` → `FrmRelComissao2`
+- Por contas à Receber → `Rel_Com_CPF` → `FrmRelComRec`
+- Comissão por Função → `Rel_Com_CCR` → `FrmRelComissao`
+
+**Margem**
+- Margem de Lucro → `Rel_Pec_MLC` → `FrmRelPecMLC` — possível equivalente já migrado: `relatorio-margem-lucro.tsx` (não confirmado campo-a-campo, só o nome/propósito batem)
+- Margem de Lucro x DAV → `Rel_Pec_MLd` → `FrmResDAV` (gate `VerificaAreaAtuacao`)
+
+**Estoque**
+- Estoque → `Rel_Pec_Est` → `FrmRelPecNiv`
+- Estoque por Nível → `Rel_Pec_EPN` → `FrmRelFecEst`
+- Estoque Terceirizado → `Rel_Pec_Cab` → `FrmRelCAb`
+- Etiqueta de Produto → `Rel_Pec_Epr` → `FrmEtqProd`
+- Produtos Reservados → `Rel_Pec_Pre` → `frmRelPecRes`
+- Movimentação de Itens → `Rel_Nfi_Mov` → `FrmRelMovCli`
+- Movimentações por Nível → `rel_pec_mpn` → `FrmRelVenLojas`
+
+**Compras**
+- Relatório de Compra → `Rel_Pec_com` → `FrmRelEstNiv` (nome do form não bate com o rótulo — confirmado assim na fonte, não é engano de transcrição)
+
+**Pré Venda**
+- Itens do Pedido → `Rel_Pec_Ite` → `FrmItePed`
+- Pedidos Pendentes → `rel_cli_pep` → `FrmRelPeP`
+- Custo de O.S → `Rel_Ord_COs` → `FrmCustoOS`
+- Itens Vendidos O.S. → `Rel_Pec_IOB` → `FrmRelVenOsB`
+- Ordem de Serviço → `Rel_Ord_Ord` → `FrmRelOs` — possível equivalente já migrado: `relatorio-os.tsx`
+- O.S. Não Faturadas → `Rel_Ord_ONf` → `frmRelOSRes`
+- Resumo Atendimento → `Rel_Ord_OSS` → `FrmRelOSs`
+- Resumo Mov da O.S. → `Rel_Ord_RMO` → `FrmResRos`
+
+**Combustíveis** (grupo inteiro só visível com módulo Posto ligado — ver regras de gating acima; não aparece no screenshot)
+- Contagem de Abastecimentos → `rel_cbo_aba` → `FrmResAba` (ou `FrmRelComPos` — hardcode de CNPJ, não portar)
+- Encerrantes → `rel_cbo_enc` → `FrmRelEnc`
+- Controle de Estoque → `rel_cbo_cec` → `FrmRelVCE`
+- Livro de Movimentação - LMC → `rel_cbo_lmc` → `FrmRelLMC`
+- Mapa de Fechamento Diário → `rel_cbo_mfd` → `FrmFecDia` (ou `FrmFecDia2` — hardcode de CNPJ, não portar)
+- Movimentação por Bomba → `rel_cbo_mov` → `FrmRelMovBomba`
+- Movimentação de Combustível → `rel_cbo_mdc` → `FrmMovCom`
+- Relatório Gerencial → `rel_cbo_reg` → `FrmRelCXC`
+- Venda por Cliente → `rel_cbo_vpc` → `FrmComPos`
+
+**Movimentação**
+- Cheques não compensados → `Rel_Flu_Che` → `FrmRelCnp`
+- Conta corrente por Classe → `rel_flu_ccc` → `frmRelDespCat`
+- Lançamentos por Classe → `Rel_Flu_Lcc` → `frmRelCat`
+- Lançamentos por Centro Custo → `Rel_Flu_CCL` → `frmRelCaC`
+- Lançamentos por Documento → `Rel_Flu_Lcd` → `FrmRelDoc`
+- Movimentação de Contas → `Rel_Flu_Mov` → `FrmRelMov`
+- Movimentação por Favorecidos → `Rel_Flu_Mvf` → `FrmRelMFav`
+- Mov Favorecido Extrato → `Rel_flu_MFE` → `FrmRelMFavAM`
+- Receitas x Despesas por Classe → `Rel_Flu_Rdc` → `FrmRelCla`
+- Receitas x Despesas por Mês → `Rel_Flu_Rdm` → `FrmRelCla2`
+- Receitas x Despesas por Favorecido → `Rel_Flu_Rdf` → `FrmRelFav`
+- Saldos Atuais das Contas → `Rel_Flu_Sal` → `FrmRelSal`
+- Consolidado Empresas → `Rel_Flu_CEm` → `FrmGerEmp` (aparece esmaecido no screenshot — provável botão sem permissão concedida ao usuário logado, não módulo desligado)
+- Relatório Gerencial → `Rel_Flu_rge` → `FrmResFCX`
+
+**Previsão**
+- Previsões por Favorecido → `Rel_Flu_Prf` → `FrmRelPFav`
+- Previsão de Lançamentos → `Rel_Flu_Pre` → `FrmRelPRL`
+
+**Contas a Receber**
+- Relatório de Cartões → `Rel_Rec_rdc` → `FrmRelCarVen` (mesmo form de destino de "Cartões x Vencimento" do grupo Caixa — reaproveitado, confirmado assim na fonte)
+- Duplicatas à Receber → `Rel_Rec_Dre` → `FrmRelDRe`
+- Duplicatas Recebidas → `Rel_Rec_Rec` → `FrmRelDUR`
+- Impressão de Boletos → `Rel_Rec_Bol` → `FrmRelBol`
+- Previsão de Recebimento → `Rel_Rec_Pre` → `FrmRelPreRD`
+
+**Contas a Pagar**
+- Duplicatas à Pagar → `Rel_Pag_Pag` → `FrmRelDPa`
+- Duplicatas à Pagar por Banco → `Rel_Pag_Pgb` → `FrmRelBanP`
+- Duplicatas Pagas → `Rel_Pag_Dpg` → `FrmRelDUP`
+- Pagamentos por Data → `Rel_Pag_Ppg` → `FrmRelPrePD`
+
+**Contratos**
+- Listagem de Contratos → `Rel_Con_Con` → `FrmRelContrato`
+
+### Contagem e status geral
+
+15 grupos (14 sempre visíveis + "Combustíveis" gated por módulo Posto),
+~64 relatórios ao todo (contando o botão morto `Rel_Pec_IPN`). Desses,
+hoje `relatorios.tsx` cobre só 6 cards, e mesmo esses 6 **não foram
+confirmados campo-a-campo** contra o form VB6 equivalente listado acima —
+foram construídos a partir de necessidade própria desta migração
+(Fechamento de Caixa e Caixa Analítico têm rastreio próprio documentado em
+`project_fechamento_caixa`; Descontos & Margem/Margem de Lucro/Pedido de
+Venda/O.S. não têm rastreio formal contra os `.frm` deste painel — usar
+este documento como ponto de partida se/quando o rastreio campo-a-campo de
+qualquer um desses 64 relatórios for pedido).
+
+### Decisões do usuário (2026-08-07, via `AskUserQuestion`) — grupo Caixa
+
+- **Prioridade/ordem**: implementar agora só os 2 relatórios simples e
+  autônomos (**Entrada de Caixa**, **Saída de Caixa**) — os outros 5 ficam
+  registrados aqui, com o rastreio já feito acima, aguardando retomada.
+- **Escopo Comanda** (Descontos, Resumo de Venda, Cartões x Vencimento — os
+  3 que no legado só enxergam vendas via `comanda`): quando forem
+  retomados, **generalizar para Pedido/OS/Comanda**, no mesmo espírito do
+  relatório "Descontos & Margem" já existente nesta migração (filtro
+  Pedido/OS/Todos) — não replicar o escopo restrito do legado (só Comanda).
+  Isso é uma mudança de arquitetura real em relação ao `.frm` original, não
+  só um detalhe de UI — qualquer rastreio futuro desses 3 relatórios deve
+  planejar a consulta já pensando nas 3 fontes (`pedido_venda`,
+  `os_produto`, `comanda`), não só `comanda`.
+- **Recebimento de Cartões**: confirmado que é um **módulo novo**, não "um
+  relatório" — depende de um subsistema de conciliação de adquirente de
+  cartão (`cartoes_transacoes`, `cartoes_transacoes_parcelas`,
+  `cartoes_administradoras`, `bancos`, tela própria de edição de
+  transação/parcela) que não existe em nenhum lugar desta migração hoje.
+  Fica registrado aqui como módulo futuro — só priorizar se/quando pedido
+  explicitamente, mesmo tratamento dado a outros módulos grandes
+  (Bancos, Cilindros) antes de serem priorizados.
+
+### Rastreio detalhado dos 7 relatórios pendentes (feito 2026-08-07)
+
+**Entrada de Caixa** (`FrmRelEntCaixa.frm`, 579 linhas) — ✅ **implementado
+nesta rodada** (ver abaixo). Simples: agrupa `entrada_caixa` por
+`descricao`+`atendente` (nome_guerra) no período informado, soma `valor`
+por grupo, mais uma linha de Total Geral. Sem filtro de tipo/forma, sem
+níveis. Único detalhe do legado não replicado: a validação "data final não
+pode ser maior que `DATESIST`" — nenhum outro relatório desta migração
+aplica essa trava, mantido consistente com os irmãos (`relatorio-caixa.tsx`
+etc. também não checam isso).
+
+**Saída de Caixa** (`FrmRelSaiCaixa.frm`, 586 linhas) — ✅ **implementado
+nesta rodada** (ver abaixo). Espelho exato do anterior, mesma estrutura,
+tabela `Saida_Caixa` em vez de `entrada_Caixa`.
+
+**Descontos** (`FrmRelDes.frm`, 478 linhas, Caption "Relatório de descontos
+concedidos por venda/funcionário") — 🟢 **implementado 2026-08-07** (ver
+"Fase implementada" logo abaixo do rastreio). Fonte:
+`comanda` (situação='PG') + `movimentacao` (serie_nf='CM') +
+`DESCONTOS_CONCEDIDOS` (tipo='COM'). Filtros: nº da comanda, período,
+cliente (busca por código/CGC/nome/fantasia com autoload, mesmo padrão já
+usado em outras telas), faixa de desconto % (De/Até), checkbox "exibir
+também vendas sem desconto" (inverte a lógica do filtro: NOT IN vs IN na
+subquery de `DESCONTOS_CONCEDIDOS`). Saída é uma árvore de 3 níveis:
+Comanda (com formas de pagamento concatenadas em texto livre) → Item (com
+preço bruto recalculado somando de volta os descontos) → cada desconto
+concedido naquele item (percentual, valor, tipo Item/Geral, origem
+Pedido/OS quando aplicável, funcionário que concedeu — `nome_guerra`).
+Totaliza bruto/desconto/líquido por comanda e geral. **Decisão do usuário
+acima**: generalizar pra Pedido/OS/Comanda ao implementar, não só Comanda.
+
+### Descontos — implementado (2026-08-07)
+
+**Achado decisivo antes de implementar**: esta migração **já tem** uma
+tabela chamada exatamente `descontos_concedidos` (mesmas colunas do
+legado — TIPO/CODIGO/CODIGO_PRODUTO/PERCENTUAL/VALOR/USUARIO/
+TIPO_DESCONTO, ver `descontos_service.py`), mas **só é gravada pro
+Pedido** (`TIPO='PED'`, em `_log_desconto_item`/
+`_aplicar_desconto_geral_sync`). Confirmado por grep que **O.S.**
+(`os_itens_service.py`) grava desconto só como valor direto em
+`os_produto.desconto`, sem nenhuma auditoria de quem concedeu/tipo
+Item-Geral — não existe nenhum `INSERT INTO descontos_concedidos` com
+`TIPO='OS'` nesta migração. Por isso o relatório mostra, por item: pra
+**Pedido**, tipo (Item/Geral) + quem concedeu (via JOIN em
+`descontos_concedidos`); pra **O.S.**, só o valor do desconto (campos de
+auditoria vêm `null`, a UI mostra "—" em vez de inventar).
+
+**Simplificação de estrutura em relação ao legado**: no legado um item
+podia ter VÁRIOS registros históricos empilhados em
+`DESCONTOS_CONCEDIDOS` (append-only, dá pra ver descontos anteriores já
+substituídos). Nesta migração, `_log_desconto_item`/
+`_aplicar_desconto_geral_sync` usam política **delete+insert** — um item
+tem NO MÁXIMO 1 linha ativa a qualquer momento (nunca 'I' e 'G' ao mesmo
+tempo, desconto geral sempre sobrepõe removendo o log anterior). Por isso
+a árvore de 3 níveis do legado (Documento → Item → Grants) virou 2 níveis
+aqui (Documento → Item, cada item já carrega seu único desconto ativo) —
+não é perda de informação, é o formato real do dado nesta migração.
+
+**Sem filtro por situação** — mesma convenção do relatório irmão mais
+próximo ("Descontos & Margem", `_relatorio_desc_margem_sync`), que também
+não filtra por `situacao`.
+
+**Implementação**:
+`backend/services/relatorio_descontos_concedidos_service.py` (query com 2
+branches `UNION ALL` — Pedido com JOIN em `descontos_concedidos`/
+`funcionarios`, O.S. sem essa auditoria — agrupamento por documento em
+Python) + rota `GET /api/relatorios/descontos-concedidos` (filtros
+período, tipo Pedido/OS/Todos, cliente — nome ou fantasia, `[GLOBAL]`
+busca de cliente) + permissão `REL_DESC_CONCED` + 10 testes unitários +
+tela `frontend/app/relatorio-descontos-concedidos.tsx` (cards por
+documento, chips de origem) + exportador PDF/Excel + card em
+`relatorios.tsx` (grupo Caixa). `tsc --noEmit`: baseline de 12 mantido.
+**Não testado ao vivo** ainda — quando testar, confirmar que um desconto
+de item (tipo 'I') e um desconto geral (tipo 'G') aplicados num Pedido
+real aparecem corretamente rotulados, e que um item de O.S. com desconto
+aparece sem quebrar mesmo sem dado de auditoria.
+
+**Resumo de Venda** (`FrmRelFec.frm`, 837 linhas, Caption interno não
+explícito no form — botão "Resumo de Venda") — 🟢 **implementado
+2026-08-07** (ver "Fase implementada" logo abaixo do rastreio). Fonte:
+`comanda` (situação='PG') + `movimentacao` (serie_nf='CM') cruzada com
+`pecas`/`servicos`/`veiculos` pra achar `nivel1..5`, agregando faturamento
+(qtd×p_unit) e custo (`custo_reposicao`) por nível de produto (árvore
+`niveis`, indentada por profundidade — nivel1 até nivel5). O algoritmo
+VB6 usa um loop aninhado gigante pra "achar a linha do Flex que bate com
+os níveis do item" — isso é puro workaround de VB6/FlexGrid (ver "Não
+replicar truques VB6"), a regra real é só um `GROUP BY nivel1,nivel2,
+nivel3,nivel4,nivel5` com rollup por nível, trivial em SQL moderno. Tem
+também um filtro opcional por atendente (`vatendente`) via combo de
+funcionários ativos. Há um bloco de "Despesas" inteiro comentado
+(`'tb.Open "Select valor from Despesas..."`) — código morto/abandonado no
+legado, não portar. Termina com Total Geral (faturamento) e uma segunda
+seção de Saída de Caixa do mesmo período (linha 631,
+`Select valor,descricao from Saida_Caixa ...`) — ou seja, este relatório
+mistura "faturamento por nível" com "saídas de caixa do período" numa
+única tela; avaliar ao implementar se faz sentido manter os dois juntos ou
+separar, já que Saída de Caixa já vira seu próprio relatório nesta rodada.
+**Decisão do usuário acima**: generalizar a base de vendas pra Pedido/OS/
+Comanda, não só Comanda.
+
+### Resumo de Venda — implementado (2026-08-07)
+
+**Generalização real aplicada**: investigação de schema (mesma feita pro
+Apuração de Vendas-DRE, ver seção acima) confirmou que `comanda`+
+`movimentacao` nesta migração **não são um ledger geral de item** — só o
+"envelope" de fechamento (ver `fechamento_caixa_service.py`), com a única
+exceção real sendo Contratos (fora do escopo deste relatório). Por isso a
+generalização "Pedido/OS/Comanda" decidida pelo usuário virou, na prática,
+**Pedido/OS** (as tabelas reais de venda desta migração:
+`pedido_venda_prod`/`pedido_venda`, `os_produto`/`os`) — mesmos joins já
+validados no DRE (produto via `pecas.codigo_int`/`servicos.codigo`, custo
+via `custo_reposicao`/`custo_hora` no Pedido e `custo_os` já pronto no
+item de O.S.).
+
+**Simplificações conscientes**:
+- **Sem Veículos** — o legado cruza também com `VEICULOS`, mas nenhum
+  fluxo de Pedido/O.S. já migrado referencia item tipo veículo; não
+  portado sem confirmação (nem o rastreio do DRE encontrou essa
+  referência em nenhum join já existente no backend).
+- **Sem a seção de Saída de Caixa** que o `.frm` original anexa ao final
+  — já existe como relatório próprio nesta migração
+  (`relatorio-entrada-saida-caixa.tsx?tipo=S`, implementado antes deste),
+  duplicar seria redundante. Essa era exatamente a dúvida registrada no
+  rastreio original acima — resolvida ao implementar.
+- **Árvore de nível substituída por lista plana com breadcrumb completo**
+  — em vez de replicar a indentação hierárquica do `FlexGrid` (puro
+  workaround de UI do legado, os valores não são somados por ancestral,
+  só exibidos com indentação visual), cada combinação de nível vira uma
+  linha só com o caminho completo resolvido via `buildNivelBreadcrumb`
+  (mesma função/regra `[GLOBAL]` já usada em Produto Completo/Serviços) —
+  mais simples de implementar e mais claro de ler que uma árvore
+  recolhível, sem perder nenhuma informação (a soma por nível já era por
+  combinação exata no legado, nunca um rollup pros ancestrais).
+- Filtro por Vendedor replicado (opcional) — `pv.vendedor` no Pedido
+  (header), `i.vendedor` na O.S. (item), mesma assimetria de schema já
+  documentada no DRE.
+- Venda bruta (sem descontar `desconto`), mesma convenção dos outros
+  relatórios desta migração.
+
+**Implementação**: `backend/services/relatorio_resumo_venda_service.py`
+(query com 4 branches `UNION ALL` — Pedido Produto/Serviço, O.S. Produto/
+Serviço — agregação por nível em Python) + rota
+`GET /api/relatorios/resumo-venda` + permissão `REL_RES_VENDA` + 7 testes
+unitários + tela `frontend/app/relatorio-resumo-venda.tsx` (reaproveita
+`GET /api/relatorios/margem-lucro/niveis`, endpoint de lookup já
+existente, pra resolver os breadcrumbs) + card em `relatorios.tsx` (grupo
+Caixa). `tsc --noEmit`: baseline de 12 mantido, sem erro novo. **Não
+testado ao vivo** ainda.
+
+**Cartões x Vencimento** (`FrmRelCarVen.frm`, 808 linhas, Caption
+"Relatório de Formas de Pagamento Por Vencimento") — 🔴 não implementado.
+Fonte: tabelas `comanda_cartao`/`comanda_credito`-like (aliases `CC`/`CRC`
+vistos nas queries, ligadas a `forma_pagamento`, com `taxa_adm`). 3 modos
+de resumo alternáveis: "Por Tipo de Pagamento", "Por Forma de Pagamento",
+"Cartões Por Vencimento" — mais filtros de Cheque/Cartões de Crédito/
+Cartões de Débito e um botão "Exibir Comandas...". **Rastreio ainda
+raso** — não foi lido campo-a-campo, só a estrutura de captions/queries;
+precisa de uma leitura completa antes de implementar. **Decisão do usuário
+acima**: generalizar pra Pedido/OS/Comanda.
+
+**Recebimento de Cartões** (`FrmRelCar.frm`, 2231 linhas, Caption
+"Relatório de Recebimento de Cartões") — 🔴 **módulo futuro, não um
+relatório simples** (decisão do usuário acima). Fonte: `cartoes_transacoes`,
+`cartoes_transacoes_parcelas`, `cartoes_administradoras`, `bancos`,
+`forma_pagamento` — sistema completo de conciliação de adquirente de
+cartão, com tela própria de "Alteração de Transações" (editar
+data de recebimento/parcelas/bandeira/administradora de uma transação já
+lançada), múltiplos resumos cruzados (por Banco, por Banco/Administradora,
+por Banco/Bandeira, por Administradora, por Administradora/Bandeira, por
+Bandeira), filtros Débito/Crédito/Loja/"Totalizar por data de crédito".
+Nenhuma dessas tabelas existe nesta migração. Não rastreado campo-a-campo
+(seria trabalho perdido antes de decidir se/quando este módulo entra em
+pauta) — só a estrutura de captions/queries foi inspecionada.
+
+**Apuração Vendas - DRE** (`FrmRelAPV.frm` — **não existe em `Geral\`**,
+usado `Kontacto\FrmRelAPV.frm`, 1953 linhas, mais completo que a variante
+em `consult\`; Caption "Apuração de Vendas...") — 🟢 **Fase 1 implementada
+2026-08-07** (ver abaixo), Fases 2/3 pendentes.
+
+Rastreio completo do `.frm` (campo-a-campo, `Command1_Click` = motor
+principal, `executa2`/`CalculaDespesas` = sub-sistema de Despesas,
+`Form_Load` = carga dos combos de filtro):
+
+- **Filtros**: Vendedor (`Cmb(0)`, funcionários ativos + "TODOS"), Região
+  (`Cmb(1)`), Segmento (`Cmb(2)`), Rota (`Cmb(3)`), Tipo Cliente (`Cmb(4)`)
+  — todos opcionais, "TODOS"/"-2" tem um caso especial (registros cujo FK
+  não bate com nenhuma linha da tabela auxiliar — não portado, edge case
+  de dado órfão). Produto/Serviço/Veículo específico (`Campo(2)`, busca por
+  código de fábrica/barras/descrição/código interno/chassi) e "Por Nível"
+  (árvore de níveis) — mutuamente exclusivos (`Option1`/`Option2`), nenhum
+  dos dois na Fase 1. "Incluir Vendas de Garantia" (`Check3`) filtra
+  `comanda.tipo=0` quando desmarcado.
+- **5 categorias de receita**, uma query `UNION ALL` por categoria,
+  agrupada por mês (ou por período inteiro quando o intervalo não cobre
+  mês(es) cheios — ver simplificação abaixo): Contratos, Produtos O.S.,
+  Serviços O.S., Venda Produtos, Venda Serviços. Todas as 5, no legado,
+  leem `comanda`+`movimentacao` (`situacao='PG'`, `serie_nf='CM'`),
+  diferenciadas só por `codigo_int = Cod_Servico_Contrato` (Contratos) e
+  por `c.comanda IN/NOT IN (SELECT comanda FROM comanda_os)` (O.S. vs
+  venda direta).
+- **Custo**: `SUM(m.QTD*custo_mov)` por categoria — coluna `custo_mov` de
+  `movimentacao`, item a item.
+- **Despesas** (`Command13`/`Configurar Despesas`): abre um `ListView`
+  (`Classes`) com toda combinação `classe`/`sub_classe` de
+  `classes`/`sub_classes` (plano de contas do Financeiro), com checkbox —
+  seleção persistida em `classes_despesas` (delete-all + reinsert a cada
+  abertura). `CalculaDespesas(FiltroPeriodo, Totalizar)` soma
+  `movimentacoes_centro_custo` (via `movimentacoes.tipo <> 2`) restrito às
+  classes marcadas (ou TODAS se nada foi desmarcado), classifica cada
+  classe como Receita/Despesa pelo SINAL do total agregado (não por uma
+  coluna fixa) e devolve o total de Despesas (linhas com sinal negativo,
+  invertido pra positivo) do período/mês. **Reaproveita infraestrutura já
+  migrada** (`movimentacoes`/`movimentacoes_centro_custo`/`classes`/
+  `sub_classes` — mesmas tabelas do Financeiro > Fluxo de Caixa, ver
+  `project_contas_fluxo_caixa`), não é módulo novo — só não foi portado
+  na Fase 1 por ser um sub-fluxo de configuração próprio (picker de
+  classes) que merece sua fase separada.
+- **Colunas do grid final**: Mês/Ano (ou Período) | Contratos | Produtos
+  O.S. | Serviços O.S. | Venda Produtos | Venda Serviços | Total Mês |
+  Custo | Despesas | Margem Valor (`Total − Custo − Despesas`) | Margem %
+  (`100 − ((Custo+Despesas)/Total×100)`).
+- **"Imprime detalhado"** (`Check7`): pra cada mês, chama `Detalha` +
+  `Imprime3` — não rastreado em detalhe (não lido campo-a-campo), abre uma
+  segunda grade (`Grid2`/`Frame2`) com o detalhamento por produto/nível
+  daquele mês. Fase 3.
+- **"Preço Médio"** (`Check9`) e checkboxes de tipo de venda a incluir
+  (`Check1`/`Check2`/`Check4`/`Check5`/`Check6` — Contratos/Produtos O.S./
+  Venda de Produtos/Serviços O.S./Venda de Serviços) estão todos com
+  `Visible=0` no form — **código morto/desligado no legado**, não geram
+  nenhum filtro real em `Command1_Click` (a query sempre calcula as 5
+  categorias incondicionalmente). Não portado, não é perda de regra.
+
+### Fase 1 implementada (2026-08-07) — decisões de arquitetura
+
+**Generalização Pedido/OS/Comanda** (decisão do usuário, mesma diretriz já
+dada para Descontos/Resumo de Venda/Cartões x Vencimento acima) — mas
+aplicada de forma diferente do que essas 3 vão precisar, porque a
+investigação de schema mostrou que **nesta migração Pedido e O.S. já são
+documentos próprios** (`pedido_venda`/`pedido_venda_prod`,
+`os`/`os_produto`), não passam pelo ledger `comanda`+`movimentacao` como
+no legado — `comanda` aqui é só o "envelope" de fechamento/pagamento
+(`COMANDA_PED`/`comanda_os` linkam `comanda` → `pedido_venda`/`os`, ver
+`fechamento_caixa_service.py`). Então a Fase 1 já lê as tabelas REAIS:
+- Produtos/Serviços O.S. → `os_produto` (`codigo_interno` prefixo P/S) +
+  `os` (`situacao='PG'`, período em `data_entrada`).
+- Venda Produtos/Serviços → `pedido_venda_prod` (`produto` → `pecas`/
+  `servicos`) + `pedido_venda` (`situacao='PG'`, período em `data`).
+- **Contratos continua via `comanda`+`movimentacao`** — confirmado que
+  `contratos_service.py._faturar_contratos_sync` grava EXATAMENTE nesse
+  formato (`movimentacao(codigo_int=cod_servico_contrato, serie_nf='CM')`
+  + `comanda`), sem equivalente em `pedido_venda`/`os` — não é o mesmo
+  "workaround" das outras 3 pendências, é a tabela real usada por essa
+  categoria nesta migração também.
+- `situacao='PG'` (Faturado) é o código compartilhado por `pedido_venda`/
+  `os`/`comanda` nesta migração (`SITUACAO_LABEL` em
+  `services/constants.py`) — mesmo código que o legado já usava pra
+  comanda, confirmado antes de assumir.
+
+**Simplificações conscientes desta Fase 1** (ver docstring de
+`relatorio_apuracao_vendas_service.py` pro detalhe completo):
+- Sempre agrupa por mês (nunca colapsa num "Período" único) — o
+  branching do legado (mês cheio vs período parcial) era só limitação de
+  UI do FlexGrid, agrupar sempre por mês é estritamente mais informativo.
+- "Incluir Vendas de Garantia" **não implementado** — não existe campo
+  equivalente a `comanda.tipo=0` nesta migração (`pedido_venda.tipo` já
+  foi reaproveitado pro tipo Mesa/Comanda/Balcão do Pedido Bar). Replicar
+  exigiria juntar as 3 fontes às tabelas de forma de pagamento (mesmo
+  mecanismo `FORMA_PAG_GARANTIA` que o Fechamento de Caixa já usa) — não
+  feito ainda, registrado como possível Fase 1.5.
+- **Despesas não implementadas** (Fase 2, ver rastreio acima) — Margem
+  desta Fase 1 é só `Total − Custo`, sem dedução de despesa configurada.
+- **Sem Por Nível/produto específico/Preço Médio/impressão detalhada por
+  item** (Fase 3).
+- Venda é **bruta** (sem descontar `desconto`) — mesma convenção já usada
+  em `_relatorio_pedidos_sync`/`_relatorio_os_desc_margem_sync`.
+
+**Implementação**: `backend/services/relatorio_apuracao_vendas_service.py`
+(`_apuracao_vendas_sync`, query única com 5 branches `UNION ALL`,
+agregação por mês em Python) + rota `GET /api/relatorios/apuracao-vendas`
+(`routes/relatorios.py`) + permissão `REL_APUR_VENDAS` + 7 testes
+unitários (`test_relatorio_apuracao_vendas_service.py`) + tela
+`frontend/app/relatorio-apuracao-vendas.tsx` + card em `relatorios.tsx`
+(grupo Caixa). **Não testado ao vivo** contra uma conexão real ainda —
+antes de considerar a Fase 1 validada, rodar contra dados reais com
+Contrato + O.S. + Pedido faturados no mesmo período e conferir que os 3
+somam corretamente por mês, e que os filtros de Vendedor/Região/Segmento/
+Rota/Tipo Cliente batem com o que a lista de Pedidos/O.S. já mostra pros
+mesmos documentos.
+
+### Próximos passos
+
+- **Implementados**: Entrada de Caixa, Saída de Caixa, Apuração de Vendas
+  - DRE (Fase 1), Resumo de Venda e Descontos — 5 dos 9 relatórios do
+  grupo Caixa.
+- **Ainda pendente**: só Cartões x Vencimento (médio porte, mesma
+  generalização Pedido/OS a aplicar — usar o rastreio de schema já feito
+  no DRE/Resumo de Venda/Descontos como ponto de partida, não
+  re-investigar do zero) + Recebimento de Cartões (módulo futuro, fora de
+  escopo até pedido explícito) + Apuração de Vendas-DRE Fases 2/3
+  (Despesas configuráveis, Por Nível, Preço Médio, impressão detalhada).
+- Grupo "Combustíveis" (gated por módulo Posto) e módulo "KA$H"
+  (não mapeado nesta migração) — perguntas em aberto sem decisão ainda,
+  não bloqueiam o trabalho acima.
+
+## Painel de Relatórios (VB6) — Grupo Pré Venda
+
+**Status: rastreio dos 8 relatórios feito (2026-08-07); situação multi-
+select implementada; ainda faltam 4 relatórios novos, aguardando retomada.**
+
+### Correção importante achada no meio do rastreio
+
+Os 2 forms **"Ordem de Serviço"** (`Rel_Ord_Ord`) e **"Resumo Atendimento"**
+(`Rel_Ord_OSS`) do painel apontam pra dois `CommandButton`s que chamam
+identificadores VB6 quase idênticos — `FrmRelOs` (8 letras) vs `FrmRelOSs`
+(9 letras, "S" maiúsculo extra) — e o **nome do ARQUIVO físico não bate
+com o nome INTERNO da classe (`Attribute VB_Name`)** em nenhum dos dois,
+o que gerou um rastreio errado na primeira passada:
+
+- `Kontacto\frmrelos.frm` (arquivo, 1083 linhas) → `VB_Name = "FrmRelOSs"`
+  → é na verdade o form de **"Resumo Atendimento"**, não "Ordem de
+  Serviço" como uma primeira leitura sugeriria pelo nome do arquivo.
+- O form real de **"Ordem de Serviço"** (`VB_Name = "FrmRelOs"`) está em
+  `Revenda\FrmRelOS.frm` — não existe cópia dele em `Kontacto\`/`Geral\`,
+  só referenciado via caminho relativo `..\Revenda\FrmRelOS.frm` no
+  `backon.vbp` (mesmo padrão de arquivo compartilhado entre pastas de
+  linha de negócio já visto em `frmRelOSRes`/`frmresros`, seção Caixa
+  acima).
+
+Isso também corrige o achado anterior de **"Resumo Atendimento" (`FrmRelOSs`)
+é botão morto**: estava errado — o form existe e é robusto (1083 linhas),
+só não tinha sido encontrado porque a busca original procurou por um
+arquivo chamado literalmente `FrmRelOSs.frm`, que não existe (o arquivo
+físico é `frmrelos.frm`, mesmo case-insensitive). **Lição pra rastreios
+futuros**: sempre conferir `Attribute VB_Name` dentro do arquivo, nunca
+confiar só no nome do arquivo físico — nomes de classe e nomes de arquivo
+divergem no legado com mais frequência do que o esperado.
+
+### Os 8 relatórios
+
+**Itens do Pedido** (`Kontacto\FrmItePEd.frm`, 316 linhas) — 🟢
+**implementado 2026-08-07**. Soma `qtd_pedida` por produto (`codigo_fab`) de todo Pedido
+`situacao='F'` (Fechado) no período, convertido pra Unidade de Compra via
+`QTD_UN_COMPRA`/`UN_COMPRA` (auxiliar de reposição/compra — "quanto
+preciso comprar pra repor o que foi vendido"). Checkbox "Detalhar" expande
+cada produto nos pedidos individuais que contribuíram. Só Pedido (não O.S.
+— esse é o recorte do próprio legado, não uma escolha desta migração).
+Situação `'F'` é uma regra real (produto "comprometido", não precisa
+esperar faturamento pra entrar no cálculo de reposição) — portar como
+está, mais `ISNULL(i.item_cancelado,0)=0` (schema desta migração tem essa
+coluna, toda outra query já a usa; sua ausência aqui seria um bug de
+correção, não fidelidade ao legado).
+
+**Custo de O.S** (`Geral\FrmCustoOS.frm`, 736 linhas) — 🟢 **implementado
+2026-08-07**. Soma `custo_os*quant` de `os_produto` (`origem<>'R'`, exclui
+devoluções), situação A/F/PG, agrupável por Cliente OU por Produto/Serviço
+(radio), modo Detalhado, filtro por tipo de item (`tipo_os_prod`),
+período/O.S./item/cliente. Análise de custo pura, sem equivalente hoje —
+`relatorio-os.tsx` mostra venda/desconto/margem por O.S., não uma
+quebra de custo por cliente/produto.
+
+**Itens Vendidos O.S./Balcão** (`Geral\FrmRelVenOsB.frm`, 770 linhas) — 🟢
+**implementado 2026-08-07**. Soma quantidade/valor por produto INDIVIDUAL (não por
+nível — diferente do Resumo de Venda já implementado), combinando venda
+direta ("Balcão") + consumo de O.S., no legado via `comanda`+
+`movimentacao`+`os_produto`/`comanda_os`. **Generalização** (mesmo
+princípio já usado em DRE/Resumo de Venda/Descontos): "Balcão" nesta
+migração é só Pedido (Bar ou Geral) não-vinculado a O.S. — ou seja,
+`pedido_venda_prod` + `os_produto`, os mesmos dois já usados no Resumo de
+Venda, só que a agregação aqui é por produto/serviço individual em vez de
+por nível, e mostra quantidade (não só valor).
+
+**Ordem de Serviço** (`Revenda\FrmRelOS.frm`, `VB_Name="FrmRelOs"`, 1391
+linhas) — 🟢 **implementado 2026-08-07** (ver "Implementação" logo abaixo
+dos dois rastreios). É uma tela de **busca/lookup de O.S.** (não um relatório de período
+agregado como `relatorio-os.tsx`), com master-detail (Grid1 = O.S.
+encontradas, Grid2 = itens da O.S. selecionada ao clicar na linha).
+
+- **Filtro único ativo por vez** (radio `Opt(0..7)`, sem botão
+  "Selecionar" — a busca dispara automaticamente ao perder o foco do
+  campo, `Campo_LostFocus` → `Atualiza`): Cliente (código exato),
+  Data Entrada (intervalo), Data Término (intervalo), Placa (prefixo),
+  Chassi (prefixo), OS (intervalo de código), Marca (código exato),
+  Modelo (código exato). Ordenação Ascendente/Descendente pela mesma
+  coluna do filtro ativo.
+- **Confirmado fortemente orientado a veículo** (`INNER JOIN` obrigatório
+  com `marcas`/`modelos` — uma O.S. sem marca/modelo cadastrado nem
+  aparece no resultado), mas **isso não bloqueia mais a implementação**:
+  confirmado por grep que `os_service.py` já grava e lê `placa`, `marca`,
+  `modelo`, `chassi`, `km`, `ano`, `numero_de_serie` na tabela `os` desta
+  migração, e `marcas`/`modelos` já são Tabelas Auxiliares reais (ver
+  "Platform Scope" > Web-only areas em CLAUDE.md). Os dados existem,
+  só a tela de busca em si não foi construída ainda.
+- **Grid1 (lista)**: Cliente (código-nome), OS, Veículo (marca+modelo),
+  Data Entrada, Data Término, Placa, Chassi, Situação.
+- **Grid2 (detalhe ao clicar numa linha)**: código+descrição do item,
+  Qtd, Valor Unitário, Valor Total, **Destino** (`os_produto.situacao`
+  decodificado — 0=Cliente, 1=Garantia, 2=Interno, 3=Rev. de Fábrica —
+  **mesmo achado do "Custo de O.S"/"Resumo Atendimento" abaixo, agora
+  confirmado numa 3ª fonte independente**: é sempre o mesmo FK pra
+  `tipo_os_prod`, nunca a situação da O.S. em si).
+- Botões: Imprimir, Gerar Planilha, Sair — sem período obrigatório (é
+  busca pontual, não relatório fechado por data).
+
+**Resumo Atendimento** (`Kontacto\frmrelos.frm`, `VB_Name="FrmRelOSs"`,
+1083 linhas) — 🟢 **implementado 2026-08-07**. Diferente de "Ordem de
+Serviço" acima — é um relatório
+operacional por período, uma linha por O.S., com quebra financeira por
+**destino do item** e tempo de execução.
+
+- **Filtros**: Cliente (nome/código/CGC, com autoload de Chassi/Equip.
+  associado a esse cliente), Data Término (intervalo), Tipo de O.S.
+  (`tipo_os` via `os.tipo` — **nota**: o `.frm` usa `os.posicao_os`, mas
+  `tabelas_aux_service.py` já confirma via `sys.foreign_keys` que o FK
+  real desta migração é `os.tipo` → `tipo_os.codigo`; `posicao_os` não
+  existe aqui, adaptação necessária, não é suposição — mesmo padrão de
+  adaptação já usado no Custo de O.S com `os_produto.situacao`), Técnico
+  (`funcionarios`, combo "TODOS"), Equipamento/Chassi (dependente do
+  cliente escolhido, combo "TODOS"). Situação da O.S.: 2 checkboxes
+  "Fechadas"(`F`)/"Pagas"(`PG`), combináveis (OR). 3 checkboxes de
+  **destino a incluir**: "Cliente Pg." / "Interno/Contrato" / "Garantia"
+  — controlam tanto se a O.S. aparece (só aparece se tiver total > 0 em
+  pelo menos um destino marcado) quanto se a coluna daquele destino é
+  zerada quando desmarcada.
+- **Uma linha por O.S.**, colunas: Data (término), O.S., **Técnico**
+  (`nome_guerra` do funcionário com o MAIOR `codigo_int` entre os
+  executores dos itens daquela O.S. — `max(executor)`, regra literal do
+  legado, replicável), Início/Fim (de `os_tempo.hora_inicio`/`hora_fim`,
+  só quando `os.tipo=1`), T.Horas (soma de `quant` dos itens tipo
+  Serviço), Serviço(s)/Peça(s) (soma de `quant*preco_unitario` por
+  tipo P/S), Contrato/Garantia/Cliente Pg. (soma por destino do item —
+  `os_produto.situacao` 2-ou-3 / 1 / 0), Tipo (`tipo_os.descricao`),
+  Serviço Executado (`os.resumo`, quebras de linha removidas pra caber
+  numa célula). Totais gerais na última linha.
+- Todas as tabelas/colunas referenciadas (`os.resumo`, `os_tempo.
+  hora_inicio`/`hora_fim`, `os_produto.executor`) já são reais e usadas
+  nesta migração (`os_service.py`, `os_tempo_service.py`,
+  `os_itens_service.py`) — confirmado por grep, nenhuma suposição.
+- Botões: Imprimir, Gerar Planilha, Gerar HTML (`GeraHTML`, não
+  inspecionado — provável variante de impressão, mesma informação do
+  grid; não replicar como recurso separado, PDF via `expo-print` já
+  cobre a necessidade de "gerar documento" desta migração).
+
+**Pedidos Pendentes** (`Geral\FrmRelPeP.frm`) — 🟢 **resolvido sem tela
+nova, 2026-08-07** (decisão do usuário). `pv.situacao NOT IN ('C','PG')`
+= mesmo resultado de marcar Aberto+Fechado no relatório de Pedidos já
+existente. Implementado como preset "Pendentes" (`situacao=A,F`) no chip
+de situação de `relatorio-pedidos.tsx` (`Filtros.tsx`), reaproveitando o
+backend já existente — `_relatorio_pedidos_sync` ganhou suporte a
+`situacao` como CSV (`"A,F"` → `IN ('A','F')`), mesmo padrão de
+`dias_semana` já usado em `/relatorios/caixa-analitico`. Filtro de
+periodicidade de forma de pagamento do legado (`List1`/`forma_pagamento.
+periodo` — Decenal/Mensal/Quinzenal/etc.) não portado — conceito
+obscuro, sem uso confirmado em nenhuma outra tela desta migração.
+
+**O.S. Não Faturadas** (`Revenda\frmRelOSRes.frm`) — 🟢 **resolvido sem
+tela nova, 2026-08-07**, mesmo padrão do item acima: preset "Não
+Faturadas" (`situacao=A,F`) adicionado ao dropdown de situação de
+`relatorio-os.tsx`, reaproveitando `_relatorio_os_sync` (mesmo suporte a
+CSV adicionado).
+
+**Resumo Mov da O.S.** (`Focco\frmresros.frm`) — 🔴 **pulado por
+enquanto** (usuário sem preferência forte, seguida a recomendação). Só
+existe na linha de negócio Focco (não Kontacto/Geral), usa `TRANSFORM/
+PIVOT` do Access (sintaxe não portável direto pra SQL Server, precisaria
+de `PIVOT` manual) e uma regra opaca (`comanda.tipo = os_produto.
+faturado`) sobre colunas (`osp.faturado`, `osp.situacao` numérico) não
+confirmadas nesta migração. Registrado aqui, não investigado mais a
+fundo — retomar só se pedido explicitamente.
+
+### Implementação (2026-08-07)
+
+- **Situação multi-select**: `test_relatorio_situacao_multi.py` (7
+  testes, `_relatorio_pedidos_sync`/`_relatorio_os_sync` com `situacao`
+  CSV).
+- **Itens do Pedido**: `relatorio_itens_pedido_service.py` (8 testes) +
+  rota `GET /api/relatorios/itens-pedido` + permissão `REL_ITENS_PED` +
+  tela `relatorio-itens-pedido.tsx` (cards expansíveis por produto).
+- **Custo de O.S**: `relatorio_custo_os_service.py` (7 testes) + rota
+  `GET /api/relatorios/custo-os` + permissão `REL_CUSTO_OS` + tela
+  `relatorio-custo-os.tsx` (toggle Cliente/Produto, filtro Tipo reaproveita
+  `GET /api/tabelas/tipo-os-prod` já existente).
+- **Itens Vendidos O.S./Balcão**: `relatorio_itens_vendidos_service.py`
+  (6 testes) + rota `GET /api/relatorios/itens-vendidos` + permissão
+  `REL_ITENS_VEND` + tela `relatorio-itens-vendidos.tsx`.
+- Os 3 exportadores PDF/Excel seguem o padrão já estabelecido
+  (`print-report-header.ts`). Todos os 3 cards adicionados ao grupo "Pré
+  Vendas" já existente em `relatorios.tsx`.
+- `tsc --noEmit`: baseline de 12 mantido. **Não testado ao vivo.**
+
+### Implementação de Ordem de Serviço e Resumo Atendimento (2026-08-07)
+
+- **Ordem de Serviço (busca)**: `relatorio_busca_os_service.py` (11
+  testes) + rotas `GET /api/relatorios/busca-os` (lista por filtro único)
+  e `GET /api/relatorios/busca-os/{os}/itens` (detalhe master-detail) +
+  permissão `REL_BUSCA_OS` + tela `relatorio-busca-os.tsx` (chips de modo
+  de filtro, cards expansíveis por O.S.). **Diferença consciente do
+  legado**: `LEFT JOIN` com `marcas`/`modelos` em vez do `INNER JOIN`
+  original — uma O.S. sem veículo cadastrado continua aparecendo (ver
+  docstring do service pro raciocínio completo).
+- **Resumo Atendimento**: `relatorio_resumo_atendimento_service.py` (10
+  testes) + rota `GET /api/relatorios/resumo-atendimento` + permissão
+  `REL_RES_ATEND` + tela `relatorio-resumo-atendimento.tsx` (chips de
+  situação/destino, SelectField pra Tipo/Técnico reaproveitando lookups
+  já existentes `GET /api/tabelas/tipo-os` e `GET /api/funcionarios`).
+  Campo Cliente ficou como input de código simples (não usa
+  ClientSearchModal) — simplificação consciente pra esta tela de
+  filtro secundário, não a tela principal de cadastro/vínculo de
+  cliente onde a regra `[GLOBAL]` de busca de identidade é mandatória.
+- Os 2 exportadores PDF/Excel seguem o padrão já estabelecido. Cards
+  adicionados ao grupo "Pré Vendas" em `relatorios.tsx`.
+- `tsc --noEmit`: baseline de 12 mantido. **Não testado ao vivo** —
+  atenção especial ao testar: confirmar que o `LEFT JOIN` de Ordem de
+  Serviço realmente traz O.S. sem marca/modelo (não só as que têm
+  veículo), e que a coluna T.Horas do Resumo Atendimento bate com os
+  itens de Serviço reais de uma O.S. de teste.
+
+### Próximos passos
+
+Os 8 relatórios do grupo Pré Venda estão implementados. **Resumo Mov da
+O.S.** (Focco) fica de fora até pedido explícito — obscuro, `TRANSFORM/
+PIVOT` do Access, colunas não confirmadas nesta migração (ver rastreio
+acima).
+
+## Painel de Relatórios (VB6) — Grupo Estoque
+
+**Status: rastreio completo dos 7 relatórios feito (2026-08-07). 4 prontos
+pra implementar imediatamente, 1 bloqueado (dado nunca escrito nesta
+migração), 1 muito mais rico que o esperado (motor universal de
+movimentação — todo módulo já grava nele), 1 de natureza diferente
+(designer de etiqueta física, não relatório de dados).**
+
+**Produtos Reservados** (`Revenda\frmrelpecres.frm`, 374 linhas) — 🟢
+**implementado 2026-08-07**. Lista `pecas` onde
+`(reservado_os + reservado) <> 0` — código interno, código fabricante,
+descrição, preço venda, quantidade reservada, preço total — ordenável por
+Código Interno/Código Fabricante/Descrição. Sem período (é um snapshot
+atual). `pecas.reservado`/`reservado_os` já são colunas reais e ativamente
+usadas nesta migração (Checkout, Contratos, Inventário).
+
+**Estoque por Nível** (`Geral\FrmRelFecEst.frm`, 603 linhas) — 🟢
+**implementado 2026-08-07**. Soma `(qtd+reservado+reservado_os)` (unidades em estoque) × `custo_
+reposicao` e × `p_venda`, agrupado por nível de produto (hierarquia
+`niveis`) — mesmo padrão de agregação/breadcrumb já usado em "Resumo de
+Venda" (Caixa), reaproveitável 1:1 (substituir a árvore do FlexGrid por
+lista plana com `buildNivelBreadcrumb`). Sem período (snapshot atual).
+
+**Estoque** (`Geral\FrmRelPecNiv.frm`, 1265 linhas) — 🟢 **implementado
+2026-08-07**, complementar ao anterior. Detalhe produto-a-produto (não agregado) dentro
+de UMA combinação de nível escolhida (5 combos em cascata Nível1→5):
+código, descrição, `(qtd+reservado+reservado_os)`, `custo_inventario`,
+`p_venda`, `area`/`prateleira`/`escaninho` (localização física —
+colunas reais, já usadas em Produto Completo/Inventário), só `situacao=
+'A'`. Ordenável por Código/Descrição.
+
+**Estoque Terceirizado** (`Geral\FrmRelCAb.frm`, 696 linhas) — 🔴
+**bloqueado, não implementável agora**. Inteiramente construído sobre a
+tabela `consignacao` (estoque de terceiros em nosso poder / nosso estoque
+em poder de terceiros, ligado a `n_fiscal`, com `qtd`/`qtd_devolvida`/
+`qtd_faturada` e um botão `&Transferir` que sugere escrita, não só
+leitura). Confirmado em `notas_fiscais_service.py` (docstring explícita,
+linhas ~80-83): esta migração **nunca escreve** em `consignacao`/
+`consignacao_baixa` — decisão consciente já tomada antes desta sessão
+("muito específico e arriscado de replicar sem dados reais de
+consignação pra testar"), só faz uma leitura pontual pra bloquear
+cancelamento de NF já com itens devolvidos/faturados. Implementar este
+relatório agora resultaria sempre em tela vazia — **fica bloqueado até o
+fluxo de emissão de NF de consignação ser construído**, não antes.
+
+**Movimentação de Itens** (`Geral\FrmRelMovCli.frm`, 1313 linhas) — 🟢
+**implementado 2026-08-07**, mas **muito mais rico do que o nome sugere**:
+achado importante nesta rodada — `movimentacao` é o ledger universal
+desta migração também (não só do legado), escrito por **praticamente
+todo módulo já migrado**: confirmado por grep de
+`INSERT INTO movimentacao` em `pedidos_service.py` (`tipo='S01',
+serie_nf='CM'`, ao faturar — cria uma `comanda` "envelope" na hora, exatamente
+como `fechamento_caixa_service.py` já documentava), `os_service.py`,
+`checkout_service.py` (4 pontos), `contratos_service.py`,
+`requisicao_service.py` (`serie_nf='RQ'`), `movimentacao_produtos_service.py`
+(`serie_nf='MV'`), `inventario_service.py` (`serie_nf='IV'`, tipo
+`E00`/`S00` — **mesmíssimos códigos do legado**, confirmado), e
+`agenda_service.py`. Tabela `tipo_mov` (codigo/descricao/atualiza_est)
+também já é real e usada (`lookups_service.py`).
+- **Simplificação de arquitetura consciente**: o `.frm` original
+  reconstrói o ledger via 5+ branches `UNION ALL` por origem (Comanda/
+  Requisição/Inventário), com lógica de exclusão via `comanda_nf` pra não
+  contar duas vezes uma venda já com NF emitida — isso existia porque no
+  legado `movimentacao` nem sempre é confiável sozinho pra reconstruir a
+  história de uma comanda. **Nesta migração isso não é necessário**:
+  como confirmado acima, todo módulo já grava fielmente em `movimentacao`
+  na hora certa — um `SELECT` direto na tabela (com joins simples pra
+  `pecas`/`servicos`/`tipo_mov`/`funcionarios`) já é a fonte completa e
+  correta, sem precisar reconstruir nada.
+- **Origem via `serie_nf`** (CM=venda faturada Pedido/OS/Contrato/
+  Checkout, RQ=Requisição, IV=Inventário, MV=Movimentação de Produtos
+  manual) — nota: `CM` mistura Pedido/OS/Contrato/Checkout, já que todos
+  usam a mesma série; não dá pra distinguir a origem exata sem voltar em
+  `COMANDA_PED`/`comanda_os`/`comanda_contrato`, não replicado nesta
+  primeira versão (fica como "Venda" genérico).
+- Filtros do legado a portar: período (obrigatório), produto (busca por
+  código/descrição), tipo de movimentação (multi-select via `tipo_mov`),
+  Entrada/Saída (`LEFT(tipo,1)`), ordenação.
+
+**Movimentações por Nível** (`frmrelvenlojas.frm`, `Gilson Pneus\`, 1243
+linhas) — 🟢 **implementado 2026-08-07**, com 2 achados de correção:
+- **Caption interna do form diz "Transferência para as Filiais"**, mas o
+  botão do painel chama de "Movimentações por Nível" e a query real não
+  tem nada a ver com filiais/transferência entre lojas — é só soma de
+  `qtd`/`qtd*p_unit` de `movimentacao` por UM tipo de movimentação
+  escolhido (`tipo_mov`, situação Ativa + `atualiza_est='S'`), agrupado
+  por nível de produto, num período. Caption é artefato de copiar-colar
+  de outro form dentro da pasta específica de cliente ("Gilson Pneus") —
+  não replicar o conceito de filial, replicar só a agregação por nível
+  que a query de fato faz.
+- **`PECASEQ` (produtos equivalentes/similares) não portado** — o legado
+  consolida o movimento de um produto e seus equivalentes sob um único
+  código antes de agrupar por nível; **simplificação consciente**: soma
+  cada produto pelo seu próprio nível, sem consolidar equivalentes (a
+  tabela `pecaseq` existe nesta migração — já usada em Produto Completo —
+  mas essa consolidação específica não foi replicada por ora).
+- Workaround de tabela temporária (`create table teste`) — puro artefato
+  de VB6/Access, vira `GROUP BY` direto.
+
+**Etiqueta de Produto** (`Geral\FrmEtqProd.frm`, 2989 linhas — o maior
+form já rastreado nesta migração) — 🟢 **implementado 2026-08-07**, depois
+do usuário desbloquear com detalhes reais de uso (screenshot da tela +
+confirmação de que usam tanto folha laser quanto impressora térmica
+Zebra). Rastreio campo-a-campo completo feito via agente de pesquisa (ver
+histórico da sessão) — 3 mecanismos de impressão totalmente diferentes no
+legado: `Printer` GDI puro (2 modelos "Identificação", folha laser tipo
+Pimaco), uma DLL COM .NET via GDI+ (2 modelos "Gôndola", com código de
+barras EAN), e comandos EPL crus escritos direto num compartilhamento de
+rede fixo `\\<computador>\ZEBRA` (4 modelos térmicos Zebra GC420/TLP2844).
+
+Decisões do usuário (`AskUserQuestion`, 2026-08-07):
+- **Tabela `modelo_etiqueta` nova** (arquitetura configurável, não só
+  constantes no código) — "nada impede de prepararmos pra cadastrar
+  modelos específicos no futuro", semeada com os 8 modelos do legado
+  (`codigo` = mesmo índice do combobox legado, `formato` = `grade_laser`/
+  `gondola`/`termica`, dimensões/margens/colunas/linhas por folha).
+- **Zebra (térmica) não implementada nesta rodada** — só documentada no
+  Modo Didático (ícone "i") da tela nova, explicando que precisa de uma
+  extensão do print-agent local já existente (`project_impressao_
+  silenciosa`, testado ao vivo pra cupom/comanda) capaz de falar EPL cru
+  com a impressora — extensão ainda não construída. Os 4 modelos Zebra
+  aparecem no combobox (pra não precisar de migração de schema depois)
+  mas o botão Imprimir bloqueia com mensagem clara se escolhidos.
+- **"Excluir"/"Limpar Todos" implementados de verdade** — no legado são
+  botões inertes (nenhuma `Sub` por trás, confirmado por rastreio
+  completo do arquivo) — corrigido aqui, não replicado como lacuna.
+- **Matriz de Grade (Cor×Tamanho) incluída** — detecção automática ao
+  digitar um código com grade cadastrada (`pecas_grade`), troca o campo
+  Quant por uma matriz de quantidade por combinação.
+- **Bug de paginação do "Gôndola Não Fiscal"** (legado não pagina, GDI+
+  desenha além da página) — não relevante, impressão via HTML/CSS no
+  navegador pagina sozinha por conteúdo.
+
+Simplificações conscientes documentadas na íntegra na docstring de
+`etiqueta_produto_service.py`: subquery de cor/tamanho via `pecaseq` no
+caminho "Selecionar" não portada (dado morto no legado, nunca chega a
+aparecer na etiqueta impressa); "Usar descrição NFCe" só afeta o caminho
+manual, replicando a assimetria real do legado; default hardcoded do
+checkbox por CNPJ específico não portado (ajuste de cliente único, não
+regra geral); resolução Cor×Tamanho numa única query (não no padrão
+2-etapas do legado). **Nunca validado contra impressora/folha física
+real** — layout CSS em cm é uma aproximação razoável dos modelos do
+legado, não uma cópia pixel-a-pixel; ajuste fino de fonte/posição só é
+possível comparando contra a folha impressa de verdade.
+
+### Implementação (2026-08-07)
+
+- **Produtos Reservados**: `relatorio_produtos_reservados_service.py`
+  (6 testes) + rota `GET /api/relatorios/produtos-reservados` +
+  permissão `REL_PROD_RES` + tela `relatorio-produtos-reservados.tsx`.
+- **Estoque por Nível**: `relatorio_estoque_nivel_service.py` (3 testes)
+  + rota `GET /api/relatorios/estoque-nivel` + permissão
+  `REL_ESTOQUE_NIV` + tela `relatorio-estoque-nivel.tsx` (breadcrumb via
+  `buildNivelBreadcrumb`, mesmo endpoint de lookup do Resumo de Venda).
+- **Estoque**: `relatorio_estoque_service.py` (7 testes, reaproveita
+  `_nivel_clause` de `margem_lucro_service.py`) + rota
+  `GET /api/relatorios/estoque` + permissão `REL_ESTOQUE` + tela
+  `relatorio-estoque.tsx` (seletor de nível via `NiveisModal`
+  compartilhado).
+- **Movimentação de Itens**: `relatorio_movimentacao_itens_service.py`
+  (9 testes) + rota `GET /api/relatorios/movimentacao-itens` +
+  permissão `REL_MOV_ITENS` + tela `relatorio-movimentacao-itens.tsx`
+  (filtros produto/tipo/entrada-saída/origem, tipo reaproveita
+  `GET /api/tabelas/tipo-mov` já existente).
+- **Movimentações por Nível**: `relatorio_movimentacao_nivel_service.py`
+  (5 testes) + rota `GET /api/relatorios/movimentacao-nivel` +
+  permissão `REL_MOV_NIVEL` + tela `relatorio-movimentacao-nivel.tsx`.
+- Novo grupo **"Estoque"** em `relatorios.tsx` (5 cards, ordem alfabética
+  automática como todo grupo já existente). 5 exportadores PDF/Excel
+  seguem o padrão já estabelecido.
+- `tsc --noEmit`: baseline de 12 mantido. 30 testes novos, todos
+  passando. **Não testado ao vivo** — atenção especial: confirmar que
+  "Movimentação de Itens" realmente traz linhas de todas as origens
+  (Pedido faturado, O.S. faturada, Contrato, Checkout, Requisição,
+  Inventário, Movimentação de Produtos manual) contra uma conexão real
+  com dados de cada tipo.
+
+- **Etiqueta de Produto**: `etiqueta_produto_service.py` (14 testes,
+  tabela nova `modelo_etiqueta` idempotente/semeada) + rotas dedicadas em
+  `routes/etiqueta_produto.py` (`GET modelos`, `POST modelos/{codigo}/
+  margem`, `GET nf`, `GET produto`, `GET grade`) + permissão
+  `REL_ETQ_PROD` + tela `etiqueta-produto.tsx` (NF Entrada via
+  `FornecedorSearchModal`, adição manual via `ProdutoSearchModal` +
+  matriz de Grade, Modo Didático explicando a lacuna do Zebra) +
+  `export-etiqueta-produto.ts` (grid CSS em cm, paginação por
+  `linhas_por_folha` do modelo) + `src/utils/barcode.ts` (novo, usa a
+  dependência `jsbarcode` — adicionada ao `package.json` nesta rodada,
+  gera EAN-13/EAN-8/CODE128 conforme o tamanho do código).
+
+### Próximos passos
+
+Resta **Estoque Terceirizado** (bloqueado até o fluxo de emissão de NF de
+consignação ser construído — não é falta de tempo, é dado que não
+existe). **Etiqueta de Produto está implementada mas nunca testada contra
+impressora/folha física real** — validar visualmente (alinhamento,
+tamanho de fonte, código de barras legível) antes de depender dela em
+produção; e retomar a impressão térmica Zebra quando o print-agent local
+ganhar suporte a EPL cru (ver seção acima).
+
+## Painel de Relatórios (VB6) — Grupo Vendas
+
+**Status: rastreio completo dos 10 relatórios feito (2026-08-07). 5
+implementados, 3 pulados por sobreposição (pendente resposta da equipe
+VB6), 1 adiado por ser área fiscal sensível, 1 (Ranking) implementado sem
+sua sub-feature de cruzamento com Compras.**
+
+**Achado de localização, antes do rastreio em si**: só 3 dos 10 forms
+vivem em `Geral\` — os outros 5 vêm de `Kontacto\`/`Guerengases\` (cada
+`.vbp`, inclusive o `backon.vbp` do próprio Kontacto, aponta pra eles
+nesses locais; não existem em `Geral\` de forma alguma, não é uma falha
+de busca). Duas armadilhas nome-de-arquivo/`VB_Name` reais encontradas:
+`Geral\FrmRelComVenCup.frm` **não** é "Venda por Comanda" (é outro
+relatório, não rastreado) — o real é `Geral\frmrelcomven.frm` (minúsculo,
+só achado via grep case-insensitive); `Geral\FrmRelVenNiv2.frm` tem
+`VB_Name = FrmRelVenNiv` (cópia abandonada, mesmo nome interno do form
+#5) — **não** é "Venda por Vendedor/Executor O.S", que é de fato
+`Kontacto\frmrelvennivfun.frm` (`VB_Name FrmRelVenNivFun`).
+
+**Confirmação da diretriz de generalização já usada no grupo Caixa**
+(Apuração de Vendas-DRE/Resumo de Venda/Descontos/Itens Vendidos, todos
+2026-08-07): nesta migração `comanda`+`movimentacao` **não** é o ledger
+geral de venda — é só o "envelope" de fechamento (ver
+`fechamento_caixa_service.py`), exceto Contratos (exceção já confirmada,
+arquitetura própria). Todo relatório do legado que lê `comanda`+
+`movimentacao` com `serie_nf='CM'` foi generalizado pra ler
+`pedido_venda_prod`/`pedido_venda` (situação `'PG'`) UNION `os_produto`/
+`os` (situação `'PG'`) diretamente — mesmo padrão/mesmas colunas de custo
+já validadas (`custo_reposicao` produto, `custo_hora` serviço no Pedido,
+`custo_os` já pronto no item de O.S.). Aplicada a todos os 5 relatórios
+implementados abaixo, sem exceção.
+
+**Inconsistências reais do legado, resolvidas por decisão desta migração
+(não do legado)**:
+- **`situacao`**: a maioria dos 10 forms usa `comanda.situacao='PG'`
+  (só pago), mas o form #7 (Venda por Vendedor/Executor) usa
+  `c.situacao<>'C'` (qualquer não-cancelado) no modo Vendedor — outlier
+  mesmo dentro do próprio legado. Decisão: manter `'PG'`/situação
+  faturada em todos os 5 implementados, consistente com **todo** outro
+  relatório já construído nesta migração (Apuração/Resumo/Descontos/Itens
+  Vendidos/Itens do Pedido) — não replicar o outlier.
+- **`veiculos`**: aparece em 4 dos 8 forms rastreados pelo agente (mais os
+  2 já traçados por mim). Decisão: **sem Veículos** em nenhum dos 5
+  implementados — mesma simplificação consciente já documentada em
+  `relatorio_resumo_venda_service.py` (`pedido_venda_prod`/`os_produto`
+  nesta migração só referenciam `pecas`/`servicos`, sem evidência de item
+  tipo veículo nesses fluxos).
+- **Custo básis**: form #1 usava `movimentacao.custo_mov` (custo no
+  momento da venda), form #5 usava `pecas.custo_reposicao` (custo atual).
+  Como nenhum dos dois foi implementado (ver "pulados" abaixo), não
+  precisou de decisão nesta rodada — fica registrado pra quando/se
+  "Vendas x Custo"/"Venda por Nível" forem retomados.
+
+### Implementados (2026-08-07)
+
+**Itens por Funcionário** (`Geral\FrmRelVenFun.frm`, 866 linhas) — toggle
+Vendedores (Pedido, agrupado por `nome_guerra` via `pedido_venda_prod.
+vendedor`/`pedido_venda.vendedor`, header sobrepõe item quando vazio,
+mesma regra já usada em Descontos) / Executores (O.S., agrupado por
+`os_produto.executor`) — filtros período (obrigatório) + funcionário
+(opcional) + "considerar serviços" (inclui/exclui a união com
+`servicos`). Sem filtro de código de fabricante do legado (marginal,
+já coberto indiretamente pela busca de produto de outros relatórios).
+
+**Ranking de Vendas** (`Geral\FrmRkgCliPro.frm`, 1787 linhas) — Top-N por
+Cliente, Produto ou Vendedor, ordenável por Quantidade ou Valor, filtro
+"Nº de Registros" (cap), período, vendedor, considerar serviços. **Não
+portada a sub-feature "Compras"** (cruzamento com `n_fiscal_itens` de
+entrada pra mostrar histórico de compra ao lado de cada produto no
+ranking) — decisão consciente: é uma feature de compras enxertada dentro
+de uma tela de vendas, sem pedido explícito do usuário pra portar, e our
+Gestão de Compras já tem seus próprios relatórios de ressuprimento/curva
+ABC que cobrem essa necessidade de outro ângulo.
+
+**Venda por Cliente/Produto** (`Geral\FrmRelVenCli.frm` 738L +
+`Geral\FrmRelVenPro.frm` 902L, unificados por decisão do usuário) — uma
+tela só, toggle Cliente↔Produto (mesma consulta, `GROUP BY`/`ORDER BY`
+invertido), com busca opcional de produto específico (código
+fábrica/barras/descrição/código interno, mesmo fallback do legado) só
+disponível no modo Produto. Lista itemizada com quebra/subtotal por
+cliente (ou por produto) e total geral, período obrigatório.
+
+**Venda por Vendedor × Nível** (`Kontacto\frmrelvennivfun.frm`, 1357
+linhas) — mesmo toggle Vendedor(Pedido)/Executor(O.S.) do "Itens por
+Funcionário" acima, mas agregado por **nível de produto** em vez de por
+funcionário isoladamente (venda/custo/margem por nível, dentro de UM
+funcionário ou geral) — reaproveita `buildNivelBreadcrumb`. Filtro de
+funcionário único (sem "TODOS + quebra por funcionário" do legado — só
+"todos os funcionários juntos" ou "um funcionário específico", simplifi-
+cação consciente pra não empilhar 2 dimensões de agrupamento na mesma
+tela).
+
+**Venda por Região/Segmento** (`Guerengases\FrmVenTot.frm`, 847 linhas)
+— generalização do "query builder dinâmico" do legado (4 dimensões
+opcionais: Região/Segmento/Rota/Vendedor, cada uma podendo ser
+"não filtrar"/"todos"/valor específico, com `SELECT`/`GROUP BY`
+montados em string no próprio VB6) pra uma agregação fixa: sempre agrega
+por todas as 4 dimensões de uma vez (`cliente.regiao`/`.segmento`/
+`.rota`, `pedido_venda.vendedor`/`os_produto.executor`), retorna a lista
+completa, e o FRONTEND decide quais colunas mostrar/agrupar visualmente
+conforme os filtros marcados — evita replicar a montagem de SQL dinâmico
+(puro workaround de VB6, ver "Não replicar truques VB6" no CLAUDE.md; a
+regra real é só "group by configurável", não a técnica de concatenar
+string de SQL). "SEM REGIÃO"/"SEM SEGMENTO"/"SEM ROTA"/"SEM VENDEDOR"
+como label de fallback, igual ao legado.
+
+### Pulados — pendente resposta da equipe VB6 (2026-08-07)
+
+Por decisão explícita do usuário ("pular os 3 até ter resposta da
+equipe vb 6"), os 3 relatórios abaixo **não foram implementados nesta
+rodada** — aguardando confirmação de que a sobreposição com relatórios
+já existentes é aceitável (ou se há alguma diferença de regra de negócio
+real que eu não capturei no rastreio):
+
+- **Vendas x Custo** (`Kontacto\FrmRelPVC.frm`, 1261 linhas) — venda ×
+  custo × lucro % por nível de produto, com filtro adicional de
+  documento (Fichas/Orçamento/O.S./Pedidos via `comanda_ped`/
+  `comanda_orc`/`comanda_os`/`comanda_ficha`) que **nem teria como ser
+  replicado fielmente** — `comanda_orc`/`comanda_ficha`/`os_ficha` não
+  são gravados por nenhum service desta migração (grep confirmado,
+  zero ocorrências fora de `comanda_ped`/`comanda_os` que já existem
+  como link tables do Fechamento de Caixa). Sobreposição: **Resumo de
+  Venda** (Caixa) já entrega venda/custo/margem por nível a partir de
+  Pedido+O.S. — só falta o detalhamento produto-a-produto dentro de
+  cada nível (o legado mostra, Resumo de Venda hoje só mostra o nível
+  agregado).
+- **Venda por Nível** (`Geral\FrmRelVenNiv.frm`, 1307 linhas) — mesmíssima
+  forma (venda/custo/margem por nível, com detalhamento produto-a-produto
+  dentro do nível) sem o filtro de documento do anterior. Mesma
+  sobreposição com Resumo de Venda.
+- **Itens Vendidos por Comanda** (`Geral\frmrelcomven.frm`, 804 linhas) —
+  auditoria/conferência item-a-item por número de comanda + vendedor
+  (inclusive uma faixa "vendedor=0/Ninguém", achado que parece truque de
+  VB6 — `comanda.situacao` reaproveitado como alias `Nome_Guerra` pra
+  esses casos — não uma regra de negócio real). Como `comanda` não é mais
+  a unidade conceitual de venda nesta migração (é só o envelope de
+  fechamento), o equivalente mais próximo seria "item a item por
+  Pedido/O.S." — que **Itens do Pedido** e **Itens Vendidos O.S./Balcão**
+  (grupo Pré Venda) já cobrem em nível agregado por produto, só sem a
+  quebra por número de documento individual.
+
+**Se a resposta da equipe VB6 confirmar que algum dos 3 tem valor real
+além do que já existe**, retomar aqui — o rastreio SQL completo de cada
+um já está registrado acima (via o agente de pesquisa desta sessão),
+não precisa ser refeito do zero.
+
+### Adiado — área fiscal sensível
+
+**Vendas por Nota** (`Kontacto\FrmRelCSN.frm`, 688 linhas) — o mais
+estruturalmente diferente do grupo: não soma vendas, **confronta** o
+total vendido por nível contra o quanto já foi emitido em documento
+fiscal (NFC-e via `comanda_nfce`/`comanda_nfce_detalhe`, NF-e via
+`n_fiscal`/`n_fiscal_itens`/`comanda_nf` com `SITUACAO_NFE=1`, NF-e de
+Serviço via a mesma trinca com série de serviço), mostrando o gap
+"Outros" (vendido mas sem nota emitida). Todas as tabelas dependência
+existem nesta migração (confirmado por grep), mas:
+- É o único relatório do grupo cuja regra de negócio central é
+  inteiramente sobre emissão fiscal — cai sob a seção 12 do CLAUDE.md
+  ("Telas Fiscais — Fonte VB6 em Evolução Contínua"), que pede cautela
+  extra e reconfirmação antes de portar regra fiscal, mesmo sendo um
+  relatório só de leitura.
+- Teria que decidir também de que fonte vem o "Venda" total pra
+  confrontar — repetir a mesma generalização Pedido/O.S. já usada nos
+  outros 5 (provavelmente correto), mas ainda não confirmado.
+- Por decisão explícita do usuário (`AskUserQuestion`, "Deixar por
+  último/pendente"), fica registrado aqui com o rastreio SQL completo
+  (5 passos: base de venda por nível, NFS-e, NF-e, NFC-e, rollup
+  hierárquico em 2 tabelas temporárias) já feito — implementar depois,
+  isoladamente, não junto com o resto do grupo.
+
+### Implementação (2026-08-07)
+
+- **Itens por Funcionário**: `relatorio_itens_funcionario_service.py`
+  (8 testes) + rota `GET /api/relatorios/itens-funcionario` + permissão
+  `REL_ITENS_FUNC` + tela `relatorio-itens-funcionario.tsx` (toggle
+  Vendedor/Executor, filtro funcionário opcional, considerar serviços).
+- **Ranking de Vendas**: `relatorio_ranking_vendas_service.py` (8 testes)
+  + rota `GET /api/relatorios/ranking-vendas` + permissão `REL_RANKING`
+  + tela `relatorio-ranking-vendas.tsx` (Cliente/Produto/Vendedor,
+  ordenar por Qtd/Valor, Nº de Registros, filtro vendedor/fabricante).
+- **Venda por Cliente/Produto**: `relatorio_venda_cliente_produto_service.py`
+  (6 testes) + rota `GET /api/relatorios/venda-cliente-produto` +
+  permissão `REL_VEN_CLIPRO` + tela
+  `relatorio-venda-cliente-produto.tsx` (toggle de agrupamento client-side,
+  busca de produto via `ProdutoSearchModal` reaproveitado, `tipo=all`).
+- **Venda por Vendedor × Nível**: `relatorio_venda_nivel_funcionario_service.py`
+  (7 testes) + rota `GET /api/relatorios/venda-nivel-funcionario` +
+  permissão `REL_VEN_NIVFUN` + tela
+  `relatorio-venda-nivel-funcionario.tsx` (mesmo breadcrumb de nível do
+  Resumo de Venda).
+- **Venda por Região/Segmento**: `relatorio_venda_regiao_service.py`
+  (6 testes) + rota `GET /api/relatorios/venda-regiao` + permissão
+  `REL_VEN_REGIAO` + tela `relatorio-venda-regiao.tsx` (chips de dimensão
+  multi-seleção, reagrupamento no backend conforme `dimensoes` CSV).
+- 5 exportadores PDF/Excel novos (`export-itens-funcionario.ts`,
+  `export-ranking-vendas.ts`, `export-venda-cliente-produto.ts`,
+  `export-venda-nivel-funcionario.ts`, `export-venda-regiao.ts`), seguem
+  o padrão já estabelecido (`print-report-header.ts`/`export-xlsx.ts`).
+  Novo grupo **"Vendas"** populado em `relatorios.tsx` (5 cards, ordem
+  alfabética automática).
+- `tsc --noEmit`: baseline de 12 mantido (nenhum erro novo). Backend:
+  1674 passed / 67 failed (baseline pré-existente inalterado) — 35 testes
+  novos, todos passando. **Não testado ao vivo contra dados reais.**
+
+### Próximos passos
+
+1. Aguardar resposta da equipe VB6 sobre os 3 relatórios pulados (Vendas
+   x Custo, Venda por Nível, Itens Vendidos por Comanda) antes de decidir
+   se algum deles precisa mesmo assim de uma tela própria.
+2. Retomar **Vendas por Nota** (fiscal, `Kontacto\FrmRelCSN.frm`)
+   isoladamente — rastreio SQL completo já registrado acima, falta só a
+   decisão de arquitetura (fonte do "Venda" a confrontar) e a implementação
+   em si, com a cautela de área fiscal já descrita.
+3. Validar os 5 relatórios implementados contra uma conexão real (nenhum
+   foi testado ao vivo ainda) — atenção especial pro Ranking de Vendas
+   (2 UNIONs por modo) e Venda por Região/Segmento (reagrupamento em
+   Python, cardinalidade pequena mas nunca exercitada contra dado real).
+
+## Painel de Relatórios (VB6) — Grupo Clientes
+
+**Status: rastreio completo dos 3 relatórios feito (2026-08-07), os 3
+implementados — mas o de "Mala Direta" saiu **bem diferente** do legado
+por decisão explícita do usuário, ver abaixo.**
+
+### Rastreio
+
+- **Inatividade de Clientes** (`Geral\FrmRelCliSMV.frm`, 1065 linhas) —
+  detecção de clientes sem compra num período, com 3 "ciclos" de
+  frequência de recompra (janelas configuráveis em dias, contadas a
+  partir de uma data-base por cliente ou global), campo "Acima de" que
+  na prática é um PISO DE DATA (não um valor — nome enganoso do legado,
+  replicado como está por fidelidade ao rótulo mas com comportamento
+  correto), e 2 sub-checks de faturamento de Contrato.
+- **Listagem de Clientes** (`Geral\FrmRelClie.frm`, 692 linhas) — 6 modos
+  de filtro (Código/CPF-CNPJ/Nome/Data Cadastro/Data Nascimento/Tipo) +
+  PF/PJ por tamanho de `cgc_cpf`. Achado: o "Tipo" do legado é
+  `cliente.tipo`, uma coluna que **não existe nesta migração** —
+  generalizado pra `cliente.cliente_forn` (a FK real de tipo_cliente, já
+  usada em todo o resto do sistema).
+- **Mala Direta** (`Geral\FrmMalDir2.FRM`, 2741 linhas) — no legado,
+  imprime etiqueta de endereço em folha Pimaco (mesmo mecanismo GDI de
+  `FrmEtqProd.frm`, 4 formatos fixos + um modo "Personalizado" de texto
+  livre repetido), com 4 modos de seleção de destinatário (Clientes —
+  Todos/Aniversário/Data Cadastro/Tipo —, Clientes que Compraram,
+  Fornecedores, Clientes e Fornecedores).
+
+### Decisões do usuário (2026-08-07, várias rodadas de `AskUserQuestion` +
+mensagens diretas) — **mudança de arquitetura real, não só de UI**
+
+1. **Mala Direta perdeu a impressão de etiqueta por completo** — "retire
+   envio por etiqueta e me surpreenda com o envio por email e whatsapp".
+   Não imprime mais nada; seleciona destinatário (Clientes: Todos/
+   Aniversário dia-mês/Data Cadastro/Tipo Cliente; + Fornecedores; ambos
+   juntos) e dispara envio em massa. Fora do escopo desta rodada:
+   "Clientes que Compraram" (cruzamento com Pedido+O.S., mais complexo)
+   e "Etiqueta Personalizada" (não faz mais sentido sem impressão).
+2. **Novo recurso reutilizável `envio_massa_service.py`** (backend) +
+   `EnvioMassaModal.tsx` (frontend) — pedido explícito do usuário: "esse
+   recurso de envio vai ser introduzido em consulta de clientes entre
+   outros" e "use metodologia atuais de envio". **Não reinventa nada** —
+   reaproveita exatamente a infraestrutura já existente e testada:
+   - **WhatsApp**: `services/whatsapp/service.py`, `document_type='CLI'`
+     — o mesmo motor já usado pela tela de Telemarketing pra mensagem
+     avulsa a um cliente (histórico, retry, config/provider já prontos).
+     Escopo: só Cliente (o motor `CLI` só resolve contra a tabela
+     `cliente`, confirmado em `whatsapp/repository.py` — não dá pra
+     mandar WhatsApp pra Fornecedor sem estender esse motor, não feito
+     aqui).
+   - **E-mail**: `services/email_cobranca_service.py` (`enviar_email`) —
+     SMTP puro já usado no envio de cobrança
+     (`Controle do Sistema > aba Outros > Configuração de Emails`).
+     Funciona pra Cliente E Fornecedor (ambos têm `e_mail` próprio).
+   - `envio_massa_service.py` só faz o LOOP pelos destinatários + um
+     render simples de `{nome}` na mensagem/assunto/corpo — não tenta
+     reconstruir a partir do template de documento do WhatsApp (pensado
+     pra Pedido/OS, com `{itens}`/`{total}`, que não fazem sentido numa
+     campanha de marketing).
+   - Rotas: `POST /api/envio-massa/whatsapp` e `/email`, ambas com log de
+     auditoria (`tela=ENVIO_MASSA`). **Este recurso ainda NÃO foi
+     conectado a nenhuma tela de Consulta de Clientes** (só Mala Direta e
+     Inatividade de Clientes, que já existiam nesta rodada) — o
+     componente `EnvioMassaModal` já está pronto pra isso (só precisa de
+     `{codigo, nome, email?, tem_telefone?}[]`), fica como próximo passo
+     natural quando pedido.
+3. **Inatividade de Clientes ganhou ação "Enviar WhatsApp em massa"**
+   sobre os clientes encontrados (reengajamento), reaproveitando o mesmo
+   `EnvioMassaModal` — usuário confirmou explicitamente.
+4. **Decisão própria desta migração, sem precedente no legado**: todo
+   modo de seleção da Mala Direta (Clientes e Fornecedores) exige
+   `situacao = 'A'` — envio de verdade (ao contrário de imprimir uma
+   etiqueta que pode simplesmente não ser usada) não deveria alcançar
+   cadastro inativo/cancelado por padrão. Reavaliar se pedido o
+   contrário.
+
+### Achados técnicos confirmados durante a implementação
+
+- `contratos.situacao` usa 'A'/'F' (Aberto/Finalizado) nesta migração —
+  diferente do texto livre do legado (`Left(SituacaoContrato.Text,1)`).
+- **Divergência real de série confirmada**: o legado filtra
+  `receber.serie='CM'` pro sub-check "último faturamento de contrato
+  pago", mas `_faturar_contratos_sync` desta migração grava com
+  `serie='CO'` — usado o valor real desta migração, não o do legado.
+- `Receber`/`Duplicata_Receber`/`Duplicata_Rec_Venc`/`Duplicata_Rec_Nf`
+  (incl. `duplicata_rec_venc.data_pag`) e `comanda_contrato` — todos
+  confirmados reais e já usados pelo módulo Contratos/CNAB.
+- "Ciclos" de frequência de recompra ficaram fiéis ao legado — só contam
+  `pedido_venda` (não O.S.), mesmo antes desta migração generalizar o
+  resto do relatório.
+
+### Implementação (2026-08-07)
+
+- **`envio_massa_service.py`** (5 testes) + `routes/envio_massa.py`
+  (`POST /api/envio-massa/whatsapp`, `/email`).
+- **Listagem de Clientes**: `relatorio_listagem_clientes_service.py`
+  (10 testes) + rotas em `routes/relatorio_clientes.py` + permissão
+  `REL_LIST_CLI` + tela `relatorio-listagem-clientes.tsx` +
+  `export-listagem-clientes.ts` (PDF busca contato/endereço por cliente
+  sob demanda, fiel à diferença real Imprimir vs. Gerar Planilha do
+  legado).
+- **Inatividade de Clientes**: `relatorio_inatividade_clientes_service.py`
+  (10 testes) + permissão `REL_INAT_CLI` + tela
+  `relatorio-inatividade-clientes.tsx` (com botão "Enviar WhatsApp") +
+  `export-inatividade-clientes.ts`.
+- **Mala Direta**: `mala_direta_service.py` (7 testes) + permissão
+  `MALA_DIRETA` + tela `mala-direta.tsx` (sem exportador de impressão —
+  não imprime mais nada).
+- **`EnvioMassaModal.tsx`** (novo componente reutilizável,
+  `frontend/src/components/`) — canal WhatsApp/E-mail, template com
+  `{nome}`, resultado por destinatário.
+- Novo grupo **"Clientes"** em `relatorios.tsx` (3 cards, ordem
+  alfabética automática).
+- `tsc --noEmit`: baseline de 12 mantido. Backend: 1720 passed / 67
+  failed (baseline pré-existente inalterado) — 32 testes novos, todos
+  passando. **Não testado ao vivo** — atenção especial: nenhum envio de
+  WhatsApp/e-mail de verdade foi disparado ainda (só testado com mocks
+  nos testes unitários); confirmar credenciais/configuração antes de
+  usar em produção.
+
+### Próximos passos
+
+1. Conectar `EnvioMassaModal` numa tela de Consulta/Cadastro de Clientes
+   (pedido explícito do usuário, ainda não feito — só precisa passar
+   `destinatarios: [{codigo, nome, email?, tem_telefone?}]`, componente já
+   pronto).
+2. Testar envio real de WhatsApp e e-mail em massa contra uma conexão de
+   teste antes de liberar pra produção.
+3. Se pedido no futuro: "Clientes que Compraram" (Mala Direta) e a
+   integração de "Grade" nos filtros — nenhum dos dois foi rastreado a
+   fundo nesta rodada por estarem fora do escopo aprovado.
+
+## KPDV — Migração da Tela de Vendas (Checkout) para C#/.NET/WPF
+
+**Status: análise de viabilidade feita (2026-08-08), nenhuma linha de
+código C# escrita ainda.** Pedido do usuário: migrar a "tela de vendas"
+pra um app desktop nativo separado, nome **KPDV (Kontacto PDV)**, em
+C# + .NET + WPF — motivado por acesso mais fácil a periféricos (balança,
+impressora térmica, etc.) do que a stack atual permite.
+
+### Escopo — qual tela é "a tela de vendas"
+
+Confirmado: é o **Checkout** (`frontend/app/checkout.tsx`, migração de
+`Geral\FrmPafOFF.frm` — "Emissão de Cupom Fiscal", o PDV/venda direta de
+balcão do legado, ver [[project_checkout]]). Não é Pedido Bar/Pedido
+Geral/O.S. (pré-venda) — é especificamente a tela de venda imediata,
+onde faz sentido pensar em balança/impressora térmica no ato da venda.
+
+### Confirmações de arquitetura (usuário, 2026-08-08)
+
+- **Backend**: KPDV consome a mesma API Python (FastAPI) já em
+  desenvolvimento neste projeto — confirma a premissa já usada na análise
+  de viabilidade, nenhuma mudança de backend necessária.
+- **Busca de Produtos/Serviços — SEM modal, inline no campo.** Diferente
+  do padrão já estabelecido no frontend web (`ProdutoSearchModal`/
+  `ClientSearchModal` — digitar + Enter abre um modal de seleção quando
+  há 0 ou 2+ resultados, ver regra `[GLOBAL]` "Campos de identidade
+  precisam de mecanismo de busca" em CLAUDE.md), o KPDV usa um padrão
+  **typeahead/autocomplete ancorado no próprio campo** — resultado
+  aparece direto abaixo do campo de busca enquanto digita, navegável por
+  teclado (↑/↓/Enter/Esc), sem nunca abrir uma janela/diálogo separada.
+  Motivação explícita: velocidade — é o fluxo mais crítico da tela (a
+  cada item vendido), um modal quebraria o ritmo do operador de caixa.
+  Em WPF, o equivalente é um `Popup`/`ListBox` não-modal ancorado sob o
+  `TextBox` (mesma árvore visual, sem `Window` nova) — WPF-UI não tem um
+  `AutoSuggestBox` pronto no momento desta análise, mas o padrão é
+  simples de montar com `Popup` + `ListBox` + navegação de teclado
+  manual.
+  - **Mockup interativo desta busca já publicado** (Artifact HTML/CSS,
+    ver "Mockup visual" na memória do projeto) — campo "Pesquisar por
+    código, descrição ou GTIN" filtra a lista de produtos ao digitar,
+    mostra um painel flutuante ancorado sob o campo (não modal), com
+    navegação por teclado e "Enter" adicionando o item direto à venda —
+    é a referência de interação, não só de aparência.
+  - Esta regra é específica do KPDV — não estende automaticamente pro
+    resto do frontend web (que continua usando o padrão modal já
+    validado em produção lá).
+- **O screenshot "ShopPdv" usado como referência inicial era só um
+  exemplo de inspiração**, não uma especificação a seguir literalmente —
+  confirmado pelo usuário. O mockup publicado (ver memória) reflete a
+  interpretação/adaptação pra marca Kontacto, não uma cópia pixel-a-pixel
+  do exemplo.
+
+### Login e permissões (usuário, 2026-08-08)
+
+- **Tela de login do KPDV**: ao abrir, solicita **conexão** (servidor/
+  banco — mesmo conceito já usado no frontend web, `listConnections()`/
+  tela de Conexões, hoje uma lista local por instalação) + **usuário** +
+  **senha**. Usa o mesmo `POST /api/login` já existente — `LoginResponse`
+  já devolve `usuario`/`funcionario` (inclui `classe`, usado a seguir pra
+  resolver permissões), nenhuma mudança de backend necessária.
+- **Toda administração de permissão continua sendo feita pelo frontend
+  React** — o KPDV **não terá tela própria de gestão de permissões**.
+  Quem concede/revoga o que cada grupo pode fazer no KPDV é a tela
+  Permissões já existente (`frontend/app/permissoes.tsx` +
+  `GET/POST /api/permissoes*`). O KPDV só **consome** essas permissões
+  (mesmo fluxo já usado no React: login → `classe` do usuário →
+  `GET /api/permissoes?classe=X` → gate de UI equivalente ao `can()` do
+  hook `usePermissions()`), nunca as edita.
+  - **O catálogo de permissões já tem a tela certa pra isso**: a tela
+    `CHECKOUT` já existe no catálogo (`permissoes_service.py`,
+    `ACOES_CHECKOUT` — `ABRIR`/`ADD_ITEM`/`DEL_ITEM`/`DESC_ITEM`/
+    `DESC_GERAL`/`FECHAR`/`CANCELAR`) porque o Checkout web já usa essas
+    mesmas ações. Como o KPDV assume literalmente a mesma tela/regra de
+    negócio, a expectativa é que ele reaproveite a MESMA chave `CHECKOUT`
+    no catálogo — não uma tela nova — a menos que surja uma ação
+    genuinamente exclusiva do KPDV (ex.: algo ligado só a periférico)
+    que precise de um `BOTAO` próprio.
+- **O Checkout deixará de existir no frontend React** — confirmado pelo
+  usuário: "não existirá mais a tela de vendas no frontend React". É uma
+  substituição completa, não convivência (resolve o ponto em aberto #3
+  já registrado na análise de viabilidade). **Reconfirmado explicitamente
+  2026-08-10** ("KPDV não convive com checkout web. Só existirá o KPDV."),
+  em resposta direta à pergunta ainda listada como "em aberto" na seção
+  acima — a lista de pontos em aberto não tinha sido atualizada quando
+  esta decisão foi tomada originalmente, causando essa reabertura
+  aparente; já corrigido lá. **Isto é uma decisão de
+  destino, não uma instrução pra remover o código agora** — `checkout.tsx`
+  e toda a árvore de componentes ligada (`FecharVendaModal.tsx`,
+  `DavPendentesModal.tsx`, `ConfiguracaoImpressaoModal.tsx`,
+  `DemonstrativoCupomFiscal.tsx`, `AbastecimentoModal.tsx`,
+  `AgendamentoModal.tsx`) continuam sendo a ÚNICA tela de venda em
+  produção até o KPDV existir de verdade e atingir paridade de
+  funcionalidade — remover agora deixaria o negócio sem PDV nenhum. A
+  remoção do Checkout web fica registrada aqui como passo FUTURO,
+  condicionado ao KPDV estar pronto pra substituir, não antes.
+  - **Implicação prática pra daqui pra frente**: novo trabalho de venda de
+    balcão (regra de negócio nova, ajuste de fluxo) deve mirar o KPDV
+    primeiro — o Checkout web só recebe manutenção mínima/correção de bug
+    enquanto continuar sendo a única coisa em produção, não deve ganhar
+    funcionalidade nova a partir de agora, pra não duplicar esforço numa
+    tela com prazo de vida definido.
+
+### Remoção do Checkout web (2026-08-10) — EXECUTADA
+
+Pedido explícito do usuário: "elimine o checkout web do projeto." Removido:
+
+- `frontend/app/checkout.tsx` (a tela em si).
+- `frontend/src/components/checkout/` inteiro — `AbastecimentoModal.tsx`,
+  `AgendamentoModal.tsx`, `ConfiguracaoImpressaoModal.tsx`,
+  `DavPendentesModal.tsx`, `DemonstrativoCupomFiscal.tsx`,
+  `FecharVendaModal.tsx` — confirmado por grep que **nenhum outro arquivo
+  do frontend importava nada desse diretório** (exclusivo de
+  `checkout.tsx`, seguro remover a árvore inteira).
+- Tile "Checkout" removido de `frontend/app/(tabs)/transacoes.tsx`
+  (apontava pra rota `/checkout`, que deixou de existir).
+
+**Deliberadamente NÃO removido** (é "Checkout **web**", não "Checkout" —
+o backend é infraestrutura COMPARTILHADA que o KPDV consome pra valer):
+- `backend/services/checkout_service.py` + `backend/routes/checkout.py` +
+  `backend/tests/unit/test_checkout_service.py` — o KPDV fala com esses
+  MESMOS endpoints (`/api/checkout/*`); removê-los quebraria o KPDV por
+  completo.
+- Permissão `CHECKOUT` no catálogo (`permissoes_service.py`) — decisão já
+  registrada acima ("Login e permissões"): o KPDV reaproveita literalmente
+  a mesma chave/ações, não ganha uma tela nova no catálogo.
+- `frontend/src/utils/reciboTexto.ts` — utilitário genérico, desenhado
+  desde o início pra ser reaproveitável por qualquer tela ("não só
+  Checkout"), sem acoplamento exclusivo à tela removida.
+- Referências a `tipo === "CHECKOUT"` em `useDashboard.ts`/
+  `PedidosTable.tsx` (Tela Principal) — isso é sobre DADOS históricos de
+  vendas (`comanda.tipo`), não sobre a tela; o KPDV continua gravando
+  vendas com esse mesmo tipo, então o dashboard precisa continuar sabendo
+  exibi-las.
+- `print-agent/` e a fila `impressao_fila`/`impressao_service.py` — infra
+  compartilhada, não exclusiva do Checkout web, fora do pedido explícito.
+
+**Verificação**: `tsc --noEmit` → mesmos 12 erros de baseline
+pré-existentes, nenhum novo, nenhum erro de import quebrado (confirma que
+a remoção não deixou nada pendurado). Arquivos removidos via `rm` (não
+`git rm`/commit) — reversível com `git checkout HEAD -- <caminho>` se
+precisar, nenhum commit foi feito nesta sessão.
+
+### Ícone de conexão — restrito aos "3 Magníficos" (usuário, 2026-08-08)
+
+KPDV terá um **ícone de conexão** (acessa/altera a configuração de
+servidor+banco do terminal) visível só pros **"3 Magníficos"** — mesmo
+apelido e mesmo critério já usado no Checkout web pro ícone "engrenagem"
+de configuração de impressão (ver [[project_checkout]]): **Gerente ou
+Supervisor por função (`funcionarios.cod_funcao` 01/02) OU usuário
+Master**. Critério exato já implementado em
+`frontend/src/permissions/index.tsx` (`isManagerFuncao = isMaster ||
+codFuncao === 1 || codFuncao === 2`, `isMaster = usuario.master===true
+OU usuario.usuario.toUpperCase()==='KONTACTO'`) — **nenhum endpoint
+novo necessário**, tanto `usuario.master`/`usuario.usuario` quanto
+`funcionario.cod_funcao` já vêm prontos no `LoginResponse` do
+`POST /api/login`, então o KPDV replica a mesma conta booleana em C# a
+partir do que a própria tela de login já recebeu.
+
+Motivação implícita (mesmo raciocínio do ícone de impressão): trocar
+servidor/banco por engano ou por má-fé (operador de caixa comum) é um
+risco real — venda podendo ir pro banco errado — então só quem já tem
+autoridade operacional (gerência) deve poder mexer nisso; é uma trava de
+função, não uma permissão granular do catálogo.
+
+### Achado do rastreio: balança NÃO existe no legado
+
+Busca exaustiva em `FrmPafOFF.frm` e na árvore `Geral\` inteira por
+qualquer integração de balança/porta serial (`MSComm`, `RS232`) —
+**nenhuma ocorrência real** (os únicos matches de "balanc*" eram
+"balanço" contábil/inventário, falso positivo). **Balança é
+funcionalidade nova, sem regra de negócio legada pra replicar** — precisa
+de definição de requisitos própria (modelo/protocolo) antes de
+implementar, não é rastreio de VB6.
+
+Impressão no legado é via `Printer` (GDI/driver do Windows, mesmo
+mecanismo já visto em `FrmEtqProd.frm`/`FrmMalDir2.FRM`), não ESC/POS
+cru. TEF existe (`USA_TEF`, `TEF_Hora`, `TEF_ValorPago`, `TEF_Transacao`,
+`TEF_NumeroCupom`) mas a chamada externa (DLL tipo `CliSiTef.dll`) não
+foi rastreada a fundo nesta rodada — TEF real já estava adiado no
+Checkout web também (ver [[project_checkout]]).
+
+### Por que WPF resolve o problema de verdade (não é só "mais uma tentativa de desktop")
+
+Este projeto já tentou desktop nativo uma vez — `react-native-windows`,
+ver "Platform Scope" em CLAUDE.md — e **pausou especificamente por causa
+de acesso a periférico**: o motivador original (enumeração automática de
+impressoras) acabou não precisando de RNW, e o resultado prático foi
+construir um workaround via HTTP (o **print-agent**, ver
+[[project_impressao_silenciosa]]) — um processo Python separado rodando
+na máquina cliente, fazendo *polling* numa fila (`impressao_fila`) porque
+o navegador não tem acesso à porta USB local. Funciona, mas é indireto:
+2 processos, fila, latência de polling.
+
+**C#/.NET/WPF resolve isso nativamente, sem indireção**:
+
+| Periférico | Stack atual (web/RNW) | WPF nativo |
+|---|---|---|
+| Impressora térmica (USB local) | Fila + agente Python fazendo polling + `win32print` RAW | `System.Drawing.Printing`/P-Invoke direto no spooler, OU bibliotecas ESC/POS maduras (ex. `ESC POS .NET`) — **sem fila, sem 2º processo, imprime síncrono no fechar da venda** |
+| Balança (serial/COM) | Inviável — Web Serial API tem suporte limitado, nunca tentada; RNW exigiria native module próprio (mesmo tipo de trabalho que já pausou o RNW) | `System.IO.Ports.SerialPort` — acesso trivial e nativo, um dos usos mais documentados da classe |
+| Leitor de código de barras | Já funciona (HID keyboard-wedge, Enter-driven) | Idêntico — não é diferencial, mas não regride |
+| Gaveta de dinheiro | Depende da impressora (pulso ESC/POS) | Resolvido junto com a impressora |
+| TEF | Adiado (Checkout web nunca implementou) | P/Invoke pra DLL nativa (`CliSiTef.dll`/PayGo) é natural em C#; em RN exigiria native module Windows |
+
+### O que se aproveita do que já foi construído
+
+- **Backend inteiro, sem mudança nenhuma.** A API HTTP já é agnóstica de
+  frontend (mesmo raciocínio já documentado no CLAUDE.md pro RNW —
+  "talking to the same Python HTTP API — no backend changes needed").
+  `checkout_service.py` inteiro — formas de pagamento múltiplas, Vale de
+  Devolução, Cartão Presente, checagem de Taxa NFCe, importar Pedido/O.S.
+  como DAV, Abastecimento/Agenda — já rastreado, testado (67 testes) e
+  100% reaproveitável.
+- **`/api/login`** já existe e serve pro KPDV autenticar sem mudança —
+  CORS (`allow_origins=["*"]`) nem é relevante aqui, é um conceito só de
+  navegador; um `HttpClient` nativo do .NET não é afetado por CORS de
+  jeito nenhum.
+- **UX já validada com o usuário** (não código, mas especificação viva):
+  campo Código como único foco + Enter inclui direto, destaque do item
+  recém-lançado, grade Descrição/Qtd/Unit./Total, rodapé de totais — todo
+  esse desenho de interação (`checkout.tsx`/`DemonstrativoCupomFiscal.tsx`)
+  já foi discutido e ajustado com o usuário, reduz bastante retrabalho de
+  UX mesmo que o código TypeScript em si não sirva pra WPF.
+- **print-agent continua sendo a solução certa pras OUTRAS telas** que
+  não têm plano de virar desktop nativo (Pedido Bar, Pedido Geral, O.S.)
+  — migrar o Checkout pro KPDV não invalida esse trabalho, só o torna
+  desnecessário especificamente pra esta tela.
+
+### Pontos em aberto (decisões do usuário, não técnicas)
+
+~~1. **Modelo/protocolo de balança** a suportar~~ — **RESOLVIDO
+   2026-08-10**: Toledo, modo compatível. Implementado best-effort (ver
+   "Balança Toledo + Pré-Pesagem" abaixo) — ainda precisa de validação
+   contra hardware físico real, mas a decisão de qual protocolo perseguir
+   está tomada.
+2. **TEF entra no escopo do KPDV desde já** ou fica adiado como já estava
+   no Checkout web? — ainda em aberto.
+~~3. **KPDV convive com o Checkout web** ou **substitui por completo**?~~ —
+   **RESOLVIDO 2026-08-08** (registrado abaixo em "Login e permissões",
+   só não tinha sido refletido aqui), **reconfirmado explicitamente pelo
+   usuário em 2026-08-10** ("KPDV não convive com checkout web. Só
+   existirá o KPDV.") **e EXECUTADO no mesmo dia** — usuário pediu
+   explicitamente pra eliminar o Checkout web do projeto, não é mais só
+   decisão de destino. Ver "Remoção do Checkout web" logo abaixo.
+4. **Distribuição/atualização** do KPDV nas lojas — **infraestrutura de
+   auto-update IMPLEMENTADA 2026-08-10** (ver "Distribuição — Velopack"
+   abaixo). Das 2 sub-decisões, 1 já **RESOLVIDA no mesmo dia**:
+   ~~(a) framework-dependent vs. self-contained~~ → **self-contained**
+   (script já ajustado, virou o padrão). Continua aberta: (b) ONDE a fonte
+   de atualização física vai morar (pasta de rede entre as lojas? servidor
+   HTTP central?) — o painel "Atualização" do KPDV já aceita qualquer um
+   dos dois formatos, só falta a decisão de infraestrutura em si.
+
+### Recomendação
+
+Tecnicamente viável, e resolve de forma definitiva e nativa exatamente os
+2 problemas que motivaram a pausa do react-native-windows. Nenhuma mudança
+de backend necessária. O trabalho real é: (a) reconstruir a UI em XAML
+consumindo os mesmos endpoints REST já existentes e testados, (b)
+implementar 2 módulos de periférico em C# (impressão ESC/POS direta,
+leitura serial de balança), (c) decidir os 4 pontos em aberto acima com o
+usuário antes de começar a implementação.
+
+### Direção visual — "aparência bastante atual" (pedido do usuário, mesmo dia)
+
+WPF puro (sem biblioteca extra) tem os controles padrão do .NET Framework
+clássico — cinza, chrome datado, nada "atual". Pra atingir a aparência
+pedida sem trocar de framework (o usuário pediu WPF, não WinUI3/UWP),
+a rota é uma **biblioteca de estilos Fluent para WPF por cima do WPF
+padrão**:
+
+- **Recomendação: [WPF-UI](https://github.com/lepoco/wpfui)** (`lepoco/wpfui`,
+  ativamente mantida) — aplica o Fluent Design real do Windows 11 (cantos
+  arredondados, fundo Mica/acrylic na janela, `NavigationView`, ícones
+  Fluent, snackbar/toast, tema claro/escuro/automático do sistema) em
+  cima do WPF puro — não é WinUI3, continua sendo WPF, só com o visual
+  atualizado.
+  - Alternativas consideradas: **ModernWpfUI** (mesma ideia, menos
+    ativa), **MaterialDesignInXamlToolkit** (visual Material/Android, não
+    "nativo Windows"), **HandyControl** (rico em controles tipo
+    dashboard, bom pra telas densas de dados), **MahApps.Metro** (visual
+    "Metro" da era Windows 8, hoje já datado comparado ao Fluent do
+    Windows 11).
+- **Continuidade de marca com o resto do sistema (web/mobile)**: reaproveitar
+  a paleta já definida em `frontend/src/theme/colors.ts` em vez do azul
+  padrão do Fluent — `brandPrimary #0B2A5B` (navy) como cor de destaque,
+  `surface #F4F6FB`/`surfaceSecondary #FFFFFF` como fundos, `radius.md
+  12px` pros cantos de card, `spacing` (4/8/12/16/24/32) como escala de
+  espaçamento. O KPDV deve parecer parte da mesma família visual do
+  Kontacto, não um app à parte.
+- **Contexto de PDV**: botões grandes/tocáveis (mesmo em desktop, o
+  operador de caixa costuma usar mouse/touch rápido, não precisão fina),
+  alto contraste pro ambiente de loja, tipografia Segoe UI Variable
+  (fonte padrão do Windows 11, incluída pelo WPF-UI).
+- Tema claro/escuro/automático do sistema já vem de graça com WPF-UI —
+  vale oferecer, mesmo que o padrão operacional de PDV normalmente seja
+  tema claro.
+
+Ainda não decidido nem prototipado — fica registrado como direção pra
+quando a implementação começar.
+
+### Considerações técnicas WPF (checklist do usuário, mesmo dia)
+
+Pontos que precisam de decisão de arquitetura ANTES de começar a
+implementação (nenhum decidido ainda, só mapeados):
+
+- **Renderização de fontes**: `TextOptions.TextFormattingMode` —
+  `Display` (pixel-snapped, mais nítido a 100% de escala) vs `Ideal`
+  (correto em telas com DPI fracionário/escalado, mais consistente entre
+  terminais de loja diferentes). Terminal de PDV varia muito de hardware
+  — tender pra `Ideal` + `TextRenderingMode=ClearType`, mas validar contra
+  os monitores reais das lojas antes de fixar.
+- **XAML**: padrão MVVM (View em XAML "burro", lógica em ViewModel,
+  nunca code-behind com regra de negócio) — mesma separação de
+  responsabilidade já praticada no React (`checkout.tsx` = orquestração,
+  `DemonstrativoCupomFiscal.tsx` = apresentação). UserControl por seção
+  da tela, espelhando a modularização já validada no frontend web.
+- **Recursos dinâmicos**: `DynamicResource` só onde precisa mudar em
+  runtime (troca de tema claro/escuro do WPF-UI) — tem custo de lookup a
+  cada acesso. `StaticResource` (resolvido uma vez, mais rápido) pra tudo
+  que não muda em runtime (tamanhos fixos, brushes não-temáticos).
+- **Entrada de dados**: a UX inteira do Checkout web já é construída em
+  cima de "campo Código é o único foco necessário, Enter inclui o item
+  direto, foco volta sozinho" (ver [[project_checkout]]) — replicar via
+  `PreviewKeyDown`/`InputBindings` pro Enter (inclusive o Enter automático
+  de leitor de código de barras HID) + gestão explícita de foco
+  (`FocusManager`), não widgets de captura genéricos.
+- **Cache**: tabelas de apoio (funcionários, formas de pagamento, produto
+  buscado) devem ser cacheadas em memória no processo do KPDV, buscadas
+  uma vez e reaproveitadas — mesmo padrão já usado no frontend web (listas
+  carregadas uma vez no mount, não a cada tecla). `BitmapCache`/`CacheMode`
+  só se algum visual pesado (ícone/gradiente) causar lag perceptível em
+  grade rolável — não otimizar isso de antemão sem medir.
+- **Arrays**: lista de itens da venda deve ser `ObservableCollection<T>`
+  (notifica a UI sozinha em Add/Remove), não `List<T>` — evita
+  implementar `INotifyCollectionChanged` na mão.
+- **Diálogos**: `Window.ShowDialog()` clássico (modal, bloqueia a janela
+  pai) só pra confirmação que realmente precisa bloquear (ex.: código do
+  Cartão Presente/Vale de Devolução). Pra aviso não-bloqueante (equivalente
+  ao `ScreenToast`/`useFeedback` do web — ver "Mensagens de sistema" em
+  CLAUDE.md), usar Snackbar/InfoBar do WPF-UI, não uma segunda `Window` —
+  mesmo princípio já `[GLOBAL]` no resto do sistema: mensagem de sistema
+  nunca trava a tela sem necessidade real.
+- **Automação da interface**: todo controle relevante ganha
+  `AutomationProperties.AutomationId` (equivalente direto do `testID` já
+  usado em toda tela React deste projeto) — viabiliza teste automatizado
+  futuro (WinAppDriver/FlaUI) e acessibilidade (leitor de tela), mesma
+  disciplina já seguida no resto do sistema, não uma prática nova.
+- **Conversões de pixel/DPI**: WPF trabalha em pixels independentes de
+  dispositivo (1 DIP = 1/96"), mas terminal de loja varia de escala
+  (100/125/150/200%, comum em hardware touch de PDV) — manifest precisa
+  declarar **Per-Monitor V2 DPI awareness** (crítico se o KPDV rodar com
+  monitor do operador + monitor voltado pro cliente, cada um podendo ter
+  DPI diferente), e todo layout deve ser medido em DIP, nunca pixel de
+  tela cru — testar os botões grandes/tocáveis em mais de uma escala
+  antes de fixar tamanho.
+
+### Versão do .NET e requisitos não-funcionais (decisão do usuário, mesmo dia)
+
+**Target: .NET 10 (LTS), não .NET 11.** Decisão explícita do usuário:
+".NET 11 ainda está em Preview [na época deste registro] — ficar no .NET
+10 LTS" — segue o padrão real de release do .NET (versões pares =
+LTS/3 anos de suporte, ímpares = STS/18 meses; .NET 11 só vira estável em
+novembro, ~1 ano depois do .NET 10). TFM do projeto:
+`net10.0-windows` (WPF sempre precisa do sufixo `-windows`, não existe
+`net10.0` puro pra WPF). **Verificar na hora de implementar** se WPF-UI
+(biblioteca recomendada acima) já publica build compatível com .NET 10
+antes de fixar a versão do pacote — não assumido/confirmado ainda, só
+verificável quando o projeto for criado de fato.
+
+**"Leve, responsiva e estável"** — 3 requisitos não-funcionais explícitos
+do usuário, com implicação técnica direta:
+
+- **Leve**: mínimo de dependências além do essencial (WPF-UI +
+  `HttpClient`, sem framework de DI pesado se não for necessário — o
+  `Microsoft.Extensions.DependencyInjection` já é leve e idiomático o
+  bastante se precisar). Decisão de deployment framework-dependent
+  (runtime .NET 10 pré-instalado na loja) vs. self-contained (maior,
+  mas não depende de nada instalado) fica pro momento de decidir
+  distribuição (ver ponto 4 já registrado acima) — self-contained tende
+  a contradizer "leve" em tamanho de instalador, mas é mais robusto pra
+  loja sem runtime já presente; avaliar então.
+- **Responsiva**: nunca bloquear a UI thread — toda chamada ao backend
+  via `async`/`await` real (nunca `.Result`/`.Wait()` síncrono em cima de
+  `Task`, armadilha clássica de deadlock em WPF), debounce em busca de
+  produto "ao digitar" (mesmo princípio já usado no frontend web —
+  350ms de debounce nas buscas de cliente/produto/fornecedor), UI nunca
+  "trava" esperando rede — precisa de indicador de carregando (mesmo
+  princípio `[GLOBAL]` "Feedback visual em processos demorados" já
+  aplicado no resto do sistema).
+- **Estável**: tratamento robusto de falha de rede (a loja pode ter rede
+  instável, backend pode estar temporariamente fora) — política de
+  retry (`Polly` é a biblioteca padrão de mercado pra isso em .NET, leve
+  o bastante pra não contradizer o requisito anterior), handler global
+  de exceção não tratada (`Application.DispatcherUnhandledException`)
+  pra nunca deixar o app fechar sozinho no meio de uma venda, e cuidado
+  especial pra uma venda nunca ficar "presa" num estado intermediário se
+  a rede cair no meio do fechamento.
+
+Nenhuma dessas decisões foi implementada ainda — ficam registradas como
+requisito orientador pra quando o projeto KPDV for criado de fato.
+
+### Implementação — 1ª fase (2026-08-08)
+
+**Status: projeto WPF real criado, compila e roda.** Solução em
+`C:\Desenv\KPDV\` (fora do repositório APPIAREACT — projeto irmão,
+consome a mesma API, não faz parte deste monorepo). `dotnet build`:
+**0 erros, 0 avisos**. Processo testado (`Start-Process` +
+`Get-Process`): abre e fica de pé com o título "KPDV — Kontacto PDV" —
+confirma que DI, tema Fluent, `App.xaml`/`Brand.xaml` e a `LoginView`
+inicial carregam sem exceção. **Não testado visualmente** (tentativa de
+screenshot pegou a janela errada por engano — descartada, não repetida;
+ver nota de segurança abaixo) nem testado com login real de ponta a
+ponta (precisa de usuário/senha reais, que não estão disponíveis nesta
+sessão) — só a conectividade/contrato dos endpoints foi verificada
+contra o backend rodando (`curl`/leitura direta do código-fonte antes de
+implementar, não suposição).
+
+**Achado que corrige a análise anterior**: o pacote NuGet `WPF-UI`
+4.3.0 (`lepoco/wpfui`) **já publica build oficial pra `net10.0-
+windows7.0`** — confirmado inspecionando o pacote instalado
+(`lib/net10.0-windows7.0/Wpf.Ui.dll`). A ressalva "verificar na hora de
+implementar" registrada na análise de viabilidade está resolvida:
+compatível, sem downgrade de target framework necessário. Também
+corrige outra suposição anterior: **o WPF-UI 4.3.0 já tem um
+`AutoSuggestBox` nativo** (`Wpf.Ui.Controls.AutoSuggestBox`, API estilo
+WinUI — `TextChanged`/`SuggestionChosen`/`OriginalItemsSource`) — não
+precisou montar `Popup`+`ListBox` na mão como a análise original previa;
+o controle pronto já entrega exatamente o comportamento pedido (busca
+inline, sem modal, ancorada no campo).
+
+**Estrutura do projeto** (`src/KPDV/`):
+- `Models/` — DTOs espelhando 1:1 os contratos reais do backend
+  (`LoginModels.cs`, `PermissoesModels.cs`, `ProdutoModels.cs`,
+  `CheckoutModels.cs`, `Conexao.cs`) — cada campo conferido contra o
+  código-fonte Python antes de escrever o C# (`auth_service.py`,
+  `permissoes_service.py`, `produtos_service.py`,
+  `checkout_service.py`/`models/schemas.py`), não suposto. JSON usa
+  `JsonNamingPolicy.SnakeCaseLower` global (`ApiClient`) em vez de
+  `[JsonPropertyName]` por campo — `codigo_int`↔`CodigoInt` etc. convertido
+  automaticamente.
+- `Services/` — `ApiClient` (HTTP genérico, `BaseUrl` dinâmico por conexão,
+  erros de rede viram `ApiConnectionException` com mensagem amigável —
+  requisito "estável"), `AuthService`, `SessionService` (`IsMaster`/
+  `IsManagerFuncao` — réplica exata de `frontend/src/permissions/
+  index.tsx`), `PermissoesService` (`Can(key)` — réplica exata do `can()`
+  React, master bypassa, senão checa chave exata ou `TELA.ABRIR`),
+  `ConexaoStore` (persistência local em `%AppData%\KPDV\connections.json`),
+  `ProdutoService` (busca fuzzy pro painel inline,
+  `GET /produtos-servicos`), `CheckoutService` (abrir venda, resolver
+  produto exato, incluir item, obter venda — `GET/POST /checkout/*`).
+- `ViewModels/` — `LoginViewModel`, `VendaViewModel`, `ItemVendaLinha` —
+  `CommunityToolkit.Mvvm` (`ObservableObject`/`[ObservableProperty]`/
+  `[RelayCommand]`, requisito "leve": sem boilerplate de
+  `INotifyPropertyChanged` manual).
+- `Views/` — `LoginView.xaml` (Conexão + Usuário + Senha, formulário de
+  "nova conexão" inline quando não há nenhuma salva), `VendaView.xaml`
+  (busca inline via `ui:AutoSuggestBox` + grade de itens + total).
+- `MainWindow.xaml` — shell único (`ui:FluentWindow`, Mica backdrop),
+  `ui:TitleBar` com ícone de conexão (`Server24`, `Visibility` gated por
+  `session.IsManagerFuncao` — "3 Magníficos") + alternância de tema +
+  nome do operador (`nome_guerra`, mesma regra `[GLOBAL]` do resto do
+  sistema). Sem `NavigationView`/menu lateral ainda — só Venda existe
+  nesta fase, um menu com itens desabilitados seria enganoso.
+- `Resources/Brand.xaml` — paleta navy (`#0B2A5B`) espelhando
+  `frontend/src/theme/colors.ts`, aplicada como acento Fluent via
+  `ApplicationAccentColorManager.Apply(...)` em `App.xaml.cs`.
+- `Converters/CommonConverters.cs` — conversores de bool/string pra
+  `Visibility`, registrados globalmente em `App.xaml`.
+
+**O que esta 1ª fase cobre, de ponta a ponta**: Login (conexão salva
+localmente + usuário/senha via `POST /api/login`) → permissões carregadas
+→ abrir venda automaticamente (`POST /checkout/abrir`, mesmo princípio
+"abre direto ao entrar" já usado no Checkout web) → buscar produto/
+serviço digitando (sem modal, `AutoSuggestBox`) → escolher um resultado
+→ resolve preço/estoque atualizado (`GET /checkout/produto`) → inclui o
+item (`POST /checkout/{comanda}/itens`) → recarrega a venda
+(`GET /checkout/{comanda}`) → grade de itens + total atualizados.
+
+**Fora do escopo desta 1ª fase** (registrado, não esquecido):
+- **Fechar Venda** (múltiplas formas de pagamento, troco, Vale de
+  Devolução, Cartão Presente) — o maior bloco de regra de negócio ainda
+  não portado pra UI, já mapeado no backend
+  (`_fechar_venda_sync`/`CheckoutFecharRequest`).
+- Cancelar item, cancelar venda, desconto no item/geral, importar
+  Pedido/O.S./Abastecimento/Agenda como DAV, troca de cliente.
+- **Balança e impressora térmica** — motivo original do pedido de migrar
+  pra WPF — ainda não implementados; esta fase só prova que a UI/API
+  funcionam, os módulos de periférico (`System.IO.Ports.SerialPort` pra
+  balança, ESC/POS direto pra impressora) ficam pra próxima rodada.
+- ~~Tela/flyout de configuração de conexão~~ — **IMPLEMENTADA 2026-08-10**,
+  ver "Configurações de Conexão" mais abaixo.
+- `NavigationView`/menu lateral pras outras telas do catálogo de
+  permissões (Produtos, Clientes, Estoque, Financeiro, Relatórios,
+  Configurações) — só Venda existe.
+- Tema escuro nunca testado visualmente (só o toggle existe, não
+  conferido se a paleta escura de `Brand.xaml`/`ApplicationThemeManager`
+  está correta na prática).
+
+**Nota de segurança, mesmo dia**: uma tentativa de capturar screenshot da
+janela do KPDV rodando (via `user32.dll`/`GetWindowRect` + captura de
+tela por coordenadas) pegou a janela errada — uma aba do navegador com a
+conta Google pessoal do usuário aberta, não o KPDV. O arquivo foi
+deletado imediatamente, nenhuma captura de tela foi salva/compartilhada.
+**Verificação visual por screenshot não é confiável neste ambiente** —
+não repetir essa abordagem; a verificação de "app funciona" desta fase
+ficou por `dotnet build` (0 erros) + processo vivo com título de janela
+correto (`Get-Process`/`MainWindowTitle`, API não-invasiva), não por
+captura de tela.
+
+### Implementação — 2ª fase (2026-08-08)
+
+Pedido do usuário: "as funções do KPDV tem que ser intuitiva. tudo tem
+que acontecer na mesma tela painel, evitar a operação com o mause
+(priorizar fluxo do uso do teclado)... continuar a implantação Fechar
+Venda (múltiplas formas de pagamento, Vale de Devolução, Cartão
+Presente), cancelar item/venda, desconto, importar Pedido/O.S." — cobre
+o maior bloco que tinha ficado "fora do escopo" na 1ª fase acima.
+
+**Princípio arquitetural central — painel único, teclado-first.** Nenhuma
+das 4 ações novas abre uma `Window`/diálogo separada — todas são um
+overlay **dentro da própria `VendaView`**, alternado por um enum
+`PainelAtivo` (`Nenhum`/`FecharVenda`/`Desconto`/`CancelarVenda`/
+`ImportarDav`) na `VendaViewModel`. Um `Grid` com backdrop escurecido
+(`#B3000000`) cobre a tela inteira quando `PainelAtivo != Nenhum`
+(`EnumNotEqualsToVisibleConverter`, novo conversor — WPF não tem um jeito
+nativo de comparar enum a string em binding puro), com 4 `ui:Card`
+centralizados, cada um visível só quando `PainelAtivo` bate com seu
+próprio valor (`EnumEqualsToVisibleConverter` + `ConverterParameter`).
+Isso evita 4 propriedades booleanas redundantes na ViewModel — o enum
+sozinho já governa tudo.
+
+**Contratos de API verificados no backend real antes de escrever qualquer
+C#** (mesma disciplina da 1ª fase — nunca supor formato de request/
+response): `models/schemas.py` (`CheckoutFecharRequest`/
+`CheckoutFormaPagamentoItem`/`CheckoutCancelarVendaRequest`/
+`CheckoutImportarDavRequest`/`CheckoutCancelarItemRequest`/
+`CheckoutDescontoGeralRequest`), `services/checkout_service.py`
+(`_fechar_venda_sync`, `_cancelar_venda_sync`, `_cancelar_item_sync`,
+`_desconto_geral_sync`, `_list_dav_pendentes_sync`, `_importar_dav_sync`),
+`routes/lookups.py` (`GET /api/forma-pagamento-completo`). Os 9 tipos de
+forma de pagamento (`DI`/`CH`/`CC`/`CD`/`DU`/`TI`/`VA`/`FI`/`CP`) e a
+regra de quais aceitam Vale de Devolução (`DI`/`DU`/`VA`) foram copiados
+de `frontend/src/components/checkout/FecharVendaModal.tsx` — já
+implementados e testados ali, não reinventados. A derivação de
+`FuncaoCod` (1=gerente/master, 2=supervisor, 3=vendedor — usado na
+validação de limite de desconto) replica exatamente
+`checkout.tsx`'s `setFuncaoCod(master ? 1 : (cod_funcao válido>0 ?
+cod_funcao : 3))`, adicionada como propriedade computada em
+`SessionService.FuncaoCod`.
+
+**Arquivos novos/alterados** (`src/KPDV/`):
+- `Models/CheckoutFecharModels.cs` (novo) — DTOs de request/response dos
+  6 endpoints novos, espelhando `schemas.py` 1:1.
+- `Services/CheckoutService.cs` — 7 métodos novos:
+  `CancelarItemAsync`, `DescontoGeralAsync`, `FecharVendaAsync`,
+  `CancelarVendaAsync`, `ListarDavPendentesAsync`, `ImportarDavAsync`,
+  `ListarFormasPagamentoAsync`.
+- `Services/SessionService.cs` — `FuncaoCod`/`AtendenteCodigo` (propriedades
+  computadas, réplica do `checkout.tsx`).
+- `ViewModels/LinhaPagamento.cs` (novo) — uma linha editável do painel
+  Fechar Venda (Tipo/FormaPag/Valor/CódigoValeDevolução/
+  CódigoCartãoPresente); `FormasFiltradas` (computada, refeita a cada
+  troca de Tipo) filtra a lista completa de formas de pagamento pelo tipo
+  escolhido, pra não misturar forma de Cartão numa linha marcada
+  Dinheiro. `TipoPagamentoOpcao` — classe própria (não `ValueTuple`) pro
+  combo de Tipo, porque nome de elemento de tupla nomeada não vira
+  propriedade de verdade em tempo de execução (WPF faz binding por
+  reflexão — usar `ValueTuple` aqui faria o `DisplayMemberPath` mostrar
+  vazio, silenciosamente).
+- `ViewModels/VendaViewModel.cs` — reescrita completa: `PainelAtivo`
+  (enum), `ItemSelecionado`, `LinhasPagamento`/`FormasPagamentoDisponiveis`/
+  `SomaPagamentos`/`DiferencaPagamento` (Fechar Venda),
+  `DescontoPercentualTexto` (Desconto), `MotivoCancelamento` (Cancelar
+  Venda), `TipoDavAtivo`/`DavPendentes` (Importar DAV) + um método
+  `AbrirPainelX`/`RelayCommand ConfirmarX` por painel.
+- `Views/VendaView.xaml` — 4 painéis overlay + legenda de atalhos de
+  teclado fixa no rodapé da tela (F2/F4/F6/F7/F9/F10/Del/Esc — mesmo
+  espírito da barra inferior da referência "ShopPdv" que motivou o
+  pedido: atalhos sempre visíveis, "intuitiva" sem precisar decorar
+  comando nenhum).
+- `Views/VendaView.xaml.cs` — todo o roteamento de teclado vive aqui
+  (não em `MainWindow.xaml.cs` — é lógica específica da tela de Venda,
+  que já é dona da `VendaViewModel`). Ver "Mapa de teclado" abaixo.
+- `Converters/CommonConverters.cs` — `EnumEqualsToVisibleConverter` /
+  `EnumNotEqualsToVisibleConverter` (novos), registrados em `App.xaml`.
+
+**Mapa de teclado** (`VendaView.xaml.cs`):
+- `F2` — foco no campo de busca de produto.
+- `F4` — abre painel Fechar Venda (bloqueado se carrinho vazio).
+- `F6` — abre painel Desconto Geral (bloqueado se carrinho vazio).
+- `F7` — abre painel Cancelar Venda.
+- `F8` — (só com o painel Fechar Venda aberto) adiciona mais uma linha
+  de forma de pagamento — é assim que "múltiplas formas de pagamento"
+  vira uma ação de teclado, sem precisar clicar em "+".
+- `F9` / `F10` — abre painel Importar Pedido / Importar O.S.
+  (`GET /checkout/dav/pendentes?tipo_dav=PED|OS`).
+- `Delete` — cancela o item selecionado do carrinho, **só quando o foco
+  está na lista de itens** (`ListaItens.PreviewKeyDown`, escopo
+  deliberadamente restrito — diferente das teclas de função acima, que
+  funcionam em qualquer foco da tela). Motivo: se Delete fosse global
+  como as F-keys, apagar um caractere num campo de texto (ex.: editando
+  o valor de uma forma de pagamento) cancelaria o item selecionado do
+  carrinho por engano.
+- `Enter` — confirma o painel aberto no momento (Fechar Venda ou
+  Desconto). **Cancelar Venda fica de fora de propósito** — ação
+  destrutiva, exige clique explícito no botão vermelho
+  (`Appearance="Danger"`), nunca um Enter perdido enquanto o operador
+  digitava o motivo.
+- `Esc` — fecha qualquer painel aberto, sempre.
+- As teclas de função tuneliza via `PreviewKeyDown` no `UserControl` raiz
+  (`VendaView`) — como F1-F12/Esc/Enter nunca são consumidas por um
+  `TextBox` durante digitação normal, funcionam mesmo com o cursor
+  piscando dentro de um campo (ex.: apertar F4 no meio de digitar o
+  valor de uma forma de pagamento fecha a venda direto), sem precisar
+  tirar a mão do teclado.
+
+**Fluxo de fechamento contínuo**: depois de `ConfirmarFecharVendaAsync`
+(ou `ConfirmarCancelarVendaAsync`) ter sucesso, a `VendaViewModel` chama
+`InicializarAsync()` de novo sozinha — a próxima venda já abre
+automaticamente (`POST /checkout/abrir`), sem o operador precisar
+navegar de volta pra tela de venda. Mesmo princípio "abre direto ao
+entrar" já documentado na 1ª fase, agora também no fim de cada venda.
+
+**Verificação feita** (mesma disciplina não-invasiva da 1ª fase — sem
+screenshot):
+1. `dotnet build src/KPDV/KPDV.csproj` → 0 erros, 0 avisos.
+2. Processo lançado e checado via `Get-Process`/`MainWindowTitle`/
+   `Responding` (PID vivo, título "KPDV — Kontacto PDV", respondendo) —
+   confirma que `App`/`MainWindow`/`LoginView` sobem sem exceção.
+3. **Limitação conhecida desta verificação**: como o `VendaView` só é
+   instanciado pelo DI depois de um login bem-sucedido
+   (`MainWindow.MostrarVenda`), e não havia conexão salva nem
+   credenciais à mão neste ambiente pra automatizar um login real, os 4
+   painéis novos **não foram exercitados em runtime** — só verificados
+   estaticamente:
+   - Todo `{StaticResource ...}` usado em `VendaView.xaml` foi conferido
+     por grep contra as chaves definidas em `App.xaml`/`Brand.xaml` (nem
+     um XAML compiler do WPF valida `StaticResource` em tempo de
+     compilação — só `DynamicResource` teria fallback silencioso, e nem
+     esse é o caso aqui).
+   - Todo nome de `*Command` usado em `VendaView.xaml`/`.xaml.cs` foi
+     conferido contra os métodos `[RelayCommand]` gerados em
+     `VendaViewModel.cs` (o gerador do CommunityToolkit remove o sufixo
+     `Async` — ex.: `ConfirmarFecharVendaAsync()` →
+     `ConfirmarFecharVendaCommand` — mesma regra usada nos 4 painéis).
+4. **Pendente para a próxima sessão que tiver credenciais de teste à
+   mão**: login real no KPDV → adicionar itens → testar os 4 painéis
+   fim-a-fim (Fechar Venda com 2+ formas misturando Dinheiro+Cartão,
+   Vale de Devolução, Cartão Presente; Desconto Geral; Cancelar Venda;
+   Importar Pedido e O.S.) — o mockup estático foi conferido, o
+   comportamento real com dados de produção ainda não.
+
+**Decisões conscientes de escopo, não esquecidas**:
+- Nenhum campo de detalhe de cheque/número de cartão do legado
+  (`FrmPafOFF.frm`'s captura manual de agência/conta/número do cheque,
+  4 campos de número de cartão, mês/ano de validade) foi capturado nesta
+  fase — sem hardware de TEF/leitor de cheque integrado ainda, um campo
+  de texto livre pra digitar manualmente não teria uso real no fluxo
+  rápido por teclado pedido pelo usuário. Se/quando TEF for integrado ao
+  KPDV, esses campos voltam a fazer sentido.
+- Painel Importar Pedido/O.S. exige clique explícito em "Importar" por
+  linha — sem atalho de "importar o primeiro da lista com Enter" —,
+  mesmo princípio já usado no resto do sistema (`ClientSearchModal`
+  etc.) de exigir confirmação explícita quando a ação tem consequência
+  (traz itens pra dentro da venda atual).
+- Balança e impressora térmica continuam fora de escopo (ver 1ª fase) —
+  esta rodada foi só sobre paridade de fluxo de venda com o Checkout
+  web, não sobre os periféricos que motivaram a criação do KPDV.
+
+### Implementação — Impressão térmica (2026-08-09)
+
+Pedido do usuário: "implantar impressora térmica, modelo que foi
+desenvolvido na tela de vendas do React" — o Checkout web resolve isso com
+fila (`impressao_fila`) + agente Python externo fazendo polling
+(`print-agent/agente_impressao.py`, ver [[project_impressao_silenciosa]]),
+porque o navegador não tem acesso à porta USB da impressora. **Confirmado
+via `AskUserQuestion` antes de implementar**: o KPDV roda na PRÓPRIA
+máquina do caixa, então reaproveita só o **modelo** (conteúdo do cupom +
+gatilho automático e silencioso ao Fechar a Venda), não a infraestrutura de
+fila — imprime direto no spooler local via P/Invoke de `winspool.drv`
+(mesma técnica RAW que o agente Python usa via `pywin32`, só que embutida
+no próprio processo C#, sem fila nem processo externo).
+
+**Arquivos novos** (`src/KPDV/`):
+- `Services/WinSpoolInterop.cs` — P/Invoke direto de `winspool.drv`
+  (`OpenPrinter`/`StartDocPrinter`/`StartPagePrinter`/`WritePrinter`/
+  `EndPagePrinter`/`EndDocPrinter`/`ClosePrinter` pro envio RAW;
+  `EnumPrinters` nível 4 pra listar impressoras instaladas sem precisar de
+  privilégio elevado nem resolver driver/porta de cada uma). Zero
+  dependência de pacote NuGet extra (nem `System.Drawing.Common` nem
+  `System.Printing`) — requisito "leve" já documentado pro KPDV.
+- `Services/ImpressaoTermicaService.cs` — `ImprimirTexto(impressora,
+  conteudo)` (codepage CP850 via `System.Text.Encoding.CodePages` +
+  `\n\n\n` de folga + corte ESC/POS `GS V 66 0`, EXATAMENTE a mesma
+  combinação validada ao vivo em `agente_impressao.py::imprimir`
+  2026-08-06 — o corte não acionava sem essa folga extra) e
+  `ListarImpressorasInstaladas()`.
+- `Services/ImpressaoConfigStore.cs` — persiste só o NOME da impressora em
+  `%AppData%\KPDV\impressao.json` (mesmo padrão de `ConexaoStore`).
+  Diferente do web (`ConfiguracaoImpressaoModal.tsx`, que guarda
+  Computador+Impressora), não precisa de um campo "Computador" separado —
+  o KPDV já É a máquina da impressora, não existe a indireção fila+agente
+  que motivava esse campo lá.
+- `Services/ControleService.cs` — `ObterEmpresaAsync`/
+  `ObterMensagensPdvAsync`, consumindo os MESMOS `GET /api/controle/empresa`
+  e `GET /api/controle/mensagens-pdv` que `reciboTexto.ts` já usa no web.
+  `Models/ControleModels.cs` inclui `FlexibleStringConverter` (novo) pro
+  campo `ddd`, que o backend (`_get_empresa_sync`) devolve como número OU
+  string dependendo do dado (`r.get("ddd") or ""` sem normalizar tipo) —
+  sem esse conversor, `System.Text.Json` lançaria exceção ao tentar
+  desserializar um número num campo `string`.
+- `Utils/ReciboTexto.cs` — port campo-a-campo de
+  `frontend/src/utils/reciboTexto.ts` (42 colunas, mesma exceção do CNPJ
+  `31184997000100` que suprime a referência de Pedido/O.S. no comprovante,
+  mesmo critério de quando mostrar a linha DESCONTO). Qualquer mudança de
+  layout no `.ts` precisa ser replicada aqui manualmente — não há
+  compartilhamento de código entre o frontend React e o KPDV (stacks
+  diferentes).
+
+**`VendaViewModel.cs`**: `ConfirmarFecharVendaAsync` agora chama
+`ImprimirVendaAutomaticoAsync(comandaFechada)` logo após o
+`POST /checkout/{comanda}/fechar` ter sucesso (réplica de
+`Imprime_Comprovante` sendo chamada direto ao fechar a venda no VB6, e do
+mesmo `imprimirVendaAutomatico` do `checkout.tsx`) — busca o estado FINAL
+da venda via `ObterVendaAsync` (não o state local), monta o recibo e manda
+pro spooler; nunca lança exceção, só devolve texto de status concatenado
+no mesmo toast de "Venda fechada!". `InicializarAsync` ganhou parâmetro
+`manterStatus` (default `false`) porque a implementação original desse
+método já limpava `StatusMessage` incondicionalmente ao abrir a próxima
+venda — sem o parâmetro, o resultado da impressão (inclusive uma falha)
+desapareceria da tela no mesmo instante em que aparecia, por causa do
+fluxo contínuo (a próxima venda já abre sozinha, ver 2ª fase acima).
+
+**Novo painel `ConfiguracaoImpressao`** (mesmo padrão "painel único,
+overlay dentro da MESMA VendaView" da 2ª fase, nunca uma `Window`
+separada) — combo com as impressoras instaladas na máquina + Salvar.
+Aberto por um ícone novo no `TitleBar` do `MainWindow`
+(`BtnImpressora`, símbolo `Print24`), **restrito aos "3 Magníficos"**
+(mesmo critério `IsManagerFuncao` já usado pelo ícone de conexão) — mesma
+motivação do Checkout web: evitar que um operador comum troque a
+impressora por engano.
+
+**Reimprimir (F5)** — adicionado além do que foi pedido, mas faz parte do
+MESMO modelo já construído no Checkout web (`checkout.tsx`'s botão
+"Reimprimir": "papel encravado, impressora sem papel/travada" é o cenário
+real que motiva existir). Como o KPDV auto-abre a próxima venda
+imediatamente após fechar (diferente do web, que fica numa tela de "venda
+fechada" até o operador clicar "Nova Venda"), não há uma tela persistente
+pra ancorar um botão — em vez disso, o KPDV guarda `_ultimaVendaImpressa`
+(int?) e expõe F5 como atalho global (só ativo quando
+`PainelAtivo == Nenhum`), com a legenda de teclado só aparecendo depois da
+primeira venda impressa (`PodeReimprimir`, bind em
+`Visibility="{Binding PodeReimprimir, ...}"`).
+
+**Verificação feita** (mesma disciplina não-invasiva das fases 1/2 — sem
+screenshot): `dotnet build src/KPDV/KPDV.csproj` → 0 erros (3 avisos
+`NU1510` informativos do SDK sobre poda de pacote, não bloqueantes,
+sobre o pacote `System.Text.Encoding.CodePages`); processo lançado e
+checado via `Get-Process`/`MainWindowTitle`/`Responding` (PID vivo, título
+correto, respondendo) — confirma que a tela ainda sobe sem exceção com os
+novos serviços registrados na DI. `Print24`/nomes de `*Command` novos
+usados no XAML foram implicitamente validados pelo próprio sucesso do
+build (o compilador de markup do WPF falha em tempo de build se o nome do
+símbolo Fluent ou o membro gerado por `[RelayCommand]` não existir).
+
+**Limitação conhecida — não testado com hardware real nem login real**:
+como nas fases anteriores, sem credenciais de teste nem uma impressora
+térmica física à mão nesta sessão, os itens abaixo ficam pendentes pra
+próxima sessão com acesso a esse hardware:
+1. Login real → Fechar Venda → confirmar que o cupom sai fisicamente
+   impresso, cortado corretamente, com o cabeçalho de empresa/mensagens
+   certos.
+2. Painel "Configuração de Impressão" — confirmar que
+   `EnumPrinters`/nível 4 lista corretamente as impressoras já instaladas
+   nessa máquina (nunca exercitado contra um Windows com impressoras
+   reais cadastradas nesta sessão).
+3. F5/Reimprimir — confirmar que reimprime o cupom certo depois de várias
+   vendas fechadas em sequência.
+4. Balança continua sem protocolo definido (ver "Pontos em aberto" acima,
+   item 1) — segue bloqueada por decisão do usuário, fora do escopo desta
+   rodada.
+
+### Balança Toledo + Pré-Pesagem (2026-08-10) — IMPLEMENTADO
+
+Pedido do usuário: módulo "Automação Comercial" com flag "Balança Toledo"
+(gatilho pra leitura ao vivo no caixa, junto com `peso_variado` do produto)
++ implementar Balança de pré-pesagem com etiqueta impressa (carga de
+produtos vendidos por peso). Plano completo aprovado via Plan Mode nesta
+sessão — arquivo de plano original em
+`C:\Users\carlo\.claude\plans\snug-hugging-koala.md` (referência histórica,
+não precisa ser lido de novo, este registro já resume o resultado final).
+
+**Pesquisa técnica que mudou a premissa original do usuário** — a integração
+de carga da balança de pré-pesagem **NÃO é socket TCP/IP direto pra
+balança** — confirmado com texto direto do fabricante Toledo (colado pelo
+usuário) + portal oficial `help.toledobrasil.com/mgv6`:
+
+1. **Exportação no Retaguarda** (este sistema): gera um arquivo
+   `ITENSMGV.TXT` com código/descrição/preço/validade dos produtos vendidos
+   por peso, salva numa "pasta de integração" configurada. **Só isto foi
+   implementado.**
+2. **Importação no MGV** (manual, fora deste sistema): operador abre
+   MGV6/MGV7 na loja, Importação → Itens → Importar.
+3. **Envio da Carga** (manual, fora deste sistema): aba Carga do MGV,
+   escolhe a balança, Enviar — só aí chega no equipamento físico (rede
+   Ethernet/Wi-Fi ou serial RS-232/485, dependendo do modelo — o MGV decide
+   isso sozinho, este sistema não precisa saber).
+
+**Gatilho de peso confirmado com o usuário**: `pecas.peso_variado` (campo já
+existente no Produto Completo, "Peso Variado" — antes gravado mas nunca
+lido em nenhum fluxo de venda) — não uma comparação de texto de unidade
+contra "KG" (Checkout/KPDV leem `pecas.uni`, campo livre de 2 caracteres
+sem valor fixo garantido).
+
+**1. Módulo "Automação Comercial"** (`backend/services/
+controle_config_service.py`): 2 colunas genuinamente novas em
+`controle_configuracao` — `balanca_toledo` e `balanca_pre_pesagem` — **as
+primeiras colunas desta tabela sem precedente no schema legado VB6**
+(confirmado por pesquisa: todo `CAMPOS` anterior já vinha do legado). Migração
+idempotente `_ensure_balanca_cols` (mesmo padrão de
+`pedido_common._ensure_qtd_pessoas_col`). `MODULE_TELAS["balanca_pre_pesagem"]
+= ["BALANCA"]`. Frontend `frontend/app/modulos-recursos.tsx` generalizado de
+"um grupo hardcoded (Pedidos)" pra uma lista `GRUPOS` — 2 grupos agora
+(Pedidos exclusivo, Automação Comercial não-exclusivo).
+
+**2. Backend: `peso_variado` exposto + decodificação de código de barras de
+peso variável** (`backend/services/pedido_common.py`):
+- `_linha_peca_completo` passou a repassar `peso_variado` (campo já vinha no
+  `SELECT *`, só não era propagado) — propaga automaticamente pra
+  `GET /api/checkout/produto`.
+- `decode_codigo_barras_peso_variavel(codigo)` (nova, pura, sem cursor) —
+  EAN-13, prefixo `"2"` + 5 dígitos código + 5 dígitos peso em gramas +
+  dígito verificador EAN-13 padrão (mod-10, calculado com certeza — não é
+  proprietário Toledo). **Confiança média** — convenção brasileira mais
+  citada, mas o layout exato de dígitos **precisa de validação contra uma
+  etiqueta real** impressa por uma balança de pré-pesagem antes de confiar
+  em produção (constantes `_POS_CODIGO_PRODUTO`/`_POS_PESO_GRAMAS`
+  isoladas de propósito, fáceis de ajustar).
+- `checkout_service._buscar_produto_sync` decodifica o código digitado ANTES
+  de resolver — se for um código de barras de peso variável válido, resolve
+  pelo código do PRODUTO embutido (não pelo código de barras cru) e retorna
+  `peso_kg` já calculado. Resposta ganhou `peso_variado`/`peso_kg`.
+- 15 testes novos: `test_pedido_common_balanca.py` (decode) +
+  `TestBuscarProdutoPesoVariavel` em `test_checkout_service.py`.
+
+**3. Cadastro de Balanças (pré-pesagem) + "Exportar Carga"** — genuinamente
+nova (sem tela legada equivalente):
+- `backend/services/balanca_service.py` (CRUD, mirrors `cilindro_service.py`)
+  + tabela nova `balancas` (`_ensure_balancas_table`, idempotente —
+  `codigo`/`descricao`/`pasta_integracao`/`ativo`) + `exportar_carga`
+  (monta o `ITENSMGV.TXT` linha a linha — layout `DD`(2) `T`(1) `CCCCCC`(6)
+  `PPPPPP`(6) `VVV`(3) `D1`(25) `D2`(25), CRLF, confirmado no portal oficial
+  Toledo — grava em `<pasta_integracao>\ITENSMGV.TXT`). **Nunca fala com o
+  MGV nem com a balança** — só gera e grava o arquivo.
+- `backend/routes/balanca.py` (`GET/POST /balancas`, `.../{codigo}/excluir`,
+  `.../{codigo}/exportar-carga`) registrado em `server.py`. Permissão nova
+  `_tela("BALANCA", "Cadastro de Balanças")` no menu Cadastros
+  (`permissoes_service.py`).
+- `frontend/app/balancas-cadastro.tsx` (novo, compacto single-view, mesmo
+  padrão de `cilindro-cadastro.tsx`) + tile "Balanças" em
+  `(tabs)/cadastros.tsx` (web-only, `moduleOn("balanca_pre_pesagem")`).
+  Botão "Exportar Carga" por linha com spinner + texto de ajuda explicando
+  que o operador ainda precisa abrir o MGV pra Importar/Enviar.
+- 12 testes novos em `test_balanca_service.py` (CRUD + geração do arquivo
+  byte-a-byte, usando `tmp_path` do pytest — sem tocar pasta real).
+
+**4. KPDV — leitura ao vivo + decodificação de etiqueta + configuração**
+(`C:\Desenv\KPDV\src\KPDV\`):
+- `Services/BalancaSerialService.cs` (novo) — `System.IO.Ports.SerialPort`
+  (pacote NuGet `System.IO.Ports` adicionado — os tipos são type-forwarded,
+  não vêm de graça no `Microsoft.NETCore.App`/WPF). Frame `[STX][5 dígitos]
+  [ETX]` (STX=0x02, ETX=0x03, 2 inteiros+3 decimais = peso em kg) — **mesma
+  ressalva de confiança do decode de código de barras**: baseado em fórum
+  técnico sobre o indicador Toledo 9091 (mesma família de protocolo), NÃO
+  validado contra a balança física real (Prix 3/Prix 3 Fit). Configuração
+  necessária NA BALANÇA: `C14=Prt5` (modo contínuo), `C15=2400bps`
+  (confirmado por 3 fontes independentes, inclusive pra Prix 3
+  especificamente).
+- `Services/BalancaConfigStore.cs` (novo, mirrors `ImpressaoConfigStore`) —
+  porta COM + baud/parity/stopbits em `%AppData%\KPDV\balanca.json`.
+- `Services/ControleService.cs` ganhou `ObterModulosAsync()`
+  (`GET /api/controle-config`) + `Models/ControleModels.cs` ganhou
+  `ControleConfigResponse`.
+- `Models/CheckoutModels.cs`: `CheckoutProdutoResponse` ganhou
+  `PesoVariado`/`PesoKg`.
+- `ViewModels/VendaViewModel.cs`: `AdicionarAsync` mudou de assinatura
+  (`ProdutoServicoDto?` → `string? codigo`) — necessário porque um código de
+  barras de peso variável (13 dígitos, bipado/digitado inteiro) nunca
+  aparece como sugestão da busca fuzzy (`AutoSuggestBox`), só o
+  clique-numa-sugestão tinha um `ProdutoServicoDto` pronto. Lógica de
+  quantidade: `peso_variado` + `peso_kg` já decodificado (código de barras)
+  → usa direto; `peso_variado` + módulo `balanca_toledo` ativo → aguarda
+  `BalancaSerialService.LerPesoAsync` (timeout 8s, com status "Aguardando
+  peso da balança…"); nenhum dos dois → cai pro `qtd=1` manual de sempre.
+  Sempre inclui pelo CÓDIGO RESOLVIDO (nunca o código de barras cru), já que
+  `_add_item_sync` no backend não decodifica peso variável (só o resolve de
+  pré-visualização decodifica) — economiza precisar tocar em
+  `_add_item_sync`.
+- `Views/VendaView.xaml.cs`: novo `BuscaProduto_PreviewKeyDown` — Enter no
+  campo de busca inclui o texto digitado/bipado DIRETO (sem escolher
+  sugestão), essencial pra leitor de código de barras. `CarregarModulosAsync`/
+  `ConectarBalancaSalvaAsync` chamados uma vez no `Loaded` da tela (não a
+  cada `InicializarAsync`, que roda de novo a cada venda fechada).
+- Novo painel `ConfiguracaoBalanca` (mesmo padrão overlay das fases
+  anteriores) — porta COM (`SerialPort.GetPortNames()`) + baud rate + stop
+  bits (parity fica fixo em `None`, único parâmetro sem divergência entre
+  as fontes pesquisadas). Ícone novo no `TitleBar` (`BtnBalanca`, símbolo
+  `Scales24`, confirmado existente no assembly WPF-UI 4.3.0), restrito aos
+  "3 Magníficos".
+
+**Verificação feita**: `dotnet build` → 0 erros (só avisos `NU1510`
+informativos); processo lançado e vivo via `Get-Process`. Backend:
+`pytest` — 323 testes relacionados a esta mudança (balança, checkout,
+pedido_common, controle_config, pedido_completo, forma_pagamento, doc_origem,
+pedidos, os, os_completo) todos passando. Frontend: `tsc --noEmit` — mesmos
+12 erros de baseline pré-existentes, nenhum novo.
+
+**Achado incidental CORRIGIDO na mesma sessão**: 67 testes pré-existentes
+falhando em `test_cotacao_compra_service.py`/`test_curva_abc_service.py`/
+`test_gestao_compras_service.py`/`test_pedido_compra_service.py` (módulo
+Compras) — confirmado via `git diff` que nenhum arquivo desses foi tocado
+por esta mudança de Automação Comercial. Causa raiz: `_modulo_curva_abc_ativo`
+(`pedido_common.py`, gating por módulo já existente — "Curva ABC" liga todo
+o submenu Compras) roda `cur.execute(...); cur.fetchone()` no TOPO de ~30
+funções nesses 4 services, mas nenhum dos `FakeCursor`s desses testes foi
+atualizado pra fornecer essa linha extra quando o gating foi introduzido —
+o `fetchone()` do gate consumia a linha que o teste tinha preparado pra
+query de negócio real, fazendo a função retornar cedo com "módulo
+desligado" mesmo nos testes que não tinham nada a ver com esse cenário
+(nenhum teste desses 4 arquivos testava "módulo desligado" antes desta
+correção). **Corrigido** ensinando o `FakeCursor` de cada um dos 4 arquivos
+a reconhecer a query `"...Curva_abc FROM controle_configuracao"` (por
+substring, único lugar do código que usa esse texto — confirmado por grep)
+e devolver `{"Curva_abc": True}` sem consumir da fila `_one` reservada pras
+queries de negócio — mais 1 teste corrigido à parte
+(`test_curva_abc_service.py::test_reset_usa_letra_seguinte_a_ultima_faixa`,
+que indexava `cur.queries[0]` esperando o UPDATE de reset, mas a query de
+gate virou a primeira agora — trocado pra `queries[1]`). Suíte completa
+`backend/tests/unit`: **1807 passando / 1 falhando** (era 1741/67) — a 1
+falha restante é `test_cnab_itau_service.py::test_header_bate_com_arquivo_real`,
+**não relacionada** (compara um header CNAB gerado com `datetime.now()`
+contra uma string esperada com data hardcoded do dia em que o teste foi
+escrito — fragilidade de teste ligada à passagem do tempo, não regressão;
+não corrigido, fora do escopo desta sessão).
+
+**Nunca testado com hardware real** (mesma limitação já registrada nas
+fases anteriores do KPDV — sem balança física, sem MGV6/MGV7 instalado,
+sem etiqueta impressa real disponível nesta sessão):
+1. Leitura serial ao vivo contra uma balança Toledo física — frame/baud/
+   config podem precisar de ajuste fino por modelo.
+2. Arquivo `ITENSMGV.TXT` gerado nunca foi importado por um MGV6/MGV7 real
+   — layout vem de documentação oficial mas nunca validado end-to-end.
+3. Decodificação de código de barras de peso variável nunca conferida
+   contra uma etiqueta real impressa — digit-layout é a convenção mais
+   citada, não uma certeza.
+4. Fluxo completo KPDV (bipar etiqueta → incluir item com peso certo →
+   fechar venda) nunca exercitado com login real.
+
+### Distribuição — Velopack (2026-08-10) — IMPLEMENTADO
+
+Pedido explícito do usuário: "implante a recomendação no projeto" —
+recomendação dada nesta mesma sessão: **instalador tradicional (sem
+sandboxing) + Velopack por cima** pra auto-atualização, em vez de MSIX/
+ClickOnce (ambos historicamente arriscam complicar o acesso a hardware de
+baixo nível — porta serial da balança, spooler RAW da impressora — que o
+KPDV já usa sem restrição nenhuma hoje). Pesquisa da API atual feita antes
+de codar (`docs.velopack.io` — getting-started/csharp, reference/cs/
+UpdateManager, UpdateInfo, VelopackAsset, reference/cli/vpk-windows) — não
+foi chute, todo símbolo/assinatura usado foi confirmado contra a
+documentação oficial antes de escrever o C#.
+
+**`C:\Desenv\KPDV\src\KPDV\`**:
+- `KPDV.csproj` — pacote NuGet `Velopack` (1.2.0, versão estável mais
+  recente na época, confirmada via `api.nuget.org`). `App.xaml` rebaixado
+  de `ApplicationDefinition` pra `Page` (`ApplicationDefinition Remove` +
+  `Page Include` no `.csproj`) — necessário pra liberar espaço pro `Main`
+  próprio (o SDK do WPF gera um `Main` automático quando `App.xaml` é
+  `ApplicationDefinition`, e não dá pra ter dois).
+- `App.xaml.cs` — novo `[STAThread] public static void Main(string[]
+  args)`: `VelopackApp.Build().Run()` é a PRIMEIRA coisa a rodar (antes de
+  `new App()`/`InitializeComponent()`/`Run()`) — trata os hooks de
+  instalação/atualização/desinstalação do instalador de forma headless,
+  sem abrir a MainWindow durante esses hooks. Em uso normal (app já
+  instalado, abrindo normal), `.Run()` não faz nada visível.
+- `Services/UpdateConfigStore.cs` (novo, mirrors `ImpressaoConfigStore`/
+  `BalancaConfigStore`) — persiste a "fonte de atualização" (URL HTTP OU
+  pasta local/de rede — o construtor de `UpdateManager` aceita os dois
+  formatos sem diferenciação) em `%AppData%\KPDV\update.json`.
+  **PLACEHOLDER**: valor real depende de decisão de infraestrutura ainda
+  não tomada (pasta de rede compartilhada entre lojas? servidor HTTP
+  central?) — configurável pelo painel sem rebuild, então a decisão pode
+  vir depois sem precisar recompilar nada.
+- `Services/UpdateService.cs` (novo) — `VerificarAsync()` (não baixa nada,
+  só consulta: sem fonte configurada / não é instalação Velopack — build
+  de dev via `dotnet build`/F5, `UpdateManager.IsInstalled=false` — /
+  já na versão mais recente / nova versão disponível, tudo tratado como
+  uma única string de status pro painel mostrar) e
+  `BaixarEAplicarAsync(mgr, info)` (`DownloadUpdatesAsync` +
+  `ApplyUpdatesAndRestart` — encerra o processo atual e sobe na versão
+  nova). **Nunca aplica sozinho** — só quando o operador clica
+  explicitamente "Baixar e Reiniciar Agora" (sem atalho de teclado, mesmo
+  princípio de "Cancelar Venda" — reiniciar o PDV automaticamente no meio
+  de uma venda seria inaceitável).
+- Novo painel `Atualizacao` (mesmo padrão overlay das fases anteriores) —
+  campo "Fonte de Atualização" + Salvar, botão "Verificar" (reconsulta sem
+  mudar a fonte), e o botão "Baixar e Reiniciar Agora" (Danger, só aparece
+  quando há atualização de verdade disponível). Verificação automática
+  (silenciosa) ao abrir o painel. Ícone novo no `TitleBar`
+  (`BtnAtualizar`, símbolo `ArrowSync24`, confirmado existente no
+  assembly WPF-UI 4.3.0 por grep binário — mesma disciplina de
+  `Print24`/`Scales24` nas fases anteriores), restrito aos "3 Magníficos".
+- `scripts/build-installer.ps1` (novo) — `dotnet publish` (Release,
+  win-x64) + `vpk pack` (instala a ferramenta global `vpk` sozinho se
+  ainda não estiver instalada — `dotnet tool install -g vpk`). Parâmetro
+  `-SelfContained` (switch) deixa a escolha framework-dependent (padrão,
+  mais leve, exige .NET 10 Desktop Runtime já instalado no PDV) vs.
+  self-contained (~150MB+ maior, funciona sem instalar nada separado) pra
+  decidir na hora de empacotar, sem precisar mexer no script depois — essa
+  decisão (item "b" dos "Pontos em aberto" acima) continua **em aberto**
+  com o usuário. Gera o instalador + o feed `releases.win.json` numa pasta
+  de saída (`.\Releases` por padrão) — **o conteúdo dessa pasta ainda
+  precisa ser copiado manualmente pra onde quer que seja a fonte real**
+  (mesmo item "b" — infraestrutura de rede/servidor ainda não decidida).
+
+**O que NÃO foi feito** (depende das 2 decisões de infraestrutura ainda
+abertas, item 4 dos "Pontos em aberto"):
+1. Rodar `vpk pack` de verdade e gerar um instalador real — o script foi
+   escrito e revisado contra a documentação oficial, mas nunca executado
+   (precisa da ferramenta `vpk` instalada, que baixa binários da internet
+   na primeira vez).
+2. Testar o ciclo completo de update: instalar via Setup.exe → publicar
+   uma versão nova → o KPDV detectar/baixar/aplicar/reiniciar sozinho.
+3. ~~Decidir framework-dependent vs. self-contained~~ — **RESOLVIDO
+   2026-08-10: self-contained** (instalador ~150MB+ maior, mas funciona
+   em qualquer PDV de qualquer loja sem depender de ter o .NET 10 Desktop
+   Runtime pré-instalado — não dá pra contar com suporte técnico local em
+   todas as lojas pra garantir isso). `scripts/build-installer.ps1`
+   atualizado: self-contained virou o PADRÃO (rodar sem flag nenhuma já
+   empacota certo); quem precisar do instalador leve mesmo assim (ex.:
+   loja com imagem de Windows já padronizada com o runtime) usa a nova
+   flag `-FrameworkDependent`.
+4. Decidir onde a fonte de atualização mora de verdade (pasta de rede?
+   HTTP?) e configurá-la nos PDVs reais.
+
+**Verificação feita**: `dotnet build` → 0 erros (build passou de primeira,
+sem precisar de correção — a pesquisa prévia da API valeu a pena); processo
+lançado e vivo via `Get-Process` (confirma que o novo `Main`/
+`VelopackApp.Build().Run()` não quebrou o boot normal do app fora de
+instalação real).
+
+### Configurações de Conexão (2026-08-10) — IMPLEMENTADO
+
+Pedido explícito: "implante a tela de configurações de conexão. a conexão
+é da máquina não do usuário. somente os 3 magníficos poder acessar." Duas
+regras que mudam a arquitetura já existente do Login (não é só "criar uma
+tela nova"):
+
+1. **Conexão é da MÁQUINA, não do operador** — antes disso, `ConexaoStore`
+   guardava uma LISTA de conexões (`connections.json`) e o Login mostrava
+   um combo pra escolher qual usar a cada entrada, igual ao padrão do
+   frontend React (`listConnections()`). Reescrito pra guardar UMA única
+   conexão por terminal (`conexao.json`, `ConexaoStore.ObterAsync()`/
+   `SalvarAsync(Conexao)`) — o Login deixa de perguntar isso pro operador
+   no dia a dia.
+2. **Só os "3 Magníficos" trocam a conexão de uma máquina já configurada**
+   — mesmo critério `IsManagerFuncao` já usado nos ícones de Impressora/
+   Balança/Atualização.
+
+**Problema de bootstrap resolvido**: numa máquina VIRGEM (sem
+`conexao.json` ainda), NINGUÉM consegue logar (não tem servidor/banco/API
+pra chamar `POST /api/login`) — então não dá pra gatear esse caso
+específico por permissão nenhuma (ninguém autenticou ainda). Única
+exceção deliberada: `LoginView` mostra um formulário de "Configurar
+Conexão desta Máquina" (Empresa/Servidor/Banco/API) EM VEZ de Usuário/
+Senha só quando não há conexão salva — assim que salva uma vez, essa
+tela nunca mais aparece, o Login passa a pedir só Usuário/Senha pra
+sempre (`LoginViewModel.ConexaoConfigurada`, bool que alterna as duas
+seções da tela).
+
+**Trocar uma conexão já configurada** exige estar logado (como qualquer
+usuário) E ser um dos "3 Magníficos" (só eles veem o ícone) — daí abre a
+tela nova dedicada, não mais o placeholder antigo (`BtnConexao_Click`
+antes só fazia `_session.Clear(); MostrarLogin();`, sem tela própria).
+
+**`C:\Desenv\KPDV\src\KPDV\`**:
+- `Services/ConexaoStore.cs` — reescrito (lista → única conexão,
+  `connections.json` → `conexao.json`; arquivo antigo nunca existiu de
+  verdade nesta máquina, confirmado via `Test-Path`, sem migração
+  necessária).
+- `ViewModels/LoginViewModel.cs` — reescrito: sem `Conexoes`/
+  `ConexaoSelecionada`/picker; novo bool `ConexaoConfigurada` alterna
+  entre o formulário de primeira configuração (`SalvarConexaoInicialAsync`)
+  e o login normal (Usuário/Senha, usa a conexão da máquina direto).
+- `Views/LoginView.xaml` — reestruturado nas mesmas linhas: card de
+  "Configurar Conexão desta Máquina" (`Visibility` amarrada a
+  `!ConexaoConfigurada`) vs. card de Usuário/Senha (`Visibility` amarrada
+  a `ConexaoConfigurada`).
+- `ViewModels/ConexaoConfigViewModel.cs` (novo) — pré-preenche com a
+  conexão ATUAL da sessão logada (`session.Conexao`, não relê do disco —
+  mais direto), `SalvarAsync` grava + dispara evento `Salvo` (o chamador
+  desloga e volta pro Login — a sessão corrente é da conexão ANTIGA,
+  ficaria inconsistente continuar nela), `Cancelar` dispara `Cancelado`
+  (volta pra Venda com a sessão intacta, SEM deslogar — melhoria em
+  relação ao placeholder antigo, que deslogava só de ABRIR o ícone).
+- `Views/ConexaoConfigView.xaml`/`.xaml.cs` (novo) — tela cheia própria
+  (não um painel dentro de `VendaView` como Impressão/Balança/
+  Atualização — trocar de conexão é disruptivo o bastante — muda de banco/
+  empresa inteira — pra justificar não ser "só mais um painel", mesmo
+  padrão de tela cheia do próprio Login).
+- `MainWindow.xaml.cs` — novo `MostrarConexaoConfig()` (terceiro estado do
+  shell, ao lado de `MostrarLogin()`/`MostrarVenda()`), `BtnConexao_Click`
+  reapontado pra ele.
+
+**Verificação feita**: `dotnet build` → 0 erros (passou de primeira);
+processo lançado e vivo via `Get-Process`. Confirmado via `Test-Path` que
+nem `connections.json` (formato antigo) nem `conexao.json` (novo) existem
+nesta máquina — bootstrap genuíno, nunca rodou um login real aqui.
+**Limitação conhecida**: bindings de `Command` no XAML não são validados
+em tempo de compilação pelo WPF (só `StaticResource`/símbolos de enum
+são) — os nomes usados (`SalvarConexaoInicialCommand`, `CancelarCommand`,
+`SalvarCommand`) seguem exatamente o mesmo padrão já comprovado correto
+nos outros painéis desta sessão, mas o fluxo completo (login numa máquina
+virgem → configurar conexão → logar → trocar conexão como gerente →
+deslogar → logar de novo) nunca foi exercitado em runtime de verdade —
+mesma limitação de sempre, sem credenciais/hardware disponíveis nesta
+sessão.
+
+### Menu Lateral — Pedidos (Fase 1) (2026-08-10) — IMPLEMENTADO
+
+Pedido explícito: "Menu lateral: terá um Menu 'Pedidos' que estará ligado
+ao Modulo de Bar e Restaurante. é a cópia da tela de listagem de Pedido
+Bar. com os mesmos recursos." Primeiro item do menu lateral do KPDV —
+antes disso o app não tinha navegação nenhuma, só 3 estados trocados por
+código (Login/Venda/ConexaoConfig). Escopo reduzido a uma **Fase 1
+enxuta**, confirmada com o usuário via `AskUserQuestion` antes de
+implementar (ver plano de sessão) — fica pra depois: drag-and-drop entre
+colunas, modificadores no adicionar item, impressão automática por
+finalidade (cozinha/bar), botão Taxa de Serviço, botão Imprimir (recibo
+completo do pedido), múltiplas formas de pagamento (só "Faturar com 1
+forma, valor cheio" nesta fase), e o botão **"Abrir"** ficou
+**desabilitado** (mostra mensagem explicando) porque o KPDV não tem uma
+tela de edição completa de Pedido (equivalente a `pedido-form.tsx`) — as
+ações rápidas do próprio card cobrem o dia a dia.
+
+**Menu lateral usa `Wpf.Ui.Controls.NavigationView`** — só a parte visual
+(painel, ícones), sem sistema de páginas/roteamento à parte (mesmo
+princípio "leve" já documentado). API real do pacote 4.3.0 confirmada por
+reflexão sobre o assembly antes de codar (não chutada):
+`NavigationView.MenuItems` (`IList`, populável direto no XAML),
+`NavigationView.ReplaceContent(UIElement, object)` (troca o conteúdo sem
+disparar `SelectionChanged` de novo — usado pelo code-behind, nunca um
+`ContentControl` genérico), evento `SelectionChanged` com assinatura
+`TypedEventHandler<NavigationView, RoutedEventArgs>` (estilo WinUI, não o
+`EventHandler` padrão do .NET). **Achado importante**:
+`NavigationView.SelectedItem` tem setter `protected` (não dá pra atribuir
+de fora) — o destaque visual do item ativo é controlado por
+`NavigationViewItem.IsActive` (setter público), usado em vez disso.
+`NavigationViewItem.TargetPageTag` (string, propriedade própria do
+controle) identifica qual item foi clicado, em vez do `Tag` genérico do
+WPF.
+
+**`MainWindow.xaml`**: `Grid.Row="1"` ganhou um segundo elemento
+(`ui:NavigationView x:Name="NavView"`) sobreposto ao `ContentControl
+x:Name="ConteudoAtual"` já existente, alternados por `Visibility`
+(`ConteudoAtual` = Login/ConexaoConfig; `NavView` = Venda/Pedidos, só
+pós-login) — evita depender de uma API de "esconder só o painel" do
+`NavigationView` que não foi confirmada existir. Dois itens declarados
+direto no XAML: `NavItemVenda` (`TargetPageTag="Venda"`, ícone
+`Cart24`) e `NavItemPedidos` (`TargetPageTag="Pedidos"`, ícone `Food24`,
+nasce `Visibility="Collapsed"`).
+
+**`MainWindow.xaml.cs`**:
+- `MostrarVenda()` virou `MostrarVendaAsync()` (async) — depois de
+  resolver/cachear a `VendaView`, chama `ControleService.ObterModulosAsync()`
+  (mesmo endpoint já usado pelo painel de Balança) pra checar o módulo
+  `Bar` e `PermissoesService.Can("PEDIDO.ABRIR")` (mesmo critério do
+  frontend web) — só com os dois verdadeiros o item "Pedidos" fica
+  visível. Essa checagem roda só aqui (uma vez por login), não a cada
+  troca de aba.
+- `MostrarVendaConteudo()`/`MostrarPedidos()` (novos, leves) — só trocam o
+  conteúdo via `ReplaceContent`, chamados pelo novo `NavView_SelectionChanged`
+  (lê `TargetPageTag` do item selecionado).
+- **Achado de correção durante a implementação, não previsto no plano
+  original**: `VendaView`/`PedidosView` já eram resolvidas via
+  `_services.GetRequiredService<T>()` a cada chamada (`AddTransient`) —
+  isso sempre foi inofensivo antes porque `MostrarVenda()` só era chamado
+  uma vez por sessão (login ou cancelar-config). Com o menu lateral,
+  "Venda" passou a ser um item clicável repetidamente — recriar a
+  `VendaView` do zero a cada clique reabriria uma comanda NOVA
+  (`VendaViewModel.InicializarAsync` chama `AbrirVendaAsync`), descartando
+  a venda em andamento. Corrigido cacheando a `VendaView` em
+  `MainWindow` (`_vendaView ??= ...`, só cria uma vez, reaproveitada em
+  toda troca de aba e mesmo depois de Cancelar em Configurações de
+  Conexão) **e** guardando `VendaView.xaml.cs`'s `Loaded` (que dispara de
+  novo a cada reanexação à árvore visual — comportamento normal do WPF,
+  não um bug) com uma flag `_inicializado` — a inicialização pesada
+  (módulos, balança, abrir venda) roda só na primeira vez; nas próximas
+  reanexações só refoca o campo de busca. `PedidosView` continua
+  `AddTransient`/recriada a cada visita de propósito — como só LÊ dados
+  (sem "venda em andamento" pra perder), recarregar do zero a cada troca
+  de aba é seguro e até desejável (dados sempre atualizados).
+
+**`C:\Desenv\KPDV\src\KPDV\`** (arquivos novos desta feature):
+- `Models/PedidosModels.cs` — DTOs espelhando 1:1 o contrato já usado por
+  `pedidos_service.py`/`itens_service.py` (campo-a-campo verificado contra
+  o backend real antes de escrever, não chutado) — `PedidoDto` (traz
+  `TipoClienteDescricao` já resolvido via `COALESCE(NULLIF(p.tipo,0),
+  c.cliente_forn)` e `VendedorNome` já como `nome_guerra`, nunca
+  recalculados no cliente), `ItemPedidoRequest` (subconjunto mínimo — sem
+  modificadores/nº série/m², exclusivos do Pedido Geral), etc. Reaproveita
+  `CheckoutSimpleResponse` já existente pra respostas `{Success,Message}`
+  simples, em vez de duplicar.
+- `Utils/PainelTipos.cs` (novo) — réplica de
+  `frontend/src/components/pedido/painelTipos.ts`: ordem fixa das colunas
+  (`MESA, COMANDA, BALCÃO, ENTREGA, FIADO`) e normalização de
+  `tipo_cliente_descricao` (`"BALCAO"` sem cedilha → `"BALCÃO"`) — ponto
+  único, usado tanto por `PedidoCardViewModel` (cor do card) quanto por
+  `PedidosViewModel` (agrupamento nas colunas), evita duplicar a mesma
+  regra duas vezes.
+- `Services/PedidosService.cs` — um método por endpoint (`ListarAsync`,
+  `ListarTiposClienteAsync`, `BuscarClientesAsync` — SEM filtro por tipo,
+  mesmo achado do web: filtrar escondia clientes de outros tipos e
+  arriscava cadastro duplicado —, `CriarAsync`, `ListarItensAsync`,
+  `AdicionarItemAsync`, `DefinirFormaPagSimplesAsync`, `FaturarAsync`,
+  `DefinirQtdPessoasAsync`, `ListarFormasPagamentoSimplesAsync`).
+  `ProdutoService.BuscarAsync` ganhou parâmetro opcional `tipo` (default
+  `"all"`, compatível com todo uso existente) pro "+Item" buscar só
+  produtos (`tipo="P"`), sem duplicar lógica de busca.
+- `Services/PedidosFiltrosStore.cs` — persiste a última seleção de
+  filtros (situação + 5 bools de tipo) em
+  `%AppData%\KPDV\pedidos_filtros.json`, um único arquivo por instalação
+  (mais simples que o `pedidosFilters.ts` do web, que chaveia por
+  empresa+banco — desnecessário aqui porque a conexão do KPDV agora é da
+  MÁQUINA, ver seção "Configurações de Conexão" acima). `null` = nunca
+  salvo antes (primeira visita, mantém os 5 tipos marcados por padrão) —
+  distinto de "salvo com todos desmarcados", mesma distinção do web.
+- `ViewModels/PedidoCardViewModel.cs` — envolve um `PedidoDto`,
+  computa `IsStale` ("parado": aberto + data < hoje, mesmo critério do
+  web), cores fixas por tipo (`AccentBrush`) e `TempoAbertoTexto`
+  atualizado por `AtualizarTempo(DateTime agora)` — chamado por um
+  relógio ÚNICO compartilhado do `PedidosViewModel` (`DispatcherTimer`,
+  10s), nunca um timer por card (podem ser dezenas simultâneos).
+- `ViewModels/PedidosViewModel.cs` — 5 `ObservableCollection` fixas
+  (Mesa/Comanda/Balcão/Entrega/Fiado), totalizadores por tipo + geral
+  (recalculados a cada carga via `DistribuirNasColunas`), filtros
+  (busca/situação recarregam do backend; tipo só redistribui os dados já
+  carregados), painel embutido (`PainelPedidosAtivo`: AddItem/Faturar/
+  NovoPedido) no mesmo padrão `PainelAtivo` já usado por `VendaView`.
+  Código de `tipo_cliente` por coluna (pro botão "+" de cada coluna)
+  resolvido dinamicamente contra `TiposCliente` depois de carregado
+  (`ResolverCodigosTipo`) — não hardcoded, já que o código real vem do
+  cadastro da empresa.
+- `Views/PedidosView.xaml`/`.xaml.cs` — 5 colunas lado a lado
+  (`ScrollViewer` horizontal + `ItemsControl` por coluna, `DataTemplate`
+  compartilhado `CardPedidoTemplate`), totalizadores, filtros (chips de
+  Situação via `SelecionarSituacaoCommand`, `ToggleButton`s de tipo
+  ligados direto às 5 props bool), 3 painéis overlay (mesmo "Card
+  centralizado + backdrop escurecido" já estabelecido em `VendaView.xaml`).
+- `App.xaml.cs` — `PedidosService`/`PedidosFiltrosStore` (`AddSingleton`),
+  `PedidosViewModel`/`Views.PedidosView` (`AddTransient`).
+
+**Verificação feita**: `dotnet build` → 0 erros (passou depois de corrigir
+2 erros pontuais durante a implementação: atribuição encadeada
+`int = double = 0` no cálculo de totalizadores, e aspas simples dentro de
+um `StringFormat` no XAML, que o parser MC3043 rejeita). Processo lançado
+e vivo via `Get-Process` (PID/título/`Responding`) com o novo
+`NavigationView` já presente em `MainWindow.xaml` — confirma que o XAML
+novo carrega sem erro em tempo de execução, não só de compilação.
+**Não coberto** (mesma limitação de sempre, sem login/dados reais nesta
+sessão): carregar pedidos de verdade, colunas populadas contra dados
+reais, qualquer uma das ações rápidas (+Item/Faturar/Qtd. Pessoas/Novo
+Pedido) contra o backend de verdade, o fluxo completo de navegação
+Venda↔Pedidos clicado ao vivo.
+
+**Auto-revisão logo depois de reportar "sem problemas" ao usuário —
+achados 3 problemas reais, todos corrigidos antes de confirmar**:
+
+1. **Corrida de carregamento duplicado (bug real)**:
+   `PedidosViewModel.OnSituacaoSelecionadaChanged`/`OnBuscaTextoChanged`
+   disparavam `AplicarFiltroTextoOuSituacaoAsync()` (fire-and-forget) sem
+   checar `_carregandoFiltrosSalvos` — como `CarregarFiltrosSalvosAsync()`
+   ATRIBUI `SituacaoSelecionada` ao restaurar o filtro salvo, isso
+   disparava um `CarregarAsync()` concorrente ANTES de `TiposCliente`/
+   `FormasPagamento` estarem carregados, corrida com o `CarregarAsync()`
+   explícito de `InicializarAsync()` logo depois. `SalvarFiltrosAsync()`
+   já tinha a guarda certa; `AplicarFiltroTextoOuSituacaoAsync`/
+   `AplicarFiltroTipoAsync` não tinham — corrigido adicionando a mesma
+   guarda (`if (_carregandoFiltrosSalvos) return;`) nos dois.
+2. **Card não 100% clicável (bug de UX menor)**: a `Grid` da linha 1 do
+   card (`MouseBinding` de "Abrir") não tinha `Background` definido — no
+   WPF, um `Panel` sem `Background` (mesmo `null`) só é hit-test visível
+   onde os filhos de fato desenham, então clicar no espaço vazio da linha
+   (fora do texto) não disparava o clique. Corrigido com
+   `Background="Transparent"`.
+3. **Colunas sem scroll vertical (gap funcional real)**: o `ScrollViewer`
+   externo das 5 colunas usa `VerticalScrollBarVisibility="Disabled"`
+   (necessário pro scroll horizontal entre colunas funcionar sem competir
+   com o vertical) — mas isso também significa que uma coluna com muitos
+   pedidos simplesmente teria os cards de baixo CORTADOS, sem nenhuma
+   forma de rolar até eles. Corrigido envolvendo o `ItemsControl` de cada
+   coluna no seu próprio `ScrollViewer` interno
+   (`VerticalScrollBarVisibility="Auto"`, `MaxHeight="520"`) — cada coluna
+   agora rola independente das outras, sem depender do scroll da página.
+
+`dotnet build` → 0 erros depois dos 3 ajustes. Mesma limitação de sempre:
+nenhum dos 3 foi exercitado com dados reais (a corrida #1 foi encontrada
+por leitura de código, não reproduzida ao vivo).
+
+### Fase 2a — Impressão Automática por Finalidade (2026-08-10) — IMPLEMENTADO
+
+Pedido explícito: implementar a Fase 2 do Menu Pedidos Bar, sequenciando
+"primeiro a Impressão Automática por Finalidade, depois os outros 5 itens
+menores" (drag-and-drop, Modificadores, Taxa de Serviço, múltiplas formas
+de pagamento no Faturar, Imprimir recibo completo — ainda não
+implementados, ficam pra próxima rodada; "Abrir completo" segue à parte,
+mais adiante ainda). O desenho passou por várias rodadas de correção em
+conversa com o usuário na mesma sessão — resumo da versão FINAL:
+
+**Achado-chave que mudou o desenho original**: o usuário esclareceu que a
+impressão automática precisa disparar mesmo quando o item foi adicionado
+por **outro app** (Pedido Bar do frontend web, futuramente mobile), não só
+pelo próprio KPDV. Isso levou a reaproveitar uma infraestrutura já
+existente e testada ao vivo nesta sessão — `impressao_fila`/`/impressao/
+fila/*` (ver [[project_impressao_silenciosa]], usada antes pelo Checkout
+web via `print-agent/`) — em vez de um desenho fechado dentro do KPDV. O
+próprio comentário no topo de `impressao_service.py` já previa exatamente
+essa lacuna ("resolver automaticamente qual computador/impressora usar a
+partir da Finalidade do item").
+
+**Onde a config mora — 3 rodadas até fechar**: 1ª proposta (minha) foi um
+painel dentro de Venda; o usuário corrigiu pra "dentro da Configuração de
+Conexão"; corrigiu de novo pra **item próprio no menu lateral, chamado
+"Configurações"** — "essas configurações serão utilizadas somente pelo
+KPDV e somente para o módulo de bar e restaurante. essa configuração será
+única e global. somente os 3 magníficos é quem poderão acessar." Essa é a
+versão implementada. "Única e global" inicialmente ia esconder o campo
+`computador` por completo da UI — corrigido de novo quando o usuário
+apontou "caso tenha mais de uma estação de KPDV": a lista agora mostra
+TODAS as linhas (sem dedupe por Finalidade), com o `computador` exibido
+como rótulo informativo read-only ("Nesta máquina" / "Em: X") — nunca
+digitado, sempre `Environment.MachineName` no momento de salvar.
+
+**Duas simplificações confirmadas via `AskUserQuestion` direta**:
+1. `Automatica` virou liga/desliga simples — `false` significa que aquela
+   Finalidade não dispara impressão nenhuma (nem fila, nem confirmação
+   pendente) — dropa a nuance "confirmar antes de imprimir" que o web tem
+   (não faz sentido pra um poller de fundo sem ninguém necessariamente
+   olhando o KPDV no momento).
+2. O "+Item" do próprio KPDV imprime **imediato** (não espera o poller) —
+   usuário escolheu essa opção mesmo sabendo que exige uma trava extra
+   (confirmar o job na fila logo depois de imprimir localmente, pra não
+   imprimir 2× quando o poller de fundo também pegar o mesmo job).
+
+**Arquitetura implementada**:
+
+- **Backend** (`c:\Desenv\APPIAREACT\backend`, mudança pequena, sem schema
+  novo) — `services/itens_service.py::_add_item_sync`: depois de resolver
+  `tipo_peca` (já existia), busca TODAS as linhas de
+  `direcionamento_impressora` com aquele `tipo` e `automatica=1` (pode ser
+  mais de uma — suporta 2 estações com impressoras diferentes pra mesma
+  Finalidade) e enfileira um job LEVE (JSON `{pedido, codauto, tipo_peca}`,
+  não o ticket já pronto — quem monta o texto é o KPDV, evita duplicar o
+  template em 2 linguagens) pra cada `computador` encontrado, via
+  `impressao_service._enfileirar_sync` já existente. A resposta de
+  `POST /pedidos/{pedido}/itens` ganhou o campo novo `impressao_fila:
+  [{computador, impressora, fila_id}]`. Best-effort — nunca derruba a
+  resposta de sucesso do add-item. 31/31 testes de `itens_service`
+  passando, suíte inteira do backend 1807/1808 (1 falha pré-existente
+  sem relação nenhuma — `test_cnab_itau_service.py`, data hardcoded num
+  fixture comparada contra a data real de hoje).
+- **KPDV** (`C:\Desenv\KPDV\src\KPDV\`):
+  - `Models/ControleSistemaModels.cs` + `Services/ControleSistemaService.cs`
+    (novos) — CRUD de `direcionamento_impressora` (`GET/POST
+    /controle-sistema/direcionamento-impressora`, `POST .../{codigo}/excluir`)
+    + `GET /api/tipo-peca`. Lista SEMPRE tudo, sem filtrar por computador.
+  - `Models/ImpressaoFilaModels.cs` + `Services/ImpressaoFilaService.cs`
+    (novos) — consome `/impressao/fila/pendentes` e `/impressao/fila/{id}/confirmar`,
+    mesma fila já testada ao vivo pelo Checkout.
+  - `Utils/ItemTicketTexto.cs` (novo, mesma disciplina de `Utils/ReciboTexto.cs`)
+    — porta fiel do branch `isItemMode` de `ReciboPedidoModal.tsx:144-206`
+    (cabeçalho da empresa, `{Pedido|Orçamento} nº N`, Atendente+data/hora,
+    QTD+descrição em fonte ampliada, complemento, Obs, endereço/telefone,
+    previsão de entrega, mensagens de rodapé) — usa comandos ESC/POS
+    (`ESC E` negrito, `GS !` fonte dobrada) embutidos como caracteres de
+    controle na própria string, já que `ImpressaoTermicaService.ImprimirTexto`
+    só faz CP850+RAW sem noção de formatação.
+  - `Services/PedidosService.cs` — 2 métodos novos, `ObterPedidoAsync`/
+    `ObterClienteResumoAsync` (reaproveitam endpoints já existentes,
+    usados só pelo poller — o caminho rápido já tem tudo na resposta do
+    próprio add-item).
+  - `Services/ImpressaoComandaPoller.cs` (novo) — consumidor de fundo,
+    `DispatcherTimer` de 8s, roda uma vez por sessão (iniciado/parado pelo
+    `MainWindow`, independente de qual tela está aberta) — cobre o caso
+    "item incluído por outro app". Cacheia empresa/mensagens (reset a cada
+    `Iniciar()`, pra não vazar dado de uma conexão trocada).
+  - `ViewModels/PedidosViewModel.cs` — `ConfirmarAddItemAsync` ganhou
+    `ImprimirAutomaticoAsync`: depois do add-item ter sucesso, imprime na
+    hora só os alvos de `resp.ImpressaoFila` cujo `Computador` é esta
+    própria máquina (`Environment.MachineName`) — os de outra estação
+    ficam pro poller DAQUELA estação. `InicializarAsync` ganhou fetch
+    paralelo de empresa/mensagens (mesmo padrão de tipos/formas).
+  - `Views/ConfiguracoesView.xaml`/`.xaml.cs` + `ViewModels/ConfiguracoesViewModel.cs`
+    + `ViewModels/DirecionamentoImpressoraLinhaViewModel.cs` (novos) — tela
+    "Configurações": lista de mapeamentos (Finalidade→Impressora,
+    rótulo "Nesta máquina"/"Em: X", Automática, Excluir) + form de
+    Incluir/Alterar (combo Finalidade via `/tipo-peca`, combo Impressora
+    via `ImpressaoTermicaService.ListarImpressorasInstaladas()` — já
+    enumera impressoras locais E compartilhadas de rede, `PRINTER_ENUM_LOCAL
+    | PRINTER_ENUM_CONNECTIONS`).
+  - `MainWindow.xaml`/`.xaml.cs` — 3º item de menu `NavItemConfiguracoes`
+    (ícone `Settings24`, confirmado por reflexão sobre o assembly), gate
+    `moduloBarAtivo && IsManagerFuncao` (mesmo critério "3 Magníficos" dos
+    outros ícones/telas restritas — não é permissão do catálogo). Inicia/
+    para o `ImpressaoComandaPoller` junto do módulo Bar, em
+    `MostrarVendaAsync()`/`MostrarLogin()`.
+  - `App.xaml.cs` — `ControleSistemaService`/`ImpressaoFilaService`/
+    `ImpressaoComandaPoller` (`AddSingleton`) + `ConfiguracoesViewModel`/
+    `Views.ConfiguracoesView` (`AddTransient`).
+
+**Template do ticket** (fonte: `ReciboPedidoModal.tsx:144-206`) — ticket
+inteiro em negrito: nome da empresa centralizado, `hr`, `{Pedido|Orçamento}
+nº N   Local: X   ClienteNome` (label "Orçamento" quando situação="A",
+regra `[GLOBAL]` já documentada), `hr`, `Atendente: X   data  hora atual`,
+`hr`, QTD+descrição em fonte ampliada (`GS ! 0x11`), complemento (só se
+diferente da descrição), `hr`, Obs + `hr` (se houver), endereço/telefone
+do cliente (se houver), `hr` + "Entrega em..." (se `previsao_entrega`),
+mensagens de rodapé centralizadas.
+
+**Verificação feita**: `dotnet build` → 0 erros (1 correção pontual
+durante a implementação — `DirecionamentoImpressoraListResponse` não tem
+campo `Message`, o backend não devolve mensagem de erro nesse endpoint de
+listagem). Processo lançado e vivo via `Get-Process` (PID/título/
+`Responding`), com o item "Configurações" já presente no `NavigationView`.
+**Não coberto** (mesma limitação de sempre, sem login/hardware/2ª máquina
+disponíveis nesta sessão): fluxo completo com item incluído pelo web sendo
+pego pelo poller do KPDV, múltiplas estações de verdade, corte/negrito/
+fonte ampliada contra impressora térmica física, o CRUD da tela
+Configurações contra o backend real.
+
+**Próximos passos da Fase 2** (ainda não implementados, ordem combinada
+com o usuário): drag-and-drop entre colunas, Modificadores no +Item, Taxa
+de Serviço, múltiplas formas de pagamento no Faturar, Imprimir recibo
+completo do pedido. "Abrir" completo (edição total do Pedido, ~4.400
+linhas só no lado web) fica pra um plano dedicado à parte, mais adiante
+ainda — não faz parte da Fase 2 "menor".
+
+### Fase 2b — Os 5 itens menores (2026-08-10) — IMPLEMENTADO
+
+Pedido explícito: "implantar os 5 itens" — os itens que a Fase 2a deixou
+pendentes: drag-and-drop entre colunas, Modificadores no +Item, Taxa de
+Serviço, múltiplas formas de pagamento no Faturar, Imprimir recibo
+completo do pedido. Fecha a Fase 2 inteira — só "Abrir" completo (edição
+total do Pedido) continua fora de escopo, plano dedicado à parte.
+
+Todos os 5 reaproveitam endpoints já existentes no backend — **nenhuma
+mudança de backend nesta rodada** (diferente da Fase 2a, que precisou de
+uma mudança pequena em `itens_service.py`). Todo schema/rota foi conferido
+direto contra `backend/models/schemas.py`/`routes/pedidos.py`/`routes/
+modificadores.py`/`services/forma_pagamento_service.py` antes de
+implementar, sem chute.
+
+- **Taxa de Serviço** — botão "Tx Serv." no card (`PedidosService.
+  AplicarTaxaServicoAsync` → `POST /pedidos/{pedido}/taxa-servico`,
+  endpoint já idempotente no backend — atualiza a linha `S002` existente
+  em vez de empilhar).
+- **Drag-and-drop entre colunas** — **primeira vez usando `DragDrop`
+  nativo do WPF neste projeto** (API padrão, sem lib externa):
+  `PreviewMouseLeftButtonDown`/`PreviewMouseMove` no card (limiar de
+  arrasto do sistema, `SystemParameters.MinimumHorizontalDragDistance`)
+  disparam `DragDrop.DoDragDrop`; cada coluna vira alvo (`AllowDrop`,
+  `Tag={Binding TipoCodigoX}`, evento `Drop`) que chama
+  `PedidosViewModel.MoverParaColunaAsync` → `POST /pedidos/{pedido}/tipo`.
+  Nunca move o card otimisticamente — a regra de override de cliente
+  reservado é 100% server-side (`_resolve_tipo_pedido`), por isso sempre
+  recarrega a lista depois pra refletir a posição real (mesmo
+  comportamento do web). Os handlers de mouse são tunneling e nunca
+  marcam `e.Handled`, então clique normal (Abrir, botões, stepper Qtd.
+  Pessoas) continua funcionando — só um arrasto de verdade dispara o
+  `DoDragDrop`.
+- **Múltiplas formas de pagamento no Faturar** — sistema separado do
+  Checkout (`forma_pagamento_service.py`, tabelas próprias por tipo, 8
+  tipos sem Cartão Presente). O painel "Faturar" da Fase 1 (1 combo
+  simples) vira o caminho rápido padrão; um checkbox "Dividir em várias
+  formas de pagamento" revela um grid (`LinhaFormaPagamentoPedido.cs`,
+  mesmo espírito de `LinhaPagamento.cs`/Fechar Venda da Venda, reaproveita
+  o DTO `FormaPagamentoCompletoDto` já existente pro lookup por Tipo). Com
+  linhas, submete cada uma via `POST .../formas-pagamento` e pula o
+  `forma-pag-simples` de propósito antes de chamar o `Faturar` já
+  existente — a validação de fechamento do backend (`_fecha_fpag_dav`)
+  reconcilia automaticamente pequenas divergências. Campos de detalhe de
+  cheque/cartão não capturados (mesma simplificação já aplicada ao Fechar
+  Venda do Checkout).
+- **Imprimir recibo completo do pedido** — **reaproveita `Utils/
+  ReciboTexto.cs` já existente** (recibo do Checkout) em vez de um
+  template novo do zero — a estrutura é quase idêntica.
+  `ReciboTextoDados` ganhou 4 campos NOVOS e opcionais (`Obs`,
+  `ClienteEndereco`, `ClienteTelefone`, `QtdPessoas`, todos `null`/`0`
+  por padrão) e `Build()` ganhou as linhas condicionais correspondentes —
+  **mudança estritamente aditiva**, as chamadas já existentes do Checkout
+  continuam produzindo exatamente o mesmo texto de hoje (conferido lendo
+  o diff). Novo botão ícone "🖨" no card, imprime na impressora já
+  configurada em `ImpressaoConfigStore` (a mesma do recibo de Venda — é o
+  recibo do CLIENTE, diferente do ticket de cozinha por Finalidade da
+  Fase 2a).
+- **Modificadores no +Item** — tocar um produto na busca não adiciona mais
+  direto: primeiro consulta `GET /modificadores/por-item/{tipo}/{codigo}/
+  completo` (`ModificadoresService`, novo); sem categorias, adiciona na
+  hora (mesmo comportamento da Fase 1); com categorias, mostra uma 2ª
+  "página" dentro do mesmo painel "+Item" (`MostrandoModificadores`) com
+  checkboxes por modificador (`ModificadorCategoriaSelecaoViewModel` —
+  categoria `selecao_multipla=false` funciona como grupo de rádio,
+  marcar um desmarca os irmãos, feito reagindo a `PropertyChanged`),
+  bloqueia "Confirmar" até toda categoria obrigatória ter uma seleção. Ao
+  confirmar, agrega `acrescimo`/`desconto` dos modificadores marcados nos
+  campos `Desconto`/`Acrescimo` já existentes de `AdicionarItemAsync`
+  (que precisou ganhar esses parâmetros — antes só passava
+  `ValorUnitario`) e junta os nomes marcados no `Complemento` — nenhuma
+  mudança de backend, o endpoint de adicionar item já aceitava os 3
+  campos desde a Fase 1, só não estavam sendo usados.
+- **Layout do card**: a barra de ações (`+Item`/`Faturar`) virou
+  `WrapPanel` (era `StackPanel`) — permite quebrar pra uma 2ª linha
+  dentro do card se os 2 botões novos (`Tx Serv.`/`🖨`) não couberem em
+  280px, sem cortar nenhum.
+
+**Arquivos novos**: `Models/ModificadoresModels.cs`, `Services/
+ModificadoresService.cs`, `ViewModels/ModificadorCategoriaSelecaoViewModel.cs`
+(+ `ModificadorItemSelecaoViewModel`), `ViewModels/LinhaFormaPagamentoPedido.cs`.
+**Arquivos estendidos**: `Models/PedidosModels.cs` (`TaxaServicoRequest`,
+`TipoPedidoRequest`, `FormaPagamentoLancadaDto`/request/response),
+`Services/PedidosService.cs` (7 métodos novos), `Utils/ReciboTexto.cs`
+(4 campos opcionais + linhas condicionais), `ViewModels/PedidosViewModel.cs`
+(ganhou `ImpressaoConfigStore`/`ModificadoresService` no construtor),
+`Views/PedidosView.xaml`/`.xaml.cs`.
+
+**Verificação**: `dotnet build` → 0 erros de primeira em todas as etapas
+(backend não mudou nesta rodada, então nenhum teste Python novo a rodar).
+Processo lançado e vivo via `Get-Process`. **Não coberto** (mesma
+limitação de sempre): nenhum dos 5 itens exercitado com login/dados
+reais — drag-and-drop em particular só é testável com mouse de verdade,
+impossível simular via `Get-Process`.
+
+**Fase 2 do Menu Pedidos Bar está completa** — só falta "Abrir" completo
+(edição total do Pedido, ~4.400 linhas só no lado web), que segue como
+plano dedicado à parte, ainda não iniciado.
+
+### Identidade visual — Login (2026-08-11) — IMPLEMENTADO
+
+Pedido explícito: aplicar a logo da Kontacto e a logo do KPDV na tela
+inicial. Usuário anexou várias imagens (logo "PDV" vermelho, mockup de
+caixa, ícone) + um `.txt` ("KPDV ICONE FX.txt") que se revelou ser um
+dump binário corrompido de tentar exportar um `.ico` como texto — tentei
+localizar os arquivos reais no disco primeiro (achei só um logo genérico
+da Kontacto no Desktop, nada do KPDV) e expliquei a limitação técnica
+(imagens coladas na conversa não viram arquivo acessível a mim) via
+`AskUserQuestion`. Usuário escolheu salvar os arquivos reais numa pasta
+acessível (`C:\Desenv\KPDV\Assets\`) — apareceram os originais de 2013,
+inclusive os `.ico` de verdade (o que o `.txt` tentava representar).
+
+- **Logo do KPDV**: `KPDV LOGO.png` (kit de marca original 2013 —
+  círculo vermelho com marca "K" estilizada + wordmark "PDV") copiado
+  pra `src/KPDV/Assets/kpdv-logo.png`, exibido em destaque no topo da
+  tela de Login.
+- **Logo da Kontacto — precisa ser a MESMA do app Web** (correção do
+  usuário em cima da minha 1ª tentativa, que usou um arquivo genérico do
+  Desktop) — localizado o uso real em `frontend/app/login.tsx:299`
+  (`require("../assets/images/kontacto-logo.png")`) e copiado o MESMO
+  arquivo (`frontend/assets/images/kontacto-logo.png`, byte-a-byte) pra
+  `src/KPDV/Assets/kontacto-logo.png`. É um wordmark BRANCO (precisa de
+  fundo escuro) — no web fica sobre uma faixa `colors.brandPrimary`
+  (`login.tsx:519`); replicado exatamente igual no KPDV: `Border`
+  `Background="{StaticResource KpdvBrandBrush}"` (mesma cor) envolvendo
+  a imagem.
+- **Ícone do app**: `KPDV ICONE FX.ico` (variante com mais resoluções,
+  8 tamanhos embutidos — a que o `.txt` corrompido tentava representar)
+  copiado pra `src/KPDV/Assets/kpdv-icone.ico`, usado como
+  `<ApplicationIcon>` no `.csproj` (ícone do `.exe`/taskbar/Alt+Tab) E
+  como `ui:TitleBar.Icon` (`ui:ImageIcon`) em runtime — antes a
+  TitleBar tinha `Icon="{x:Null}"` (sem ícone nenhum).
+- Todos os 3 arquivos (`kpdv-logo.png`, `kontacto-logo.png`,
+  `kpdv-icone.ico`) registrados como `<Resource Include=...>` no
+  `.csproj` (embarcados no assembly, referenciáveis via
+  `/Assets/nome.ext` no XAML).
+- **Verificação**: `dotnet build` → 0 erros; processo lançado e vivo via
+  `Get-Process`. **Não verificado visualmente por screenshot** — mesma
+  disciplina de sempre nesta sessão (incidente de screenshot registrado
+  anteriormente, não repetir a abordagem neste ambiente) — usuário
+  precisa conferir visualmente ao rodar `dotnet run --project
+  src/KPDV/KPDV.csproj` ele mesmo.
+
+#### Correção — rodapé + transparência (mesmo dia, 2026-08-11)
+
+Usuário colou screenshot da TitleBar pedindo "no título da janela, deixe o
+ícone e 'Kontacto Pdv' exatamente assim" — na 1ª passada eu li errado e
+registrei como "sem mudança" (o texto vigente na hora era "KPDV — Kontacto
+PDV", NÃO "Kontacto PDV"); o usuário corrigiu explicitamente depois
+("Com relação ao Título eu pedi assim: ícone + 'Kontacto PDV'"), e só
+então o texto foi de fato trocado — ver "Correção 2" logo abaixo. Junto
+com a correção do título, pediu 2 ajustes de logo: "a logo da kontacto
+quero na parte inferior da tela como um rodapé e use a mesma do app web
+aquela que fica acima do menu lateral com transparência" + "a logo do
+KPDV também com transparência".
+
+- **Logo da Kontacto — trocada de arquivo E reposicionada**: não é mais a
+  versão branca do `login.tsx` (que exigia a faixa `KpdvBrandBrush` por
+  trás) — agora é `frontend/assets/images/kontacto-logo-color.png`, o
+  MESMO arquivo do cabeçalho do menu lateral (`Sidebar.tsx:158-185`),
+  wordmark colorido com canal alfa real, pensado pra fundo claro. Copiado
+  pra `src/KPDV/Assets/kontacto-logo-color.png`. Removida a `Border`
+  `KpdvBrandBrush` que envolvia a logo antiga — a nova já é colorida e
+  transparente, não precisa de caixa por trás. Reposicionada: saiu de
+  dentro do card centralizado (topo da tela) e virou um rodapé fixo —
+  `LoginView.xaml`'s `Grid` ganhou 2 linhas (`* `/`Auto`), o card
+  centralizado ocupa a linha 0, a logo Kontacto sozinha ocupa a linha 1
+  (`HorizontalAlignment="Center"`, `Margin="0,0,0,24"`).
+- **Logo do KPDV — nenhum arquivo fornecido tinha lockup completo E
+  transparência ao mesmo tempo.** Investigação via `System.Drawing.Bitmap`
+  (`PixelFormat` + alfa de um pixel de canto) nos 3 PNGs do kit 2013:
+  `KPDV LOGO.png` (em uso) = `Format24bppRgb`, opaco; `KPDV LOGO
+  DESCRICAO.png` (lockup completo + tagline) = idem, opaco; `KPDV
+  MARCA.png` (só a marca circular "K", sem o texto "PDV") = ÚNICO com
+  `Format32bppArgb` real (canto A=0) — mas sem o wordmark. Em vez de
+  perder o texto "PDV" (trocar pra `KPDV MARCA.png` sozinho) ou pedir
+  mais um arquivo ao usuário, gerei uma versão transparente da própria
+  `KPDV LOGO.png` **localmente**: flood-fill (BFS) a partir dos 4 cantos
+  da imagem, removendo (alfa=0) só os pixels quase-brancos CONECTADOS à
+  borda externa — preserva os brancos que são parte do desenho em si (o
+  "K" branco dentro do círculo vermelho, o anel branco da borda), que não
+  são alcançáveis a partir dos cantos. Script em PowerShell
+  (`System.Drawing.Bitmap.GetPixel/SetPixel`), output salvo direto em
+  `src/KPDV/Assets/kpdv-logo-transparent.png` — confirmado
+  `Format32bppArgb`, canto (2,2) com A=0, centro do "K" com A=255 (R=198
+  G=45 B=50, cor original preservada). `kpdv-logo.png` (cópia opaca
+  original) continua no repo como histórico/fonte, não é mais referenciada
+  em nenhum XAML.
+- `.csproj`: `ItemGroup` de identidade visual atualizado —
+  `kontacto-logo-color.png` e `kpdv-logo-transparent.png` adicionados
+  (`kontacto-logo.png`/`kpdv-logo.png` continuam registrados, só não são
+  mais usados por nenhuma tela).
+- **Verificação**: `dotnet build` → 0 erros; processo lançado,
+  `Responding=True`, encerrado limpo via `Stop-Process`. Mesma disciplina —
+  **não verificado por screenshot**; usuário deve conferir visualmente
+  rodando o app.
+
+#### Correção 2 — texto do título estava errado (mesmo dia, 2026-08-11)
+
+Eu tinha registrado o texto do título como já correto ("KPDV — Kontacto
+PDV") na 1ª rodada — leitura errada da própria instrução do usuário.
+Usuário corrigiu diretamente: pediu ícone + **"Kontacto PDV"**, sem o
+prefixo "KPDV — ". Corrigido nos 3 pontos que carregavam o texto antigo em
+`MainWindow.xaml`: `ui:FluentWindow`'s `Title` (título nativo da janela),
+`ui:TitleBar`'s `Title`, e o `TextBlock` dentro de `ui:TitleBar.Header`
+(o texto visível de fato) — todos trocados de `"KPDV — Kontacto PDV"` pra
+`"Kontacto PDV"`. Confirmado por grep que não havia outra ocorrência do
+texto antigo em nenhum outro arquivo `.xaml`/`.cs` do projeto (só nos
+binários `bin`/`obj`, que ficam desatualizados até o próximo build).
+
+- **Verificação**: `dotnet build` → 0 erros; processo lançado e `Get-Process`
+  confirmou `MainWindowTitle = 'Kontacto PDV'` (texto exato, sem "KPDV — "),
+  `Responding=True`, encerrado limpo.
+
+#### Correção 3 — cor do texto do título (mesmo dia, 2026-08-11)
+
+Pedido: "koloque a cor da fonte do título na cor da logo da kontacto Azul
+marine eu acho". O `TextBlock` do `ui:TitleBar.Header` (`MainWindow.xaml`)
+não tinha `Foreground` explícito (herdava a cor padrão do tema). Aplicado
+`Foreground="{StaticResource KpdvBrandBrush}"` — já é literalmente o azul
+marinho da marca (`#0B2A5B`, `Resources/Brand.xaml`), mesmo tom usado em
+toda parte do app (preços, valores em destaque, título das telas de
+Pedidos/Venda) e o mesmo `colors.brandPrimary` do site — não precisou
+adivinhar/criar cor nova. `dotnet build` → 0 erros; processo vivo
+confirmado.
+
+#### Correção 4 — campos de Usuário/Senha ilegíveis (mesmo dia, 2026-08-11)
+
+Reportado: "os campos usuário e senha não estão visíveis. branco sobre
+branco parece. na conexão está do mesmo jeto. a caixa do text box precisa
+está delineada para o usuário, assim como botão". Causa provável: o
+`ui:TextBox`/`ui:PasswordBox`/`ui:Button` do WPF-UI usam um visual Fluent
+"underline" por padrão (sem caixa completa) e resolvem cor de
+fundo/texto/borda por `DynamicResource`/triggers internos ligados ao
+`Appearance` — sem contraste garantido sobre o `KpdvSurfaceBrush` (fundo
+claro custom da marca) nem borda visível o bastante pro usuário perceber
+o campo.
+
+- **Corrigido com valores LOCAIS explícitos** (não um `Style`/`Setter`) —
+  valor local tem prioridade máxima em WPF, acima de qualquer trigger de
+  `Style`/`ControlTemplate` interno do WPF-UI, então é a forma garantida
+  de funcionar independente do que o `Appearance="Primary"/"Secondary"`
+  decidir por baixo dos panos. Todo `ui:TextBox`/`ui:PasswordBox` de
+  `LoginView.xaml` e `ConexaoConfigView.xaml` ganhou
+  `Background="{StaticResource KpdvSurfaceSecondaryBrush}"` (branco),
+  `Foreground="{StaticResource KpdvInkBrush}"` (tinta escura #0B1B33),
+  `BorderBrush="{StaticResource KpdvBorderBrush}"` (#D7DEEC) +
+  `BorderThickness="1"` — caixa clara e delineada, texto legível. Todo
+  `ui:Button`: Primary (Entrar/Salvar) ganhou
+  `Background="{StaticResource KpdvBrandBrush}"` (navy) +
+  `Foreground="{StaticResource KpdvOnBrandBrush}"` (branco) +
+  `BorderBrush="{StaticResource KpdvBrandBrush}"`; Secondary (Cancelar)
+  ganhou fundo branco + texto escuro + a mesma borda cinza-azulada —
+  ambos com `BorderThickness="1"` pra ficarem visivelmente delineados.
+- **Escopo**: só `LoginView.xaml`/`ConexaoConfigView.xaml` (as 2 telas
+  reportadas com o problema) — `VendaView.xaml`/`PedidosView.xaml`/
+  `ConfiguracoesView.xaml` não foram tocadas (nunca reportado problema
+  ali, e essas telas só são alcançadas pós-login, ainda não exercitadas
+  ao vivo nesta sessão — se o mesmo problema aparecer lá, aplicar o
+  mesmo tratamento quando reportado).
+- **Verificação**: `dotnet build` → 0 erros (1 processo de teste anterior
+  preso travando a cópia do `.exe`, encerrado antes do rebuild); processo
+  lançado, título `Kontacto PDV`, `Responding=True`, encerrado limpo.
+  **Sem screenshot**, mesma disciplina — contraste/legibilidade final
+  precisam ser conferidos visualmente pelo usuário.
+- **Confirmado ao vivo pelo usuário, mesmo dia** — colou screenshot da
+  tela de Login já com os campos legíveis/delineados, título navy e o
+  rodapé/logo corretos (ver Correções 1-3 acima) — nenhum ajuste adicional
+  pedido nesse retorno.
+
+#### Correção 5 — cantos arredondados em todos os campos/botões do projeto (mesmo dia, 2026-08-11)
+
+Pedido: "caixa de texto e botões arredondado em todas as janelas desse
+projeto, é possível?". Investigação (lendo o template REAL de `Button`/
+`TextBox`/`PasswordBox` na fonte oficial do WPF-UI, tag `4.3.0` do
+`lepoco/wpfui` no GitHub — a mesma versão instalada, via `gh api`) achou
+que os 3 controles resolvem o próprio `CornerRadius` a partir de uma
+**única chave compartilhada**: `Setter Property="Border.CornerRadius"
+Value="{DynamicResource ControlCornerRadius}"` — valor padrão da lib,
+`4,4,4,4` (`src/Wpf.Ui/Resources/Variables.xaml`), sutil demais pra o
+usuário notar.
+
+- **Corrigido num único ponto**: `<CornerRadius x:Key="ControlCornerRadius">6,6,6,6</CornerRadius>`
+  adicionado em `Resources/Brand.xaml` — mesmo raio `radius.sm` já usado em
+  campos/botões no app Web (`frontend/src/theme/colors.ts`). Como
+  `Brand.xaml` já é mesclado DEPOIS do tema base do WPF-UI em `App.xaml`
+  (`MergedDictionaries`: `Wpf.Ui.xaml` primeiro, `Brand.xaml` depois — regra
+  do WPF é "o último da lista vence" quando duas dictionaries do mesmo
+  nível definem a mesma chave), essa redefinição vale automaticamente pra
+  TODO `Button`/`TextBox`/`PasswordBox` de QUALQUER tela do projeto — não
+  precisou tocar em nenhuma tela individualmente.
+- **Verificação**: `dotnet build` → 0 erros (um valor malformado de
+  `CornerRadius` teria quebrado o parse XAML na hora); processo lançado e
+  vivo. Tentativa de verificação mais profunda (instanciar os controles
+  reais fora do `.exe`, ver valor resolvido em runtime) esbarrou numa
+  limitação de resolução de `pack://` URI fora de um host de app de
+  verdade — não chegou a comprometer a confiança na correção, já que o
+  `.exe` real segue compilando/subindo normalmente. Confirmado ao vivo
+  pelo usuário no mesmo retorno da Correção 4 (screenshot mostrando cantos
+  arredondados nos campos/botão).
+
+### Trocar conexão direto na tela de Login (2026-08-11) — IMPLEMENTADO
+
+Pedido: "na tela de login, tem que informar qual a conexão está sendo
+usada para se conectar. precisamos alterar essa conexão da tela de login
+caso seja necessário. com usuário e senha de um dos magníficos". Antes
+disso, a única forma de trocar a conexão de uma máquina já configurada era
+logar primeiro e usar o ícone de conexão no `TitleBar` (`ConexaoConfigView`,
+ver seção "Configurações de Conexão" acima) — inconveniente quando a
+conexão está tão errada que ninguém consegue nem logar pra chegar lá.
+
+- **Conexão em uso sempre visível**: novo bloco no topo do formulário de
+  Usuário/Senha (`LoginViewModel.ConexaoResumo`, `"{Empresa} — {Servidor} /
+  {Banco}"`) — texto pequeno, mudo, com um botão "Trocar" ao lado.
+- **3 sub-estados novos na tela de Login** (`enum TrocaConexaoEstado`:
+  `Fechado`/`Autorizando`/`Editando`, mesmo padrão de enum +
+  `EnumEqualsToVisibleConverter` já usado pelos painéis inline da
+  `VendaView`, aplicado aqui pela 1ª vez fora da Venda):
+  1. **Fechado** — formulário normal de Usuário/Senha (como já era),
+     mais o bloco "Conexão em uso" acima.
+  2. **Autorizando** — pede Usuário/Senha de um "3 Magnífico" (Gerente/
+     Supervisor/Master), **validados contra a conexão ATUAL** (a que será
+     eventualmente trocada) via uma chamada normal a `POST /api/login`
+     — mas **nunca chama `SessionService.SetLogin`**, é só uma verificação
+     de credencial (`LoginViewModel.VerificarAutorizacaoAsync`), não
+     estabelece sessão nenhuma. Critério "3 Magnífico" checado via novo
+     método estático `SessionService.EhManagerFuncao(UsuarioInfo?,
+     FuncionarioInfo?)` — extraído da lógica de instância já existente
+     (`IsManagerFuncao`) pra não duplicar o critério nem precisar mutar o
+     `SessionService` singleton só pra checar uma credencial que não é a
+     do operador.
+  3. **Editando** — autorizado, mostra o MESMO formulário de Empresa/
+     Servidor/Banco/API já usado pelo ícone de conexão pós-login —
+     **reaproveita `ConexaoConfigViewModel` por inteiro** (não duplica
+     campos/lógica de salvar): `LoginViewModel` recebe um
+     `ConexaoConfigViewModel` próprio via DI (já era `AddTransient`, sem
+     mudança de registro), e o `StackPanel` desse estado troca seu
+     `DataContext` pra `{Binding ConexaoConfig}`. `ConexaoConfigViewModel.
+     Inicializar()` ganhou um overload `Inicializar(Conexao? atual)` — o
+     original lia `SessionService.Conexao` (só existe pós-login), o novo
+     aceita a conexão explícita (a `ConexaoAtual` da tela de Login, ainda
+     sem sessão nenhuma).
+- **Evento `Salvo` do `ConexaoConfigViewModel` tratado de forma diferente
+  aqui do que no fluxo pós-login**: no ícone de conexão pós-login, Salvar
+  desloga e recarrega a `MainWindow` inteira (a sessão antiga fica
+  inconsistente com a conexão nova). Na tela de Login não existe sessão
+  pra deslogar — `LoginViewModel` assina o mesmo evento e só relê a
+  conexão do disco (`OnConexaoTrocadaAsync`), volta pro estado `Fechado`
+  já com `ConexaoResumo` refletindo a conexão nova, campos de Usuário/
+  Senha limpos. Evento `Cancelado` simplesmente volta pro estado
+  `Fechado` (mesmo padrão do botão Cancelar já existente nesse VM).
+- **Verificação**: `dotnet build` → 0 erros de primeira; processo lançado,
+  título `Kontacto PDV`, `Responding=True` — a tela abriu normalmente numa
+  máquina já configurada (mostrando Usuário/Senha, não o formulário de
+  primeira config), confirmando que `InicializarAsync` e o binding dos 3
+  novos estados carregaram sem erro de XAML/binding.
+
+#### Correção — botão "Verificar" sem nenhum retorno visível (mesmo dia, 2026-08-11)
+
+Usuário testou ao vivo pela 1ª vez (screenshot mostrando o painel
+"Autorização necessária" preenchido com `KONTACTO`/`$KONT2011`) e
+reportou: "clico em verificar e não tem nenhuma ação ou mensagem".
+
+Investigação (sem conseguir reproduzir o silêncio nem confirmar a causa
+exata — documentado honestamente, não um "achei e corrigi" de verdade):
+
+- **Conexão da máquina de teste**: `conexao.json` aponta pra
+  `Empresa=BAIXO BRISA, Servidor=MINIMACHINE, Banco=BD_BAIXOBRISA,
+  Api=http://192.168.18.50:8081/` — um servidor de cliente real, não o
+  backend local desta sessão. Testado direto via `curl` contra
+  `POST http://192.168.18.50:8081/api/login` com as mesmas credenciais:
+  respondeu em **0.03s** com `success:true, master:true` — a rede/
+  credencial/backend estão OK, não é problema de conectividade nem de
+  timeout.
+- **Revisão de código não achou bug óbvio** no fluxo (`VerificarAutorizacaoAsync`,
+  `PodeVerificarAutorizacao`, notificação de `CanExecute` nos
+  `On*Changed` parciais — mesmo padrão já usado e comprovado em
+  `EntrarAsync`/`PodeLogar`).
+- **Tentativa de reproduzir headless** (projeto console descartável em
+  `tools/DiagLogin`, instanciando `LoginViewModel` via DI real e chamando
+  `VerificarAutorizacaoCommand.ExecuteAsync` direto, sem UI) travou —
+  mas por uma limitação do PRÓPRIO harness (um `System.Windows.Application`
+  sem `Application.Run()` rodando não tem message pump pra processar
+  `Dispatcher.Invoke` vindo de uma continuação `.ConfigureAwait(false)`
+  que retomou numa thread do pool — no app real isso não é problema
+  porque `Application.Run()` já está bombeando mensagens o tempo todo).
+  Não prova nem descarta o bug real; só não serviu como reprodução válida.
+  Projeto removido depois (`tools/DiagLogin`, nunca fez parte do app).
+- **Hipótese mais provável, não confirmada**: alguma exceção não prevista
+  (ou uma resposta com `message` vazio) fazendo a `Task` do comando
+  falhar sem nada visível — `AsyncRelayCommand` por padrão RELANÇA a
+  exceção (não swallow silencioso, ao contrário do que se imaginaria à
+  primeira vista — confirmado lendo `AsyncRelayCommand.cs` na fonte
+  oficial do CommunityToolkit.Mvvm, tag `v8.4.0`), então um crash puro
+  seria mais provável que um silêncio total — mas sem log nenhum no KPDV
+  até agora, não dava pra confirmar se algo chegou a lançar.
+
+**Corrigido de forma defensiva** (não é a causa raiz confirmada, é
+blindagem pra garantir que isso nunca mais aconteça sem deixar rastro,
+seja qual for a causa real):
+
+- **Novo `Services/AppLog.cs`** — log mínimo em arquivo
+  (`%AppData%\KPDV\logs\kpdv-AAAAMMDD.log`, mesmo espírito do log diário
+  já usado em `start-backend.ps1`/`start-frontend.ps1`), sem
+  níveis/rotação, só `AppLog.Error(contexto, exception)`. Primeira peça
+  de logging do KPDV — não existia nenhuma antes.
+- **`catch (Exception ex)` adicionado** em `VerificarAutorizacaoAsync` E
+  `EntrarAsync` (parceiro do mesmo risco, mesmo já em produção) — além do
+  `catch (ApiConnectionException)` já existente, grava no `AppLog` e
+  mostra uma mensagem amigável genérica em vez de deixar a `Task` falhar
+  sem eco nenhum.
+- **`response.Message` vazio/nulo agora cai num fallback** ("Usuário ou
+  senha inválidos.") em vez de deixar a caixa de erro sem texto nenhum
+  (que ficaria invisível — `StringToVisibleConverter` colapsa string
+  vazia).
+- **Feedback visual de "processando" adicionado** (`EntrarButtonText`/
+  `VerificarButtonText`, vira "Entrando..."/"Verificando..." durante a
+  chamada) — gap real contra a regra `[GLOBAL]` já existente no projeto
+  ("Feedback visual em processos demorados (>3s)", CLAUDE.md) que a tela
+  de Login nunca tinha aplicado (só desabilitava o botão, sem indicar
+  visualmente que algo estava em andamento) — mesmo que não seja A causa
+  raiz, era um gap real encontrado durante a investigação.
+- **Verificação**: `dotnet build` → 0 erros; processo vivo confirmado.
+  **Causa raiz não confirmada** — próxima vez que isso acontecer (com o
+  log já em produção), checar `%AppData%\KPDV\logs\kpdv-*.log` antes de
+  investigar de novo do zero.
+
+#### Correção — causa raiz CONFIRMADA (mesmo dia, 2026-08-11)
+
+Usuário testou de novo (rodando via **Visual Studio 2026 em modo Debug**,
+achado importante em si — nenhum teste anterior desta sessão tinha um
+depurador anexado) e desta vez colou o print da exceção real capturada
+pelo VS: `System.InvalidOperationException: 'O thread de chamada não pode
+acessar este objeto porque ele pertence a um thread diferente.'` em
+`KPDV.ViewModels.LoginViewModel.OnAutorizandoChanged(bool value)`. Essa
+evidência concreta (não mais suposição) permitiu achar e confirmar 3 bugs
+reais, todos verificados contra o comportamento documentado/fonte oficial
+do WPF-UI antes de corrigir — nenhum chute:
+
+1. **Causa raiz de "clico e não acontece nada"**: `finally { Autorizando =
+   false; }` (`VerificarAutorizacaoAsync`) e `finally { IsBusy = false; }`
+   (`EntrarAsync`) eram os ÚNICOS pontos de mutação de estado que NÃO
+   passavam por `App.Current.Dispatcher.Invoke(...)` — como o método
+   retoma numa thread do pool depois do `.ConfigureAwait(false)`, esse
+   `finally` roda fora da UI thread. Mudar `Autorizando`/`IsBusy` dispara
+   `OnAutorizandoChanged`/`OnIsBusyChanged` → `NotifyCanExecuteChanged()`
+   → WPF tenta atualizar o `IsEnabled` do botão vinculado DIRETO na thread
+   errada → exceção. Como isso acontece DENTRO do próprio `finally`, fica
+   fora do alcance de qualquer `catch` do `try` acima — por isso a
+   blindagem da rodada anterior (catch-all) não pegava. Corrigido
+   envolvendo as 2 atribuições em `App.Current.Dispatcher.Invoke(() =>
+   ... = false)`, igual a todas as outras mutações de estado no mesmo
+   método.
+2. **Senha nunca chegava no ViewModel**: `Wpf.Ui.Controls.PasswordBox.
+   PasswordProperty` é registrado com `PropertyMetadata` simples, SEM
+   `FrameworkPropertyMetadataOptions.BindsTwoWayByDefault` (confirmado
+   lendo `PasswordBox.cs` na fonte oficial, tag `4.3.0` do `lepoco/wpfui`)
+   — diferente de `TextBox.Text`, que tem esse flag. Sem `Mode=TwoWay`
+   explícito, `Password="{Binding X, UpdateSourceTrigger=PropertyChanged}"`
+   vira OneWay (só ViewModel→tela) — a senha digitada nunca era
+   propagada pro `AutorizacaoSenha`/`Senha` do ViewModel, então
+   `PodeVerificarAutorizacao()`/`PodeLogar()` ficavam sempre `false`
+   (campo "vazio" do ponto de vista do C#) e o clique nunca disparava o
+   comando. **Afeta os dois campos de senha do app** (login normal E
+   autorização) — corrigido com `Mode=TwoWay` explícito nos 2
+   `ui:PasswordBox` de `LoginView.xaml`.
+3. **Senha digitada permanecendo visível ao reabrir o painel** (reportado
+   pelo usuário como risco de segurança, "isso não pode acontecer"):
+   mesmo com o binding corrigido, o `PasswordBox` do WPF-UI tem uma lógica
+   interna (`HandleRevealedModeUpdate`) que "briga" contra um reset vindo
+   de fora enquanto o modo "revelar" (👁) está ligado — comparando
+   `Password` com `Text` e resincronizando pro `Text` antigo. Corrigido em
+   `LoginView.xaml.cs`: novo handler `ViewModel_PropertyChanged`,
+   assinado no construtor, que reseta os 2 `PasswordBox` DIRETO (`Text`,
+   `Password`, e `IsPasswordRevealed` via `SetValue` já que o setter
+   público é privado) sempre que `TrocaConexaoEstado`/`ConexaoConfigurada`
+   mudam — bypassa por completo a lógica de binding/revelar que causa o
+   problema.
+4. **Botão "Verificar" sumindo ao passar o mouse** (reportado pelo
+   usuário): cor de fundo/borda no hover e no clique são propriedades
+   PRÓPRIAS do `Wpf.Ui.Controls.Button` — `MouseOverBackground`,
+   `MouseOverBorderBrush`, `PressedBackground`, `PressedForeground` —
+   separadas de `Background`/`Foreground`/`BorderBrush` (confirmado lendo
+   `Button.xaml` na mesma fonte oficial). Como eu só tinha fixado os 3
+   primeiros como valor local, o hover caía de volta na cor padrão da lib
+   (clara) enquanto o texto branco continuava fixo — texto branco sobre
+   fundo claro, "sumindo". Corrigido adicionando as 4 propriedades como
+   valor local em **todos os 9 botões customizados** desta rodada
+   (`LoginView.xaml` e `ConexaoConfigView.xaml`, não só o "Verificar") —
+   botões navy usam `KpdvBrandHoverBrush` (já existia em `Brand.xaml`,
+   pensado exatamente pra isso, só não estava em uso) pro hover/pressed;
+   botões brancos usam `KpdvSurfaceSunkenBrush`/`KpdvBrandTintBrush`.
+- **Verificação**: `dotnet build` → 0 erros de C# (só falha esperada de
+  cópia do `.exe`, travado pela própria sessão de Debug do usuário no
+  VS2026 — não encerrada, não é processo meu). Aguardando o usuário parar
+  o debug (Shift+F5) e testar de novo (F5) pra confirmar os 4 pontos.
+
+#### Login funcionou — 1ª vez na história do projeto — e destravou o próximo bug (mesmo dia, 2026-08-11)
+
+Com os 4 pontos acima corrigidos, o usuário conseguiu logar de verdade
+pela primeira vez nesta sessão (conexão BARESTELA, usuário master) — e
+isso, por sua vez, expôs o PRÓXIMO trecho de código nunca antes
+exercitado com login real: `MainWindow.MostrarVendaAsync()` (chamado
+automaticamente após `LoginSucceeded`). Novo crash, também capturado com
+print da exceção real do VS2026: `System.NullReferenceException:
+'Object reference not set to an instance of an object.'` dentro do
+próprio `Wpf.Ui.dll`, na linha `NavView.ReplaceContent(_vendaView,
+null);`.
+
+- **Causa**: `MainWindow.xaml.cs::MostrarVendaAsync()` fazia
+  `NavView.Visibility = Visibility.Visible;` e, na LINHA SEGUINTE,
+  síncrona, chamava `NavView.ReplaceContent(...)`. Confirmado lendo a
+  fonte oficial do WPF-UI (`NavigationView.Navigation.cs`, tag `4.3.0`):
+  `ReplaceContent` → `UpdateContent` → `NavigationViewContentPresenter.
+  Navigate(content)` — `NavigationViewContentPresenter` é uma PEÇA DE
+  TEMPLATE (`OnApplyTemplate`), que só existe depois de um passe de
+  layout do WPF. Marcar `Visibility = Visible` num elemento antes
+  Collapsed NÃO aplica o template na hora — isso só acontece
+  assincronamente no próximo passe de layout. Chamar `ReplaceContent` na
+  linha seguinte corre na frente desse passe, e a peça interna ainda é
+  `null` nesse instante → `NullReferenceException` dentro do próprio
+  `Wpf.Ui.dll`.
+- **Corrigido**: `NavView.UpdateLayout()` adicionado entre as duas linhas
+  — força o passe de layout (inclusive aplicação do template) a
+  acontecer AGORA, de forma síncrona, garantindo que
+  `NavigationViewContentPresenter` já existe antes do `ReplaceContent`.
+  Único ponto afetado no arquivo — os outros 3 usos de `ReplaceContent`
+  (`MostrarVendaConteudo`/`MostrarPedidos`/`MostrarConfiguracoesConteudo`)
+  rodam a partir de `NavView_SelectionChanged`, ou seja, com o `NavView`
+  já visível havia tempo (usuário clicando dentro do menu já aberto) —
+  sem a mesma corrida, não precisaram de ajuste.
+- **Contexto**: este é código da Fase 1 do Menu Lateral (2026-08-10, ver
+  seção própria de PENDENCIAS.md > "KPDV"), não desta rodada — só nunca
+  tinha sido testado com um login de verdade até agora (mesma limitação
+  "nunca testado com login real" registrada em TODAS as fases anteriores
+  do projeto). Primeiro bug de um caminho de código que provavelmente
+  tem outros ainda não descobertos, mais adiante no fluxo pós-login
+  (Venda, Pedidos, Configurações) — nenhum desses foi exercitado ainda.
+- **Verificação**: `dotnet build` → 0 erros de C# (mesma sessão de Debug
+  do usuário travando a cópia do `.exe`, não é erro de código).
+
+#### Mais 2 achados no mesmo teste — mensagem de erro crua + painéis "invisíveis" (mesmo dia, 2026-08-11)
+
+Com o crash do `NavView` corrigido, o usuário chegou até a tela de Venda de
+verdade e bateu em mais 2 problemas reais, ambos no mesmo teste:
+
+**1) Erro cru vazando na tela de Venda** — "abrir venda" falhou contra
+GERDELL/BARESTELA com o texto cru do driver direto na tela: `Erro ao abrir
+venda: (20047, b'DB-Lib error message 20003, severity 6:\nAdaptive Server
+connection timed out\nDB-Lib error message 20047, severity 9:\nDBPROCESS is
+dead or not enabled\n')`. Investigação: `GERDELL` é a PRÓPRIA máquina de
+teste (`$env:COMPUTERNAME` confirma) e o SQL Server está mesmo escutando
+normalmente em `1433` (confirmado via `Get-NetTCPConnection` filtrado pelo
+processo `sqlservr` — uma checagem inicial sem esse filtro deu falso
+negativo) — não é problema de porta/rede, foi uma conexão que caiu NO MEIO
+da query (exatamente o cenário que CLAUDE.md > "Mensagens de Erro" já
+previa como fora do escopo da correção original: "erros de query já
+executando com conexão aberta... continuam podendo vazar texto técnico...
+fica pra quando aparecer um caso concreto" — este é esse caso).
+- **Corrigido em `backend/db/connection.py`**: novo `is_connection_error(e)`
+  (mesma lista de padrões de `friendly_db_error`, mais os padrões de
+  conexão que caem NO MEIO de uma query — `"dbprocess is dead"`,
+  `"server connection lost"`, `"connection is closed"`, `"read from the
+  server failed"`, `"not connected to any mssql server"`) +
+  `friendly_db_error` ganhou um novo `if` pra esses padrões ("A conexão
+  com o banco de dados caiu no meio da operação..."). `is_connection_error`
+  existe pra decidir SE aplica a tradução amigável — nunca confundir um
+  erro de negócio genuíno (chave duplicada, violação de constraint) com
+  um erro de conexão.
+- **Aplicado em `backend/services/checkout_service.py::_abrir_venda_sync`**
+  (o caso concretamente reportado) — o `except` que envolve a query
+  (depois da conexão já aberta) agora usa `friendly_db_error(e) if
+  is_connection_error(e) else f"Erro ao abrir venda: {e}"`. **Escopo
+  deliberadamente contido**: este mesmo arquivo tem ~19 outros `except`
+  no mesmo formato (`_get_venda_sync`, `_buscar_produto_sync`,
+  `_add_item_sync`, `_importar_dav_sync`, `_fechar_venda_sync`,
+  `_cancelar_venda_sync`, etc.) que têm a MESMA lacuna latente — não
+  corrigidos nesta rodada (só o caso concreto reportado), mas registrados
+  aqui como pendência conhecida pra quando/se aparecer outro caso
+  concreto num desses, seguindo o mesmo princípio de não-retroatividade
+  já usado em outras regras deste projeto.
+- **Verificação**: `python -c "import services.checkout_service"` → sem
+  erro; `pytest tests/unit/test_checkout_service.py` → 63/63 passando;
+  backend reiniciado (supervisor `start-backend.ps1`) com a correção em
+  produção nesta máquina.
+
+**2) Painéis "Configuração de Impressão"/"Configuração de Balança"
+praticamente invisíveis** — texto flutuando sobre o fundo escurecido, sem
+nenhum cartão/superfície visível por trás. Causa: NENHUM dos `ui:Card`
+usados como painel overlay (backdrop escurecido `#B3000000` + card
+centralizado) em `VendaView.xaml`/`PedidosView.xaml` tinha `Background`
+explícito — o `ui:Card` do WPF-UI resolve isso por `DynamicResource`, e
+nesta configuração de tema (Light forçado + backdrop Mica) o resultado
+prático é quase transparente sobre o overlay escuro, deixando só o texto
+visível e sem contraste real. Reportado só pros 2 painéis de Impressão/
+Balança, mas o MESMO padrão (`ui:Card` sem Background, dentro do backdrop
+escurecido) se repete em TODOS os painéis dessas 2 telas — corrigido de
+forma sistemática, não só nos 2 relatados:
+- **`VendaView.xaml`**: os 7 painéis (Fechar Venda, Desconto, Cancelar
+  Venda, Importar DAV, Configuração de Impressão, Configuração de
+  Balança, Atualização) ganharam
+  `Background="{StaticResource KpdvSurfaceSecondaryBrush}"` (branco —
+  mesmo brush já validado ao vivo nos cards de Login/Configurações de
+  Conexão).
+- **`PedidosView.xaml`**: os 3 painéis overlay (+Item, Faturar, Novo
+  Pedido) ganharam o mesmo tratamento. As 5 colunas de tipo (Mesa/
+  Comanda/Balcão/Entrega/Fiado, `Width="280"`) e o card de resumo no topo
+  NÃO foram tocados — não são overlay sobre backdrop escuro, ficam sobre
+  o fundo claro normal da página, risco bem menor e não reportado.
+- **`ConfiguracoesView.xaml`**: card único da tela também NÃO foi tocado
+  pelo mesmo motivo (fica sobre fundo claro normal, não um backdrop
+  escurecido) — não reportado como quebrado.
+- **Verificação**: `dotnet build` → 0 erros de XAML/C# (mesma sessão de
+  Debug do usuário travando só a cópia do `.exe`).
+
+#### Achado real e não relacionado — incompatibilidade de versão TDS bloqueava a conexão "Baixo Brisa Real" (mesmo dia, 2026-08-11)
+
+Aproveitando o teste, o usuário conectou direto no SQL Server do
+`DESKTOP-TDK482U` ("Baixo Brisa Real", pendência antiga registrada em
+`project_login_baixo_brisa_sa_password.md` como suspeita de senha `sa`
+divergente) via SSMS/VS com `sa`/`Cmslrav@155` — **conectou com sucesso**,
+provando que a hipótese antiga (senha errada) estava incorreta: essa é
+literalmente a MESMA senha já configurada como padrão do backend
+(`SQL_LOCAL_PASSWORD`, `db/connection.py`), sem nenhuma variável de
+ambiente sobrescrevendo (confirmado via `[Environment]::
+GetEnvironmentVariable` nos 3 escopos). Rede também não era o problema —
+`Test-NetConnection` já tinha confirmado a porta 1433 acessível.
+
+Testado com `pymssql.connect` direto (mesmo método usado por
+`_open_conn`), variando só `tds_version`:
+- `DESKTOP-TDK482U` (SQL Server 2014 SP1, build **12.0.2000**) — falha com
+  `(20002) Adaptive Server connection failed` em TDS 7.1/7.2/7.3/7.4 (o
+  padrão do backend era 7.4); **conecta instantaneamente em TDS 7.0**.
+- `GERDELL` (SQL Server 2014 SP2, build **12.0.5000** — build mais nova/
+  mais atualizada) — conecta em QUALQUER versão testada, 7.0 a 7.4.
+
+**Causa raiz real**: incompatibilidade de negociação de protocolo TDS
+entre o FreeTDS/pymssql do backend e uma versão de SQL Server 2014 menos
+atualizada — não é rede, não é senha, nunca foi. TDS é retrocompatível
+(servidor mais novo aceita protocolo mais antigo sem problema), então a
+versão mais baixa é a escolha mais ampla.
+
+**Corrigido em `backend/db/connection.py`** — pedido explícito do
+usuário ("TEM QUE PREVER ISSO", repetido 2x): não só baixar o padrão
+(`SQL_TDS_VERSION` de `"7.4"` pra `"7.0"`), mas também um **retry em
+cascata** (`_TDS_VERSION_FALLBACKS = ("7.0","7.1","7.2","7.3","7.4")`) —
+`_open_conn` tenta a versão configurada primeiro; se falhar
+especificamente com o padrão de negociação de protocolo
+(`_e_falha_negociacao_tds`, checa só `"adaptive server connection
+failed"`/`"net-lib error"` — nunca acionado por senha errada/host fora
+do ar/timeout, onde trocar a versão não ajudaria e só atrasaria o erro
+real), tenta as outras versões em sequência antes de desistir. Isso
+protege QUALQUER instalação de cliente futura com uma versão de SQL
+Server ainda não vista, sem precisar de uma nova rodada de investigação
+manual — a motivação explícita do pedido do usuário.
+- **Verificação em 3 camadas**: `pytest tests/unit/test_db_connection.py`
+  → 8/8; `pytest tests/unit` (suíte inteira) → 1807/1808 (a 1 falha é a
+  mesma pré-existente e sem relação, data hardcoded em teste de CNAB
+  Itaú); backend reiniciado em produção nesta máquina; **teste end-to-end
+  real via `POST /api/login`** contra `DESKTOP-TDK482U`/`BD_BAIXOBRISA`
+  com usuário `KONTACTO` → `success:true, master:true` — confirmado
+  funcionando de ponta a ponta, não só no teste isolado do driver.
+
+#### Mais um achado real no mesmo teste — `codigo_int` como número em vez de string quebrava o login de usuário comum (mesmo dia, 2026-08-11)
+
+Com a conexão já corrigida (TDS 7.0), o usuário testou login de verdade
+com um usuário COMUM (não master) — `carlos`, senha real fornecida pelo
+próprio usuário pra viabilizar o teste — e bateu em outro erro real,
+diferente do de conexão: `"O servidor retornou uma resposta em formato
+inesperado."` (mensagem do KPDV, `ApiClient.HandleAsync`'s
+`catch (JsonException)`).
+
+**Causa raiz**: `funcionarios.codigo_int` é coluna `INT` no SQL Server —
+confirmado com uma consulta somente-leitura direta contra
+`BD_BAIXOBRISA` (`SELECT codigo_int, ... FROM funcionarios WHERE
+nome_guerra = 'carlos'` → `codigo_int: 2` tipo `int`). O backend
+(`auth_service._enrich_funcionario`) devolvia esse valor sem conversão,
+saindo como NÚMERO no JSON (`"codigo_int": 2`). O modelo C# do KPDV
+(`Models/LoginModels.cs::FuncionarioInfo.CodigoInt`) é `string?`
+(deliberado — mesmo motivo já documentado pra `CodFuncao`: precisa
+acomodar o valor sintético do usuário master). `System.Text.Json` não
+converte número→string automaticamente por padrão — a desserialização
+inteira falhava, e como isso acontece DEPOIS de um HTTP 200 válido (JSON
+malformado em relação ao TIPO esperado, não erro HTTP), a mensagem
+genérica de "formato inesperado" era a única pista.
+
+**Por que só apareceu agora**: o login master (`KONTACTO`, testado antes
+e funcionando) usa `_build_master_session` — uma sessão SINTÉTICA que
+nem inclui `codigo_int` no dict retornado, então nunca exercitou esse
+campo. Só um login de usuário REAL (com uma linha de verdade em
+`funcionarios`) expõe o bug — mais um caso do padrão já repetido nesta
+sessão: "nunca testado com login real" escondendo bugs em cascata,
+revelados um de cada vez conforme o teste avança mais fundo no fluxo.
+
+- **Corrigido em `backend/services/auth_service.py::_enrich_funcionario`**:
+  `out["codigo_int"] = str(out["codigo_int"])` quando presente e não-nulo,
+  antes de qualquer outro processamento.
+- **Verificação**: `pytest tests/unit` → 1807/1808 (mesma falha
+  pré-existente sem relação); backend reiniciado; **teste end-to-end real**
+  via `POST /api/login` com `carlos`/senha real contra `DESKTOP-TDK482U`/
+  `BD_BAIXOBRISA` → `success:true`, `"codigo_int":"2"` (string, confirmado
+  no JSON de resposta) — corrigido de ponta a ponta.
+- **Escopo**: só `codigo_int` tinha esse tipo de mismatch — os outros
+  campos de `FuncionarioInfo`/`UsuarioInfo` (nome_guerra, nome, cod_funcao,
+  situacao, administrador, classe) já batiam com os tipos SQL reais
+  (todos string/int corretamente alinhados, conferido linha a linha contra
+  os dados reais de "carlos"). Não há outro campo com a mesma lacuna
+  neste endpoint.
+
+#### Regressão do próprio fix de TDS — datas viravam `str` crua, quebrando `.isoformat()` (mesmo dia, 2026-08-11, achado ao vivo no app web/Pedido Bar contra "Baixo Brisa Real")
+
+O fix de cascata TDS acima (baixar `SQL_TDS_VERSION` padrão pra `"7.0"` e
+tentar `_TDS_VERSION_FALLBACKS` em ordem CRESCENTE, `("7.0","7.1",...
+"7.4")`) resolveu a conexão mas introduziu uma regressão **sistêmica**:
+como TDS 7.0 é a versão mais permissiva, ela passou a negociar com
+sucesso pra praticamente QUALQUER servidor (não só `DESKTOP-TDK482U`) —
+inclusive servidores que suportam versões mais novas, como `GERDELL`.
+TDS 7.0 é anterior ao tipo `DATE` do protocolo (introduzido só a partir de
+TDS 7.3/SQL Server 2008): negociando em 7.0, o FreeTDS/pymssql não
+reconhece colunas `DATE` como tipo temporal e devolve `str` cru em vez de
+`datetime.date` — todo `campo.isoformat()` direto (sem checar o tipo)
+quebra com `'str' object has no attribute 'isoformat'`. Reproduzido ao
+vivo no app web, tela Pedido Bar (`app/pedidos.tsx`), contra
+`DESKTOP-TDK482U`/`BD_BAIXOBRISA` ("Baixo Brisa Real").
+
+**Escala do problema**: `grep -rn "\.isoformat()"` no backend inteiro
+encontrou **114 ocorrências em 53 arquivos** — o padrão
+`campo.isoformat() if campo else None` (sem checar tipo) está espalhado
+por praticamente todo service que formata data pra JSON.
+
+**Corrigido em 2 camadas**:
+1. **Causa raiz** (`backend/db/connection.py`): `_TDS_VERSION_FALLBACKS`
+   invertido pra ordem DECRESCENTE (`("7.4","7.3","7.2","7.1","7.0")`) e
+   `SQL_TDS_VERSION` padrão voltou pra `"7.4"` — tenta a versão mais
+   moderna (melhor fidelidade de tipo) primeiro, só degradando quando a
+   negociação genuinamente falha. Resolve pra qualquer servidor que
+   suporte uma versão ≥ 7.3 (ex.: `GERDELL`) — volta a ter tipagem `DATE`
+   correta.
+2. **Defesa** (não resolvida só pela camada 1): `DESKTOP-TDK482U`
+   especificamente só nego TDS 7.0 (SQL Server 2014 SP1 build 12.0.2000
+   — ver achado original acima), então mesmo com a ordem corrigida, ele
+   AINDA devolve `str` crua pra colunas `DATE` — é uma limitação real do
+   driver/servidor, não resolvível por ordem de tentativa. Criado helper
+   `iso(value)` em `db/connection.py` (tolera `str` OU
+   `date`/`datetime`, mesmo padrão defensivo que `_to_json_safe` já usava
+   internamente) e aplicado nos 5 pontos de
+   `services/pedidos_service.py` (`_list_pedidos_sync`,
+   `_get_pedido_sync`) — a tela que quebrou ao vivo.
+- **Verificação**: `pytest tests/unit` → 1807/1808 (mesma falha
+  pré-existente sem relação, CNAB Itaú data hardcoded); backend
+  reiniciado; teste end-to-end real via `POST /api/pedidos` contra
+  `DESKTOP-TDK482U`/`BD_BAIXOBRISA` → 22 pedidos reais retornados com
+  datas corretas (antes: `success:false`, erro de isoformat).
+- **Pendência real, NÃO resolvida nesta rodada**: os outros ~109
+  ocorrências de `.isoformat()` cru em ~51 arquivos continuam vulneráveis
+  ao mesmo bug pra qualquer servidor cliente que só negocie TDS < 7.3
+  (mesma classe de SQL Server antigo/desatualizado que `DESKTOP-TDK482U`
+  representa) — a causa raiz (camada 1) já cobre a maioria dos casos, mas
+  não windows como este. Trocar `campo.isoformat() if campo else None`
+  por `iso(campo)` (importar de `db.connection`) em cada arquivo quando
+  ele for tocado por outro motivo, em vez de uma varredura retroativa
+  agora — mesmo princípio de não-retroatividade automática já usado nas
+  regras `[GLOBAL]` do CLAUDE.md.
+
+#### Mais um achado real no mesmo teste — Login do KPDV usava `pymssql.connect` direto, sem a cascata TDS (mesmo dia, 2026-08-11)
+
+Com o backend corrigido (camada 1 acima), o usuário testou o LOGIN do
+KPDV contra `DESKTOP-TDK482U`/`BD_BAIXOBRISA` e bateu em
+"Não foi possível conectar ao servidor de banco de dados" — a MESMA
+falha de negociação TDS que a cascata deveria evitar. Causa: a tela de
+Login (`auth_service._sql_login_sync`) sempre abriu sua PRÓPRIA conexão
+via `pymssql.connect(..., tds_version=SQL_TDS_VERSION)` direto — nunca
+passou por `_open_conn` (roda ANTES de qualquer sessão existir, então não
+tinha motivo histórico pra reaproveitar aquele helper) — então nunca
+ganhou a cascata de fallback quando ela foi criada só dentro de
+`_open_conn`.
+
+**Corrigido** extraindo a lógica de cascata de `_open_conn` pra um novo
+helper `_connect_with_tds_fallback(server, user, password, banco,
+timeout)` em `db/connection.py` (levanta a exceção crua, sem traduzir —
+quem chama decide) — `_open_conn` e `auth_service._sql_login_sync` agora
+os dois chamam esse mesmo helper, cada um com seu próprio
+tratamento de erro em cima (o de `auth_service` preserva `attempted`/
+`error_step`/`error_line` pro payload de diagnóstico que já existia).
+- **Verificação**: `pytest tests/unit` → 1807/1808 (mesma falha
+  pré-existente); backend reiniciado; teste end-to-end real via
+  `POST /api/login` com senha intencionalmente errada contra
+  `DESKTOP-TDK482U`/`BD_BAIXOBRISA` → `"Usuário ou senha inválidos."`
+  (rejeição de CREDENCIAL, não mais falha de CONEXÃO) — confirma que a
+  conexão em si abre com sucesso agora.
+
+#### Mais um achado real — painel Pedido Bar escondia pedidos abertos há mais de 1 dia, exceto Fiado (mesmo dia, 2026-08-11)
+
+Comparando lado a lado com o legado VB6 (tela "Pedidos Abertos",
+`FrmManPedBar.frm`) contra os mesmos dados reais de `BD_BAIXOBRISA`: o
+VB6 mostrava 6 pedidos abertos (4 Comanda + 2 Mesa, total R$845,50,
+alguns abertos desde janeiro/maio) — o painel web (`app/pedidos.tsx`)
+mostrava só 3 pedidos Fiado antigos (R$190,00), com Mesa/Comanda/Balcão/
+Entrega todos zerados.
+
+**Causa raiz**: `pedidos.tsx` sempre envia `data_ini`/`data_fim` = hoje
+por padrão (não é um filtro opcional, é o `useState` inicial da tela) —
+e o backend (`_list_pedidos_sync`) já tinha uma exceção pra isso, mas só
+pra pedidos tipo **FIADO** ainda Abertos (implementada 2026-07-18,
+pensada especificamente pro caso "fiado pode ficar aberto por semanas").
+Mesa/Comanda/Balcão/Entrega abertos há mais de 1 dia NÃO tinham a mesma
+exceção — eram filtrados pra fora da lista assim que a data de abertura
+deixava de ser "hoje", mesmo com o pedido genuinamente ainda aberto. Isso
+contrariava o próprio comportamento já documentado do painel (CLAUDE.md
+> "Painel de Pedidos": "pedido aberto há mais de um dia... nunca é
+filtrado por data, só reordenado/destacado em vermelho") e divergia do
+legado (a tela "Pedidos Abertos" do VB6 não filtra por data de abertura
+nenhuma, só por Data de Entrega — campo separado).
+
+**Corrigido** em `services/pedidos_service.py::_list_pedidos_sync` —
+generalizada a exceção de "`situacao = 'A'` E tipo FIADO" pra só
+"`situacao = 'A'`", cobrindo qualquer tipo de pedido aberto, não só
+Fiado. `tests/unit/test_pedidos_service.py::
+test_data_ini_e_fim_tem_excecao_pra_qualquer_pedido_aberto` (renomeado,
+antes `..._pra_fiado_aberto`) atualizado pra cobrir a cláusula nova.
+- **Verificação**: `pytest tests/unit` → 1807/1808 (mesma falha
+  pré-existente); backend reiniciado; teste end-to-end real via
+  `POST /api/pedidos` com `data_ini=data_fim="2026-08-11"` (exatamente o
+  que a tela envia por padrão) contra `DESKTOP-TDK482U`/`BD_BAIXOBRISA` →
+  22 pedidos retornados (antes: só os Fiado apareciam), incluindo os 6
+  Mesa/Comanda que batem exatamente com a lista do VB6.
+- **Escopo**: não muda o filtro pra situações Fechado/Faturado/
+  Cancelado/Todos — só pedidos com `situacao = 'A'` (Aberto) ganham a
+  exceção, mantendo o filtro de data útil pra restringir histórico
+  grande nas outras situações.
+
+#### Fiado deixa de ser fallback do tipo do cliente; cores do card por coluna; bug real de drag-and-drop (mesmo dia, 2026-08-11)
+
+Três achados na mesma sessão de teste ao vivo contra "Baixo Brisa Real",
+depois que o painel passou a bater com o VB6 (achado acima):
+
+1. **Fiado não pode ser inferido só pelo tipo do CLIENTE**: pedidos
+   antigos sem "Tipo" próprio gravado (campo só existe no app web/KPDV,
+   nunca existiu no VB6) caíam na coluna Fiado só porque o CLIENTE tem
+   `cliente_forn = Fiado` — categorização administrativa do cliente, não
+   prova que aquele pedido específico é uma venda fiado. Corrigido com
+   `TIPO_EFETIVO_PEDIDO_SQL` (novo, `services/pedido_common.py`): cai pro
+   tipo do cliente normalmente (Mesa/Comanda/Balcão/Entrega), EXCETO pra
+   Fiado, onde o fallback é recusado — só conta como Fiado se
+   `pedido_venda.tipo` foi gravado explicitamente assim (ex.: por
+   arrasto manual, ver item 3). Aplicado em `pedidos_service.py`
+   (`_list_pedidos_sync`, `_get_pedido_sync`) e
+   `pedido_completo_service.py`. Web e KPDV herdam automaticamente (só
+   leem `tipo_cliente_descricao` já resolvido pelo backend, nenhum
+   recalcula por conta própria).
+2. **Cor do card sempre da COLUNA, nunca sobrescrita por "parado"**:
+   antes, um pedido aberto há mais de 1 dia (`isStale`/`IsStale`) virava
+   vermelho sólido (border+texto), mascarando a cor real do tipo (Mesa
+   azul, Comanda verde, etc.) — dava a impressão errada de que "parado =
+   Fiado". Pedido explícito do usuário: "quero que o tema de cor dos
+   cards da coluna Mesa tenha a cor da coluna. propague para as demais
+   colunas". Removida a sobrescrita em `PainelPedidoCard.tsx` (web,
+   prop `stale` removida do componente — não influencia mais nada) e
+   `PedidoCardViewModel.cs` (KPDV, `BrushStale` removido) — `accentColor`/
+   `AccentBrush` e `textColor`/`TextoBrush` usam só `TIPO_COLOR`/
+   `CorPorTipo` agora. A REORDENAÇÃO de pedidos parados pro fim da coluna
+   (`isStale`/`IsStale` usado só pra `sort`/`OrderBy`) não mudou — só a
+   cor deixou de depender disso. Vai de mãos dadas com o novo fluxo
+   manual: "no app da web e do KPDV, nós arrastaremos o card para fiado
+   manualmente" (pedido explícito do usuário) — em vez de o sistema
+   inferir Fiado automaticamente (item 1), o operador decide arrastando.
+3. **Bug real achado ao vivo: drag-and-drop no WEB nunca disparava**
+   (Fase 2b/2026-07-30 nunca tinha sido testada com um navegador real —
+   só validada por leitura de código). Causa: `DraggablePedidoCard`
+   (`PainelDragDrop.tsx`) seta `draggable="true"` no elemento WRAPPER,
+   que usa `display:"contents"` (necessário pro layout do grid de
+   cards). Elemento com `display:contents` não gera caixa própria no
+   navegador, e a HTML5 Drag and Drop API exige uma caixa real pra
+   servir de fonte do arrasto — `draggable="true"` no wrapper
+   simplesmente não tinha efeito nenhum, sem erro visível. Corrigido
+   movendo o atributo `draggable` + os listeners `dragstart`/`dragend`
+   pro CARD real (`node.firstElementChild`, já usado só pra estilo
+   antes) em vez do wrapper. `DroppableColuna` não tinha o mesmo problema
+   (não usa `display:contents`, listeners continuam no próprio nó). KPDV
+   não tem esse bug — usa `DragDrop.DoDragDrop` nativo do WPF, sem
+   equivalente a `display:contents`.
+- **Verificação**: `pytest tests/unit` → 1807/1808 (mesma falha
+  pré-existente); backend reiniciado; teste end-to-end real via
+  `POST /api/pedidos` contra `DESKTOP-TDK482U`/`BD_BAIXOBRISA` → Fiado
+  não lista mais os 3 pedidos sem tipo próprio (achado 1); `dotnet build`
+  KPDV → 0 erros, app relançado (achado 2 no KPDV); achado 2 no web e
+  achado 3 dependem de teste manual no navegador/app (não coberto por
+  este agente — usuário deve confirmar ao vivo).
+
+#### Menu lateral do KPDV parou de responder a cliques após o submenu "Configurações" (mesmo dia, 2026-08-11) — CORRIGIDO
+
+Regressão crítica reportada logo após o submenu "Configurações" ser
+adicionado (ver seção "Contraste global de ComboBox/TextBox + submenu
+'Configurações'" abaixo) — confirmado via `AskUserQuestion`: o app NÃO
+trava (resto da janela responde normalmente), mas **nenhum** item do
+menu lateral reage a clique — nem os NOVOS (Impressora/Balança/Conexão/
+Atualização) nem os já existentes e intocados (Venda/Pedidos). Também
+reportado junto: "menu duplicado" (não investigado a fundo — não há
+duplicação real no XAML, só 1 `<ui:NavigationView>`; pode ser um efeito
+colateral visual do mesmo estado quebrado, a confirmar depois do fix
+abaixo).
+
+**Causa raiz**: `Wpf.Ui.Controls.NavigationViewItem.OnClick()` (lido
+diretamente do código-fonte da versão instalada, 4.3.0, via `gh api`
+contra `lepoco/wpfui`) só chama `NavigationView.OnNavigationViewItemClick`
+(que dispara o evento `SelectionChanged`) quando a propriedade
+`TargetPageType` (um `System.Type`, usado pro sistema de navegação por
+PÁGINA/cache do WPF-UI) está definida:
+```csharp
+if (TargetPageType is not null) navigationView.OnNavigationViewItemClick(this);
+```
+Este projeto **nunca** usou `TargetPageType` — só `TargetPageTag`
+(string), roteado manualmente no code-behind (`NavView_SelectionChanged`)
+sem o sistema de páginas do WPF-UI. Ou seja, pela leitura do código-fonte,
+`SelectionChanged` nunca deveria ter disparado neste projeto, nem antes
+do submenu — mas Venda/Pedidos funcionavam antes, então algum mecanismo
+interno não documentado do WPF-UI estava fazendo a seleção funcionar de
+outra forma, e a adição do submenu aninhado
+(`NavItemConfiguracoes.MenuItems`) evidentemente perturbou esse estado
+interno o bastante pra quebrar a seleção pra TODO o menu, não só os itens
+novos.
+
+**Decisão**: em vez de continuar depurando um mecanismo interno não
+documentado de uma lib de terceiros, trocado por um caminho robusto e
+óbvio — `NavigationViewItem` herda `System.Windows.Controls.Primitives.
+ButtonBase`, cujo evento `Click` SEMPRE dispara (`base.OnClick()` é
+chamado incondicionalmente no fim do `OnClick()` override, independente
+de `TargetPageType`). Adicionado `Click="NavItem_Click"` em CADA item
+folha do menu (Venda, Pedidos, Impressão por Finalidade, Impressora,
+Balança, Conexão, Atualização — não no item pai "Configurações", que só
+expande/colapsa) + handler compartilhado `NavItem_Click` em
+`MainWindow.xaml.cs`, que delega pro mesmo switch de roteamento (extraído
+pra `NavigateByTag(string? tag)`, reaproveitado tanto por `NavItem_Click`
+quanto por `NavView_SelectionChanged` — mantido como rede de segurança
+idempotente, não removido, caso o mecanismo antigo volte a funcionar em
+paralelo).
+- **Verificação**: `dotnet build` → 0 erros; app relançado
+  (`Get-Process` → `Responding: True`). **Não testado ao vivo por este
+  agente** (clique de mouse real não é simulável pelas ferramentas
+  disponíveis) — usuário deve confirmar que todos os itens do menu voltam
+  a funcionar, e se o "menu duplicado" reportado junto também some.
+- **Confirmado funcionando** pelo usuário logo em seguida (conseguiu
+  navegar até "Impressão por Finalidade" e reportar outro bug ali —
+  prova de que o clique passou a funcionar).
+
+#### `ConfiguracoesViewModel`'s combobox "Finalidade" — 3 achados na mesma investigação (mesmo dia, 2026-08-11)
+
+1. **Erro real descoberto ao adicionar diagnóstico**: o código silenciava
+   `tipos.Success == false` sem nunca mostrar mensagem de erro (diferente
+   do tratamento já existente pra `mapeamentos`), deixando o combobox
+   "Finalidade" vazio sem nenhuma pista. Corrigido — `TipoPecaListResponse`
+   ganhou campo `Message`, e `InicializarAsync` agora chama
+   `SetStatusOnUi(tipos.Message ?? "Falha ao carregar finalidades.", true)`
+   quando falha. Com isso, o usuário viu o erro real pela primeira vez:
+   **"O servidor retornou uma resposta em formato inesperado."**
+   (`JsonException` capturada em `ApiClient.HandleAsync`) — confirma que
+   é uma falha de DESSERIALIZAÇÃO intermitente, não um bug de estilo/
+   ComboBox (teoria descartada no caminho — `Wpf.Ui.Controls` NÃO tem uma
+   classe `ComboBox` própria, `ui:ComboBox` nem existe na v4.3.0; toda
+   ComboBox do app é a vanilla do WPF, retemplada globalmente por um
+   `Style` implícito do tema do WPF-UI).
+2. **Causa raiz suspeita**: usuário relatou "falha às vezes, principalmente
+   quando vem de um menu para outro" — bate com o próprio
+   `NavView_SelectionChanged` mantido como "rede de segurança" junto do
+   novo `Click` (ver achado anterior) — se os dois dispararem juntos pro
+   mesmo clique, `NavigateByTag` roda 2x, criando 2 instâncias de
+   `ConfiguracoesView`/`ViewModel` quase simultâneas, cada uma disparando
+   sua PRÓPRIA leva de chamadas HTTP concorrentes — explicação plausível
+   pra uma falha intermitente de parsing JSON sob concorrência. Removido
+   por completo `SelectionChanged` (não só mantido como redundância) —
+   `Click` é a ÚNICA fonte de navegação agora. **Não confirmado
+   definitivamente como a causa raiz** (não há como reproduzir/instrumentar
+   a condição de corrida por este agente) — se o erro intermitente
+   persistir mesmo assim, investigar outra causa (ex.: timeout do backend
+   sob carga, resposta truncada por outro motivo).
+3. **Pedido explícito do usuário, mesma rodada**: "coloque o menu
+   impressora e impressora por finalidade na mesma tela. Não precisa de
+   uma tela para cada configuração" — `ConfiguracaoImpressaoViewModel`/
+   `View` (tela separada "Impressora", configuração LOCAL desta estação
+   pro cupom da Venda) removidos por completo e mesclados dentro de
+   `ConfiguracoesViewModel`/`ConfiguracoesView` (antes só "Impressão por
+   Finalidade", mapeamento GLOBAL via API) — 2 cards na mesma tela agora:
+   "Impressora desta Estação" (topo) + "Impressão por Finalidade"
+   (embaixo, como já era). Reaproveitada a mesma `ImpressorasDisponiveis`
+   (fonte de dados idêntica nos dois casos — `_impressao.
+   ListarImpressorasInstaladas()`), com uma propriedade separada
+   `ImpressoraEstacaoSelecionada` (pra não colidir com
+   `ImpressoraSelecionada`, já usada pelo "Novo mapeamento"). Item de menu
+   "Impressora" removido; "Impressão por Finalidade" renomeado só "Impressão"
+   e não depende mais de `moduloBarAtivo` (a seção de impressora da
+   estação é útil em qualquer segmento, não só Bar).
+- **Verificação**: `dotnet build` → 0 erros (3 rodadas: diagnóstico,
+  merge das telas, remoção do SelectionChanged); app relançado. Teste ao
+  vivo da causa raiz nº2 (condição de corrida) e do combobox Finalidade
+  em si ficam pendentes de confirmação do usuário — não reproduzíveis
+  pelas ferramentas deste agente.
+
+#### Redesign da tela de Venda (Checkout) — layout em 2 colunas (mesmo dia, 2026-08-11)
+
+Usuário pediu ajuda de design a um Claude Chat separado ("gera uma tela em
+XAML... me surpreenda com design moderno"), colou o `VendaView.xaml`
+atual como referência, e trouxe o XAML gerado de volta pra cá pra aplicar
+— explicitamente pedindo pra **não perder a versão atual, caso precise
+reverter**.
+
+- **Backup criado antes de qualquer mudança**:
+  `Views/_backup_venda_2026-08-11/VendaView.xaml.bak` +
+  `VendaView.xaml.cs.bak` (cópia fiel da versão anterior). Pra reverter:
+  copiar esses 2 arquivos de volta pra `Views/VendaView.xaml`/`.xaml.cs`
+  (o `.xaml.cs` não foi alterado nesta rodada, mas o backup existe por
+  precaução) e `dotnet build`.
+- **Layout novo**: 2 colunas na área central — esquerda = busca de item +
+  "Ações Rápidas" (cards com botões Fechar Venda/Desconto/Cancelar/
+  Importar Pedido/Importar O.S./Reimprimir, cada um com o badge da tecla
+  de função, substituindo a antiga legenda de atalhos em texto no
+  rodapé); direita = lista de itens da venda (cards com sombra, cantos
+  arredondados) + barra de total fixa embaixo. Painéis modais (Fechar
+  Venda/Desconto/Cancelar/Importar) e toda a lógica de atalhos de teclado
+  (F2/F4-F10/Esc/Enter/Delete) preservados 100% sem mudança — só a área
+  visível por trás deles foi redesenhada.
+- **XAML gerado pelo Claude Chat NÃO foi colado direto** — validado
+  campo a campo contra `VendaViewModel.cs`/`VendaView.xaml.cs` reais
+  antes de aplicar (o próprio XAML colado já vinha com um aviso
+  explícito sobre isso). Achados reais da validação:
+  1. `AbrirPainelFecharVendaCommand`/`AbrirPainelDescontoCommand`/
+     `AbrirPainelCancelarVendaCommand`/`AbrirPainelImportarDavCommand`
+     **não existiam** — eram métodos públicos comuns chamados direto
+     pelo code-behind (atalhos de teclado), nunca `[RelayCommand]`.
+     Adicionados ao `VendaViewModel.cs`: `[RelayCommand]` direto em
+     `AbrirPainelDesconto()`/`AbrirPainelCancelarVenda()`/
+     `AbrirPainelImportarDavAsync(string)` (parâmetros batem exatamente
+     com o que o XAML novo espera); `AbrirPainelFecharVendaAsync(string
+     tipoInicial = "DI")` ganhou um WRAPPER parameterless
+     (`AbrirPainelFecharVenda()`) em vez de receber o atributo direto —
+     um `[RelayCommand]` num método com parâmetro só-com-default geraria
+     um comando de 1 argumento que, sem `CommandParameter` no botão,
+     executaria com `null` em vez do default "DI". Em todos os 4 casos,
+     o método público original foi mantido intacto — os atalhos de
+     teclado (F4/F6/F7/F9/F10) continuam chamando-o direto, sem
+     depender do novo `[RelayCommand]`.
+  2. Todo o resto (bindings de `ItemVendaLinha`, `LinhaPagamento`,
+     `ui:AutoSuggestBox`/`OriginalItemsSource`, os 16
+     brushes/conversores `StaticResource`) já existia e batia
+     exatamente — nenhuma outra mudança necessária. `ui:AutoSuggestBox`
+     em particular já era usado assim na tela original, confirmado por
+     comparação direta com o backup antes de aceitar como válido (mesmo
+     princípio de cautela que descobriu, na mesma sessão, que
+     `ui:ComboBox` NÃO existe no WPF-UI 4.3.0 — nunca assumir que um
+     nome de controle/propriedade gerado por IA está certo sem checar
+     contra o código real ou a fonte da lib).
+- **Verificação**: `dotnet build` → 0 erros; app relançado. **Não
+  testado visualmente por este agente** (não há como renderizar/
+  screenshotar uma janela WPF pelas ferramentas disponíveis) — usuário
+  deve conferir o resultado visual e testar o fluxo completo (buscar
+  item, fechar venda, desconto, cancelar, importar, reimprimir) antes de
+  considerar concluído.
+
+#### 2ª rodada do redesign — revertido e refeito espelhando o Checkout web de verdade (mesmo dia, 2026-08-11)
+
+Usuário pediu reverter a 1ª tentativa ("preciso da tela o mais parecido
+com a tela de venda do app web. as duas versões atuais está muito longe
+do que preciso"). Revertido via backup
+(`Views/_backup_venda_2026-08-11/*.bak`).
+
+- **Fonte de referência real**: `frontend/app/checkout.tsx` +
+  `DemonstrativoCupomFiscal.tsx` foram DELETADOS do working tree em
+  2026-08-10 (substituídos pelo KPDV, ver [[project_checkout]]), mas
+  ainda existem no último commit (`3fa72b3`) — recuperados via
+  `git show HEAD:caminho` pra servir de referência visual real, não uma
+  lembrança aproximada.
+- **Achado real ao comparar**: o Checkout web tem busca/vínculo de
+  Cliente na venda — o KPDV não tem essa funcionalidade implementada
+  (nem endpoint chamado nem lógica no `CheckoutService`/
+  `VendaViewModel`). Perguntado ao usuário via `AskUserQuestion` — decisão:
+  **só o layout agora**, seção Cliente fixa em "Clientes Diversos" (sem
+  busca), funcionalidade de vincular cliente fica pra rodada futura.
+- **Correção do usuário no meio da implementação**: a 1ª versão desta
+  2ª rodada replicava a estrutura LITERAL do `checkout.tsx` antigo (card
+  Atendente/Cliente cheio, 2 colunas Busca+Demonstrativo, DEPOIS uma
+  faixa cheia de caixas de total, DEPOIS uma faixa cheia de botões de
+  ação) — usuário corrigiu: "o layout do web possui duas colunas na tela
+  central: os campos + funções e a outra à direita com a lista de
+  itens." Refeito: os botões de ação (Importar Pedido/O.S., Desconto
+  Geral, Fechar Venda, Reimprimir, Cancelar Venda) SAÍRAM da faixa cheia
+  embaixo e entraram dentro da COLUNA ESQUERDA, empilhados abaixo do
+  campo de busca — a coluna direita fica só com o Demonstrativo (lista
+  de itens + total), como pedido.
+- **Dados novos expostos** (o DTO da API já trazia, só não estava
+  mapeado pra exibição): `ItemVendaLinha` ganhou `PrecoBruto`/
+  `DescontoUnit`/`AcrescimoUnit`/`OrigemDav`; `VendaViewModel` ganhou
+  `AtendenteNome` (nome_guerra, regra `[GLOBAL]` de sempre), `UltimoItem`
+  (destaque grande no Demonstrativo, réplica de `ultimoItem` do web),
+  `TotalBruto`/`TotalDescontosItens`/`TotalAcrescimosItens` (as 4 caixas
+  de total, réplica de `totalBruto`/`totalDescontos`/`totalAcrescimos`
+  do web) — todos recalculados/notificados dentro de
+  `RecarregarVendaAsync`. Novo comando `CancelarItemAsync(ItemVendaLinha?
+  item)` — cancelar item pelo ÍCONE na própria linha da grade (réplica do
+  "✕" por linha do `DemonstrativoCupomFiscal.tsx`), complementar ao
+  atalho de teclado Delete-sobre-linha-selecionada já existente (não
+  substituído).
+- **3 conversores novos** (não existiam): `NullToVisibleConverter`/
+  `NullToCollapsedConverter` (destaque do último item vs. estado vazio)
+  e `ZeroToCollapsedConverter` (só mostra "desc. RX/un." quando o item
+  genuinamente tem desconto unitário) — adicionados em
+  `Converters/CommonConverters.cs` + registrados em `App.xaml`, mesmo
+  padrão dos conversores já existentes.
+- **Bug de sintaxe achado e corrigido no caminho**: comentários XML com
+  `----` (múltiplos hífens seguidos, usados como separador visual em 3
+  lugares) quebram a compilação (`XML comment cannot contain '--'`) —
+  regra do XML, não do WPF-UI. Trocados por texto sem hífens duplos.
+- **Verificação**: `dotnet build` → 0 erros (2 rodadas: erro de sintaxe
+  XML corrigido, depois build limpo); app relançado. Mesma ressalva de
+  sempre — **não testado visualmente por este agente**.
+
+#### 3ª rodada — usuário testou ao vivo e pediu mais 8 ajustes de uma vez (mesmo dia, 2026-08-11)
+
+Lista completa do que foi pedido e implementado nesta rodada:
+
+1. **Lista de itens fixa com scrollbar** — `ListaItens` trocou `MaxHeight`
+   por `Height="280"` (não encolhe com 0 itens) +
+   `ScrollViewer.VerticalScrollBarVisibility="Visible"` (sempre visível,
+   não "Auto").
+2. **Atendente removido do corpo** — já mostrava em `TxtOperador` na
+   barra de título (`MainWindow.xaml`); o card "Atendente" do corpo era
+   redundante, removido.
+3. **"Venda + comanda" centralizado na barra de título** — novo
+   `TxtTituloBarra` (renomeado do TextBlock estático "Kontacto PDV" que
+   já existia no `TitleBar.Header`) atualizado via código
+   (`MainWindow.xaml.cs::AtualizarTituloVenda()`, chamado ao mostrar a
+   tela de Venda E assinado a `VendaViewModel.PropertyChanged` uma única
+   vez pra acompanhar `Comanda` ao vivo — ex.: depois de Fechar Venda, a
+   próxima venda abre sozinha com número novo). Outras telas (Pedidos/
+   Configurações/Conexão) resetam pra "Kontacto PDV". **Ressalva
+   honesta**: `TitleBar.Header` do WPF-UI fica logo após o ícone, não
+   necessariamente centralizado matematicamente na largura total da
+   janela — usei `HorizontalAlignment="Center"` mas não há como
+   confirmar visualmente sem o usuário testar.
+4. **Campo Cliente virou busca de verdade** (não mais só layout) —
+   usuário reverteu a decisão anterior ("só layout agora"). Implementado:
+   `CheckoutService.BuscarClientesAsync`/`DefinirClienteAsync` (novo,
+   `PUT /checkout/{comanda}/cliente`, mesmo endpoint do web) +
+   `VendaViewModel.BuscarClienteAsync`/`DefinirClienteCommand` (mesmo
+   padrão de busca inline via `ui:AutoSuggestBox` já usado pro Produto,
+   sem modal) + handlers novos em `VendaView.xaml.cs`
+   (`BuscaCliente_TextChanged`/`SuggestionChosen`/`PreviewKeyDown`).
+   Enter com busca resolvendo pra exatamente 1 cliente vincula direto
+   (regra [GLOBAL] "Padrão de Campo Cliente" do CLAUDE.md).
+5. **Campo Qtd ao lado do Produto/Serviço** — `VendaViewModel.QtdTexto`
+   (novo, default "1", resetado após cada inclusão), lido dentro de
+   `AdicionarAsync` (só quando o produto NÃO é vendido por peso — peso da
+   balança/etiqueta sempre prevalece, comportamento já existente
+   preservado).
+6. **Busca sem modal, com Enter, tanto Produto quanto Cliente** — Produto
+   já funcionava assim; Cliente ganhou o mesmo padrão (achado 4 acima).
+7. **Botões de Ações em grade estilo VB6** — antes empilhados numa coluna
+   só (6 linhas); agora `UniformGrid Columns="2"` (3 linhas pros 6
+   botões), cada botão com tecla de função grande em cima + rótulo
+   embaixo, centralizado (`VbAcaoButtonStyle` novo) — réplica do estilo
+   da legenda de atalhos do VB6 que o usuário anexou como referência.
+8. **Mensagens de status: 3s, centralizadas** — antes um banner fixo no
+   canto superior direito, sem auto-esconder. Agora: `VendaViewModel.
+   SetStatus` inicia um timer (`ClearStatusAfterDelayAsync`, cancela o
+   anterior a cada mensagem nova) que limpa `StatusMessage` sozinho
+   depois de 3000ms; `VendaView.xaml` trocou o banner de canto por um
+   `Border` centralizado na tela inteira (fora da área de rolagem),
+   verde quando `StatusIsError=False`, vermelho quando `True`.
+
+**Bug real achado e corrigido no caminho** (não pedido pelo usuário,
+achado comparando o screenshot dele com o código): o box de "destaque do
+último item" aparecia como um "x" solto mesmo com a venda vazia — os 3
+usos de `NullToVisibleConverter`/`NullToCollapsedConverter` (destaque,
+vazio, botão cancelar por linha) estavam com os dois conversores
+TROCADOS entre si (nome dos conversores é sobre o que a lógica FAZ, não
+sobre quando aparecem — confusão na hora de aplicar). `UltimoItem=null`
+fazia o box de destaque aparecer (errado) em vez do box "vazio"; como
+`UltimoItem` é null, só o texto ESTÁTICO " x " (separador entre Qtd e
+PUnit) renderizava, o resto ficava em branco — daí o "x" solto no
+screenshot. Corrigido invertendo os 3 usos pro converter certo.
+- **Verificação**: `dotnet build` → 0 erros (2 rodadas: build inicial
+  limpo, depois fix do bug do "x" + rebuild limpo); app relançado. Mesma
+  ressalva de sempre — **não testado visualmente por este agente**,
+  inclusive a centralização exata do título na barra (item 3 acima) fica
+  sujeita a confirmação visual do usuário.
+
+#### 4ª rodada — usuário confirmou o layout ao vivo (screenshot real, "Venda #17851" batendo certinho) e pediu mais 2 ajustes (mesmo dia, 2026-08-11)
+
+1. **Enter com busca PARCIAL (descrição ou código) traz a lista, não
+   tenta incluir direto** — antes, digitar "picanha" (não é um código
+   válido) e Enter caía direto em "Produto não encontrado" porque
+   `AdicionarAsync` sempre tentava resolver o texto como CÓDIGO EXATO
+   primeiro. Corrigido nos dois campos (mesma regra pros dois, pedido
+   explícito do usuário — "mesma regra para o cliente"):
+   - Novo `VendaViewModel.ProdutoExisteAsync(codigo)` — só CHECA se
+     resolve como código exato, sem incluir nada.
+   - `BuscaProduto_PreviewKeyDown` (code-behind) reescrito: tenta
+     `ProdutoExisteAsync` primeiro (caminho rápido, bipe de leitor de
+     código de barras) → se falhar, dispara `BuscarAsync(texto,
+     imediato:true)` (novo parâmetro `imediato`, pula o debounce de
+     350ms) → 1 resultado inclui direto, 0 ou 2+ deixam o dropdown do
+     `AutoSuggestBox` aberto pro usuário escolher.
+   - O campo Cliente já tinha essa exata lógica desde a 3ª rodada — não
+     precisou de mudança, só confirma que "mesma regra" já estava valendo.
+2. **Botões de Ações menores e arredondados** — `VbAcaoButtonStyle`:
+   `Height` 64→48, `Margin` 4→3, `CornerRadius="16"` novo (propriedade
+   própria do `ui:Button`, maior que o `ControlCornerRadius` global de
+   6px do app), fonte da tecla de função 16→13, fonte do rótulo 11→10.
+- **Verificação**: `dotnet build` → 0 erros; app relançado. Mesma
+  ressalva de sempre — **não testado visualmente por este agente**.
+
+#### 5ª rodada — busca ainda não funcionava de fato (root cause achada na fonte do WPF-UI) + 3 ajustes de layout (mesmo dia, 2026-08-11)
+
+Usuário reportou que a busca continuava não funcionando nos dois campos
+mesmo depois da 4ª rodada, e pediu 3 ajustes de layout: agrupar
+Cliente+Produto num card só, aumentar a lista de itens, diminuir a
+largura dos botões de ação (repetindo o pedido da 4ª rodada — o resultado
+anterior não pareceu suficientemente estreito).
+
+1. **Causa raiz real da busca nunca ter funcionado**: lida direto da fonte
+   do `AutoSuggestBox` do WPF-UI 4.3.0 (`gh api
+   repos/lepoco/wpfui/contents/...?ref=4.3.0`). O controle filtra
+   `OriginalItemsSource` sozinho, a cada `TextChanged`, via
+   `DefaultFiltering(text)` → `GetStringFromObj(item)` — que usa
+   `DisplayMemberPath` se ele estiver setado, senão cai pra
+   `item.ToString()`. Nem `BuscaProduto` nem `BuscaCliente` tinham
+   `DisplayMemberPath`, e os DTOs (`ProdutoBuscaDto`/`ClienteBuscaDto`)
+   não sobrescrevem `ToString()` — o filtro interno SEMPRE devolvia vazio,
+   não importa o que a busca assíncrona já tivesse colocado na coleção.
+   Agravante: `OriginalItemsSourceProperty` não tem
+   `PropertyChangedCallback` nenhum — mesmo com `DisplayMemberPath`
+   correto, uma busca assíncrona/debounced que termina DEPOIS do
+   `TextChanged` não reabre/atualiza o dropdown sozinha.
+   - **Fix (2 camadas)**: (a) `DisplayMemberPath="Nome"` em `BuscaCliente`
+     e `DisplayMemberPath="Descricao"` em `BuscaProduto` — corrige o
+     filtro interno do controle; (b) mais importante, `VendaView.xaml.cs`
+     — todo handler que dispara uma busca (`BuscaProduto_TextChanged`,
+     `BuscaProduto_PreviewKeyDown`, `BuscaCliente_TextChanged`,
+     `BuscaCliente_PreviewKeyDown`) agora, depois do `await` da busca,
+     empurra o resultado explicitamente via
+     `sender.SetCurrentValue(AutoSuggestBox.ItemsSourceProperty, resultados)`
+     + `sender.SetCurrentValue(AutoSuggestBox.IsSuggestionListOpenProperty,
+     resultados.Count > 0)` — contorna o mecanismo interno quebrado/
+     defasado em vez de depender dele.
+2. **Cliente + Produto/Serviço agrupados num único card** — antes eram 2
+   `ui:Card` separados (um "CLIENTE" acima da grade de 2 colunas, outro
+   "BIPAR OU DIGITAR PRODUTO/SERVIÇO" já dentro da coluna esquerda);
+   viraram um só card na coluna esquerda, com um separador (`Border`
+   1px) entre a seção Cliente e a seção Produto/Qtd.
+3. **Lista de itens aumentada** — `Height` do `ListView` 280→460.
+4. **Botões de Ação com largura fixa e mais arredondados** —
+   `VbAcaoButtonStyle` ganhou `Width="112"` (antes esticava pra caber na
+   célula da `UniformGrid`) e `CornerRadius` 16→22; o contêiner trocou de
+   `UniformGrid Columns="2"` (força esticar) pra `WrapPanel` (respeita a
+   largura fixa do botão e quebra linha sozinho).
+- **Verificação**: `dotnet build src/KPDV/KPDV.csproj` → 0 erros (precisou
+  encerrar o processo KPDV rodando antes — arquivo `.dll` travado); app
+  relançado (PID 17240, título "Kontacto PDV", `Responding=True`). Mesma
+  ressalva de sempre — **não testado visualmente/ao vivo por este agente**
+  (nem teclado real nem mouse). O usuário mencionou "em anexo imagem de
+  como quero a tela" numa mensagem, mas nenhuma imagem chegou de fato
+  neste agente — se a busca ou o layout ainda não baterem com o que o
+  usuário tinha em mente, pode ser necessário reenviar essa imagem.
+
+#### 6ª rodada — crash real ao logar (`XamlParseException`), causado pelo fix da 5ª rodada (mesmo dia, 2026-08-11)
+
+Usuário testou ao vivo (Visual Studio, F5) e o app quebrou com
+`System.Windows.Markup.XamlParseException`: "A propriedade definida
+'System.Windows.Controls.ItemsControl.ItemTemplate' iniciou uma exceção"
+— confirma que a 5ª rodada nunca tinha sido de fato exercitada contra a
+tela renderizando (só build+`Get-Process` liveness, que não chega a
+montar `VendaView`).
+
+- **Causa raiz**: `ItemsControl` (classe-base de `ui:AutoSuggestBox`) do
+  WPF **não permite setar `DisplayMemberPath` e `ItemTemplate` ao mesmo
+  tempo** no mesmo controle — lança `InvalidOperationException` em
+  runtime assim que o controle tenta aplicar o template, que o parser XAML
+  embrulha em `XamlParseException`. A 5ª rodada tinha acabado de adicionar
+  `DisplayMemberPath="Nome"`/`"Descricao"` exatamente nos 2
+  `AutoSuggestBox` que JÁ tinham `ItemTemplate` custom (grid com
+  Código/Nome/Tipo) — conflito direto, nunca compilado+executado antes de
+  reportar como pronto.
+- **Fix**: removido `DisplayMemberPath` dos 2 `AutoSuggestBox`
+  (`VendaView.xaml`) — o `ItemTemplate` visual fica intacto. Em vez disso,
+  `ProdutoServicoDto`/`ClienteBuscaDto` (`Models/ProdutoModels.cs`/
+  `Models/PedidosModels.cs`) ganharam `override string ToString()`
+  (retornando `Descricao`/`Nome`) — é isso que o filtro interno do
+  `AutoSuggestBox` (`DefaultFiltering`→`GetStringFromObj`) usa quando
+  `DisplayMemberPath` não está setado, sem conflitar com `ItemTemplate`.
+  O resto do fix da 5ª rodada (push explícito de `ItemsSource`/
+  `IsSuggestionListOpen` via `SetCurrentValue` no code-behind) continua
+  válido e inalterado.
+- **Regra pra qualquer `AutoSuggestBox` futuro neste projeto**: se o
+  controle tem `ItemTemplate` custom, NUNCA setar `DisplayMemberPath`
+  junto — usar `override ToString()` no DTO em vez disso.
+- **Verificação**: `dotnet build` → 0 erros; processo encerrado e
+  relançado (PID 23224, "Kontacto PDV", `Responding=True`) — mas isso
+  ainda não prova que a tela abre sem crash (o crash anterior só
+  acontecia ao NAVEGAR pra Venda/logar, não no boot do processo). Login
+  real + navegação até a tela de Venda continuam sem confirmação deste
+  agente — só o usuário pode validar isso de fato.
+
+#### 7ª rodada — usuário testou de verdade (login + digitação real) e achou 2 problemas novos: lista de sugestões "vazando" por trás da tela + crash real ao digitar (mesmo dia, 2026-08-11)
+
+Confirma que a 6ª rodada resolveu o crash de NAVEGAR pra Venda, mas
+digitar no campo Cliente ("carlos") e no campo Produto ("picanha")
+revelou 2 problemas novos, um visual e um crash real (`InvalidOperationException`
+capturado ao vivo pelo Visual Studio, call stack até `Main`).
+
+1. **Lista de sugestões "vazando" — texto da tela por trás aparecendo
+   através do popup**: causa raiz é a MESMA já documentada em
+   `Resources/Brand.xaml` pro `ComboBox` (`ComboBoxDropDownBackground`) —
+   `FlyoutBackground` (usado pelo `Border` do popup de sugestões do
+   `AutoSuggestBox`) resolve pra `AcrylicBackgroundFillColorDefault`, uma
+   cor TRANSLÚCIDA pensada pra um desfoque Mica real que o WPF-UI não
+   aplica em `Popup`s (issue #93 do próprio repositório, já citada no
+   comentário do ComboBox). Sem desfoque, a translucidez vira "vidro" e
+   deixa o conteúdo por trás (Ações, hint text, etc.) transparecendo.
+   **Fix**: `Brand.xaml` ganhou `FlyoutBackground`/`FlyoutBorderBrush`
+   sólidos (mesma técnica já usada pro ComboBox/TextBox nesta sessão) —
+   corrige TODO popup/flyout do app de uma vez (não só os 2 campos desta
+   tela), incluindo qualquer um futuro.
+2. **Crash real ao digitar**: `System.InvalidOperationException: 'A
+   propriedade 'Background' não aponta para um DependencyObject no
+   caminho '(0).(1)'.'`, não tratado, derrubando o processo inteiro
+   (stack desenrolado até `Main`). Causa raiz lida direto na fonte do
+   WPF-UI 4.3.0 (`Controls/AutoSuggestBox/AutoSuggestBox.xaml`,
+   `DefaultAutoSuggestBoxItemContainerStyle`): a lib anima
+   `(Border.Background).(SolidColorBrush.Opacity)` via `Storyboard` no
+   `MouseEnter`/`MouseLeave` de cada item de sugestão. O `ItemsPanel` do
+   popup é uma `VirtualizingStackPanel` com `VirtualizationMode="Recycling"`,
+   e `BuscarAsync`/`BuscarClienteAsync` fazem `Clear()`+`Add()` na
+   coleção a CADA tecla digitada — se o mouse estiver sobre um item
+   quando a coleção é trocada, o container é RECICLADO no meio da
+   animação (Background fica `null` momentaneamente), e o `Storyboard`
+   tenta resolver `(Border.Background)` como `SolidColorBrush` — acha
+   `null`, e o WPF derruba o app (esse `Storyboard` é código da PRÓPRIA
+   lib WPF-UI, nunca foi escrito por este projeto).
+   - **Fix**: novo `SuggestionItemStyle` em `VendaView.xaml` — cópia do
+     `DefaultAutoSuggestBoxItemContainerStyle` original, mas com o
+     `MultiTrigger`+`Storyboard` de fade TROCADO por `Trigger`+`Setter`
+     estático (`IsMouseOver`/`IsSelected` → muda `Background`
+     instantaneamente, sem `Storyboard`, sem precisar resolver
+     `PropertyPath` nenhum) — elimina a corrida por completo. Aplicado via
+     `ItemContainerStyle="{StaticResource SuggestionItemStyle}"` nos 2
+     `AutoSuggestBox` (Cliente e Produto).
+   - `Brand.xaml` também ganhou `ListViewItemBackgroundPointerOver` sólido
+     (cor de hover usada pelo novo Style), por consistência com o resto
+     da paleta.
+3. **Bug lateral achado na mesma revisão** (não reportado pelo usuário,
+   mas visível nos prints — botões F4/F6/F9 renderizando lisos/cinzas,
+   sem o visual pill/gradiente do WPF-UI): `VbAcaoButtonStyle` não tinha
+   `BasedOn` — `Style="{StaticResource VbAcaoButtonStyle}"` substitui por
+   completo o style implícito do WPF-UI (`DefaultUiButtonStyle`,
+   registrado sem `x:Key` em `Button.xaml`), perdendo o Template/triggers
+   que dão cor a `Appearance="Primary/Secondary/Danger"`. Corrigido com
+   `BasedOn="{StaticResource {x:Type ui:Button}}"`.
+- **Regra geral pra qualquer Style customizado de `ui:*` neste projeto**:
+  sempre usar `BasedOn="{StaticResource {x:Type ui:TipoDoControle}}"` ao
+  criar um `Style x:Key="..."` pra um controle WPF-UI — senão o visual
+  padrão da lib (cores por `Appearance`, hover, etc.) é perdido por
+  completo, não só "não personalizado".
+- **Verificação**: `dotnet build` → 0 erros (precisou matar o processo
+  KPDV rodando via PID, `Get-Process -Name KPDV` não encontra porque o
+  processo real é `dotnet.exe` hospedando o `.dll`, não `KPDV.exe`);
+  relançado (PID 32868, "Kontacto PDV", `Responding=True`). Mesma
+  ressalva de sempre — **não testado ao vivo por este agente** (nem
+  teclado real nem mouse) — só o usuário pode confirmar se o crash
+  realmente parou de acontecer e se o popup ficou sólido.
+
+#### 8ª rodada — usuário testou login+digitação de verdade: popup "vazio" sobrando, item duplicado + deadlock, crash de thread no Enter da forma de pagamento, totais somem, botões sem relevo (mesmo dia, 2026-08-11)
+
+A 7ª rodada resolveu o crash de MOUSE OVER e a transparência do popup — mas
+o teste real revelou mais 3 bugs novos (2 reais/graves) e 2 pedidos de
+ajuste visual.
+
+1. **Campo vazio sobrando abaixo de Cliente/Produto depois de
+   selecionar**: causa raiz lida na própria fonte do `AutoSuggestBox.cs`
+   (não suposição) — no clique do mouse, `SelectedItem` já é setado no
+   MouseDown, então quando `PreviewMouseLeftButtonUp` roda e vê
+   `SelectedItem != null`, ele **retorna sem fechar o popup**; quem
+   fecha é `SelectionChanged` → `OnSelectedChanged`, que só chama
+   `OnSuggestionChosen` (dispara o evento, atualiza o texto) e **nunca
+   fecha o popup**. Resultado: o popup fica ABERTO com o `ItemsSource`
+   antigo (a mesma coleção que o code-behind empurrou manualmente) — a
+   faixa vazia era esse popup ainda aberto. **Fix**:
+   `BuscaProduto_SuggestionChosen`/`BuscaCliente_SuggestionChosen`
+   (`VendaView.xaml.cs`) agora fecham explicitamente
+   (`IsSuggestionListOpen=false`) e limpam `ItemsSource=null` **antes**
+   de processar a seleção (não depois), eliminando o estado antigo por
+   completo.
+2. **Item duplicado na lista + erro de deadlock do SQL Server ao
+   adicionar produto**: mesma causa raiz do item 1 — como o popup ficava
+   aberto com a seleção antiga ainda "viva" (`_selectedItem` interno da
+   lib), qualquer interação seguinte na lista podia redisparar
+   `SuggestionChosen` pro MESMO produto, mandando uma 2ª chamada de
+   `POST /pedidos/.../itens` quase simultânea à 1ª — 2 transações
+   concorrentes na mesma comanda é exatamente o padrão de um deadlock
+   real do SQL Server (`Transaction ... was deadlocked on lock
+   resources`), e explica as 2 linhas do mesmo item na grade. **Mesmo
+   fix do item 1** resolve os dois de uma vez (fechar+limpar antes de
+   processar elimina a chance de redisparo).
+3. **Crash real (`NotSupportedException`) ao dar Enter na forma de
+   pagamento**: "'Este tipo de CollectionView não oferece suporte às
+   alterações feitas a SourceCollection a partir de um thread diferente
+   do thread Dispatcher.'" — causa raiz bem mais profunda, achada lendo
+   o próprio `VendaViewModel.cs`: **praticamente todo `await` do arquivo
+   usava `.ConfigureAwait(false)`** (35 ocorrências). Isso faz a
+   continuação depois do `await` retomar numa thread do POOL, não na
+   thread da UI — e como `ConfirmarFecharVendaAsync` (Fechar Venda/
+   confirmar pagamento) termina chamando `InicializarAsync(manterStatus:
+   true)` (abre a próxima venda), e `InicializarAsync` faz `Itens.Clear()`
+   **antes do seu próprio primeiro `await`**, essa linha acabava rodando
+   na thread do pool (herdada de um `ConfigureAwait(false)` anterior na
+   cadeia) — WPF derruba o app na hora, porque `Itens` é a
+   `ObservableCollection` vinculada ao `ListView` da tela.
+   - **Achado mais grave**: esse MESMO padrão (`ConfigureAwait(false)`
+     em todo `await` de ViewModel) está espalhado em **7 dos 13
+     ViewModels do projeto** (`AtualizacaoViewModel`,
+     `ConexaoConfigViewModel`, `ConfiguracaoBalancaViewModel`,
+     `ConfiguracoesViewModel`, `LoginViewModel`, `PedidosViewModel`,
+     `VendaViewModel` — 101 ocorrências no total). Um comentário já
+     existente em `LoginViewModel.cs` (achado ao revisar) confirma que
+     esse MESMO bug já tinha acontecido antes ali e foi "resolvido" só
+     com `App.Current.Dispatcher.Invoke(...)` no `finally` — um
+     band-aid pontual, não a causa raiz.
+   - **Fix real, não band-aid**: removido `.ConfigureAwait(false)` dos 7
+     arquivos (101 ocorrências) — em WPF, um método `async` chamado a
+     partir de um `[RelayCommand]`/evento de UI já captura o
+     `DispatcherSynchronizationContext` da thread da UI ao iniciar;
+     **não** usar `ConfigureAwait(false)` (o padrão, sem chamar o
+     método) garante que toda continuação depois de um `await` volta
+     pra essa mesma thread — é o padrão correto e idiomático pra WPF
+     (`ConfigureAwait(false)` é pensado pra código de biblioteca/
+     servidor que não tem SynchronizationContext, não pra ViewModel que
+     mexe em coleção/propriedade vinculada à UI). Os `App.Current.
+     Dispatcher.Invoke(...)` já espalhados pelo código (inclusive os
+     que já existiam antes desta correção) continuam funcionando
+     normalmente — viram só redundantes/inofensivos onde já estavam
+     certos, não foram removidos (fora de escopo, sem necessidade).
+4. **Totais somem da tela** ("colocar os totais na mesma caixa dos
+   botões de ações... a tela não pode esconder nenhum campo ou botão"):
+   os 4 boxes de total (Bruto/Descontos/Acréscimos/A Pagar) ficavam numa
+   faixa própria, largura cheia, ABAIXO das 2 colunas inteiras — em
+   janela mais baixa, essa faixa ficava fora da área visível. Movidos
+   pra DENTRO do mesmo card "AÇÕES" (coluna esquerda, sempre perto do
+   topo), em grade 2x2 (não mais 1x4, a coluna é mais estreita que a
+   tela toda).
+5. **Botões de ação em 3D**: `VbAcaoButtonStyle` ganhou `DropShadowEffect`
+   (sombra mais forte que a dos cards — "flutuando" sobre o card) +
+   `Trigger IsPressed` que reduz a sombra e desloca o botão 1.5px pra
+   baixo (`TranslateTransform`), simulando o botão "afundando" no clique
+   — WPF não tem relevo nativo, essa é a aproximação padrão pra efeito
+   3D em botões flat.
+- **Verificação**: `dotnet build` → 0 erros; app relançado (PID 34168,
+  "Kontacto PDV", `Responding=True`). Mesma ressalva de sempre — **não
+  testado ao vivo por este agente**; o crash de thread em particular só
+  foi confirmado por análise de código (leitura de fonte + grep), não
+  reproduzido/re-testado por este agente antes do fix.
+- **Pendência pra próxima sessão**: os OUTROS 6 ViewModels com o mesmo
+  padrão (`AtualizacaoViewModel`/`ConexaoConfigViewModel`/
+  `ConfiguracaoBalancaViewModel`/`ConfiguracoesViewModel`/
+  `LoginViewModel`/`PedidosViewModel`) já tiveram o `.ConfigureAwait(false)`
+  removido nesta rodada (fix aplicado, não é só o Venda) — mas as telas
+  Pedidos/Configurações/Atualização/Conexão/Balança **não foram
+  re-testadas ao vivo** depois da mudança; se alguma dessas telas nunca
+  teve o bug se manifestar antes, é porque o caminho de código
+  específico nunca tocou UI depois do `await` — a remoção é segura de
+  qualquer forma (nunca piora, só remove um risco latente).
+
+#### 9ª rodada — botões "invisíveis" (mesma causa raiz do ComboBox/Flyout), menu Configurações recolhido não fazia nada, e informação da venda anterior sobrando na tela (mesmo dia, 2026-08-11)
+
+1. **Botões Primary/Secondary "invisíveis" (só texto, sem fundo/pill
+   visível) — só o Danger (F7, vermelho) aparecia certo**: MESMA causa
+   raiz já corrigida 2x nesta sessão pro ComboBox/Flyout — confirmado
+   lendo `Resources/Theme/Light.xaml`: `ButtonBackground` (Secondary)
+   resolve pra `ControlFillColorDefault` = `#B3FFFFFF` (branco 70%
+   translúcido, pensado pra Mica real) — sobre um `ui:Card` sólido isso
+   vira quase invisível; `Danger` já usa uma cor SÓLIDA da paleta
+   estática (`PaletteRedColor`), por isso era o único visível. Fix:
+   `Brand.xaml` ganhou `ButtonBackground`/`ButtonForeground` (Secondary,
+   tons de superfície/borda da marca) e `AccentButtonBackground`/
+   `AccentButtonForeground` (Primary, azul da marca) sólidos — corrige
+   TODO botão do app de uma vez, não só os 5 da tela de Venda.
+2. **Ícone "Configurações" recolhido não fazia nada**: lido na fonte do
+   `NavigationViewItem.OnClick()` — o expand/collapse do submenu só roda
+   `if (HasMenuItems && navigationView.IsPaneOpen)`; com o menu lateral
+   recolhido (só ícones, `IsPaneOpen=false`), essa condição nunca bate, e
+   como o item pai também não tem `TargetPageType`, o clique não tinha
+   NENHUM efeito. Fix: novo `NavItemConfiguracoes_Click`
+   (`MainWindow.xaml.cs`) — só age quando o painel está FECHADO: abre o
+   painel (`IsPaneOpen=true`) + expande o item (`IsExpanded=true`); com o
+   painel já aberto, não faz nada extra (deixa o comportamento nativo da
+   lib cuidar, evita alternar `IsExpanded` duas vezes pro mesmo clique).
+3. **Informação da venda anterior (cliente + produto digitado + totais)
+   sobrando na tela depois de Faturar**: 2 causas reais, ambas
+   corrigidas:
+   - `TotalBruto`/`TotalDescontosItens`/`TotalAcrescimosItens`
+     (`VendaViewModel.cs`) são getters computados a partir de `Itens`,
+     **sem** `[ObservableProperty]` — só notificam quando alguém chama
+     `OnPropertyChanged` explicitamente (já acontecia em
+     `RecarregarVendaAsync`, mas faltava em `InicializarAsync`). Sem
+     isso, a tela seguia mostrando os totais da venda ANTERIOR mesmo com
+     `Itens.Clear()` já tendo rodado. Adicionados os 3
+     `OnPropertyChanged` que faltavam em `InicializarAsync`.
+   - `BuscaProduto.Text`/`BuscaCliente.Text` (o texto literal digitado/
+     bipado no `AutoSuggestBox`) são estado puramente LOCAL do controle
+     — não têm `Text="{Binding ...}"`, só eram limpos manualmente nos
+     handlers de seleção/Enter, NUNCA ao iniciar uma venda nova.
+     `InicializarAsync` já resetava `ClienteNome`/`QtdTexto` (propriedades
+     do ViewModel), mas nada limpava o texto ainda visível na caixa.
+     Fix: `VendaView.xaml.cs` (construtor) assina `PropertyChanged` do
+     ViewModel — sempre que `Comanda` muda (nova venda iniciada), limpa
+     `BuscaProduto.Text`/`BuscaCliente.Text` via `SetCurrentValue`
+     (mesmo padrão de assinatura única já usado em `MainWindow.xaml.cs`
+     pro título "Venda #N").
+   - **"Vender pra Clientes Diversos se ninguém for selecionado" já
+     funciona, sem precisar de mudança**: confirmado lendo
+     `backend/services/checkout_service.py::_abrir_venda_sync` — TODA
+     comanda já nasce com `cliente = req.cliente or _cliente_diversos(cur)`
+     no INSERT, antes mesmo do usuário poder escolher alguém. O que
+     parecia "cliente errado" era só o sintoma acima (nome antigo
+     sobrando na tela), não uma venda de fato vinculada ao cliente
+     errado no banco.
+- **Verificação**: `dotnet build` → 0 erros (precisou encerrar um
+  `KPDV.exe` rodando via sessão de debug do Visual Studio pra liberar o
+  arquivo); app relançado (PID 30744, "Kontacto PDV", `Responding=True`).
+  Mesma ressalva de sempre — **não testado ao vivo por este agente**.
+
+#### 10ª rodada — largura da lista, `Total` não resetava, foco no produto, totais separados dos botões, TROCO da última venda (mesmo dia, 2026-08-11)
+
+1. **Lista de itens mais larga**: coluna direita (Demonstrativo) da grade
+   de 2 colunas — proporção `1.2*`→`1.8*`, `MinWidth` 380→420.
+2. **`Total` não zerava ao voltar do faturamento**: a 9ª rodada já tinha
+   corrigido `TotalBruto`/`TotalDescontosItens`/`TotalAcrescimosItens`
+   (getters computados, faltava `OnPropertyChanged`), mas `Total` em si é
+   um `[ObservableProperty]` SETADO de fora (por
+   `RecarregarVendaAsync`/`ConfirmarFecharVendaAsync`) — `InicializarAsync`
+   nunca fazia `Total = 0`, então a barra "TOTAL A PAGAR" (tanto a caixa
+   pequena quanto a grande, embaixo da lista) seguia mostrando o valor da
+   venda ANTERIOR. Adicionado `Total = 0;` em `InicializarAsync`.
+3. **Foco no campo Produto após selecionar Cliente** (pedido repetido —
+   não tinha sido implementado numa rodada anterior por causa da
+   sequência de bugs mais urgentes que vieram no meio): `BuscaCliente.
+   Focus()`/`Keyboard.Focus(BuscaProduto)` adicionados em
+   `BuscaCliente_SuggestionChosen` (clique numa sugestão) e em
+   `BuscaCliente_PreviewKeyDown` (Enter com 1 resultado único).
+4. **Totais separados dos botões de Ação**: voltaram a ser um `ui:Card`
+   PRÓPRIO (título "TOTAIS"), não mais dentro do mesmo card "AÇÕES" — fica
+   logo abaixo dele, mesma coluna esquerda.
+5. **"Total a Pagar" vira "Troco" quando a venda está vazia**: a barra
+   grande embaixo da lista de itens (Demonstrativo) alterna entre 2
+   estados mutuamente exclusivos via `Itens.Count`: com itens lançados,
+   mostra "TOTAL A PAGAR"/`Total` (info essencial durante a venda, mesmo
+   de sempre); com a venda vazia (tela recém-aberta/entre vendas), mostra
+   "TROCO (última venda)"/`UltimoTroco` — novo `[ObservableProperty]`,
+   setado em `ConfirmarFecharVendaAsync` a partir de `resp.Troco` (o
+   backend já devolvia esse valor, `CheckoutFecharResponse.Troco` — só
+   nunca tinha sido persistido além do toast de "Venda fechada! Troco:
+   R$X"). Igual `_ultimaVendaImpressa`/`PodeReimprimir`, **não** é
+   resetado em `InicializarAsync` — é informação sobre a venda ANTERIOR.
+   Implementado com 2 `Grid`s sobrepostos dentro do mesmo `Border`, cada
+   um com `Visibility` num dos 2 novos converters genéricos
+   `ZeroToCollapsedConverter`/`ZeroToVisibleConverter`
+   (`Converters/CommonConverters.cs` — o primeiro já existia, generalizado
+   de `double` pra qualquer `IConvertible` numérico, incluindo o `int` de
+   `Itens.Count`; o segundo é o inverso, novo).
+- **Verificação**: `dotnet build` → 0 erros; app relançado (PID 29708,
+  "Kontacto PDV", `Responding=True`). Mesma ressalva de sempre — **não
+  testado ao vivo por este agente**.
+
+#### 11ª rodada — MESMO crash de `Background`/`DependencyObject` voltou, em outro controle (mesmo dia, 2026-08-11)
+
+Usuário reportou o mesmíssimo `InvalidOperationException` ("A propriedade
+'Background' não aponta para um DependencyObject no caminho '(0).(1)'")
+de novo, mesmo depois do fix da 6ª rodada (que corrigiu especificamente o
+`AutoSuggestBox`). Investigação (`gh api search/code` no repositório do
+WPF-UI) confirmou que o MESMO padrão de bug — `Storyboard` animando
+`(Elemento.Background).(SolidColorBrush.Opacity)` no MouseEnter/Leave,
+vulnerável a `Background` ficar `null` quando o elemento é reciclado por
+virtualização — existe em **7 controles diferentes** da lib, não só o
+AutoSuggestBox: `ToolBar`, `TreeViewItem`, `TabControl`, `ScrollBar`,
+`NavigationLeftFluent` (esse último anima `BorderBrush`, não `Background`
+— não bate com a mensagem exata, descartado), `DynamicScrollBar`.
+Candidato mais forte pro caso desta vez: `ScrollBar`'s
+`UiScrollBarLineButton` (botõezinhos de seta topo/base) — `ListaItens`
+(tela de Venda) usa `ScrollViewer.VerticalScrollBarVisibility="Visible"`
+(barra SEMPRE visível, sempre alcançável pelo mouse), e a animação em
+questão é sobre `ScrollBarButtonBackground` = `SubtleFillColorTransparent`
+(`#00FFFFFF`) — ou seja, mesmo funcionando perfeitamente, o efeito visual
+é **sempre transparente→transparente, zero diferença visível**.
+
+- **1ª tentativa (revertida)**: sobrescrever `x:Key="UiScrollBarLineButton"`
+  em `Brand.xaml` com uma versão sem a animação. **Não funciona** — WPF
+  resolve `StaticResource` DENTRO de `ScrollBar.xaml` (onde
+  `UiVerticalScrollBar`/`UiHorizontalScrollBar` referenciam esse Style)
+  usando o escopo de dicionário do PRÓPRIO arquivo da lib no momento em
+  que ele é compilado/carregado — nunca "o último a vencer" do merge do
+  app inteiro (isso só vale pra Styles IMPLÍCITOS, sem `x:Key`, que usam
+  resolução em runtime pela árvore de recursos). Corrigir de verdade
+  exigiria reimplementar o `ControlTemplate` inteiro do `ScrollBar`
+  (track+thumb+botões, ~380 linhas) só pra remover uma animação que já
+  não tem efeito visual nenhum — custo desproporcional ao benefício.
+- **Fix real, robusto e escalável**: novo `DispatcherUnhandledException`
+  handler em `App.xaml.cs::OnStartup` — captura especificamente
+  `InvalidOperationException` cuja mensagem contém "DependencyObject"
+  (o padrão exato desta classe de bug, em qualquer um dos 7 controles
+  candidatos, presentes ou futuros), loga via `AppLog.Error` (nunca
+  desaparece sem rastro) e marca `Handled = true` — impede o crash total
+  do app por uma falha comprovadamente cosmética de terceiros, sem abafar
+  NENHUMA outra exceção (qualquer coisa que não bata nesse padrão bem
+  específico continua derrubando o app normalmente, como deveria).
+- **Por que essa é a defesa certa** (não é só "esconder o problema"):
+  como o mesmo padrão de bug já apareceu 2x em controles DIFERENTES da
+  lib nesta sessão, e existem outros 5 candidatos ainda não exercitados
+  ao vivo, remendar um controle de cada vez conforme aparece é reativo e
+  incompleto por definição — a defesa em profundidade (nunca deixar ESSE
+  padrão específico crashar o processo inteiro) cobre os 7 candidatos
+  conhecidos E qualquer outro igual que apareça no futuro, sem precisar
+  reidentificar a causa raiz a cada vez.
+- **Verificação**: `dotnet build` → 0 erros (precisou matar 2 processos —
+  um provável resquício de sessão de debug do Visual Studio, PID 22752, e
+  o `dotnet.exe` da 10ª rodada, PID 29708); app relançado (PID 32944,
+  "Kontacto PDV", `Responding=True`). **Não testado ao vivo por este
+  agente** — usuário precisa confirmar que hover/interação repetida na
+  barra de rolagem/outros controles não derruba mais o app (mesmo que o
+  handler pegue a exceção, vale confirmar que não sobra nenhum efeito
+  colateral visual estranho do catch).
+
+### Enter no campo Senha executa a ação — regra `[GLOBAL]` (2026-08-11)
+
+Pedido explícito do usuário, marcado "[Regras Globais]": "ao teclar enter
+no campo senha de qualquer tela de autorização, como a tela de login,
+executar o login da mesma." Vale pra **toda tela de autorização/login do
+KPDV**, não só a atual — hoje são os 2 campos de senha que existem no app
+(`LoginView.xaml`: Senha do login normal + Senha do painel de Autorização
+de troca de conexão), mas qualquer campo de senha NOVO em telas futuras
+(ex.: se o app ganhar uma tela própria de troca de senha, PIN de operador,
+etc.) deve seguir o mesmo padrão desde o início.
+
+- **Implementado** via `KeyDown` no `ui:PasswordBox` (code-behind,
+  `LoginView.xaml.cs` — `SenhaBox_KeyDown`/`AutorizacaoSenhaBox_KeyDown`),
+  checando `e.Key == Key.Enter` e chamando o `Command` correspondente
+  diretamente (`EntrarCommand`/`VerificarAutorizacaoCommand`) — **não**
+  simula um clique de botão, chama o `ICommand` de verdade, respeitando o
+  próprio `CanExecute` (Enter com campo vazio ou já processando não faz
+  nada, mesma proteção que o botão já tinha).
+- **Verificação**: `dotnet build` → 0 erros (build limpo, sem bloqueio de
+  arquivo desta vez); processo lançado e vivo (`Kontacto PDV`,
+  `Responding=True`). **Nunca testado ao vivo via teclado de verdade**
+  (só a compilação/liveness foram confirmadas) — usuário deve confirmar
+  na próxima sessão de uso.
+
+## Persistência de schema INTEGRAL (não pontual) — `backend/services/schema_ensure.py` (2026-08-11) — IMPLEMENTADO
+
+Correção arquitetural pedida pelo usuário logo após a regra `[GLOBAL]`
+"Cada app precisa se auto-atualizar no banco" (ver CLAUDE.md, mesma
+seção, já corrigida com o texto integral abaixo): "a persistência não
+pode ser de forma pontual. tem que ser integral."
+
+- **Levantamento**: 24 helpers `_ensure_*` já existiam, espalhados por 15
+  services diferentes (`balanca_service`, `checkout_service`,
+  `controle_config_service`, `cotacao_compra_service`,
+  `etiqueta_produto_service`, `gestao_compras_service`,
+  `impressao_service`, `inventario_service` (2), `log_auditoria_service`,
+  `modificadores_service`, `pedido_common` (8), `produto_completo_service`
+  (2), `projetos_service`, `tabelas_aux_service`) — cada um só rodava
+  quando o service específico que o chamava era exercitado. 23 são
+  migração de SCHEMA (DDL); 1 (`contratos_service._ensure_forma_pag_
+  contrato_sync`) é bootstrap de LINHA de dado de negócio, categoria
+  diferente, deliberadamente excluído do registro central.
+- **Novo `backend/services/schema_ensure.py`**: importa os 23 helpers de
+  schema (2 tinham nome colidente — `_ensure_tables` em
+  `cotacao_compra_service` e `modificadores_service` — importados com
+  alias), registrados em `_MIGRACOES`. `ensure_all_schema(cur, servidor,
+  banco)` roda TODOS de uma vez, cada um em try/except isolado (uma falha
+  não bloqueia as outras — achado real durante a implementação: sem
+  isolamento, uma migração quebrada travava as ~15 seguintes na lista,
+  exatamente o oposto de "integral"), com cache em memória por processo
+  (`_SCHEMA_JA_GARANTIDO`, chave `(servidor, banco)` normalizados) pra não
+  repetir ~23 checagens `EXISTS` em toda requisição.
+- **Wired em `backend/db/connection.py::_open_conn`** (o único ponto de
+  abertura de conexão de todo o backend — mesmo argumento já usado pra
+  `friendly_db_error`) via novo `_ensure_schema_integral(conn, servidor,
+  banco)`, chamado logo após conectar, antes de devolver a conexão.
+  **Import tardio** (dentro da função, não no topo do arquivo) — evita
+  ciclo, já que `schema_ensure` importa de vários services que por sua
+  vez importam `_open_conn` no topo dos arquivos deles. Falha aqui NUNCA
+  derruba a conexão em si, só loga (`logging.getLogger`) — os `_ensure_*`
+  originais continuam existindo nos pontos de uso de origem como rede de
+  segurança adicional.
+- **Bug real achado ao testar ao vivo** (não hipotético — testado contra
+  GERDELL/BARESTELA de verdade antes de considerar pronto): o cursor
+  aberto em `_ensure_schema_integral` precisa ser `conn.cursor(as_dict=
+  True)` — os 23 `_ensure_*` foram todos escritos assumindo esse formato
+  (mesmo padrão do resto do backend), e um cursor padrão (tuplas) quebrava
+  com `AttributeError: 'tuple' object has no attribute 'get'` na primeira
+  migração que fazia `.get(...)` no resultado.
+- **Verificação em múltiplas camadas**: `pytest tests/unit` → 1807/1808
+  (mesma falha pré-existente sem relação); teste ao vivo direto contra
+  GERDELL/BARESTELA confirmando (a) 1ª conexão roda as 23 migrações sem
+  erro (~0.8s) e (b) 2ª conexão pula tudo via cache (~0.01s); backend
+  reiniciado em produção; **login real via `POST /api/login`** contra
+  GERDELL/BARESTELA (master) confirmado funcionando com o mecanismo ativo.
+- **CLAUDE.md atualizado** (seção "Cada app precisa se auto-atualizar no
+  banco") — regra pra migração de schema NOVA daqui pra frente: escrever
+  o `_ensure_*` de sempre **e também registrar em
+  `schema_ensure.py::_MIGRACOES`** — é esse 2º passo que mantém a
+  cobertura integral, não pontual.
+
+## Pendência de Schema BD (2026-08-11) — cobertura gradual, por menu
+
+Pedido explícito do usuário: "guarde em pendência, separe por menu todas
+as entidades para cobrirmos de todas as telas gradativamente todos os
+schema. para futuramente tenhamos todas as tabelas persistidas... Vamos
+dar o nome da Pendência de Schema BD." Objetivo: usar esta lista (levantada
+direto de `backend/routes/` — 68 módulos — e cruzada com os menus reais do
+frontend, `frontend/app/(tabs)/*.tsx`) como checklist pra, sessão a
+sessão, revisar cada entidade e confirmar se ela precisa de um `_ensure_*`
+registrado em `schema_ensure.py::_MIGRACOES` (ver seção acima) — não é
+pra ser feito tudo de uma vez, é o mapa completo pra cobertura ir
+crescendo aos poucos até cobrir 100% do sistema.
+
+**Legenda**: ✅ já tem `_ensure_*` registrado em `schema_ensure.py` |
+⬜ ainda não revisado — próximo a fazer, gradualmente.
+
+### Cadastros
+- ⬜ Clientes (`clientes_service.py`)
+- ⬜ Cliente Rápido (mesma entidade acima, tela simplificada)
+- ⬜ Produtos (`produtos_service.py`)
+- ✅ Produto Completo (`produto_completo_service.py` — `_ensure_promocao_periodo_cols`, `_ensure_web_dias_semana_table`)
+- ⬜ Produtos Compostos (`produtos_compostos.py`)
+- ⬜ Produtos Níveis (`produtos_niveis.py`)
+- ⬜ Fornecedores (`fornecedores_service.py`)
+- ⬜ Serviços (`servicos_service.py`)
+- ⬜ Veículos (`veiculos_service.py`)
+- ⬜ Funcionários (`funcionarios_service.py`)
+- ⬜ Contatos (`contatos_service.py`)
+- ⬜ Telemarketing (`telemarketing_service.py`)
+- ⬜ Equipamentos (`equipamentos_service.py`)
+- ⬜ Notas Fiscais (`notas_fiscais_service.py`)
+- ⬜ Entrada/Saída de Caixa (`entrada_saida_caixa_service.py`)
+- ✅ Balanças (`balanca_service.py` — `_ensure_balancas_table`)
+- ⬜ Tabelas Auxiliares (`tabelas_aux_service.py` — parcial, ver Configurações abaixo)
+- ⬜ Etiqueta de Produto (`etiqueta_produto_service.py` — parcial: `_ensure_modelo_etiqueta_table` já cobre a tabela de modelos, mas revisar o resto do service)
+- ⬜ Modificadores (`modificadores_service.py` — parcial: `_ensure_tables` já cobre as 3 tabelas base, revisar o resto)
+
+### Transações
+- ⬜ Pedido de Venda / Pedido Bar / Pedido Geral (`pedidos_service.py`, `pedido_completo_service.py` — parcial: vários `_ensure_*` de `pedido_common.py` já cobrem colunas específicas — `hora_inclusao_item`, `qtd_pessoas`, `os_doc_origem`, `os_forma_pagamento_garantia`, `agenda_forma_pag`, `osrevisao`, `agenda_os`, `os_produto_agenda` — mas revisar se há mais colunas não cobertas)
+- ⬜ O.S. Completa (`os_service.py`, `os_completo.py`)
+- ⬜ Envio para Terceiros (`envio_massa.py`)
+- ⬜ Gestor de Devolução (`devolucao_service.py`)
+- ⬜ Movimentações (`movimentacao_produtos.py`)
+- ⬜ Inventário (`inventario_service.py` — parcial: `_ensure_usuario_digitacao_col`, `_ensure_automatico_col` já cobrem, revisar resto)
+- ✅ Gestão de Compras (`gestao_compras_service.py` — `_ensure_alertas_estoque_cache_table`; `cotacao_compra_service.py` — `_ensure_tables`; `curva_abc.py`/`pedido_compra.py`/`requisicao.py` do mesmo menu — revisar)
+- ⬜ Gestor de Comandas (`comanda_service.py` — o arquivo que estava aberto no IDE quando este pedido foi feito)
+- ⬜ Agenda (`agenda_service.py` — parcial via `pedido_common._ensure_agenda_os_table`/`_ensure_agenda_forma_pag_tables`, revisar o resto)
+- ✅ Gestor de Projetos (`projetos_service.py` — `_ensure_projetos_tables`)
+- ⬜ Contratos (`contratos_service.py` — `_ensure_forma_pag_contrato_sync` existe mas é bootstrap de DADO, não schema; revisar se há colunas/tabelas novas sem `_ensure_*` de schema)
+
+### Financeiro
+- ⬜ Contas a Pagar / Contas a Receber (`financeiro.py`)
+- ⬜ Fluxo de Caixa (`contas.py`)
+- ⬜ Cobranças (`bancos.py`, `geracao_boletos.py`, `conta_func.py`)
+
+### Posto de Combustível
+- ⬜ Bombas (`bomba.py`)
+- ⬜ Mov. Encerrantes (`mov_encerrante.py`)
+- ⬜ Aferições/Despesas (`afericao_abastecimento.py`)
+- ⬜ Fechamento/Reabertura de Turno (`fechamento_turno.py`, `reabertura_turno.py`)
+- ⬜ Metas Combustível (`combustivel_meta.py`)
+- ⬜ Combustíveis (`combustivel.py`)
+- ⬜ Estoque/Custo Combustível (`estoque_combustivel.py`, `custo_combustivel.py`)
+- ⬜ Ilhas (`ilha.py`)
+- ⬜ Tanques/Tanque Estoque/Tanque NF (`tanque.py`, `tanque_estoque.py`, `tanque_nf.py`)
+- ⬜ Borderô (`bordero.py`)
+- ⬜ Retífica (`retifica.py`)
+- ⬜ Viagem (`viagem.py`)
+
+### Cilindros
+- ⬜ Cadastro de Cilindros / Viagens / Borderô de Cilindros (`cilindro.py`)
+
+### Configurações
+- ⬜ Tabelas Auxiliares (`tabelas_aux_service.py` — parcial: `_ensure_nfse_indop_sync` já cobre, revisar o resto — é um service GRANDE, várias tabelas auxiliares diferentes)
+- ✅ Módulos e Recursos / Balança (`controle_config_service.py` — `_ensure_balanca_cols`)
+- ⬜ Permissões (`permissoes_service.py`)
+- ⬜ Controle do Sistema (`controle_sistema.py`, `controle.py`)
+- ⬜ Usuários (`usuarios_service.py`)
+
+### Relatórios (prioridade mais baixa — telas majoritariamente LEITURA, menor risco de schema drift, mas revisar se algum tem tabela de cache/config própria)
+- ⬜ `relatorios_service.py`, `margem_lucro.py`, `descontos.py`, `relatorio_clientes.py`, `curva_abc.py` (relatório) — nenhum `_ensure_*` conhecido hoje; confirmar se genuinamente não introduzem schema novo antes de marcar como "não precisa".
+
+### Cross-cutting (não é 1 menu específico, é infraestrutura compartilhada)
+- ✅ Log de Auditoria (`log_auditoria_service.py` — `_ensure_log_auditoria_table`)
+- ✅ Impressão (`impressao_service.py` — `_ensure_impressao_fila_table`)
+- ⬜ Gestor de Documentos (`gestor_documentos.py`)
+- ⬜ WhatsApp (`whatsapp/`)
+- ⬜ Checkout/Comanda (`checkout_service.py` — parcial: `_ensure_cartao_presente_resgate_table` já cobre, revisar resto — inclui as 8 tabelas de detalhe de forma de pagamento documentadas em `checkout_service.py`'s docstring)
+- ⬜ `layout.py`, `lookups.py`, `misc.py`, `auth.py` — provavelmente não introduzem schema próprio (só leem/orquestram), confirmar e marcar quando revisado.
+
+**Como usar esta lista numa sessão futura**: escolher um menu (ou uma
+entidade específica pedida pelo usuário), ler o service correspondente
+procurando por `ALTER TABLE`/colunas novas sem `IF NOT EXISTS` guard
+existente, escrever o `_ensure_*` que faltar, registrar em
+`schema_ensure.py::_MIGRACOES`, marcar ✅ aqui. Não precisa seguir a ordem
+listada — qualquer entidade tocada por outro motivo já serve de gatilho
+pra revisar de passagem (mesmo princípio de não-retroatividade forçada já
+usado noutras regras `[GLOBAL]` deste projeto).
+
+## Contraste global de ComboBox/TextBox + submenu "Configurações" (2026-08-11) — IMPLEMENTADO
+
+Continuação da sessão de testes ao vivo — usuário reportou 2 problemas
+visuais adicionais e pediu 1 reorganização de navegação, todos na tela
+de Venda/Configurações do KPDV.
+
+### 1) ComboBox — dropdown "vidro" (list overlapping)
+
+Reportado nos painéis de Configuração de Impressão E Balança: a lista
+suspensa do `ComboBox` aparecia translúcida, com o conteúdo por trás
+(botões "Voltar"/"Salvar") transparecendo através do texto dos itens.
+
+**Causa raiz confirmada lendo a fonte oficial do WPF-UI**
+(`Resources/Theme/Light.xaml`, tag 4.3.0): `ComboBoxDropDownBackground`
+usa `AcrylicBackgroundFillColorDefault` — uma cor translúcida pensada
+pra um desfoque real (Acrylic) atrás do popup, que o WPF-UI **não
+aplica em popups** (limitação conhecida do próprio projeto, issue #93:
+"these controls exist outside the main window, so the mica effect does
+not apply to them"). Sem o desfoque, sobra só a cor translúcida — vira
+vidro.
+
+**Corrigido em `Resources/Brand.xaml`** (mesma técnica já usada pra
+`ControlCornerRadius`): `ComboBoxBackground`/`ComboBoxForeground`/
+`ComboBoxDropDownBackground` redefinidos com cores SÓLIDAS
+(`KpdvSurfaceSecondaryColor`/`KpdvInkColor`). Resource compartilhado —
+corrige todo `ComboBox` do app de uma vez, presente e futuro.
+
+### 2) "Mesma padronização de campos" na tela de Venda
+
+Investigação achou que este é o MESMO problema de base do Login
+original ("branco sobre branco"), não um problema por tela — lendo a
+mesma fonte oficial: `TextControlBackground` (usado por `TextBox`,
+`AutoSuggestBox`, `NumberBox`, `PasswordBox`, `RichSuggestBox` — mesmo
+grupo de brushes, confirmado no próprio comentário da lib) resolve pra
+`ControlFillColorDefault = #B3FFFFFF` (branco 70% translúcido) e
+`TextControlForeground` pra `TextFillColorPrimary = #E4000000` (preto
+~89% translúcido) — a borda (`TextControlElevationBorderBrush`) usa
+`ControlStrokeColorDefault = #0F000000`, ~6% de opacidade, quase
+invisível. Todos pensados pra compor sobre um fundo com desfoque Mica
+de verdade, não sobre um `Card`/tela de cor sólida como as deste app.
+
+**Corrigido em `Resources/Brand.xaml`**: `TextControlBackground`/
+`TextControlForeground`/`TextControlElevationBorderBrush` redefinidos
+com cores sólidas — corrige `TextBox`/`AutoSuggestBox`/`PasswordBox`/
+`NumberBox` do app inteiro de uma vez (inclusive o campo de busca da
+tela de Venda, "Pesquisar por código, descrição ou GTIN"), sem precisar
+repetir `Background`/`Foreground` local em cada campo — mesmo princípio
+"integral, não pontual" já aplicado ao schema do backend nesta sessão.
+
+### 3) Submenu "Configurações" no menu lateral
+
+Pedido explícito do usuário: "Todas as configurações de Impressora,
+balança, conexões, atualizar e etc, deverão ficar em um submenu do menu
+configurações no menu lateral." Antes, Impressora/Balança/Atualização
+eram painéis overlay dentro da tela de Venda (abertos por ícones soltos
+no `TitleBar`); Conexão era uma troca de tela cheia (`ConteudoAtual`),
+também acionada por ícone no `TitleBar`.
+
+**Refactor implementado**:
+- **3 novos pares View+ViewModel**, extraídos de `VendaViewModel`
+  (que ficava sobrecarregado com estado de 3 painéis de configuração
+  não relacionados ao fluxo de venda em si):
+  `ConfiguracaoImpressaoView`/`ConfiguracaoImpressaoViewModel`,
+  `ConfiguracaoBalancaView`/`ConfiguracaoBalancaViewModel`,
+  `AtualizacaoView`/`AtualizacaoViewModel` — cada um tela própria
+  (não mais painel overlay), registrados `AddTransient` no DI
+  (mesmo padrão de Pedidos/Configurações — recarrega do zero a cada
+  visita, seguro porque são só telas de configuração, sem "trabalho em
+  andamento" a preservar).
+- **`VendaViewModel` limpo**: removidas as ~150 linhas de estado/lógica
+  dos 3 painéis (`ImpressorasDisponiveis`, `PortasComDisponiveis`,
+  `BaudRateTexto`, `FonteAtualizacaoTexto`, etc., e os métodos
+  `AbrirPainelConfiguracaoImpressaoAsync`/`SalvarConfiguracaoBalancaAsync`/
+  `AplicarAtualizacaoAsync` e afins) — **cuidado tomado**: os SERVIÇOS
+  ainda usados pela Venda de verdade (`ImpressaoTermicaService`/
+  `ImpressaoConfigStore` pra imprimir o cupom ao Fechar Venda,
+  `BalancaSerialService`/`BalancaConfigStore` pra ler peso ao vivo)
+  continuam injetados em `VendaViewModel` — só a UI de CONFIGURAR foi
+  extraída, a lógica de USAR continua lá. `UpdateService`/
+  `UpdateConfigStore` foram removidos do construtor de `VendaViewModel`
+  por completo — não eram usados por mais nada ali.
+- **`PainelAtivo` enum**: removidos os 3 valores `ConfiguracaoImpressao`/
+  `ConfiguracaoBalanca`/`Atualizacao` (só sobram os 4 painéis que
+  continuam sendo overlay de verdade dentro da Venda: Fechar Venda,
+  Desconto, Cancelar Venda, Importar DAV).
+- **`MainWindow.xaml`**: os 4 ícones do `TitleBar` (Conexão/Impressora/
+  Balança/Atualizar) removidos. `NavItemConfiguracoes` virou um item PAI
+  com submenu (`NavigationViewItem.MenuItems`, suporte nativo do
+  WPF-UI) com 5 filhos: "Impressão por Finalidade" (o que já existia,
+  `ConfiguracoesView`), "Impressora", "Balança", "Conexão",
+  "Atualização".
+- **Achado importante durante o refactor** (evitou uma regressão real):
+  o item pai `NavItemConfiguracoes` antes só ficava visível com
+  `moduloBarAtivo && IsManagerFuncao` — mas só "Impressão por
+  Finalidade" é de fato específico do módulo Bar; Impressora/Balança/
+  Conexão/Atualização são configuração de MÁQUINA, sempre relevantes
+  pros "3 Magníficos" independente de segmento. Corrigido: o PAI agora
+  depende só de `IsManagerFuncao`; só o filho "Impressão por
+  Finalidade" (`NavItemImpressaoFinalidade`) tem seu próprio
+  `Visibility` extra gated por `moduloBarAtivo`. Sem essa correção, uma
+  instalação sem o módulo Bar perderia acesso a Impressora/Balança/
+  Conexão/Atualização inteiramente — bug que nunca existia antes desta
+  rodada (os ícones do TitleBar só dependiam de `IsManagerFuncao`).
+- **"Conexão" continua com tratamento especial**: diferente dos outros
+  4 itens (que trocam conteúdo via `NavView.ReplaceContent`, mantendo o
+  menu lateral visível), "Conexão" continua trocando `ConteudoAtual`
+  inteiro e escondendo o `NavView` — trocar a conexão da máquina é
+  disruptivo demais (muda banco/empresa inteira) pra continuar
+  mostrando o menu lateral normal. Mesmo comportamento de antes, só
+  acionado pelo item do submenu em vez do ícone antigo.
+- **Verificação**: `dotnet build` → 0 erros de primeira (raro nesta
+  sessão, bom sinal pra um refactor deste tamanho); processo lançado,
+  título `Kontacto PDV`, `Responding=True`; varredura por referências
+  soltas aos membros removidos (`BtnConexao`, `AbrirPainelConfiguracao*`,
+  etc.) em todo o código-fonte → nenhuma encontrada (só um artefato de
+  build intermediário em `obj/`, que se regenera sozinho). **Nunca
+  exercitado ao vivo** (clicar em cada item do novo submenu, confirmar
+  que Impressora/Balança/Atualização realmente abrem e salvam, confirmar
+  que a Venda continua imprimindo/lendo peso normalmente) — usuário
+  precisa confirmar navegando de verdade.
+
+## Tela Principal — Painel "Movimento de Hoje" (2026-08-11) — IMPLEMENTADO
+
+Pedido explícito do usuário: "o painel não está atualizando a venda de
+checkout. acumule na lista as venda de checkout, pedidos e OS com acordion
+para cada um. expandido abrir a venda ou pré venda." Motivado pela mesma
+sessão de testes ao vivo do KPDV — vendas fechadas no KPDV (app desktop
+separado, sem canal de push/websocket pra este painel web) só apareciam no
+painel depois do usuário sair e voltar pra tela (`useFocusEffect`).
+
+- **Auto-atualização** (`frontend/src/components/principal/useDashboard.ts`):
+  novo `useEffect` com `setInterval(() => loadDashboard(session,
+  situacaoFiltro), 30000)`, limpo no cleanup — refresca "Movimento de Hoje"
+  (e os totais) a cada 30s enquanto a sessão está ativa, sem depender de
+  focus/navegação. Projeto não tem infraestrutura de socket/push — poll
+  simples é a solução consistente com o resto do app.
+- **Agrupamento em acordion** (`frontend/src/components/principal/
+  PedidosTable.tsx`): a lista, antes uma única tabela plana com badge de
+  tipo (CHECKOUT/PED/OS) por linha, virou 3 seções recolhíveis — Checkout,
+  Pedidos, O.S. (ordem fixa pedida pelo usuário, não a ordem de chegada da
+  API) — cada uma com cabeçalho `"Tipo (N) · R$ subtotal"`, reaproveitando
+  `frontend/src/components/pedido/AccordionSection.tsx` (já existente,
+  usado em outras telas de Pedido — não duplicado). Grupo sem nenhum item
+  não renderiza sua seção (mesmo princípio de "Relatórios groups" no
+  CLAUDE.md). Todas as seções nascem expandidas
+  (`defaultExpanded`) — nada fica escondido por padrão, só recolhível sob
+  demanda. Clique numa linha continua abrindo a venda/pré-venda exatamente
+  como antes (`openItem` inalterado — Checkout → `/alterar-comanda`,
+  O.S. → `/os-form`, Pedido → `/pedido-form` ou `/pedido-geral` conforme
+  permissão).
+- **Verificação**: `npx tsc --noEmit` → 0 erros novos nos 2 arquivos
+  tocados (erros pré-existentes no projeto, em arquivos não relacionados,
+  continuam os mesmos de antes). **Não testado ao vivo** (abrir a Tela
+  Principal, conferir que os 3 grupos renderizam e recolhem/expandem
+  corretamente, e que uma venda nova do KPDV aparece sozinha em até 30s)
+  — usuário precisa confirmar navegando de verdade.

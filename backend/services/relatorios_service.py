@@ -50,7 +50,13 @@ def _relatorio_pedidos_sync(servidor: str, banco: str, data_ini: str, data_fim: 
     (descontos/margem) é carregada sob demanda pelos endpoints já existentes ao expandir
     cada registro. Filtro `projeto` — Fase 4 do Gestor de Projetos (recurso extra, sem
     equivalente no legado) — restringe aos Pedidos vinculados àquele projeto
-    (`projetos_documentos`, tipo_doc='PED')."""
+    (`projetos_documentos`, tipo_doc='PED').
+
+    `situacao` aceita uma OU mais situações, separadas por vírgula (mesmo padrão CSV já
+    usado por `dias_semana` em `/relatorios/caixa-analitico`) — adicionado 2026-08-07 pra
+    cobrir "Pedidos Pendentes" (Painel de Relatórios > Pré Venda, `FrmRelPeP.frm`: situação
+    Aberta OU Fechada, nunca Cancelada/Faturada) sem precisar de uma tela dedicada — ver
+    PENDENCIAS.md > "Painel de Relatórios (VB6)" > "Pré Venda"."""
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
@@ -62,9 +68,10 @@ def _relatorio_pedidos_sync(servidor: str, banco: str, data_ini: str, data_fim: 
         if vendedor not in (None, "", "all"):
             where.append("pv.vendedor = %s")
             params.append(vendedor)
-        if situacao not in (None, "", "all"):
-            where.append("pv.situacao = %s")
-            params.append(situacao)
+        sits = [s.strip() for s in (situacao or "").split(",") if s.strip() and s.strip() != "all"]
+        if sits:
+            where.append(f"pv.situacao IN ({','.join(['%s'] * len(sits))})")
+            params.extend(sits)
         if projeto:
             where.append(
                 "pv.pedido IN (SELECT pd.num_doc FROM projetos_documentos pd "
@@ -362,16 +369,65 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
         os_prod = os_venda - os_serv
         qtd_os = int(osr.get("qtd_os") or 0)
 
-        # Totais combinados (Pedido + OS)
-        venda_total = agg["venda"] + os_venda
-        custo_total = agg["custo"] + os_custo
+        # --- Agregados de venda DIRETA do Checkout (sem Pedido/O.S. por trás)
+        # — pedido explícito do usuário, 2026-08-06 ("tenho comanda oriundas
+        # de pedido e os faturadas. não aparece vendas na tela principal.
+        # incluir vendas direto da tela de vendas tb. aquelas que não vem de
+        # pré-vendas"). Até aqui o dashboard só lia pedido_venda/os — uma
+        # venda lançada 100% dentro do Checkout (nunca importou nenhum
+        # Pedido/O.S.) nunca aparecia. `NOT EXISTS` em COMANDA_PED/
+        # comanda_os é o que distingue "venda direta" de uma comanda que
+        # nasceu de uma importação de DAV (essa já é contada acima, via
+        # pedido_venda/os, e entraria em dobro se também fosse somada aqui).
+        # `comanda.situacao` só tem A/PG/C (sem "F") — pedindo o filtro
+        # "Fechado" no combo, a condição abaixo nunca bate pra Checkout,
+        # o que é o comportamento correto (não existe esse estado aqui).
+        ckfilter = ""
+        ckparams: list = []
+        if vendedor not in (None, "", "all"):
+            ckfilter += " AND m.vendedor = %s"
+            ckparams.append(vendedor)
+        if situacao in (None, "", "all"):
+            ck_date_where = "CAST(cm.data AS DATE) = %s"
+            ck_date_params = [data_iso]
+        else:
+            ck_date_where = "cm.situacao = %s AND CAST(cm.data AS DATE) = %s"
+            ck_date_params = [situacao, data_iso]
+        cur.execute(
+            "SELECT ISNULL(SUM(m.qtd*m.p_unit),0) AS venda, "
+            "  ISNULL(SUM(CASE WHEN sv.codigo IS NOT NULL THEN m.qtd*m.p_unit ELSE 0 END),0) AS serv_sum, "
+            "  ISNULL(SUM(COALESCE(NULLIF(pe.custo_reposicao,0), NULLIF(sv.custo_hora,0), 0) * m.qtd),0) AS custo_sum, "
+            "  ISNULL(SUM(ISNULL(d.desconto,0)*m.qtd),0) AS desc_sum, "
+            "  COUNT(DISTINCT cm.comanda) AS qtd_checkout "
+            "FROM movimentacao m "
+            "JOIN comanda cm ON cm.comanda = m.num_nf AND m.serie_nf='CM' "
+            "LEFT JOIN pecas pe ON pe.codigo_int = m.codigo_int "
+            "LEFT JOIN servicos sv ON sv.codigo = m.codigo_int "
+            "LEFT JOIN comanda_desconto d ON d.id_mov = m.id_mov "
+            "WHERE NOT EXISTS (SELECT 1 FROM COMANDA_PED cp WHERE cp.comanda = cm.comanda) "
+            "  AND NOT EXISTS (SELECT 1 FROM comanda_os co WHERE co.comanda = cm.comanda) "
+            f"  AND {ck_date_where}{ckfilter}",
+            tuple(ck_date_params + ckparams),
+        )
+        ckr = cur.fetchone() or {}
+        ck_venda = float(ckr.get("venda") or 0)
+        ck_serv = float(ckr.get("serv_sum") or 0)
+        ck_custo = float(ckr.get("custo_sum") or 0)
+        ck_desc = float(ckr.get("desc_sum") or 0)
+        ck_prod = ck_venda - ck_serv
+        qtd_checkout = int(ckr.get("qtd_checkout") or 0)
+
+        # Totais combinados (Pedido + OS + Checkout direto)
+        venda_total = agg["venda"] + os_venda + ck_venda
+        custo_total = agg["custo"] + os_custo + ck_custo
         margem_total = round(venda_total - custo_total, 2)
         totais = {
             "pedidos": agg["qtd_pedidos"],
             "os": qtd_os,
-            "produtos": round(agg["produtos"] + os_prod, 2),
-            "servicos": round(agg["servicos"] + os_serv, 2),
-            "descontos": round(agg["descontos"] + os_desc, 2),
+            "checkout": qtd_checkout,
+            "produtos": round(agg["produtos"] + os_prod + ck_prod, 2),
+            "servicos": round(agg["servicos"] + os_serv + ck_serv, 2),
+            "descontos": round(agg["descontos"] + os_desc + ck_desc, 2),
             "margem": margem_total,
             "margem_pct": round((margem_total / venda_total * 100), 2) if venda_total > 0 else 0.0,
         }
@@ -426,6 +482,30 @@ def _dashboard_sync(servidor: str, banco: str, vendedor: Optional[str], data_iso
                 "situacao": sit,
                 "situacao_label": SIT_LABELS.get(sit, sit),
             })
+        cur.execute(
+            "SELECT TOP 50 cm.comanda AS doc, cm.situacao, ISNULL(cli.nome, 'CLIENTES DIVERSOS') AS cliente, "
+            "  COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS vendedor_nome, cm.valor_venda AS valor "
+            "FROM comanda cm "
+            "LEFT JOIN cliente cli ON cli.codigo = cm.cliente "
+            "LEFT JOIN funcionarios f ON f.codigo_int = cm.atendente "
+            "WHERE NOT EXISTS (SELECT 1 FROM COMANDA_PED cp WHERE cp.comanda = cm.comanda) "
+            "  AND NOT EXISTS (SELECT 1 FROM comanda_os co WHERE co.comanda = cm.comanda) "
+            f"  AND {ck_date_where}{ckfilter} "
+            "  AND EXISTS (SELECT 1 FROM movimentacao mm WHERE mm.num_nf = cm.comanda AND mm.serie_nf='CM') "
+            "ORDER BY cm.comanda DESC",
+            tuple(ck_date_params + ckparams),
+        )
+        for r in cur.fetchall():
+            sit = (r.get("situacao") or "").strip().upper()
+            movimento.append({
+                "tipo": "CHECKOUT",
+                "doc": int(r.get("doc") or 0),
+                "cliente": (r.get("cliente") or "").strip(),
+                "vendedor_nome": (r.get("vendedor_nome") or "").strip(),
+                "valor": float(r.get("valor") or 0),
+                "situacao": sit,
+                "situacao_label": SIT_LABELS.get(sit, sit),
+            })
         cur.close()
         conn.close()
         return {"success": True, "totais": totais, "movimento": movimento, "pedidos": movimento}
@@ -466,7 +546,13 @@ def _relatorio_os_sync(servidor: str, banco: str, data_ini: str, data_fim: str,
                        vendedor: Optional[str], situacao: Optional[str]) -> dict:
     """Lista de OS por período + filtros (vendedor por item / situação) e totais.
     Quando um vendedor é informado, o total de cada OS e os totais consolidados
-    consideram apenas os itens daquele vendedor."""
+    consideram apenas os itens daquele vendedor.
+
+    `situacao` aceita uma OU mais situações, separadas por vírgula (mesmo padrão CSV já
+    usado por `dias_semana` em `/relatorios/caixa-analitico`) — adicionado 2026-08-07 pra
+    cobrir "O.S. Não Faturadas" (Painel de Relatórios > Pré Venda, `frmRelOSRes.frm`:
+    situação Aberta OU Fechada, nunca Cancelada/Faturada) sem precisar de uma tela
+    dedicada — ver PENDENCIAS.md > "Painel de Relatórios (VB6)" > "Pré Venda"."""
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
@@ -480,9 +566,10 @@ def _relatorio_os_sync(servidor: str, banco: str, data_ini: str, data_fim: str,
             vparams = [vendedor]
         sit_clause = ""
         sit_params: list = []
-        if situacao not in (None, "", "all"):
-            sit_clause = " AND o.situacao = %s"
-            sit_params = [situacao]
+        sits = [s.strip() for s in (situacao or "").split(",") if s.strip() and s.strip() != "all"]
+        if sits:
+            sit_clause = f" AND o.situacao IN ({','.join(['%s'] * len(sits))})"
+            sit_params = sits
         # Lista de OS (total = soma dos itens que casam o filtro de vendedor)
         only_match = " AND ag.venda IS NOT NULL" if vparams else ""
         cur.execute(

@@ -2,8 +2,10 @@
 Preenchimento) — ver `services/layout_service.py`."""
 from typing import Optional
 
+import base64
+
 from pydantic import BaseModel
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, File, Form, Request, UploadFile
 
 from services import layout_service, log_auditoria_service
 
@@ -120,6 +122,18 @@ async def delete_layout(
     return result
 
 
+@router.post("/layout/importar-formulario")
+async def importar_formulario(
+    servidor: str = Form(...),
+    banco: str = Form(...),
+    arquivo: UploadFile = File(...),
+):
+    conteudo = await arquivo.read()
+    b64 = base64.b64encode(conteudo).decode("ascii")
+    media_type = arquivo.content_type or "application/octet-stream"
+    return await layout_service.importar_formulario(servidor, banco, b64, media_type, arquivo.filename or "arquivo")
+
+
 @router.get("/layout/tipos-campo")
 async def list_tipos_campo(servidor: str, banco: str):
     return await layout_service.list_tipos_campo(servidor, banco)
@@ -197,5 +211,21 @@ async def preencher(req: PreencherRequest, request: Request):
             referencia=f"{req.entidade}/{req.codentidade}",
             descricao=f"Preenchimento do layout {req.codlayout} gravado para entidade {req.entidade}/{req.codentidade}",
             ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.delete("/layout/preenchimento/{codigo}")
+async def excluir_preenchimento(
+    codigo: int, servidor: str, banco: str, request: Request,
+    classe: Optional[int] = None, usuario_alteracao: Optional[int] = None, plataforma: Optional[str] = None,
+):
+    result = await layout_service.excluir_preenchimento(servidor, banco, codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            servidor, banco, tela="LAYOUT", comando="EXCLUIR",
+            usuario=usuario_alteracao, classe=classe,
+            referencia=str(codigo), descricao=f"Preenchimento {codigo} excluído",
+            ip_origem=_ip(request), plataforma=plataforma,
         )
     return result

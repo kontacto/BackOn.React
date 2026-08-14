@@ -87,6 +87,15 @@ export type ItemRow = {
   comprimento?: number;
   largura?: number;
   area_venda?: number;
+  // Pontuação de Técnicos inline na linha (O.S. Completa, `os/types.ts`'s
+  // `OSItemRow` — aqui como opcional, mesmo padrão dos campos Fase B acima,
+  // pra `ItemList.tsx` (compartilhado) conseguir ler sem importar o tipo
+  // OS-específico). `cod_os_prod` é a chave real do item pra gravar a nota
+  // (não é o mesmo que `codauto`, que é Pedido-only). undefined pro Pedido.
+  cod_os_prod?: number;
+  pontuacao_e?: number | null;
+  pontuacao_v?: number | null;
+  pontuacao_a?: number | null;
 };
 
 // Dados mínimos pro ticket de impressão de um item só (ReciboPedidoModal

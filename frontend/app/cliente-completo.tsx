@@ -13,6 +13,8 @@ import GestorDocumentosSection, { GESTOR_DOC_GRUPO_CLIENTE } from "@/src/compone
 import { colors, radius, spacing } from "@/src/theme/colors";
 import {
   WEB_CONTENT_SHELL,
+  WEB_FIELD_COL_HALF,
+  WEB_FIELD_COL_NARROW,
   WEB_FILTER_CARD,
   WEB_SCROLL_CENTER,
 } from "@/src/theme/webLayout";
@@ -305,7 +307,7 @@ function ClienteCompletoWebScreen({
                   </Field>
 
                   {f.docType === "CPF" ? (
-                    <Field label="Sexo" style={styles.colHalf}>
+                    <Field label="Sexo" style={styles.colNarrow}>
                       <View style={styles.radioRow}>
                         {[
                           { value: "M", label: "Masculino" },
@@ -336,7 +338,7 @@ function ClienteCompletoWebScreen({
                     </Field>
                   ) : null}
 
-                  <Field label={f.docType === "CNPJ" ? "Data Abertura" : "Data Nascimento"} style={styles.colHalf}>
+                  <Field label={f.docType === "CNPJ" ? "Data Abertura" : "Data Nascimento"} style={styles.colNarrow}>
                     <DateField
                       value={f.dataNasc}
                       onChange={f.setDataNasc}
@@ -371,7 +373,7 @@ function ClienteCompletoWebScreen({
                     />
                   </Field>
 
-                  <Field label="Situação" style={styles.colHalf}>
+                  <Field label="Situação" style={styles.colNarrow}>
                     <View style={styles.radioRow}>
                       {[
                         { value: "A" as const, label: "Ativo" },
@@ -402,7 +404,7 @@ function ClienteCompletoWebScreen({
                   </Field>
 
                   {f.situacao === "I" ? (
-                    <Field label="Inativo em" style={styles.colHalf}>
+                    <Field label="Inativo em" style={styles.colNarrow}>
                       <DateField
                         value={f.inativoEm}
                         onChange={f.setInativoEm}
@@ -411,7 +413,7 @@ function ClienteCompletoWebScreen({
                     </Field>
                   ) : null}
 
-                  <Field label="Status" style={styles.colHalf}>
+                  <Field label="Status" style={styles.colNarrow}>
                     <SelectField
                       value={f.status || null}
                       onChange={(v) => f.setStatus(v == null ? "" : String(v))}
@@ -835,7 +837,7 @@ function ClienteCompletoWebScreen({
                   />
                 </Field>
 
-                <Field label="Limite de Crédito" style={styles.colHalf}>
+                <Field label="Limite de Crédito" style={styles.colNarrow}>
                   <TextInput
                     value={f.limiteCredito}
                     onChangeText={f.setLimiteCredito}
@@ -847,7 +849,7 @@ function ClienteCompletoWebScreen({
                   />
                 </Field>
 
-                <Field label="Desconto (%)" style={styles.colHalf}>
+                <Field label="Desconto (%)" style={styles.colNarrow}>
                   <TextInput
                     value={f.desconto}
                     onChangeText={f.setDesconto}
@@ -950,7 +952,7 @@ function ClienteCompletoWebScreen({
                   />
                 </Field>
 
-                <Field label="Dia de Contato" style={styles.colHalf}>
+                <Field label="Dia de Contato" style={styles.colNarrow}>
                   <SelectField
                     value={f.diaContato || null}
                     onChange={(v) => f.setDiaContato(v == null ? "" : String(v))}
@@ -963,7 +965,7 @@ function ClienteCompletoWebScreen({
                   />
                 </Field>
 
-                <Field label="Dia de Entrega" style={styles.colHalf}>
+                <Field label="Dia de Entrega" style={styles.colNarrow}>
                   <SelectField
                     value={f.diaEntrega || null}
                     onChange={(v) => f.setDiaEntrega(v == null ? "" : String(v))}
@@ -1054,7 +1056,7 @@ function ClienteCompletoWebScreen({
                   />
                 </Field>
 
-                <Field label="Valor do Frete" style={styles.colHalf}>
+                <Field label="Valor do Frete" style={styles.colNarrow}>
                   <TextInput
                     value={f.valorFrete}
                     onChangeText={f.setValorFrete}
@@ -1066,7 +1068,7 @@ function ClienteCompletoWebScreen({
                   />
                 </Field>
 
-                <Field label="Prazo de Faturamento (dias)" style={styles.colHalf}>
+                <Field label="Prazo de Faturamento (dias)" style={styles.colNarrow}>
                   <TextInput
                     value={f.prazoFaturamento}
                     onChangeText={(v) => f.setPrazoFaturamento(v.replace(/\D/g, ""))}
@@ -1583,8 +1585,13 @@ const styles = StyleSheet.create({
   tabLabel: { fontSize: 13, fontWeight: "500", color: colors.muted },
   tabLabelSel: { color: colors.onBrandPrimary },
   card: { ...WEB_FILTER_CARD, marginBottom: spacing.lg },
-  formGrid: { flexDirection: "row", flexWrap: "wrap", columnGap: spacing.md },
-  colHalf: { width: "49%" },
+  formGrid: { flexDirection: "row", flexWrap: "wrap", columnGap: spacing.md, rowGap: spacing.sm },
+  // Design Desktop (CLAUDE.md): colHalf deixou de ser "49% do container"
+  // (esticava demais em tela larga) — agora cresce só até um teto sensato
+  // e colNarrow cobre campo curto (rádio/combo/data), permitindo 3-4 por
+  // linha em vez de sempre 2.
+  colHalf: WEB_FIELD_COL_HALF,
+  colNarrow: WEB_FIELD_COL_NARROW,
   fullWidth: { width: "100%" },
   fieldLabel: { fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "500" },
   input: {

@@ -86,6 +86,16 @@ const SERVICO_AJUDA_ITENS: HelpItem[] = [
     icon: { lib: "ion", name: "receipt-outline" },
   },
   {
+    titulo: "Código ICMS",
+    texto: "Precisa ser um código já cadastrado na tabela de ICMS do sistema — se digitar/escolher um código que não existe lá, o Gravar bloqueia com aviso.",
+    icon: { lib: "ion", name: "pricetags-outline" },
+  },
+  {
+    titulo: "Indicador de Operação (IBS/CBS)",
+    texto: "Campo da Reforma Tributária — informa onde (localidade) esse serviço é considerado prestado pra fins de IBS/CBS (ex.: estabelecimento do fornecedor, endereço do cliente, domicílio do destinatário), conforme o tipo de serviço. Só usado na emissão de NFS-e sob o novo leiaute.",
+    icon: { lib: "ion", name: "location-outline" },
+  },
+  {
     titulo: "Aceita Desconto",
     texto: "Define os limites de desconto que Gerente, Supervisor e Vendedor podem aplicar neste serviço ao incluir num Pedido/O.S.",
     icon: { lib: "ion", name: "pricetag-outline" },
@@ -177,6 +187,8 @@ export default function ServicosScreen() {
   const [especialidadeOptions, setEspecialidadeOptions] = useState<SelectOption[]>([]);
   const [cstPisOptions, setCstPisOptions] = useState<SelectOption[]>([]);
   const [cstCofinsOptions, setCstCofinsOptions] = useState<SelectOption[]>([]);
+  const [icmsOptions, setIcmsOptions] = useState<SelectOption[]>([]);
+  const [indopNfseOptions, setIndopNfseOptions] = useState<SelectOption[]>([]);
 
   const [tab, setTab] = useState<TabKey>("principal");
   const [editingCodigo, setEditingCodigo] = useState<string | null>(null);
@@ -233,16 +245,24 @@ export default function ServicosScreen() {
     const base = c.api.replace(/\/+$/, "");
     const qs = `servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`;
     try {
-      const [rTipo, rEsp, rPis, rCofins] = await Promise.all([
+      const [rTipo, rEsp, rPis, rCofins, rIcms, rIndop] = await Promise.all([
         fetch(`${base}/api/tabelas/tipo-servico?${qs}`).then((r) => r.json()).catch(() => null),
         fetch(`${base}/api/especialidades?${qs}`).then((r) => r.json()).catch(() => null),
         fetch(`${base}/api/cst-pis?${qs}`).then((r) => r.json()).catch(() => null),
         fetch(`${base}/api/cst-cofins?${qs}`).then((r) => r.json()).catch(() => null),
+        fetch(`${base}/api/tabelas/dscr-icms?${qs}`).then((r) => r.json()).catch(() => null),
+        fetch(`${base}/api/tabelas/nfse-indop?${qs}`).then((r) => r.json()).catch(() => null),
       ]);
       if (rTipo?.success) setTipoServicoOptions(rTipo.items.map((i: any) => ({ value: i.codigo, label: i.descricao })));
       if (rEsp?.success) setEspecialidadeOptions(rEsp.items.map((i: any) => ({ value: i.codigo, label: i.descricao })));
       if (rPis?.success) setCstPisOptions(rPis.items.map((i: any) => ({ value: i.codigo, label: `${i.codigo} — ${i.descricao}` })));
       if (rCofins?.success) setCstCofinsOptions(rCofins.items.map((i: any) => ({ value: i.codigo, label: `${i.codigo} — ${i.descricao}` })));
+      if (rIcms?.success) setIcmsOptions(rIcms.items.map((i: any) => ({ value: i.codigo, label: `${i.codigo} — ${i.descricao}` })));
+      if (rIndop?.success) {
+        setIndopNfseOptions(rIndop.items.map((i: any) => ({
+          value: i.codigo, label: `${i.codigo} — ${i.descricao}`, sub: i.local_fornecimento,
+        })));
+      }
     } catch {
       // silencioso — combos ficam vazios
     }
@@ -638,11 +658,27 @@ export default function ServicosScreen() {
                 <View style={styles.rowFields}>
                   <View style={styles.colTiny}>
                     <Text style={styles.label}>Código ICMS</Text>
-                    <TextInput value={codIcms} onChangeText={setCodIcms} style={styles.input} maxLength={3} testID="servicos-cod-icms" />
+                    <SelectField
+                      value={codIcms || null}
+                      onChange={(v) => setCodIcms(v == null ? "" : String(v))}
+                      options={icmsOptions}
+                      allowClear
+                      testID="servicos-cod-icms"
+                      modalTitle="Código ICMS"
+                      compactWeb
+                    />
                   </View>
                   <View style={styles.colFlex}>
                     <Text style={styles.label}>Indicador Operação</Text>
-                    <TextInput value={indopNfse} onChangeText={setIndopNfse} style={styles.input} maxLength={10} testID="servicos-indop-nfse" />
+                    <SelectField
+                      value={indopNfse || null}
+                      onChange={(v) => setIndopNfse(v == null ? "" : String(v))}
+                      options={indopNfseOptions}
+                      allowClear
+                      testID="servicos-indop-nfse"
+                      modalTitle="Indicador de Operação (IBS/CBS)"
+                      compactWeb
+                    />
                   </View>
                 </View>
                 <View style={styles.checkRow}>
@@ -865,10 +901,13 @@ const styles = StyleSheet.create({
   sectionHint: { fontSize: 11, color: colors.muted, marginTop: spacing.md, fontStyle: "italic" },
   label: { fontSize: 12, color: colors.muted, fontWeight: "500", marginTop: spacing.sm, marginBottom: 4 },
   input: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: 11, fontSize: 14, color: colors.onSurface },
-  rowFields: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-end" },
-  colHalf: { flex: 1 },
-  colThird: { flex: 1 },
-  colFlex: { flex: 1, minWidth: 0 },
+  rowFields: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-end", flexWrap: "wrap" },
+  // Design Desktop (CLAUDE.md): maxWidth evita esticar num monitor grande
+  // (container agora 1600px); flexWrap acrescentado no rowFields pra não
+  // forçar campos a dividir a linha inteira sempre em partes iguais.
+  colHalf: { flex: 1, minWidth: 220, maxWidth: 420 },
+  colThird: { flex: 1, minWidth: 160, maxWidth: 320 },
+  colFlex: { flex: 1, minWidth: 220, maxWidth: 420 },
   colNarrow: { width: 140 },
   colTiny: { width: 90 },
   checkRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.md },

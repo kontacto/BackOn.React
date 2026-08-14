@@ -135,6 +135,14 @@ export default function CadastrosScreen() {
         visible: Platform.OS === "web" && can("MOV_CAIXA.ABRIR"),
       },
       {
+        key: "balancas",
+        label: "Balanças",
+        hint: "Balanças de pré-pesagem — carga de produtos vendidos por peso",
+        icon: "scale-outline",
+        route: "/balancas-cadastro",
+        visible: Platform.OS === "web" && can("BALANCA.ABRIR") && moduleOn("balanca_pre_pesagem"),
+      },
+      {
         key: "tabelas-aux",
         label: "Tabelas Auxiliares",
         hint: "Marcas e Modelos",

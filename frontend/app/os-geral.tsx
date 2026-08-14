@@ -10,7 +10,7 @@
 // duplicado aqui, só orquestração de tela.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
+  ActivityIndicator, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -18,10 +18,12 @@ import { Ionicons } from "@/src/components/Ionicons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
-import { apiGet, apiSend } from "@/src/utils/api";
+import { apiGet, apiSend, friendlyCatchError } from "@/src/utils/api";
 import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
+import WebDateField from "@/src/components/WebDateField";
+import InfoTooltip from "@/src/components/InfoTooltip";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { formatDateBR, todayISO } from "@/src/utils/format";
@@ -41,6 +43,8 @@ import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import EquipamentoSearchModal, { EquipamentoRow } from "@/src/components/EquipamentoSearchModal";
 import { OSData } from "@/src/components/os/types";
 import { useOSItens } from "@/src/components/os/useOSItens";
+import { useOSEquipamentos } from "@/src/components/os/useOSEquipamentos";
+import OSEquipamentoCard from "@/src/components/os/OSEquipamentoCard";
 import OSItemModal from "@/src/components/os/OSItemModal";
 import OSTotaisResumo from "@/src/components/os/OSTotaisResumo";
 import PontuacaoModal from "@/src/components/os/PontuacaoModal";
@@ -53,6 +57,11 @@ import TempoGastoModal from "@/src/components/os/TempoGastoModal";
 import RequisicoesVinculadasModal from "@/src/components/os/RequisicoesVinculadasModal";
 import AnexosOSModal from "@/src/components/os/AnexosOSModal";
 import ReciboOSModal from "@/src/components/os/ReciboOSModal";
+import LayoutPreenchimentoModal from "@/src/components/agenda/LayoutPreenchimentoModal";
+
+// entidade=7 ("os") no Motor de Layout — ver _ENTIDADE_COLUNA em
+// backend/services/layout_service.py.
+const LAYOUT_ENTIDADE_OS = 7;
 
 const AJUDA_OS_ITENS: HelpItem[] = [
   {
@@ -71,8 +80,8 @@ const AJUDA_OS_ITENS: HelpItem[] = [
     icon: { lib: "ion", name: "person-circle-outline" },
   },
   {
-    titulo: "Equipamento / Veículo",
-    texto: "No módulo Assistência Técnica, busca o equipamento já cadastrado para este cliente (Cadastro de Equipamentos) — se não encontrar, é possível cadastrar um novo direto pela busca. No módulo Oficina, em vez da busca aparecem os dados do veículo (Placa, Marca, Modelo, Ano, KM, Chassi) — Marca e Modelo vêm das tabelas auxiliares já usadas em outras telas.",
+    titulo: "Equipamentos",
+    texto: "No módulo Assistência Técnica, uma O.S. pode ter vários equipamentos vinculados (ex.: mais de um ar-condicionado atendido na mesma visita) — toque em \"Adicionar equipamento\" para buscar (ou cadastrar) e vincular; cada equipamento tem seu próprio Defeito Reclamado, Serviço Executado, Serviço a Executar, Diagnóstico e Status, gravados com o botão \"Salvar\" do próprio card. \"Cancelar\" um equipamento remove o atendimento daquele item específico sem cancelar a O.S. inteira. Só disponível depois de gravar a O.S. pela primeira vez. No módulo Oficina, em vez disso aparecem os dados do veículo (Placa, Marca, Modelo, Ano, KM, Chassi) — Marca e Modelo vêm das tabelas auxiliares já usadas em outras telas.",
     icon: { lib: "ion", name: "hardware-chip-outline" },
   },
   {
@@ -145,11 +154,32 @@ const AJUDA_OS_ITENS: HelpItem[] = [
     texto: "Cada item da O.S. tem uma Situação (Cliente paga, Garantia, Interno ou Contrato). Ao Faturar, itens de Cliente paga viram uma Comanda; itens de Garantia/Interno/Contrato viram OUTRA Comanda, com sua própria forma de pagamento (\"Forma de Pag. Garantia\", precisa estar definida antes de faturar esse bloco). Se a O.S. tiver os dois tipos de item pendentes ao mesmo tempo, a tela pergunta o que faturar agora — dá pra faturar só um bloco e voltar depois pra faturar o outro, mesmo com a O.S. já Faturada.",
     icon: { lib: "ion", name: "git-branch-outline" },
   },
+  {
+    titulo: "Formulários (Layouts)",
+    texto: "Abre os checklists/formulários dinâmicos disponíveis para esta O.S. (ex.: um relatório de visita técnica cadastrado em Configurações > Cadastro de Layout) — permite preencher um novo ou consultar preenchimentos anteriores. Só aparece com a O.S. já gravada.",
+    icon: { lib: "ion", name: "document-text-outline" },
+  },
 ];
 
 // Funções que podem alterar o Atendente/Técnico: 01 (Administrador) e 02
 // (Gerente) — mesma regra já usada no Pedido/O.S. Mobile.
 const GESTOR_FUNCOES = ["01", "02"];
+
+// "2026-08-14T13:33:45.667000" → "14/08/2026 13:33" — `formatDateBR` (utils/
+// format.ts) só trata data pura (split por "-"), quebra com o "T..." colado
+// no dia. Usado só nesta tela pra exibir check-in/check-out.
+function formatCheckinDateTime(iso: string | null): string {
+  if (!iso) return "";
+  const [datePart, timePart] = iso.split("T");
+  const [y, m, d] = (datePart || "").split("-");
+  const hm = (timePart || "").slice(0, 5);
+  return d ? `${d}/${m}/${y}${hm ? ` ${hm}` : ""}` : iso;
+}
+
+function mapsUrl(lat: number | null, lng: number | null): string | null {
+  if (lat == null || lng == null) return null;
+  return `https://www.google.com/maps?q=${lat},${lng}`;
+}
 
 export default function OSGeralScreen() {
   const router = useRouter();
@@ -220,10 +250,8 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
   const [km, setKm] = useState("");
   const [ano, setAno] = useState("");
   const [chassi, setChassi] = useState("");
-  const [numeroSerie, setNumeroSerie] = useState("");
   const [marcasList, setMarcasList] = useState<{ codigo: string; descricao: string }[]>([]);
   const [modelosList, setModelosList] = useState<{ codigo: string; descricao: string }[]>([]);
-  const [equipamentoSel, setEquipamentoSel] = useState<EquipamentoRow | null>(null);
   const [equipModalOpen, setEquipModalOpen] = useState(false);
   const [equipTerm, setEquipTerm] = useState("");
   const [equipResults, setEquipResults] = useState<EquipamentoRow[]>([]);
@@ -232,6 +260,10 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
   // Campos extras da O.S. Completa.
   const [referenciaOs, setReferenciaOs] = useState("");
   const [tecnicoResponsavel, setTecnicoResponsavel] = useState<number | null>(null);
+  // Auxiliar do técnico (opcional, regra 11 do AssistenciaTecnicaCampo.md)
+  // — só o cadastro nesta rodada, sem o fluxo de "auxiliar edita com a
+  // credencial do titular".
+  const [auxiliarTecnico, setAuxiliarTecnico] = useState<number | null>(null);
   const [posicaoOs, setPosicaoOs] = useState<number | null>(null);
   const [previsaoTermino, setPrevisaoTermino] = useState<string | null>(null);
   const [dataTermino, setDataTermino] = useState<string | null>(null);
@@ -274,6 +306,7 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
     conn, editing, osId, isAberto, usuarioCod, funcaoCod, classe, master: isMaster, showToast,
     servicosOn: moduleOn("servicos"),
   });
+  const eq = useOSEquipamentos({ conn, editing, osId, usuarioCod, classe, showToast });
 
   useEffect(() => {
     (async () => {
@@ -339,9 +372,9 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
             setKm(o.km != null ? String(o.km) : "");
             setAno(o.ano || "");
             setChassi(o.chassi || "");
-            setNumeroSerie(o.numero_de_serie || "");
             setReferenciaOs(o.referencia_os || "");
             setTecnicoResponsavel(o.tecnico_responsavel ?? null);
+            setAuxiliarTecnico(o.auxiliar_tecnico ?? null);
             setPosicaoOs(o.posicao_os ?? null);
             setPrevisaoTermino(o.previsao_termino || null);
             setDataTermino(o.data_termino || null);
@@ -390,22 +423,6 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
       .finally(() => { if (!cancelled) setLoadingResumo(false); });
     return () => { cancelled = true; };
   }, [conn, cliente?.codigo]);
-
-  // Resolve o equipamento já vinculado (numero_de_serie gravado na O.S.)
-  // pra exibir os dados dele — mesma lista já usada pela busca, filtrada
-  // pelo cliente + o próprio nº de série (sem endpoint novo).
-  useEffect(() => {
-    if (!conn || !cliente?.codigo || !numeroSerie) { setEquipamentoSel(null); return; }
-    let cancelled = false;
-    apiGet(conn, `/api/equipamentos`, { cliente: cliente.codigo, busca: numeroSerie })
-      .then((j) => {
-        if (cancelled || !j?.success) return;
-        const found = (j.items || []).find((e: EquipamentoRow) => e.numero_de_serie === numeroSerie);
-        if (found) setEquipamentoSel(found);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [conn, cliente?.codigo, numeroSerie]);
 
   useEffect(() => {
     if (!searchOpen || !conn) return;
@@ -475,7 +492,6 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
 
   const isOficina = moduleOn("Oficina");
   const isAssist = moduleOn("Assistencia");
-  const equipLabel = isOficina && !isAssist ? "Veículo" : "Equipamento";
 
   const handleSave = async (autorizadoPor?: string) => {
     if (!conn) return;
@@ -497,9 +513,13 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
         km: km.trim() ? parseInt(km, 10) || 0 : 0,
         ano,
         chassi: isOficina ? chassi : "",
-        numero_de_serie: isOficina && !isAssist ? "" : numeroSerie,
+        // os.numero_de_serie fica histórico — código novo lê/grava só
+        // `os_equipamento` (Assistência Técnica, regra 14 — ver
+        // AssistenciaTecnicaCampo.md seção 5), nunca mais escrito por aqui.
+        numero_de_serie: "",
         referencia_os: referenciaOs,
         tecnico_responsavel: tecnicoResponsavel,
+        auxiliar_tecnico: auxiliarTecnico,
         posicao_os: posicaoOs,
         previsao_termino: previsaoTermino,
         data_termino: dataTermino,
@@ -537,7 +557,11 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
         setTimeout(() => router.replace({ pathname: "/os-geral", params: { os: String(j.codigo) } }), 500);
       }
     } catch (e) {
-      showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
+      // Linguagem não-técnica (CLAUDE.md > "Mensagens de Erro"), nunca o
+      // texto cru de exceção JS — achado ao vivo 2026-08-13: um erro real
+      // de serialização ("Converting circular structure to JSON") chegou
+      // a vazar aqui pro usuário final antes desta correção.
+      showToast(friendlyCatchError(e, "Falha ao gravar a O.S."), "error");
     } finally { setSaving(false); }
   };
 
@@ -613,6 +637,36 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
   }, [conn, osId, classe, isMaster, usuarioCod, showToast]);
 
   const feedback = useFeedback();
+
+  // Remover localização (LGPD) — ferramenta de conformidade, não política
+  // de retenção automática. Ver AssistenciaTecnicaCampo.md seção 7.
+  const [limpandoLocalizacao, setLimpandoLocalizacao] = useState(false);
+  const handleLimparLocalizacao = useCallback(() => {
+    if (!conn || !osId) return;
+    feedback.showConfirm(
+      "Remove as coordenadas de GPS registradas no check-in/check-out (mantém só os horários). Ação irreversível.",
+      async () => {
+        setLimpandoLocalizacao(true);
+        try {
+          const j = await apiSend(conn, `/api/os/${osId}/limpar-localizacao`, "POST", {
+            classe, master: isMaster, usuario_alteracao: usuarioCod, plataforma: Platform.OS,
+          });
+          if (j?.success) {
+            showToast("Localização removida.", "success");
+            setOs((o) => (o ? { ...o, checkin_lat: null, checkin_lng: null, checkout_lat: null, checkout_lng: null } : o));
+          } else {
+            showToast(j?.message || "Não foi possível remover a localização.", "error");
+          }
+        } catch (e) {
+          showToast(friendlyCatchError(e, "Falha ao remover localização."), "error");
+        } finally {
+          setLimpandoLocalizacao(false);
+        }
+      },
+      { title: "Remover localização", confirmText: "Remover", destructive: true },
+    );
+  }, [conn, osId, classe, isMaster, usuarioCod, showToast, feedback]);
+
   const [cancelando, setCancelando] = useState(false);
   const handleCancelar = useCallback(() => {
     if (!conn || !osId) return;
@@ -659,9 +713,13 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
   }, [conn, osId, classe, isMaster, usuarioCod, showToast, router]);
 
   const [anexosOpen, setAnexosOpen] = useState(false);
+  const [formulariosOpen, setFormulariosOpen] = useState(false);
   const [ajudaOpen, setAjudaOpen] = useState(false);
   const [dadosOpen, setDadosOpen] = useState(false);
   const [tempoModalOpen, setTempoModalOpen] = useState(false);
+  // Serviço pré-selecionado ao abrir via ícone da linha (2026-08-13,
+  // user-directed) — null quando aberto pelo fluxo antigo (sem preseleção).
+  const [tempoGastoPreselect, setTempoGastoPreselect] = useState<string | null>(null);
   const [requisicoesModalOpen, setRequisicoesModalOpen] = useState(false);
 
   const areaOptions: SelectOption[] = useMemo(() => areas.map((a) => ({ value: a.codigo, label: a.descricao })), [areas]);
@@ -700,6 +758,33 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
   const mostrarDocOrigem = ramoRevisao || ramoGarantia;
   const apenasOSComoOrigem = ramoRevisao; // Revisão nunca aceita Pedido
 
+  // Extraído uma vez pra ser reaproveitado em 2 lugares no render (dentro
+  // do card do topo quando a OS já existe, ou num card avulso quando
+  // ainda não — ver "os-geral-cliente" mais abaixo), sem duplicar as
+  // ~15 linhas de props.
+  const clienteSectionEl = (
+    <ClienteSection
+      hasCliente={!!cliente}
+      clienteResumo={clienteResumo}
+      loadingResumo={loadingResumo}
+      onOpenSearch={() => {
+        if (camposTravados) return;
+        setSearchTerm(clienteQuickTerm); setSearchResults([]); setSearchOpen(true);
+      }}
+      onOpenDados={() => setDadosOpen(true)}
+      onEditCliente={
+        cliente?.codigo
+          ? () => router.push({ pathname: "/cliente-form", params: { codigo: String(cliente.codigo) } })
+          : undefined
+      }
+      quickTerm={clienteQuickTerm}
+      onQuickTermChange={handleClienteQuickChange}
+      quickLoading={clienteQuickLoading}
+      onSubmitTerm={resolveClienteQuickTerm}
+      disabled={camposTravados}
+    />
+  );
+
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
@@ -714,9 +799,18 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
         title={editing ? `O.S. #${osId}` : "Nova O.S."}
         saving={saving}
         onBack={() => router.back()}
-        onSave={handleSave}
+        // Bug real corrigido 2026-08-13, achado ao vivo pelo botão Gravar
+        // de verdade no navegador: `Pressable.onPress` do cabeçalho SEMPRE
+        // chama a função com o evento de clique — `onSave={handleSave}`
+        // direto fazia esse evento (um nó do DOM) virar o 1º argumento de
+        // `handleSave(autorizadoPor?: string)`, que ia parar dentro do
+        // corpo JSON gravado (`autorizado_por: autorizadoPor || null`) —
+        // "Converting circular structure to JSON" ao tentar serializar.
+        // `() => handleSave()` garante zero argumentos passados adiante.
+        onSave={() => handleSave()}
         canSave={can("OS_COMP.GRAVAR") && !camposTravados}
         onAnexos={editing && osId && cliente ? () => setAnexosOpen(true) : undefined}
+        onFormularios={editing && osId && can("OS_COMP.FORMULARIOS") ? () => setFormulariosOpen(true) : undefined}
         onHelp={() => setAjudaOpen(true)}
         vinculoProjeto={vinculoProjeto ? { codigo: vinculoProjeto.codigo, onPress: () => router.push({ pathname: "/projeto-form", params: { codigo: String(vinculoProjeto.codigo) } } as never) } : undefined}
       />
@@ -724,7 +818,7 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
       <ScrollView contentContainerStyle={[styles.scroll, styles.scrollWeb]} showsVerticalScrollIndicator={false}>
         <View style={styles.webShell}>
           {editing && os ? (
-            <View style={[styles.card, { gap: spacing.md }]} testID="os-geral-topo">
+            <View style={[styles.card, { gap: spacing.sm }]} testID="os-geral-topo">
               <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, flexWrap: "wrap" }}>
                 <View style={[styles.sitTag, { backgroundColor: sitColor + "22" }]}>
                   <Text style={[styles.sitTagText, { color: sitColor }]}>{os.situacao_label}</Text>
@@ -796,6 +890,20 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
                     testID="os-geral-tecnico"
                   />
                 </View>
+                <View style={{ minWidth: 180 }}>
+                  <Text style={styles.topLabel}>Auxiliar (opcional)</Text>
+                  <SelectField
+                    value={auxiliarTecnico}
+                    onChange={(v) => setAuxiliarTecnico(v == null ? null : Number(v))}
+                    options={funcOptions}
+                    placeholder="Auxiliar"
+                    disabled={!canChangeGestores || camposTravados}
+                    modalTitle="Selecionar Auxiliar do Técnico"
+                    allowClear
+                    compactWeb
+                    testID="os-geral-auxiliar"
+                  />
+                </View>
                 <View style={{ minWidth: 160 }}>
                   <Text style={styles.topLabel}>Tipo O.S.</Text>
                   <SelectField
@@ -811,24 +919,61 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
                   />
                 </View>
               </View>
-            </View>
-          ) : null}
 
-          {editing && os ? (
-            <View style={[styles.card, { gap: spacing.sm }]} testID="os-geral-doc-origem">
-              <Text style={styles.sectionTitle}>Revisão Programada</Text>
-              <Text style={{ fontSize: 12, color: colors.muted }}>
-                Quantas revisões futuras esta O.S. deve programar (uma a cada 30 dias) — usado quando o
-                cliente costuma voltar para manutenções periódicas.
-                {mostrarDocOrigem
-                  ? ramoRevisao
-                    ? " Esta O.S. é do tipo Revisão: informe a O.S. de origem para vincular a uma data já programada."
-                    : " Esta O.S. exige um Documento de Origem (O.S. ou Pedido) da garantia/revisão."
-                  : ""}
-              </Text>
+              {/* Término (Previsto/Real) — campos existiam no backend
+                  (OSCompletoSaveRequest.previsao_termino/data_termino/
+                  hora_fechamento, carregados e gravados) mas nunca tinham
+                  campo de tela — mesma faixa do cabeçalho da OS no VB6
+                  (FrmTraOsNew.frm: "Término Prev./Término/Hora", ao lado
+                  de Entrada/Hora). Adicionado 2026-08-13, user-directed.
+                  "Revisão Programada"/Doc. Origem entraram nesta mesma
+                  linha (ao lado de Hora de Fechamento) a pedido do
+                  usuário, no mesmo dia — antes era um card à parte. */}
               <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "flex-end", gap: spacing.md }}>
-                <View style={{ width: 110 }}>
-                  <Text style={styles.topLabel}>Revisões</Text>
+                <View style={{ width: 160 }}>
+                  <Text style={styles.topLabel}>Previsão de Término</Text>
+                  <WebDateField
+                    value={previsaoTermino}
+                    onChange={setPrevisaoTermino}
+                    disabled={camposTravados}
+                    testID="os-geral-previsao-termino"
+                  />
+                </View>
+                <View style={{ width: 160 }}>
+                  <Text style={styles.topLabel}>Data de Término</Text>
+                  <WebDateField
+                    value={dataTermino}
+                    onChange={setDataTermino}
+                    disabled={camposTravados}
+                    testID="os-geral-data-termino"
+                  />
+                </View>
+                <View style={{ width: 120 }}>
+                  <Text style={styles.topLabel}>Hora de Fechamento</Text>
+                  <WebDateField
+                    type="time"
+                    value={horaFechamento || null}
+                    onChange={(v) => setHoraFechamento(v || "")}
+                    disabled={camposTravados}
+                    testID="os-geral-hora-fechamento"
+                  />
+                </View>
+                <View style={{ width: 110 }} testID="os-geral-doc-origem">
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                    <Text style={styles.topLabel}>Revisão Programada</Text>
+                    <InfoTooltip
+                      testID="os-geral-revisao-programada-info"
+                      text={
+                        "Quantas revisões futuras esta O.S. deve programar (uma a cada 30 dias) — usado quando o "
+                        + "cliente costuma voltar para manutenções periódicas."
+                        + (mostrarDocOrigem
+                          ? ramoRevisao
+                            ? " Esta O.S. é do tipo Revisão: informe a O.S. de origem para vincular a uma data já programada."
+                            : " Esta O.S. exige um Documento de Origem (O.S. ou Pedido) da garantia/revisão."
+                          : "")
+                      }
+                    />
+                  </View>
                   <TextInput
                     value={qtdRevisoes}
                     onChangeText={(v) => setQtdRevisoes(v.replace(/\D/g, ""))}
@@ -891,31 +1036,56 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
                   ))}
                 </View>
               ) : null}
-            </View>
-          ) : null}
 
-          <View style={styles.card} testID="os-geral-cliente">
-            <ClienteSection
-              hasCliente={!!cliente}
-              clienteResumo={clienteResumo}
-              loadingResumo={loadingResumo}
-              onOpenSearch={() => {
-                if (camposTravados) return;
-                setSearchTerm(clienteQuickTerm); setSearchResults([]); setSearchOpen(true);
-              }}
-              onOpenDados={() => setDadosOpen(true)}
-              onEditCliente={
-                cliente?.codigo
-                  ? () => router.push({ pathname: "/cliente-form", params: { codigo: String(cliente.codigo) } })
-                  : undefined
-              }
-              quickTerm={clienteQuickTerm}
-              onQuickTermChange={handleClienteQuickChange}
-              quickLoading={clienteQuickLoading}
-              onSubmitTerm={resolveClienteQuickTerm}
-              disabled={camposTravados}
-            />
-          </View>
+              {/* Requisições Vinculadas / Criar Cópia movidos pro 1º card
+                  (user-directed, 2026-08-13) — antes ficavam soltos abaixo
+                  dos totais, junto dos itens; são ações de nível OS, não
+                  de item, fazem mais sentido aqui perto do resto do
+                  cabeçalho. */}
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.md }}>
+                {can("OS_COMP.VER_REQUISICOES") ? (
+                  <Pressable
+                    onPress={() => setRequisicoesModalOpen(true)}
+                    style={{ flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start" }}
+                    testID="os-geral-requisicoes-btn"
+                  >
+                    <Ionicons name="clipboard-outline" size={16} color={colors.brandPrimary} />
+                    <Text style={{ fontSize: 12, color: colors.brandPrimary, fontWeight: "600" }}>Requisições Vinculadas</Text>
+                  </Pressable>
+                ) : null}
+                {can("OS_COMP.COPIAR") ? (
+                  <Pressable
+                    onPress={handleCriarCopia}
+                    disabled={copiando}
+                    style={{ flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", opacity: copiando ? 0.6 : 1 }}
+                    testID="os-geral-criar-copia-btn"
+                  >
+                    {copiando ? (
+                      <ActivityIndicator size="small" color={colors.brandPrimary} />
+                    ) : (
+                      <Ionicons name="copy-outline" size={16} color={colors.brandPrimary} />
+                    )}
+                    <Text style={{ fontSize: 12, color: colors.brandPrimary, fontWeight: "600" }}>
+                      {copiando ? "Copiando…" : "Criar Cópia"}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+
+              {/* Cliente movido pro final deste card pra economizar espaço
+                  (user-directed, 2026-08-13) — só nesta situação (OS já
+                  gravada, `editing && os`); numa OS nova este card ainda
+                  nem existe, então o fallback abaixo continua cobrindo
+                  esse caso (senão não haveria como escolher cliente pra
+                  criar a 1ª vez). Sem `marginTop` próprio — o `gap` do
+                  card do topo já espaça este bloco dos anteriores. */}
+              {clienteSectionEl}
+            </View>
+          ) : (
+            <View style={styles.card} testID="os-geral-cliente">
+              {clienteSectionEl}
+            </View>
+          )}
 
           {cliente && isOficina && !isAssist ? (
             <View style={styles.card} testID="os-geral-veiculo">
@@ -1016,23 +1186,107 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
             </View>
           ) : null}
 
-          {cliente && !(isOficina && !isAssist) ? (
+          {/* Equipamentos vinculados à O.S. (Assistência Técnica — uma OS
+              pode ter vários equipamentos, ver AssistenciaTecnicaCampo.md
+              seção 5/regra 14). Vincular um novo é exclusivo desta tela
+              (retaguarda) — sem equivalente mobile. Só disponível depois
+              do primeiro Gravar (precisa do código da OS). */}
+          {cliente && !(isOficina && !isAssist) && editing && osId ? (
             <View style={styles.card}>
-              <Text style={styles.sectionTitle}>{equipLabel}</Text>
-              <Pressable
-                onPress={() => { setEquipTerm(""); setEquipResults([]); setEquipModalOpen(true); }}
-                disabled={camposTravados}
-                style={({ pressed }) => [styles.selectBox, pressed && { opacity: 0.75 }]}
-                testID="os-geral-equipamento-open"
-              >
-                <Ionicons name={isAssist ? "hardware-chip-outline" : "car-outline"} size={18} color={colors.muted} />
-                <Text style={[styles.selectText, !equipamentoSel && !numeroSerie && { color: colors.muted }]} numberOfLines={1}>
-                  {equipamentoSel
-                    ? `${equipamentoSel.numero_de_serie}${equipamentoSel.marca_descricao ? ` · ${equipamentoSel.marca_descricao}` : ""}${equipamentoSel.modelo_descricao ? ` ${equipamentoSel.modelo_descricao}` : ""}`
-                    : numeroSerie || `Buscar ${equipLabel.toLowerCase()}`}
-                </Text>
-                <Ionicons name="chevron-forward" size={16} color={colors.muted} />
-              </Pressable>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.sm }}>
+                <Text style={styles.sectionTitle}>Equipamentos</Text>
+                {can("OS_COMP.EQUIP_ADD") && isAberto ? (
+                  <Pressable
+                    onPress={() => { setEquipTerm(""); setEquipResults([]); setEquipModalOpen(true); }}
+                    disabled={eq.adding}
+                    style={{ flexDirection: "row", alignItems: "center", gap: 4, opacity: eq.adding ? 0.6 : 1 }}
+                    testID="os-geral-equipamento-add"
+                  >
+                    {eq.adding ? (
+                      <ActivityIndicator color={colors.brandPrimary} size="small" />
+                    ) : (
+                      <Ionicons name="add-circle-outline" size={16} color={colors.brandPrimary} />
+                    )}
+                    <Text style={{ fontSize: 12, color: colors.brandPrimary, fontWeight: "600" }}>Adicionar equipamento</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+              {eq.equipamentosLoading ? <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: spacing.sm }} /> : null}
+              {!eq.equipamentosLoading && eq.equipamentos.length === 0 ? (
+                <Text style={styles.lockedText}>Nenhum equipamento vinculado ainda.</Text>
+              ) : null}
+              {eq.equipamentos.map((item) => (
+                <OSEquipamentoCard
+                  key={item.codigo}
+                  item={item}
+                  statusOptions={statusOsOptions}
+                  editavel={isAberto}
+                  canCancelar={can("OS_COMP.EQUIP_CANC")}
+                  saving={eq.savingCodigo === item.codigo}
+                  canceling={eq.cancelingCodigo === item.codigo}
+                  onSalvar={(draft) => eq.handleUpdate(item.codigo, draft)}
+                  onCancelar={() => eq.handleCancelar(item.codigo)}
+                />
+              ))}
+            </View>
+          ) : null}
+
+          {/* Check-in/Check-out do Atendimento de Campo (regra 2 do
+              AssistenciaTecnicaCampo.md) — read-only aqui, gravado só pela
+              tela mobile os-atendimento.tsx. Horário + link "Ver no mapa"
+              a partir do lat/lng capturado no momento do check-in/out. */}
+          {cliente && !(isOficina && !isAssist) && editing && osId && os ? (
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>Check-in / Check-out</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.md }}>
+                <View style={{ minWidth: 200 }}>
+                  <Text style={styles.checkinLabel}>Check-in</Text>
+                  {os.checkin_em ? (
+                    <>
+                      <Text style={styles.checkinValue}>{formatCheckinDateTime(os.checkin_em)}</Text>
+                      {mapsUrl(os.checkin_lat, os.checkin_lng) ? (
+                        <Pressable onPress={() => Linking.openURL(mapsUrl(os.checkin_lat, os.checkin_lng)!)} testID="os-geral-checkin-mapa">
+                          <Text style={styles.checkinMapaLink}>Ver no mapa</Text>
+                        </Pressable>
+                      ) : null}
+                    </>
+                  ) : (
+                    <Text style={styles.checkinEmpty}>Ainda não registrado.</Text>
+                  )}
+                </View>
+                <View style={{ minWidth: 200 }}>
+                  <Text style={styles.checkinLabel}>Check-out</Text>
+                  {os.checkout_em ? (
+                    <>
+                      <Text style={styles.checkinValue}>{formatCheckinDateTime(os.checkout_em)}</Text>
+                      {mapsUrl(os.checkout_lat, os.checkout_lng) ? (
+                        <Pressable onPress={() => Linking.openURL(mapsUrl(os.checkout_lat, os.checkout_lng)!)} testID="os-geral-checkout-mapa">
+                          <Text style={styles.checkinMapaLink}>Ver no mapa</Text>
+                        </Pressable>
+                      ) : null}
+                    </>
+                  ) : (
+                    <Text style={styles.checkinEmpty}>Ainda não registrado.</Text>
+                  )}
+                </View>
+              </View>
+              {can("OS_COMP.LIMPAR_GEO") && (os.checkin_lat != null || os.checkout_lat != null) ? (
+                <Pressable
+                  onPress={handleLimparLocalizacao}
+                  disabled={limpandoLocalizacao}
+                  style={[styles.limparLocalizacaoBtn, limpandoLocalizacao && { opacity: 0.6 }]}
+                  testID="os-geral-limpar-localizacao"
+                >
+                  {limpandoLocalizacao ? (
+                    <ActivityIndicator color={colors.error} size="small" />
+                  ) : (
+                    <Ionicons name="trash-outline" size={14} color={colors.error} />
+                  )}
+                  <Text style={styles.limparLocalizacaoText}>
+                    {limpandoLocalizacao ? "Removendo…" : "Remover coordenadas de GPS (LGPD)"}
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
           ) : null}
 
@@ -1072,43 +1326,6 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
                 </View>
               ) : null}
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.md, marginBottom: spacing.sm }}>
-                {can("OS_COMP.TEMPO") ? (
-                  <Pressable
-                    onPress={() => setTempoModalOpen(true)}
-                    style={{ flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start" }}
-                    testID="os-geral-tempo-gasto-btn"
-                  >
-                    <Ionicons name="time-outline" size={16} color={colors.brandPrimary} />
-                    <Text style={{ fontSize: 12, color: colors.brandPrimary, fontWeight: "600" }}>Tempo Gasto por Serviço</Text>
-                  </Pressable>
-                ) : null}
-                {can("OS_COMP.VER_REQUISICOES") ? (
-                  <Pressable
-                    onPress={() => setRequisicoesModalOpen(true)}
-                    style={{ flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start" }}
-                    testID="os-geral-requisicoes-btn"
-                  >
-                    <Ionicons name="clipboard-outline" size={16} color={colors.brandPrimary} />
-                    <Text style={{ fontSize: 12, color: colors.brandPrimary, fontWeight: "600" }}>Requisições Vinculadas</Text>
-                  </Pressable>
-                ) : null}
-                {can("OS_COMP.COPIAR") ? (
-                  <Pressable
-                    onPress={handleCriarCopia}
-                    disabled={copiando}
-                    style={{ flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", opacity: copiando ? 0.6 : 1 }}
-                    testID="os-geral-criar-copia-btn"
-                  >
-                    {copiando ? (
-                      <ActivityIndicator size="small" color={colors.brandPrimary} />
-                    ) : (
-                      <Ionicons name="copy-outline" size={16} color={colors.brandPrimary} />
-                    )}
-                    <Text style={{ fontSize: 12, color: colors.brandPrimary, fontWeight: "600" }}>
-                      {copiando ? "Copiando…" : "Criar Cópia"}
-                    </Text>
-                  </Pressable>
-                ) : null}
                 {can("OS_COMP.ALT_EXECUTOR") && (sit === "F" || sit === "PG") ? (
                   <Pressable
                     onPress={() => it.setAltExecutorModalOpen(true)}
@@ -1136,6 +1353,10 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
                 onCancelar={handleCancelar}
                 cancelando={cancelando}
                 onImprimir={() => setReciboOpen(true)}
+                onTempoGastoItem={(item) => {
+                  setTempoGastoPreselect(item.produto);
+                  setTempoModalOpen(true);
+                }}
               />
             </>
           )}
@@ -1312,7 +1533,7 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
       />
       <TempoGastoModal
         visible={tempoModalOpen}
-        onClose={() => setTempoModalOpen(false)}
+        onClose={() => { setTempoModalOpen(false); setTempoGastoPreselect(null); }}
         conn={conn}
         osId={osId || 0}
         isAberto={isAberto}
@@ -1321,6 +1542,7 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
         classe={classe}
         usuarioCod={usuarioCod}
         onToast={showToast}
+        preselectCodigoInterno={tempoGastoPreselect}
       />
       <RequisicoesVinculadasModal
         visible={requisicoesModalOpen}
@@ -1350,15 +1572,30 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
         loading={equipLoading}
         results={equipResults}
         onPick={(e) => {
-          setEquipamentoSel(e);
-          setNumeroSerie(e.numero_de_serie);
-          if (e.marca) setMarca(e.marca);
-          if (e.modelo) setModelo(e.modelo);
           setEquipModalOpen(false);
+          eq.handleAdd(e);
         }}
       />
       {cliente && osId ? (
         <AnexosOSModal visible={anexosOpen} onClose={() => setAnexosOpen(false)} conn={conn} os={osId} clienteCodigo={cliente.codigo} />
+      ) : null}
+      {osId ? (
+        <LayoutPreenchimentoModal
+          visible={formulariosOpen}
+          onClose={() => setFormulariosOpen(false)}
+          conn={conn}
+          entidade={LAYOUT_ENTIDADE_OS}
+          codentidade={osId}
+          usuarioCod={usuarioCod}
+          title="Formulários (Layouts) da O.S."
+          dadosExtras={[
+            { label: "Cliente", valor: cliente?.nome || os?.cliente_nome || "" },
+            { label: "CPF/CNPJ", valor: cliente?.cgc_cpf || os?.cliente_cgc || "" },
+            { label: "Telefone", valor: cliente?.telefone || "" },
+            { label: "Técnico Responsável", valor: os?.tecnico_responsavel_nome || "" },
+            { label: "Data/Hora do Atendimento", valor: os?.data ? `${formatDateBR(os.data)}${os?.hora ? ` ${os.hora}` : ""}` : "" },
+          ]}
+        />
       ) : null}
       <ReciboOSModal
         visible={reciboOpen}
@@ -1390,7 +1627,11 @@ const styles = StyleSheet.create({
   scroll: { paddingBottom: spacing.xxl },
   scrollWeb: WEB_SCROLL_CENTER,
   webShell: WEB_CONTENT_SHELL,
-  card: { ...WEB_FILTER_CARD, marginBottom: spacing.lg },
+  // Design Desktop (CLAUDE.md): espaçamento reduzido — padding/marginBottom
+  // menores que o padrão WEB_FILTER_CARD (pensado pra card único
+  // centralizado, não pra várias seções empilhadas na mesma tela).
+  // Achado ao vivo 2026-08-13, user-directed ("diminua o espaçamento").
+  card: { ...WEB_FILTER_CARD, padding: spacing.md, marginBottom: spacing.sm },
   fieldLabel: { fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "500" },
   sectionTitle: { fontSize: 13, fontWeight: "600", color: colors.onSurface, marginBottom: 6 },
   input: {
@@ -1409,4 +1650,12 @@ const styles = StyleSheet.create({
   topLabel: { fontSize: 10, color: colors.muted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 },
   lockedRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   lockedText: { flex: 1, fontSize: 13, color: colors.muted, fontStyle: "italic" },
+  checkinLabel: { fontSize: 11, color: colors.muted, marginBottom: 2 },
+  checkinValue: { fontSize: 14, fontWeight: "600", color: colors.onSurface },
+  checkinEmpty: { fontSize: 13, color: colors.muted, fontStyle: "italic" },
+  checkinMapaLink: { fontSize: 12, color: colors.brandPrimary, fontWeight: "600", marginTop: 2 },
+  limparLocalizacaoBtn: {
+    flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", marginTop: spacing.sm,
+  },
+  limparLocalizacaoText: { fontSize: 12, color: colors.error, fontWeight: "600" },
 });

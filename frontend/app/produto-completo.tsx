@@ -2007,7 +2007,7 @@ const styles = StyleSheet.create({
   groupTitle: { fontSize: 11, fontWeight: "700", color: colors.brandPrimary, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: spacing.xs },
   groupTitleRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   groupFieldsRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.xs },
-  colHalf: { flexGrow: 1, flexBasis: "45%", minWidth: 100 },
+  colHalf: { flexGrow: 1, flexBasis: "45%", minWidth: 100, maxWidth: 280 },
   nivelBox: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm,
@@ -2024,7 +2024,9 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: 12, color: colors.muted, fontWeight: "700" },
   statValue: { fontSize: 14, color: colors.onSurface, fontWeight: "700" },
   rowFields: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-end", flexWrap: "wrap" },
-  colFlex: { flex: 1, minWidth: 160 },
+  // Design Desktop (CLAUDE.md): maxWidth evita que colFlex/colHalf estiquem
+  // até a largura inteira do card num monitor grande (container agora 1600px).
+  colFlex: { flex: 1, minWidth: 160, maxWidth: 420 },
   colNarrow: { width: 140 },
   switchRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.md },
   switchRowInline: { flexDirection: "row", alignItems: "center", gap: spacing.sm },

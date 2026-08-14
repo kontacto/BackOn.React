@@ -7,11 +7,20 @@ class FakeCursor:
         self._one = list(one or [])
         self._many = list(many or [])
         self.queries = []
+        self._last_query = ""
 
     def execute(self, q, p=None):
         self.queries.append((q, p))
+        self._last_query = q
 
     def fetchone(self):
+        # `_modulo_curva_abc_ativo` (pedido_common.py) roda antes da lógica
+        # real de toda função deste service — devolve "módulo ligado" sem
+        # consumir da fila `_one` (reservada pras queries de negócio de
+        # cada teste; nenhum teste deste arquivo cobre o cenário "módulo
+        # desligado").
+        if "Curva_abc" in self._last_query:
+            return {"Curva_abc": True}
         return self._one.pop(0) if self._one else None
 
     def fetchall(self):
@@ -115,7 +124,9 @@ class TestGerarCurvaComBanco:
             "srv", "bd", "2026-01-01", "2026-06-30", "quantidade",
             [{"curva": "A", "percentual": 60}, {"curva": "C", "percentual": 40}],
         )
-        reset_q, reset_p = cur.queries[0]
+        # queries[0] é sempre a checagem de módulo (_modulo_curva_abc_ativo,
+        # roda antes de qualquer lógica de negócio) — o reset é a seguinte.
+        reset_q, reset_p = cur.queries[1]
         assert "update pecas set curva_abc = %s" in reset_q.lower()
         assert reset_p[0] == "D"  # próxima letra depois de C
 

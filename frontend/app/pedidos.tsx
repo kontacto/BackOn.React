@@ -841,7 +841,6 @@ export default function PedidosScreen() {
                         <PainelPedidoCard
                           item={item}
                           tipoKey={col.key}
-                          stale={isStale(item)}
                           nowMs={nowMs}
                           conn={conn as Connection}
                           usuarioCod={usuarioCod}

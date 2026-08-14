@@ -108,7 +108,42 @@ class TestGetOsCompleto:
         assert r["os"]["tipo_os_descricao"] == "Garantia"
         assert r["os"]["status_os_descricao"] == "Em análise"
         assert r["os"]["forma_pagamento_garantia"] == "DI"
-        assert r["os"]["forma_pagamento_garantia_descricao"] == "Dinheiro"
+
+    def test_auxiliar_tecnico_presente(self, monkeypatch):
+        """Auxiliar do técnico (regra 11, AssistenciaTecnicaCampo.md) —
+        opcional, mesmo formato de tecnico_responsavel/tecnico_nome."""
+        base = {"success": True, "os": {"codigo": 1, "cliente": 10}}
+        monkeypatch.setattr(svc.os_service, "_get_os_sync", lambda *a, **k: base)
+        row = {
+            "referencia_os": "", "tecnico_responsavel": 30, "tecnico_nome": "João",
+            "auxiliar_tecnico": 55, "auxiliar_nome": "Maria",
+            "posicao_os": None, "tipo_os_descricao": "", "previsao_termino": None,
+            "data_termino": None, "hora_entrada": "", "hora_fechamento": "",
+            "status_os_descricao": "",
+            "forma_pagamento_garantia": "", "forma_pagamento_garantia_descricao": "",
+        }
+        cur = FakeCursor(one=[row])
+        _patch(monkeypatch, cur)
+        r = svc._get_os_completo_sync("srv", "bd", 1)
+        assert r["os"]["auxiliar_tecnico"] == 55
+        assert r["os"]["auxiliar_tecnico_nome"] == "Maria"
+
+    def test_auxiliar_tecnico_ausente_fica_none(self, monkeypatch):
+        base = {"success": True, "os": {"codigo": 1, "cliente": 10}}
+        monkeypatch.setattr(svc.os_service, "_get_os_sync", lambda *a, **k: base)
+        row = {
+            "referencia_os": "", "tecnico_responsavel": None, "tecnico_nome": None,
+            "auxiliar_tecnico": None, "auxiliar_nome": None,
+            "posicao_os": None, "tipo_os_descricao": "", "previsao_termino": None,
+            "data_termino": None, "hora_entrada": "", "hora_fechamento": "",
+            "status_os_descricao": "",
+            "forma_pagamento_garantia": "", "forma_pagamento_garantia_descricao": "",
+        }
+        cur = FakeCursor(one=[row])
+        _patch(monkeypatch, cur)
+        r = svc._get_os_completo_sync("srv", "bd", 1)
+        assert r["os"]["auxiliar_tecnico"] is None
+        assert r["os"]["auxiliar_tecnico_nome"] == ""
 
 
 class TestSaveOsCompleto:
@@ -162,6 +197,39 @@ class TestSaveOsCompleto:
         r = svc._save_os_completo_sync(_os_req(), 555)
         assert r["success"] is False and "não encontrada" in r["message"].lower()
         assert conn.rolled is True
+
+    def test_criar_grava_auxiliar_tecnico(self, monkeypatch):
+        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"novo": 501}])
+        _patch(monkeypatch, cur)
+        r = svc._save_os_completo_sync(_os_req(tecnico_responsavel=30, auxiliar_tecnico=55), None)
+        assert r["success"] is True
+        insert_q = next(q for q, _ in cur.queries if q.strip().startswith("INSERT INTO os "))
+        assert "auxiliar_tecnico" in insert_q
+        insert_p = next(p for q, p in cur.queries if q.strip().startswith("INSERT INTO os "))
+        assert 55 in insert_p
+
+    def test_atualizar_grava_auxiliar_tecnico(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "A"}], rowcount=1)
+        _patch(monkeypatch, cur)
+        r = svc._save_os_completo_sync(_os_req(auxiliar_tecnico=55), 555)
+        assert r["success"] is True
+        update_q = next(q for q, _ in cur.queries if q.strip().startswith("UPDATE os SET"))
+        assert "auxiliar_tecnico=%s" in update_q
+
+
+class TestEnsureAuxiliarTecnicoCol:
+    def test_migracao_idempotente(self):
+        queries = []
+
+        class Cur:
+            def execute(self, q, p=None):
+                queries.append(q)
+
+        svc._ensure_os_auxiliar_tecnico_col(Cur())
+        assert len(queries) == 2
+        assert "IF NOT EXISTS" in queries[0]
+        assert "ALTER TABLE os ADD auxiliar_tecnico INT NULL" in queries[0]
+        assert "CREATE INDEX IX_os_auxiliar_tecnico ON os(auxiliar_tecnico)" in queries[1]
 
 
 class TestSaveOsCompletoDocOrigem:

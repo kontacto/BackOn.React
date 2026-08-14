@@ -30,6 +30,13 @@ type Props = {
   // pedido, então mora no cabeçalho junto com Ajuda/Gravar. Ícone só
   // aparece se informado (ex.: sem cliente selecionado ainda).
   onAnexos?: () => void;
+  // Abre o preenchimento de Formulário Dinâmico (Motor de Layout,
+  // `LayoutPreenchimentoModal`) desta O.S./Pedido — mesma lógica de
+  // "ação de tela, não de estado do registro" do Anexos acima, por isso
+  // mora aqui também. Ícone só aparece se informado. Adicionado
+  // 2026-08-12, user-directed (ligação O.S. Completa ↔ Formulário
+  // Dinâmico, entidade=O.S.).
+  onFormularios?: () => void;
   // Abre a configuração de Impressão Silenciosa desta estação (Checkout —
   // ver ConfiguracaoImpressaoModal.tsx). Ação de tela (não depende do
   // estado do registro), por isso mora aqui junto com Anexos/Ajuda. Ícone
@@ -82,7 +89,7 @@ function HeaderIconButton({
 }
 
 export default function PedidoHeader({
-  title, saving, onBack, onSave, canSave = true, titleExtra, onAnexos, onPrintConfig, onHelp, vinculoProjeto,
+  title, saving, onBack, onSave, canSave = true, titleExtra, onAnexos, onFormularios, onPrintConfig, onHelp, vinculoProjeto,
 }: Props) {
   return (
     <View style={styles.header}>
@@ -107,6 +114,9 @@ export default function PedidoHeader({
       ) : null}
       {onAnexos ? (
         <HeaderIconButton icon="attach-outline" label="Anexos" onPress={onAnexos} testID="pedido-form-anexos-btn" />
+      ) : null}
+      {onFormularios ? (
+        <HeaderIconButton icon="document-text-outline" label="Formulários" onPress={onFormularios} testID="pedido-form-formularios-btn" />
       ) : null}
       {onPrintConfig ? (
         <HeaderIconButton icon="settings-outline" label="Configurar Impressão" onPress={onPrintConfig} testID="pedido-form-print-config-btn" />

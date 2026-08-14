@@ -12,7 +12,7 @@ import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { apiGet } from "@/src/utils/api";
 import { colors, radius, spacing } from "@/src/theme/colors";
-import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
+import { WEB_CONTENT_SHELL, WEB_FIELD_COL_HALF, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { CatNode, flatten } from "@/src/utils/permissoesTree";
 
 type LogItem = {
@@ -426,8 +426,8 @@ const styles = StyleSheet.create({
   card: { ...WEB_FILTER_CARD, marginBottom: spacing.lg },
   sectionTitle: { fontSize: 14, fontWeight: "700", color: colors.onSurface, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: spacing.sm },
   hint: { fontSize: 12, color: colors.muted, marginTop: 4, marginBottom: spacing.sm, fontStyle: "italic" },
-  formGrid: { flexDirection: "row", flexWrap: "wrap", columnGap: spacing.md, marginTop: spacing.sm },
-  colHalf: { width: "49%", marginBottom: spacing.md },
+  formGrid: { flexDirection: "row", flexWrap: "wrap", columnGap: spacing.md, rowGap: spacing.sm, marginTop: spacing.sm },
+  colHalf: { ...WEB_FIELD_COL_HALF, marginBottom: spacing.md },
   colFull: { width: "100%", marginBottom: spacing.md },
   fieldLabel: { fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "500" },
   input: {

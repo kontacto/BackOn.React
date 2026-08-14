@@ -98,6 +98,15 @@ def imprimir(cfg: dict, item: dict) -> None:
     except LookupError:
         dados = item["conteudo"].encode("latin-1", errors="replace")
 
+    # Corte de papel (ESC/POS) — sem isso, o RAW enviado ao driver nunca
+    # aciona a guilhotina da térmica: o papel só continua avançando pro
+    # próximo cupom, emendando vários numa fita só (achado ao vivo,
+    # 2026-08-06 — foto mostrando 2 cupons impressos sem corte entre eles).
+    # `\n\n\n` empurra o texto pra além da lâmina antes de cortar; `GS V 66 0`
+    # (`\x1d\x56\x42\x00`) é o corte total, suportado tanto pelas Epson TM-T
+    # genuínas quanto pela maioria dos clones ESC/POS genéricos (ex.: G250).
+    dados += b"\n\n\n\x1d\x56\x42\x00"
+
     handle = win32print.OpenPrinter(nome_impressora)
     try:
         win32print.StartDocPrinter(handle, 1, ("Impressao Automatica", None, "RAW"))

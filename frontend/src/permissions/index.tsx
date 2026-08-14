@@ -126,6 +126,10 @@ export function PermissionsProvider({ children }: { children: React.ReactNode })
           });
           // Ordem de Serviço: habilitada se Oficina OU Assistência estiver ligada.
           if (!(cfg.valores.Oficina || cfg.valores.Assistencia)) disabledTelas.add("OS");
+          // Atendimento de Campo (check-in/check-out, QR Code) só faz sentido
+          // pro segmento Assistência Técnica — mesmo gating espelhado em
+          // backend/services/permissoes_service.py::disabled_telas().
+          if (!cfg.valores.Assistencia) disabledTelas.add("OS_ATENDIMENTO");
           // Pedido Geral (PEDIDO_COMP): habilitado se Pedido de Venda, Metro
           // Quadrado ou Clínica estiver ligado — os 3 são variações da MESMA
           // tela (ver SEGMENTOS_PEDIDO_EXCLUSIVOS no backend). Só "Pedido_venda"

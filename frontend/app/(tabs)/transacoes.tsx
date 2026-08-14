@@ -69,14 +69,6 @@ export default function TransacoesScreen() {
         visible: can("PEDIDO.ABRIR"),
       },
       {
-        key: "checkout",
-        label: "Checkout",
-        hint: "Venda direta de balcão, sem precisar de um Pedido/O.S. prévio",
-        icon: "cart-outline",
-        route: "/checkout",
-        visible: can("CHECKOUT.ABRIR"),
-      },
-      {
         key: "os-completa",
         label: "O.S. Completa",
         hint: "Versão completa da Ordem de Serviço (back-office, web)",
@@ -91,6 +83,17 @@ export default function TransacoesScreen() {
         icon: "swap-vertical-outline",
         route: "/envio-terceiros",
         visible: can("RETIFICA.ABRIR"),
+      },
+      {
+        key: "devolucao",
+        label: "Gestor de Devolução",
+        hint: "Devolução de itens de vendas pagas, com emissão de Vale de Devolução",
+        icon: "return-down-back-outline",
+        route: "/devolucao",
+        // Módulo "Devolução" (controle_configuracao.devolucao) — mesmo
+        // racional de `moduleOn` explícito já usado por outros cards deste
+        // menu (Curva_abc, contratos, gestor_projetos).
+        visible: moduleOn("devolucao") && can("DEVOLUCAO.ABRIR"),
       },
       {
         key: "movimentacoes",

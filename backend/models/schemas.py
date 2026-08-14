@@ -255,6 +255,34 @@ class FormaPagSimplesRequest(BaseModel):
     plataforma: Optional[str] = None
 
 
+class OSCheckinRequest(BaseModel):
+    """Check-in/check-out por geolocalização da tela de Atendimento de Campo
+    (Assistência Técnica — ver AssistenciaTecnicaCampo.md regra 2). Mesmo
+    request pros dois endpoints, só muda qual coluna é gravada."""
+    servidor: str
+    banco: str
+    latitude: float
+    longitude: float
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class LimparLocalizacaoRequest(BaseModel):
+    """Remove as coordenadas de GPS (lat/lng) de check-in/check-out de uma
+    OS, mantendo os horários — ferramenta de conformidade LGPD (direito de
+    exclusão sobre dado de geolocalização de funcionário), não uma política
+    de retenção automática (essa continua em aberto, ver
+    AssistenciaTecnicaCampo.md seção 7). Ação deliberada e irreversível,
+    disparada manualmente, nunca por job agendado."""
+    servidor: str
+    banco: str
+    classe: Optional[int] = None
+    master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
 class ItemSaveRequest(BaseModel):
     servidor: str
     banco: str
@@ -303,8 +331,28 @@ class OSListRequest(BaseModel):
     banco: str
     search: Optional[str] = ""
     situacao: Optional[str] = ""  # vazio = todas
-    data_ini: Optional[str] = None  # ISO YYYY-MM-DD
+    data_ini: Optional[str] = None  # ISO YYYY-MM-DD — filtra por data_entrada
     data_fim: Optional[str] = None  # ISO YYYY-MM-DD
+    # Filtro por Data de Faturamento — pedido explícito do usuário,
+    # 2026-08-06. Não existe coluna "data de faturamento" na própria tabela
+    # `os` (só data_entrada/data_agendamento/data_termino/data_compra) — o
+    # faturamento real acontece via `comanda_os` (a O.S. é vinculada a uma
+    # `comanda`, cujo campo `data` É a data de faturamento — mesmo padrão já
+    # usado por Pedido/Checkout). Ver `_list_os_sync`.
+    data_fat_ini: Optional[str] = None  # ISO YYYY-MM-DD
+    data_fat_fim: Optional[str] = None  # ISO YYYY-MM-DD
+    # Filtros da Lista de Atendimento (os-lista.tsx) — Técnico/Auxiliar
+    # (funcionarios.codigo_int), ver AssistenciaTecnicaCampo.md.
+    tecnico: Optional[int] = None
+    auxiliar: Optional[int] = None
+    # Identidade de quem pesquisa — só usados pra decidir a restrição de
+    # visibilidade (ver `_list_os_sync`: sem `OS_COMP.VER_TODAS`, só vê O.S.
+    # onde é técnico responsável ou auxiliar). Opcionais e sem efeito nos
+    # demais consumidores desta mesma request (os.tsx/os-form.tsx nunca
+    # preenchem esses campos, então a restrição não se aplica a eles).
+    classe: Optional[int] = None
+    master: Optional[bool] = False
+    usuario_codigo: Optional[int] = None
     page: int = 1
     size: int = 20
 
@@ -342,6 +390,10 @@ class OSCompletoSaveRequest(OSSaveRequest):
     KONTACTO-TESTE, 2026-07-31) — nenhuma migração de schema necessária."""
     referencia_os: Optional[str] = ""          # os.REFERENCIA_OS
     tecnico_responsavel: Optional[int] = None  # funcionarios.codigo_int (os.tecnico_responsavel)
+    # Auxiliar do técnico (regra 11, AssistenciaTecnicaCampo.md) — opcional,
+    # sem precedente no legado, coluna nova via `_ensure_os_auxiliar_tecnico_col`
+    # (os_completo_service.py).
+    auxiliar_tecnico: Optional[int] = None     # funcionarios.codigo_int (os.auxiliar_tecnico)
     posicao_os: Optional[int] = None           # Tipo O.S. — lookup tipo_os.codigo (os.posicao_os)
     previsao_termino: Optional[str] = None     # yyyy-mm-dd (os.previsao_termino)
     data_termino: Optional[str] = None         # yyyy-mm-dd (os.data_termino)
@@ -396,6 +448,29 @@ class OSItemSaveRequest(BaseModel):
     funcao: Optional[int] = None
     classe: Optional[int] = None           # grupo do usuário — só pro log de auditoria
     plataforma: Optional[str] = None       # "web"/"android"/"ios" — só pro log de auditoria
+
+
+class OSEquipamentoSaveRequest(BaseModel):
+    """Vincular/editar um equipamento de uma O.S. (`os_equipamento`, ver
+    AssistenciaTecnicaCampo.md seção 5 — regra 14, "uma OS pode ter vários
+    equipamentos"). `equipamento` é obrigatório só no ADD (POST) — o
+    número de série é sempre resolvido a partir de `equipamentos.codigo`,
+    nunca digitado livre, mesma regra "campo de identidade precisa de
+    busca" já usada no resto do projeto (`EquipamentoSearchModal`).
+    Vincular um equipamento novo é ação exclusiva da O.S. Completa
+    (retaguarda) — confirmado pelo usuário, 2026-08-12 — não existe
+    equivalente mobile nesta fase."""
+    servidor: str
+    banco: str
+    equipamento: Optional[int] = None      # equipamentos.codigo — obrigatório no ADD
+    defeito_reclamado: Optional[str] = ""
+    servico_executado: Optional[str] = ""
+    servico_a_executar: Optional[str] = ""
+    diagnostico: Optional[str] = ""
+    status_os: Optional[int] = None        # FK status_os.codigo — status DESTE equipamento (reaproveita a mesma tabela do status_os da OS)
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
 
 
 class DescontoGeralRequest(BaseModel):
@@ -873,8 +948,8 @@ class CheckoutDescontoGeralRequest(BaseModel):
 
 
 class CheckoutFormaPagamentoItem(BaseModel):
-    tipo: str        # DI/CH/CC/CD/DU/TI/VA/FI
-    forma_pag: str   # forma_pagamento.codigo
+    tipo: str        # DI/CH/CC/CD/DU/TI/VA/FI/CP (CP = Cartão Presente, só existe no Checkout)
+    forma_pag: str   # forma_pagamento.codigo — não exigido quando tipo="CP" (não tem cadastro de forma própria)
     valor: float
     vencimento: Optional[str] = None
     # Cheque
@@ -894,6 +969,14 @@ class CheckoutFormaPagamentoItem(BaseModel):
     parcelas: Optional[int] = None
     cod_administradora: Optional[int] = None
     cod_parcelador: Optional[str] = None  # "L" Loja | "A" Administradora
+    # Vale de Devolução — companheiro opcional de DI/DU/VA quando
+    # `forma_pagamento.vale_devolucao=1` (mesmo padrão do legado,
+    # `FrmPafOFF.frm`). Ver checkout_service.py pra assimetria real: só
+    # DU/VA geram vale residual quando o valor usado é menor que o saldo.
+    codigo_vale_devolucao: Optional[int] = None
+    # Cartão Presente — tipo="CP" (não existe no legado, resgate nunca foi
+    # implementado lá; ver PENDENCIAS.md > "Checkout" > "Cartão Presente").
+    codigo_cartao_presente: Optional[str] = None
 
 
 class CheckoutFecharRequest(BaseModel):
@@ -931,6 +1014,97 @@ class CheckoutImportarDavRequest(BaseModel):
     banco: str
     tipo_dav: str  # "PED" | "OS"
     documento: int
+    master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class CheckoutImportarAbastecimentoRequest(BaseModel):
+    """Importar 1 abastecimento PENDENTE (Posto de Combustível) pro Checkout
+    — réplica de `Command10_Click`/`Mostra_Abastecimentos` (FrmPafOFF.frm).
+    Gravado como `movimentacao.tipo_dav='ABA'` (não replica o esquema frágil
+    do legado, que só marca a origem numa ListBox em memória — ver
+    PENDENCIAS.md > "Checkout")."""
+    servidor: str
+    banco: str
+    num_abastecimento: int
+    vendedor: Optional[int] = None
+    master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class CheckoutImportarAgendamentoRequest(BaseModel):
+    """Importar 1 agendamento pendente de faturamento (Agenda — módulo
+    Clínica/Assistência) pro Checkout — réplica de `Command19_Click`/
+    `Mostra_Agenda` (FrmPafOFF.frm). Grava `movimentacao.tipo_dav='AGE'` +
+    o vínculo real `agenda_comanda` (mesma tabela já usada por
+    `agenda_service._faturar_avulso_sync`)."""
+    servidor: str
+    banco: str
+    codagenda: int
+    vendedor: Optional[int] = None
+    master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class DevolucaoBuscarItensRequest(BaseModel):
+    """Busca itens de venda PAGA elegíveis pra devolução — réplica dos
+    filtros de `FrmManDev.frm` (Gestor de Devolução, migração Fase 1)."""
+    servidor: str
+    banco: str
+    data_ini: Optional[str] = None
+    data_fim: Optional[str] = None
+    comanda: Optional[int] = None
+    cupom: Optional[int] = None
+    nfce: Optional[int] = None
+    nf: Optional[int] = None
+    cliente: Optional[str] = None
+    produto: Optional[str] = None
+    valor_de: Optional[float] = None
+    valor_ate: Optional[float] = None
+
+
+class DevolucaoItemRegistrar(BaseModel):
+    id_mov: int
+    qtd_devolvida: float
+    motivo: int  # devolucao_status.Codigo
+
+
+class DevolucaoRegistrarRequest(BaseModel):
+    """Registra a devolução de 1+ itens + Vale de Devolução opcional —
+    réplica simplificada do fluxo real (marcar itens, perguntar se emite
+    vale). Não emite NF de devolução nem devolve estoque físico — ver
+    docstring de `devolucao_service.py`."""
+    servidor: str
+    banco: str
+    itens: List[DevolucaoItemRegistrar]
+    emitir_vale: bool = False
+    cliente: Optional[int] = None  # obrigatório se emitir_vale=True
+    master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class DevolucaoConsultaRequest(BaseModel):
+    """Consulta de devoluções já registradas — réplica simplificada de
+    `FrmConDev.frm`."""
+    servidor: str
+    banco: str
+    data_ini: Optional[str] = None
+    data_fim: Optional[str] = None
+    cliente: Optional[str] = None
+    comanda: Optional[int] = None
+
+
+class DevolucaoCancelarRequest(BaseModel):
+    servidor: str
+    banco: str
     master: Optional[bool] = False
     usuario_alteracao: Optional[int] = None
     classe: Optional[int] = None

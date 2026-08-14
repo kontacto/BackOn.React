@@ -6,8 +6,9 @@ from fastapi import APIRouter, Request
 from models.schemas import (
     OSListRequest, OSSaveRequest, OSItemSaveRequest, DescontoGeralRequest, FecharRequest, FaturarOSRequest,
     FormaPagSimplesRequest, FormaPagamentoAddRequest, FormaPagamentoUpdateRequest, FormaPagamentoDeleteRequest,
+    OSCheckinRequest, LimparLocalizacaoRequest,
 )
-from services import os_service, os_itens_service, log_auditoria_service, forma_pagamento_service
+from services import os_service, os_itens_service, log_auditoria_service, forma_pagamento_service, os_equipamento_service
 
 router = APIRouter()
 
@@ -55,6 +56,19 @@ def _depois_os(req: OSSaveRequest) -> dict:
 @router.post("/os")
 async def list_os(req: OSListRequest):
     return await os_service.list_os(req)
+
+
+# Precisa vir ANTES de `GET /os/{codigo}` — senão "resolver-por-equipamento"
+# é capturado pelo path param `{codigo}` (que exige int) e nunca alcança esta
+# rota (achado ao vivo, mesmo gotcha já documentado em CLAUDE.md/memória
+# "Checar colisão de rota antes de criar").
+@router.get("/os/resolver-por-equipamento")
+async def resolver_por_equipamento(servidor: str, banco: str, numero_de_serie: str):
+    """Resolve o nº de série lido do QR Code do equipamento (ver
+    `equipamentos_service.QRCODE_PREFIXO_EQUIPAMENTO`) pra uma O.S. Aberta já
+    vinculada a ele — usado pela tela de Atendimento de Campo (regras 1/8 do
+    AssistenciaTecnicaCampo.md)."""
+    return await os_equipamento_service.resolver_os_aberta_por_serie(servidor, banco, numero_de_serie)
 
 
 @router.get("/os/{codigo}")
@@ -145,6 +159,69 @@ async def set_forma_pag_simples(codigo: int, req: FormaPagSimplesRequest, reques
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result
+
+
+# ---------- Atendimento de Campo (Assistência Técnica) — check-in/check-out.
+# Ver AssistenciaTecnicaCampo.md. ----------
+@router.post("/os/{codigo}/checkin")
+async def checkin_os(codigo: int, req: OSCheckinRequest, request: Request):
+    result = await os_service.checkin_os(req, codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS_ATENDIMENTO", comando="CHECKIN",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo), descricao=f"Check-in registrado na O.S. {codigo}",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/os/{codigo}/checkout")
+async def checkout_os(codigo: int, req: OSCheckinRequest, request: Request):
+    result = await os_service.checkout_os(req, codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS_ATENDIMENTO", comando="CHECKOUT",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo), descricao=f"Check-out registrado na O.S. {codigo}",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/os/{codigo}/fechar-atendimento")
+async def fechar_os_atendimento(codigo: int, req: FecharRequest, request: Request):
+    """Fechar a O.S. a partir da tela mobile de Atendimento de Campo —
+    reaproveita `_fechar_os_sync` (mesma função que OS/OS_COMP já chamam),
+    só com `tela='OS_ATENDIMENTO'` pra checar a permissão certa."""
+    result = await os_service.fechar_os(req, codigo, tela="OS_ATENDIMENTO")
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS_ATENDIMENTO", comando="SITUACAO",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo), descricao=f"O.S. {codigo} fechada via Atendimento de Campo",
+            campos_alterados=[{"campo": "situacao", "antes": "A", "depois": "F"}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/os/{codigo}/limpar-localizacao")
+async def limpar_localizacao(codigo: int, req: LimparLocalizacaoRequest, request: Request):
+    """Remove as coordenadas de GPS de check-in/check-out (mantém os
+    horários) — ferramenta de conformidade LGPD, ver
+    `LimparLocalizacaoRequest`/AssistenciaTecnicaCampo.md seção 7."""
+    result = await os_service.limpar_localizacao(req, codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS_COMP", comando="LIMPAR_GEO",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo), descricao=f"Localização de check-in/check-out removida da O.S. {codigo} (LGPD)",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
 
 
 # ---------- forma de pagamento (FrmForPag.frm) ----------

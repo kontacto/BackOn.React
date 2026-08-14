@@ -242,6 +242,48 @@ def _save_sync(
         conn.close()
 
 
+def _relatorio_sync(
+    servidor: str, banco: str, tipo: str,
+    data_de: str, data_ate: str,
+) -> dict:
+    """Relatório de Entrada/Saída de Caixa — migração de `FrmRelEntCaixa.frm`/
+    `FrmRelSaiCaixa.frm` (Painel de Relatórios > Caixa). Agrupa por
+    descrição+atendente no período e soma o valor de cada grupo, mais o
+    total geral — mesma agregação do legado (só que via `GROUP BY` em vez
+    do loop manual sobre um FlexGrid, puro workaround de VB6, ver "Não
+    replicar truques VB6" em CLAUDE.md). Validação do legado "data final
+    não pode passar de DATESIST" não é replicada aqui — nenhum outro
+    relatório desta migração aplica essa trava, mantido consistente."""
+    tipo_v = (tipo or "").strip().upper()
+    if tipo_v not in TIPOS_VALIDOS:
+        return {"success": False, "message": "Tipo inválido."}
+    if not data_de or not data_ate:
+        return {"success": False, "message": "Informe o período."}
+    tabela = _tabela(tipo_v)
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            f"SELECT s.descricao, f.nome_guerra AS atendente_nome, SUM(s.valor) AS total "
+            f"FROM {tabela} s LEFT JOIN funcionarios f ON f.codigo_int = s.atendente "
+            "WHERE s.data >= %s AND s.data <= %s "
+            "GROUP BY s.descricao, f.nome_guerra ORDER BY s.descricao",
+            (data_de, data_ate),
+        )
+        itens = [{
+            "descricao": (r.get("descricao") or "").strip(),
+            "atendente_nome": (r.get("atendente_nome") or "").strip() or None,
+            "valor": float(r["total"]) if r.get("total") is not None else 0.0,
+        } for r in cur.fetchall()]
+        total = sum(i["valor"] for i in itens)
+        cur.close()
+        return {"success": True, "itens": itens, "total": total}
+    except Exception as e:
+        return {"success": False, "message": f"Erro: {e}", "itens": [], "total": 0.0}
+    finally:
+        conn.close()
+
+
 def _delete_sync(servidor: str, banco: str, tipo: str, codigo: int) -> dict:
     tipo_v = (tipo or "").strip().upper()
     if tipo_v not in TIPOS_VALIDOS:
@@ -300,3 +342,7 @@ async def save_lancamento(
 
 async def delete_lancamento(servidor, banco, tipo, codigo):
     return await asyncio.to_thread(_delete_sync, servidor, banco, tipo, codigo)
+
+
+async def relatorio(servidor, banco, tipo, data_de, data_ate):
+    return await asyncio.to_thread(_relatorio_sync, servidor, banco, tipo, data_de, data_ate)

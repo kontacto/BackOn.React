@@ -9,7 +9,11 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Usado para ler o QR Code do equipamento na tela de Atendimento de Campo.",
+        "NSLocationWhenInUseUsageDescription": "Usado para registrar o local do check-in/check-out na tela de Atendimento de Campo."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -21,7 +25,10 @@
         "android.permission.USE_BIOMETRIC",
         "android.permission.USE_FINGERPRINT",
         "android.permission.USE_BIOMETRIC",
-        "android.permission.USE_FINGERPRINT"
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
       ],
       "package": "com.anonymous.frontend"
     },
@@ -47,6 +54,18 @@
         "expo-local-authentication",
         {
           "faceIDPermission": "Use o Face ID para entrar com segurança."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Usado para ler o QR Code do equipamento na tela de Atendimento de Campo."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Usado para registrar o local do check-in/check-out na tela de Atendimento de Campo."
         }
       ]
     ],

@@ -152,3 +152,51 @@ class TestDashboardDataPorSituacao:
         pedido_queries = [p for q, p in cur.queries if "FROM pedido_venda pv" in q]
         for p in pedido_queries:
             assert p[0] == "2026-07-16"
+
+
+class TestCheckoutDireto:
+    """Venda lançada 100% dentro do Checkout (sem Pedido/O.S. por trás) —
+    pedido explícito do usuário, 2026-08-06: "não aparece vendas na tela
+    principal. incluir vendas direto da tela de vendas tb. aquelas que não
+    vem de pré-vendas"."""
+
+    def test_exclui_comandas_vinculadas_a_pedido_ou_os(self, monkeypatch):
+        cur = SqlFakeCursor()
+        monkeypatch.setattr(svc, "_open_conn", lambda servidor, banco: FakeConn(cur))
+        svc._dashboard_sync("srv", "bd", None, "2026-07-16", situacao=None)
+        ck_queries = [q for q, _ in cur.queries if "FROM comanda cm" in q or "FROM movimentacao m " in q]
+        assert len(ck_queries) == 2  # totais + movimento
+        for q in ck_queries:
+            assert "NOT EXISTS (SELECT 1 FROM COMANDA_PED cp WHERE cp.comanda = cm.comanda)" in q
+            assert "NOT EXISTS (SELECT 1 FROM comanda_os co WHERE co.comanda = cm.comanda)" in q
+
+    def test_totais_incluem_qtd_checkout(self, monkeypatch):
+        cur = SubstringFakeCursor().when(
+            "FROM movimentacao m ",
+            [{"venda": 100.0, "serv_sum": 0.0, "custo_sum": 60.0, "desc_sum": 0.0, "qtd_checkout": 1}],
+        )
+        monkeypatch.setattr(svc, "_open_conn", lambda servidor, banco: FakeConn(cur))
+        out = svc._dashboard_sync("srv", "bd", None, "2026-07-16", situacao=None)
+        assert out["totais"]["checkout"] == 1
+
+    def test_movimento_lista_venda_direta_com_tipo_checkout(self, monkeypatch):
+        cur = SubstringFakeCursor().when(
+            "SELECT TOP 50 cm.comanda AS doc",
+            [{"doc": 43862, "situacao": "PG", "cliente": "SERGIO VIEIRA QUINTANILHA",
+              "vendedor_nome": "LEONARDO", "valor": 2431.89}],
+        )
+        monkeypatch.setattr(svc, "_open_conn", lambda servidor, banco: FakeConn(cur))
+        out = svc._dashboard_sync("srv", "bd", None, "2026-07-16", situacao=None)
+        ck = next(m for m in out["movimento"] if m["tipo"] == "CHECKOUT")
+        assert ck["doc"] == 43862
+        assert ck["situacao_label"] == "Faturado"
+        assert ck["valor"] == 2431.89
+
+    def test_situacao_faturado_filtra_por_situacao_e_data_da_comanda(self, monkeypatch):
+        cur = SqlFakeCursor()
+        monkeypatch.setattr(svc, "_open_conn", lambda servidor, banco: FakeConn(cur))
+        svc._dashboard_sync("srv", "bd", None, "2026-07-16", situacao="PG")
+        ck_queries = [(q, p) for q, p in cur.queries if "FROM comanda cm" in q or "FROM movimentacao m " in q]
+        for q, p in ck_queries:
+            assert "cm.situacao = %s AND CAST(cm.data AS DATE) = %s" in q
+            assert p[0] == "PG" and p[-1] == "2026-07-16"

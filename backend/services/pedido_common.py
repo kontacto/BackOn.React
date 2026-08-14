@@ -81,6 +81,32 @@ def _ensure_qtd_pessoas_col(cur) -> None:
     )
 
 
+# Tipo EFETIVO de um pedido, pra fins de classificação em coluna (Painel de
+# Pedidos, web e KPDV — os dois só leem o campo já resolvido aqui, nenhum
+# recalcula por conta própria) e de filtro por tipo. Cai pro tipo do
+# CLIENTE (`c.cliente_forn`) só quando o pedido não tem tipo próprio
+# (`p.tipo` NULL/0) — MESMA regra desde 2026-07-18 — EXCETO quando esse
+# fallback resolveria pra "FIADO": nesse caso específico o fallback é
+# recusado (fica `NULL`, fora de toda coluna), nunca classifica o pedido
+# como Fiado. Corrigido 2026-08-11, achado ao vivo comparando com o VB6
+# (que nunca teve o conceito de "Tipo do Pedido" — é feature só do app
+# novo): um pedido antigo sem tipo próprio (ex.: aberto antes de
+# 2026-07-18) caía em Fiado só porque o CLIENTE está cadastrado com
+# `cliente_forn = Fiado` — categorização administrativa do cliente, não
+# prova de que aquele pedido específico é uma venda fiado de verdade
+# (mesma ressalva que "Campo 'Tipo' do Pedido Bar" em CLAUDE.md já fazia
+# pra Mesa/Comanda: "vários clientes têm cliente_forn apontando pra Mesa/
+# Comanda só por serem clientes frequentes categorizados assim
+# administrativamente"). Mesa/Comanda/Balcão/Entrega mantêm o fallback
+# normal — só Fiado tem essa implicação de crédito/cobrança que torna o
+# fallback perigoso o bastante pra desabilitar.
+TIPO_EFETIVO_PEDIDO_SQL = (
+    "(CASE WHEN NULLIF(p.tipo, 0) IS NOT NULL THEN NULLIF(p.tipo, 0) "
+    "WHEN (SELECT wtc.descricao FROM tipo_cliente wtc WHERE wtc.codigo = c.cliente_forn) = 'FIADO' THEN NULL "
+    "ELSE c.cliente_forn END)"
+)
+
+
 def _resolve_tipo_pedido(fantasia: Optional[str], cliente_forn, tipo_solicitado: Optional[int]):
     """Resolve o valor final de `pedido_venda.tipo` (combobox "Tipo" do
     pedido — Mesa/Comanda/Balcão/Entrega, FK `tipo_cliente.codigo`),
@@ -451,7 +477,7 @@ def _resolve_produto_completo(cur, codigo: str) -> Optional[dict]:
         return None
 
     if codigo.upper().startswith("S"):
-        cur.execute("SELECT codigo, descricao, valor_hora AS valor FROM servicos WHERE codigo=%s", (codigo,))
+        cur.execute("SELECT codigo, descricao, valor_hora AS valor, cod_icms FROM servicos WHERE codigo=%s", (codigo,))
         r = cur.fetchone()
         if r:
             valor = float(r.get("valor") or 0)
@@ -460,12 +486,14 @@ def _resolve_produto_completo(cur, codigo: str) -> Optional[dict]:
                 "descricao": (r.get("descricao") or "").strip(),
                 "cod_fab": (r.get("codigo") or "").strip(), "valor": valor,
                 "unidade": "HR", "custo": valor, "controla_num_serie": False,
+                "cod_icms": (r.get("cod_icms") or "").strip(),
+                "peso_variado": False,  # serviço nunca é vendido por peso
             }
 
     for coluna in ("codigo_fab", "codigo_int", "codigo_bar"):
         cur.execute(
             f"SELECT codigo_int AS codigo, descricao, codigo_fab, p_venda AS valor, uni, "
-            f"       custo_reposicao, controla_num_serie, aceita_desconto "
+            f"       custo_reposicao, controla_num_serie, aceita_desconto, cod_icms, peso_variado "
             f"FROM pecas WHERE {coluna}=%s",
             (codigo,),
         )
@@ -475,7 +503,7 @@ def _resolve_produto_completo(cur, codigo: str) -> Optional[dict]:
 
     cur.execute(
         "SELECT p.codigo_int AS codigo, p.descricao, p.codigo_fab, p.p_venda AS valor, p.uni, "
-        "       p.custo_reposicao, p.controla_num_serie, p.aceita_desconto "
+        "       p.custo_reposicao, p.controla_num_serie, p.aceita_desconto, p.cod_icms, p.peso_variado "
         "FROM CODBARRA_AUXILIAR cb JOIN pecas p ON p.codigo_int = cb.codigo_int WHERE cb.codigo_bar=%s",
         (codigo,),
     )
@@ -483,7 +511,7 @@ def _resolve_produto_completo(cur, codigo: str) -> Optional[dict]:
     if r:
         return _linha_peca_completo(r)
 
-    cur.execute("SELECT codigo, descricao, valor_hora AS valor FROM servicos WHERE codigo=%s", (codigo,))
+    cur.execute("SELECT codigo, descricao, valor_hora AS valor, cod_icms FROM servicos WHERE codigo=%s", (codigo,))
     r = cur.fetchone()
     if r:
         valor = float(r.get("valor") or 0)
@@ -492,6 +520,7 @@ def _resolve_produto_completo(cur, codigo: str) -> Optional[dict]:
             "descricao": (r.get("descricao") or "").strip(),
             "cod_fab": (r.get("codigo") or "").strip(), "valor": valor,
             "unidade": "HR", "custo": valor, "controla_num_serie": False,
+            "cod_icms": (r.get("cod_icms") or "").strip(),
         }
     return None
 
@@ -507,6 +536,58 @@ def _linha_peca_completo(r: dict) -> dict:
         "custo": float(r.get("custo_reposicao") or 0),
         "controla_num_serie": bool(r.get("controla_num_serie")),
         "aceita_desconto": r.get("aceita_desconto") is None or bool(r.get("aceita_desconto")),
+        "cod_icms": (r.get("cod_icms") or "").strip(),
+        # "Vendido por peso" — gatilho de leitura ao vivo da Balança Toledo
+        # (KPDV) e do código de barras de peso variável (ver
+        # decode_codigo_barras_peso_variavel abaixo). Campo já existia no
+        # cadastro (Produto Completo, "Peso Variado"), só não era lido em
+        # nenhum fluxo de venda até agora.
+        "peso_variado": bool(r.get("peso_variado")),
+    }
+
+
+# Prefixo do código de barras de peso variável (posição 1) e posições dos
+# campos código do produto / peso em gramas — convenção brasileira mais
+# citada pra etiqueta impressa por balança de pré-pesagem (2 + 5 dígitos de
+# código + 5 dígitos de peso em gramas + dígito verificador EAN-13 padrão).
+# Constantes isoladas de propósito: NÃO validado ainda contra uma etiqueta
+# real impressa por balança Toledo (sem hardware/etiqueta física disponível
+# nesta sessão) — ver PENDENCIAS.md > "KPDV" > "Balança Toledo + Pré-Pesagem"
+# pro resumo da pesquisa e o que falta confirmar. Ajustar aqui, não espalhado
+# pelo resto da função, assim que tivermos uma etiqueta real pra comparar.
+PESO_VARIAVEL_PREFIXO = "2"
+_POS_CODIGO_PRODUTO = slice(1, 6)
+_POS_PESO_GRAMAS = slice(6, 11)
+
+
+def _ean13_checksum_valido(codigo13: str) -> bool:
+    """Dígito verificador EAN-13 padrão (mod-10, pesos alternados 1/3) — este
+    algoritmo é genérico do padrão EAN/GTIN, não é proprietário Toledo."""
+    digitos = [int(c) for c in codigo13]
+    soma = sum(d if i % 2 == 0 else d * 3 for i, d in enumerate(digitos[:12]))
+    dv = (10 - (soma % 10)) % 10
+    return dv == digitos[12]
+
+
+def decode_codigo_barras_peso_variavel(codigo: str) -> Optional[dict]:
+    """Decodifica um código de barras EAN-13 de peso variável — etiqueta
+    impressa por uma balança de pré-pesagem (ver `PESO_VARIAVEL_PREFIXO`/
+    `_POS_CODIGO_PRODUTO`/`_POS_PESO_GRAMAS` acima pro aviso de confiança).
+    Devolve `None` se `codigo` não bater com o formato (tamanho, prefixo ou
+    dígito verificador) — nesse caso o chamador trata como um código normal
+    (busca direta por `codigo_int`/`codigo_fab`/`codigo_bar`, fluxo de sempre).
+    """
+    codigo = (codigo or "").strip()
+    if len(codigo) != 13 or not codigo.isdigit():
+        return None
+    if codigo[0] != PESO_VARIAVEL_PREFIXO:
+        return None
+    if not _ean13_checksum_valido(codigo):
+        return None
+    peso_gramas = int(codigo[_POS_PESO_GRAMAS])
+    return {
+        "codigo_produto": codigo[_POS_CODIGO_PRODUTO],
+        "peso_kg": round(peso_gramas / 1000, 3),
     }
 
 

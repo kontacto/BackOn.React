@@ -73,15 +73,20 @@ class TestListPedidosFiltrosPedidosAbertos:
     CLIENTE, não um tipo de pedido), Data de Entrega filtra
     previsao_entrega<=X, Ordenar por muda o ORDER BY."""
 
-    def test_tipos_cliente_filtra_por_cliente_forn(self, monkeypatch):
+    def test_tipos_cliente_filtra_por_tipo_efetivo(self, monkeypatch):
         # Filtra pelo tipo do PEDIDO, caindo pro tipo do cliente quando o
         # pedido não tem tipo próprio — pedido explícito do usuário,
-        # 2026-07-18.
+        # 2026-07-18. Exceto Fiado, que recusa esse fallback (2026-08-11,
+        # ver TIPO_EFETIVO_PEDIDO_SQL em pedido_common.py).
         cur = FakeCursor(one=[{"c": 0}], many=[[]])
         _patch(monkeypatch, cur)
         svc._list_pedidos_sync(_list_req(tipos_cliente=[10, 20]))
         select_q, params = cur.queries[-1]
-        assert "COALESCE(NULLIF(p.tipo, 0), c.cliente_forn) IN (%s,%s)" in select_q
+        assert (
+            "(CASE WHEN NULLIF(p.tipo, 0) IS NOT NULL THEN NULLIF(p.tipo, 0) "
+            "WHEN (SELECT wtc.descricao FROM tipo_cliente wtc WHERE wtc.codigo = c.cliente_forn) = 'FIADO' THEN NULL "
+            "ELSE c.cliente_forn END) IN (%s,%s)"
+        ) in select_q
         assert 10 in params and 20 in params
 
     def test_data_entrega_filtra_previsao_entrega(self, monkeypatch):
@@ -92,19 +97,20 @@ class TestListPedidosFiltrosPedidosAbertos:
         assert "p.previsao_entrega <= %s" in select_q
         assert "2026-07-20" in params
 
-    def test_data_ini_e_fim_tem_excecao_pra_fiado_aberto(self, monkeypatch):
-        # Pedido tipo FIADO ainda Aberto nunca é escondido pelo filtro de
-        # data — a tela sempre carrega com o filtro do dia atual, e um
-        # fiado pode ter sido aberto há semanas. Pedido explícito do
-        # usuário, 2026-07-18.
+    def test_data_ini_e_fim_tem_excecao_pra_qualquer_pedido_aberto(self, monkeypatch):
+        # Nenhum pedido em situação Aberto é escondido pelo filtro de data
+        # — a tela sempre carrega com o filtro do dia atual, e uma
+        # mesa/comanda/fiado pode ter sido aberta há dias/semanas. Antes só
+        # FIADO tinha essa exceção (2026-07-18); generalizado pra qualquer
+        # tipo (Mesa/Comanda/Balcão/Entrega/Fiado) em 2026-08-11 — achado
+        # ao vivo comparando com o legado VB6, que não filtra "Pedidos
+        # Abertos" por data de abertura.
         cur = FakeCursor(one=[{"c": 0}], many=[[]])
         _patch(monkeypatch, cur)
         svc._list_pedidos_sync(_list_req(data_ini="2026-07-18", data_fim="2026-07-18"))
         select_q, params = cur.queries[-1]
-        assert "(p.data >= %s OR (p.situacao = 'A' AND (SELECT descricao FROM tipo_cliente wt " \
-            "WHERE wt.codigo = COALESCE(NULLIF(p.tipo, 0), c.cliente_forn)) = 'FIADO'))" in select_q
-        assert "(p.data <= %s OR (p.situacao = 'A' AND (SELECT descricao FROM tipo_cliente wt " \
-            "WHERE wt.codigo = COALESCE(NULLIF(p.tipo, 0), c.cliente_forn)) = 'FIADO'))" in select_q
+        assert "(p.data >= %s OR p.situacao = 'A')" in select_q
+        assert "(p.data <= %s OR p.situacao = 'A')" in select_q
         assert "2026-07-18" in params
 
     def test_ordenar_por_abertura(self, monkeypatch):

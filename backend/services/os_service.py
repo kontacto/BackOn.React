@@ -10,14 +10,40 @@ import asyncio
 from typing import Optional
 
 from db.connection import _open_conn, _get_col_sizes, _trunc
-from models.schemas import OSListRequest, OSSaveRequest, FecharRequest, FaturarOSRequest, FormaPagSimplesRequest
+from models.schemas import (
+    OSListRequest, OSSaveRequest, FecharRequest, FaturarOSRequest, FormaPagSimplesRequest, OSCheckinRequest,
+    LimparLocalizacaoRequest,
+)
 from services.constants import SITUACAO_LABEL
 from services.pedido_common import (
     _check_cliente_ativo, DavPagamento, DAV_OS, _fecha_fpag_dav, _qtd_formas, _liberar_reservado, _mover_estoque,
     _ensure_os_forma_pagamento_garantia_col,
 )
 from services.permissoes_service import tem_permissao
-from services.os_itens_service import _recalc_os_total
+from services.os_itens_service import _recalc_os_total, _check_os_aberta
+
+
+def _ensure_os_checkin_cols(cur) -> None:
+    """Check-in/check-out por geolocalização da tela de Atendimento de Campo
+    (Assistência Técnica — ver AssistenciaTecnicaCampo.md regra 2). Um único
+    par de check-in/check-out por OS (decisão do usuário, 2026-08-14) — sem
+    tabela nova, direto em `os`. Migração idempotente, mesmo padrão de
+    `_ensure_qtd_pessoas_col` (pedido_common.py)."""
+    for nome, tipo in (
+        ("checkin_em", "DATETIME NULL"),
+        ("checkin_lat", "FLOAT NULL"),
+        ("checkin_lng", "FLOAT NULL"),
+        ("checkin_usuario", "INT NULL"),
+        ("checkout_em", "DATETIME NULL"),
+        ("checkout_lat", "FLOAT NULL"),
+        ("checkout_lng", "FLOAT NULL"),
+        ("checkout_usuario", "INT NULL"),
+    ):
+        cur.execute(
+            f"IF NOT EXISTS (SELECT 1 FROM sys.columns "
+            f"WHERE Name='{nome}' AND Object_ID=Object_ID('os')) "
+            f"ALTER TABLE os ADD {nome} {tipo}"
+        )
 
 
 def _list_os_sync(req: OSListRequest) -> dict:
@@ -48,6 +74,38 @@ def _list_os_sync(req: OSListRequest) -> dict:
         if req.data_fim:
             where_parts.append("o.data_entrada <= %s")
             params.append(req.data_fim)
+        # Data de Faturamento — via `comanda_os`/`comanda.data` (ver
+        # OSListRequest.data_fat_ini/fim acima pro porquê de não existir
+        # coluna própria em `os`). Usa EXISTS em vez de JOIN direto pra não
+        # multiplicar linhas se uma O.S. algum dia tiver mais de uma comanda.
+        if req.data_fat_ini:
+            where_parts.append(
+                "EXISTS (SELECT 1 FROM comanda_os co JOIN comanda cm ON cm.comanda = co.comanda "
+                "WHERE co.os = o.codigo AND cm.data >= %s)"
+            )
+            params.append(req.data_fat_ini)
+        if req.data_fat_fim:
+            where_parts.append(
+                "EXISTS (SELECT 1 FROM comanda_os co JOIN comanda cm ON cm.comanda = co.comanda "
+                "WHERE co.os = o.codigo AND cm.data <= %s)"
+            )
+            params.append(req.data_fat_fim)
+        if req.tecnico:
+            where_parts.append("o.tecnico_responsavel = %s")
+            params.append(req.tecnico)
+        if req.auxiliar:
+            where_parts.append("o.auxiliar_tecnico = %s")
+            params.append(req.auxiliar)
+        # Restrição de visibilidade da Lista de Atendimento (os-lista.tsx) —
+        # opt-in: só ativa quando o chamador manda classe+usuario_codigo (só
+        # os-lista.tsx manda; os.tsx/os-form.tsx nunca preenchem esses campos,
+        # então não são afetados). Sem `OS_COMP.VER_TODAS` (e sem ser master),
+        # só enxerga O.S. onde é técnico responsável ou auxiliar — ver
+        # AssistenciaTecnicaCampo.md.
+        if req.classe is not None and req.usuario_codigo is not None and not req.master:
+            if not tem_permissao(cur, req.classe, "OS_COMP", "VER_TODAS"):
+                where_parts.append("(o.tecnico_responsavel = %s OR o.auxiliar_tecnico = %s)")
+                params.extend([req.usuario_codigo, req.usuario_codigo])
         where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
         cur.execute(
@@ -62,10 +120,19 @@ def _list_os_sync(req: OSListRequest) -> dict:
             f"       ISNULL((SELECT SUM(p.quant * p.p_venda) FROM os_produto p "
             f"               WHERE p.os = o.codigo AND ISNULL(p.item_cancelado,0)=0), 0) AS valor_calc, "
             f"       o.area_atuacao, c.nome AS cliente_nome, "
-            f"       COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS atendente_nome "
+            f"       COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS atendente_nome, "
+            f"       o.tecnico_responsavel, COALESCE(NULLIF(ft.nome_guerra,''), ft.nome) AS tecnico_nome, "
+            f"       o.auxiliar_tecnico, COALESCE(NULLIF(fa.nome_guerra,''), fa.nome) AS auxiliar_nome, "
+            f"       o.checkin_em, o.checkout_em, "
+            f"       (SELECT MIN(a.data) FROM AGENDA_OS ao "
+            f"        JOIN os_produto op ON op.cod_os_prod = ao.CODOS "
+            f"        JOIN AGENDA a ON a.codagenda = ao.CODAGENDA "
+            f"        WHERE op.os = o.codigo) AS proxima_agenda "
             f"FROM os o "
             f"LEFT JOIN cliente c ON c.codigo = o.cliente "
             f"LEFT JOIN funcionarios f ON f.codigo_int = o.atendente "
+            f"LEFT JOIN funcionarios ft ON ft.codigo_int = o.tecnico_responsavel "
+            f"LEFT JOIN funcionarios fa ON fa.codigo_int = o.auxiliar_tecnico "
             f"{where} "
             f"ORDER BY o.codigo DESC OFFSET {offset} ROWS FETCH NEXT {req.size} ROWS ONLY",
             params,
@@ -91,6 +158,15 @@ def _list_os_sync(req: OSListRequest) -> dict:
                 # é só EXIBIÇÃO, mais robusta a dado legado divergente.
                 "total": float(r.get("valor_calc") or 0),
                 "atendente_nome": (r.get("atendente_nome") or "").strip(),
+                "tecnico_responsavel": int(r["tecnico_responsavel"]) if r.get("tecnico_responsavel") else None,
+                "tecnico_nome": (r.get("tecnico_nome") or "").strip(),
+                "auxiliar_tecnico": int(r["auxiliar_tecnico"]) if r.get("auxiliar_tecnico") else None,
+                "auxiliar_nome": (r.get("auxiliar_nome") or "").strip(),
+                "checkin_em": r["checkin_em"].isoformat() if r.get("checkin_em") else None,
+                "checkout_em": r["checkout_em"].isoformat() if r.get("checkout_em") else None,
+                "proxima_agenda": (
+                    r["proxima_agenda"].isoformat() if hasattr(r.get("proxima_agenda"), "isoformat") else None
+                ),
             })
         cur.close()
         conn.close()
@@ -117,6 +193,8 @@ def _get_os_sync(servidor: str, banco: str, codigo: int) -> dict:
             "       o.area_atuacao, o.descricao_cliente, o.obs, o.resumo, o.status_os, o.atendente, "
             "       o.placa, o.marca, o.modelo, o.km, o.ano, o.chassi, o.numero_de_serie, "
             "       o.forma_pagamento, fp.descricao AS forma_pagamento_descricao, "
+            "       o.checkin_em, o.checkin_lat, o.checkin_lng, o.checkin_usuario, "
+            "       o.checkout_em, o.checkout_lat, o.checkout_lng, o.checkout_usuario, "
             "       c.nome AS cliente_nome, c.cgc_cpf AS cliente_cgc, "
             "       a.descricao AS area_descricao, "
             "       f.nome AS atendente_nome, f.nome_guerra AS atendente_guerra "
@@ -165,6 +243,14 @@ def _get_os_sync(servidor: str, banco: str, codigo: int) -> dict:
                 "numero_de_serie": (row.get("numero_de_serie") or "").strip(),
                 "forma_pagamento": (row.get("forma_pagamento") or "").strip(),
                 "forma_pagamento_descricao": (row.get("forma_pagamento_descricao") or "").strip(),
+                "checkin_em": row["checkin_em"].isoformat() if row.get("checkin_em") else None,
+                "checkin_lat": float(row["checkin_lat"]) if row.get("checkin_lat") is not None else None,
+                "checkin_lng": float(row["checkin_lng"]) if row.get("checkin_lng") is not None else None,
+                "checkin_usuario": int(row["checkin_usuario"]) if row.get("checkin_usuario") is not None else None,
+                "checkout_em": row["checkout_em"].isoformat() if row.get("checkout_em") else None,
+                "checkout_lat": float(row["checkout_lat"]) if row.get("checkout_lat") is not None else None,
+                "checkout_lng": float(row["checkout_lng"]) if row.get("checkout_lng") is not None else None,
+                "checkout_usuario": int(row["checkout_usuario"]) if row.get("checkout_usuario") is not None else None,
             },
         }
     except Exception as e:
@@ -303,6 +389,81 @@ def _set_forma_pag_simples_sync(req: FormaPagSimplesRequest, codigo: int) -> dic
         return {"success": False, "message": f"Erro ao gravar forma de pagamento: {e}"}
 
 
+def _checkin_os_sync(req: OSCheckinRequest, codigo: int) -> dict:
+    """Check-in do técnico em campo (tela de Atendimento — Assistência
+    Técnica, ver AssistenciaTecnicaCampo.md regra 2). Um único check-in por
+    OS — se já houver um registrado, bloqueia em vez de sobrescrever (o
+    usuário confirmou 'um único par de check-in/check-out por OS', não um
+    conceito de visita repetível)."""
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        existe, sit = _check_os_aberta(cur, codigo)
+        if not existe:
+            conn.close()
+            return {"success": False, "message": "OS não encontrada."}
+        if sit != "A":
+            conn.close()
+            return {"success": False, "message": f"OS '{SITUACAO_LABEL.get(sit, sit)}' não pode receber check-in."}
+        cur.execute("SELECT checkin_em FROM os WHERE codigo=%s", (codigo,))
+        row = cur.fetchone()
+        if row and row.get("checkin_em"):
+            conn.close()
+            return {"success": False, "message": f"Check-in já registrado nesta OS em {row['checkin_em']}."}
+        cur.execute(
+            "UPDATE os SET checkin_em=GETDATE(), checkin_lat=%s, checkin_lng=%s, checkin_usuario=%s WHERE codigo=%s",
+            (req.latitude, req.longitude, req.usuario_alteracao, codigo),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao registrar check-in: {e}"}
+
+
+def _checkout_os_sync(req: OSCheckinRequest, codigo: int) -> dict:
+    """Check-out do técnico em campo — exige check-in prévio nesta mesma OS."""
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT situacao, checkin_em, checkout_em FROM os WHERE codigo=%s", (codigo,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return {"success": False, "message": "OS não encontrada."}
+        if not row.get("checkin_em"):
+            conn.close()
+            return {"success": False, "message": "Faça o check-in antes do check-out."}
+        if row.get("checkout_em"):
+            conn.close()
+            return {"success": False, "message": f"Check-out já registrado nesta OS em {row['checkout_em']}."}
+        cur.execute(
+            "UPDATE os SET checkout_em=GETDATE(), checkout_lat=%s, checkout_lng=%s, checkout_usuario=%s WHERE codigo=%s",
+            (req.latitude, req.longitude, req.usuario_alteracao, codigo),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao registrar check-out: {e}"}
+
+
 async def list_os(req: OSListRequest) -> dict:
     return await asyncio.to_thread(_list_os_sync, req)
 
@@ -317,6 +478,53 @@ async def save_os(req: OSSaveRequest, codigo: Optional[int]) -> dict:
 
 async def set_forma_pag_simples(req: FormaPagSimplesRequest, codigo: int) -> dict:
     return await asyncio.to_thread(_set_forma_pag_simples_sync, req, codigo)
+
+
+async def checkin_os(req: OSCheckinRequest, codigo: int) -> dict:
+    return await asyncio.to_thread(_checkin_os_sync, req, codigo)
+
+
+async def checkout_os(req: OSCheckinRequest, codigo: int) -> dict:
+    return await asyncio.to_thread(_checkout_os_sync, req, codigo)
+
+
+def _limpar_localizacao_sync(req: LimparLocalizacaoRequest, codigo: int) -> dict:
+    """Remove as coordenadas de GPS de check-in/check-out (mantém os
+    horários) — ferramenta de conformidade LGPD, ver
+    `LimparLocalizacaoRequest`. Permissão própria (`OS_COMP.LIMPAR_
+    LOCALIZACAO`), checada aqui (não no frontend) porque é dado sensível —
+    mesmo princípio de reforço no backend já usado em `_fechar_os_sync`."""
+    try:
+        conn = _open_conn(req.servidor, req.banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT TOP 1 1 AS ok FROM os WHERE codigo=%s", (codigo,))
+        if not cur.fetchone():
+            conn.close()
+            return {"success": False, "message": "OS não encontrada."}
+        if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, "OS_COMP", "LIMPAR_GEO"):
+            conn.close()
+            return {"success": False, "message": "Sem permissão para remover a localização."}
+        cur.execute(
+            "UPDATE os SET checkin_lat=NULL, checkin_lng=NULL, checkout_lat=NULL, checkout_lng=NULL WHERE codigo=%s",
+            (codigo,),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao remover localização: {e}"}
+
+
+async def limpar_localizacao(req: LimparLocalizacaoRequest, codigo: int) -> dict:
+    return await asyncio.to_thread(_limpar_localizacao_sync, req, codigo)
 
 
 

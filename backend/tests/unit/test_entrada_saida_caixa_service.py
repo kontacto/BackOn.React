@@ -143,6 +143,65 @@ class TestSaveComMock:
         assert r["success"] is False and "conta" in r["message"].lower()
 
 
+class FakeCursorFetchAll:
+    """Cursor falso pra `_relatorio_sync` — só precisa de execute+fetchall."""
+
+    def __init__(self, rows=None):
+        self._rows = rows or []
+        self.queries = []
+
+    def execute(self, q, p=None):
+        self.queries.append((q, p))
+
+    def fetchall(self):
+        return self._rows
+
+    def close(self):
+        pass
+
+
+class TestRelatorioComMock:
+    def test_tipo_invalido(self):
+        r = svc._relatorio_sync("srv", "bd", "X", "2026-08-01", "2026-08-07")
+        assert r["success"] is False and "Tipo inválido" in r["message"]
+
+    def test_periodo_obrigatorio(self):
+        r = svc._relatorio_sync("srv", "bd", "E", "", "2026-08-07")
+        assert r["success"] is False and "período" in r["message"].lower()
+
+    def test_agrupa_por_descricao_e_atendente_entrada(self, monkeypatch):
+        cur = FakeCursorFetchAll(rows=[
+            {"descricao": "Suprimento", "atendente_nome": "Zé", "total": 150.0},
+            {"descricao": "Troco Inicial", "atendente_nome": "Maria", "total": 50.5},
+        ])
+        _patch(monkeypatch, cur)
+        r = svc._relatorio_sync("srv", "bd", "e", "2026-08-01", "2026-08-07")
+        assert r["success"] is True
+        assert r["itens"] == [
+            {"descricao": "Suprimento", "atendente_nome": "Zé", "valor": 150.0},
+            {"descricao": "Troco Inicial", "atendente_nome": "Maria", "valor": 50.5},
+        ]
+        assert r["total"] == 200.5
+        assert "FROM entrada_caixa" in cur.queries[0][0]
+        assert "GROUP BY s.descricao, f.nome_guerra" in cur.queries[0][0]
+        assert cur.queries[0][1] == ("2026-08-01", "2026-08-07")
+
+    def test_usa_tabela_saida_caixa(self, monkeypatch):
+        cur = FakeCursorFetchAll(rows=[])
+        _patch(monkeypatch, cur)
+        r = svc._relatorio_sync("srv", "bd", "S", "2026-08-01", "2026-08-07")
+        assert r["success"] is True
+        assert r["itens"] == []
+        assert r["total"] == 0.0
+        assert "FROM saida_caixa" in cur.queries[0][0]
+
+    def test_sem_atendente_vinculado(self, monkeypatch):
+        cur = FakeCursorFetchAll(rows=[{"descricao": "Ajuste", "atendente_nome": None, "total": 10.0}])
+        _patch(monkeypatch, cur)
+        r = svc._relatorio_sync("srv", "bd", "E", "2026-08-01", "2026-08-07")
+        assert r["itens"][0]["atendente_nome"] is None
+
+
 class TestDeleteComMock:
     def test_lancamento_nao_encontrado(self, monkeypatch):
         cur = FakeCursor(one=[None])

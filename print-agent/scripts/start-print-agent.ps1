@@ -87,7 +87,12 @@ $ErrorActionPreference = "Continue"
 while ($true) {
     Write-Log "Subindo agente_impressao.py ..."
     try {
-        & $Python "agente_impressao.py" 2>&1 | Tee-Object -FilePath $LogFile -Append
+        # -u (unbuffered) — sem isso, o stdout do Python fica bufferizado por
+        # bloco ao rodar via pipe/Tee-Object, e as linhas "[job N] impresso
+        # com sucesso" só aparecem no log muito depois de acontecerem de
+        # verdade (achado ao vivo, 2026-08-06, investigando um atraso real de
+        # impressão — o log não ajudou a diagnosticar por causa disso).
+        & $Python "-u" "agente_impressao.py" 2>&1 | Tee-Object -FilePath $LogFile -Append
         $code = $LASTEXITCODE
         Write-Log "agente encerrou (exit code $code)."
     } catch {

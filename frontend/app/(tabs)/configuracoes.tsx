@@ -169,6 +169,15 @@ export default function ConfiguracoesScreen() {
                     testID="config-controle-sistema"
                   />
                 ) : null}
+                {isWeb && can("LAYOUT.ABRIR") ? (
+                  <Item
+                    icon="clipboard-outline"
+                    label="Cadastro de Layout"
+                    hint="Cadastro de checklists/formulários reaproveitáveis em Cliente, O.S., Agenda e outras telas"
+                    onPress={() => router.push("/layout-cadastro")}
+                    testID="config-formulario-dinamico"
+                  />
+                ) : null}
               </View>
 
               {hasBio ? (
@@ -193,6 +202,13 @@ export default function ConfiguracoesScreen() {
                   <>
                     <Text style={styles.sectionTitle}>Administração</Text>
                     <View style={[styles.group, Platform.OS === "web" && styles.groupWeb]}>
+                      <Item
+                        icon="key-outline"
+                        label="IA Key"
+                        hint="Chave de API da Anthropic para recursos de IA (ex.: Importar Formulário)"
+                        onPress={() => router.push("/ia-key")}
+                        testID="config-ia-key"
+                      />
                       <Item
                         icon="cube-outline"
                         label="Módulos e Recursos"

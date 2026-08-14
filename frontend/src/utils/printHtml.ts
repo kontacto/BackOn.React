@@ -74,6 +74,44 @@ export function printHtml(bodyHtml: string, title = "", paperWidthMm?: number) {
   setTimeout(cleanup, 120000);
 }
 
+// Igual a `printHtml`, mas recebe um documento HTML JÁ COMPLETO (com seu
+// próprio <html>/<head>/<style>/<body>) e o escreve tal como está no iframe,
+// sem envolver num segundo documento — pra quando o chamador já monta um
+// HTML pronto pra impressão (cabeçalho de empresa, CSS @page A4 próprio,
+// etc.), como `export-layout-preenchimento.ts`. Ver o comentário no topo
+// deste arquivo: por que iframe, não CSS-hide.
+export function printFullHtml(fullHtml: string) {
+  if (typeof document === "undefined") return;
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentDocument;
+  if (!doc) {
+    document.body.removeChild(iframe);
+    return;
+  }
+  doc.open();
+  doc.write(fullHtml);
+  doc.close();
+
+  const cleanup = () => {
+    if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+  };
+  const win = iframe.contentWindow;
+  if (win) {
+    win.addEventListener("afterprint", cleanup);
+    win.focus();
+    win.print();
+  }
+  setTimeout(cleanup, 120000);
+}
+
 export function escHtml(s: string | number | null | undefined): string {
   return String(s ?? "")
     .replace(/&/g, "&amp;")

@@ -41,7 +41,6 @@ export type PainelPedidoItem = {
 type Props = {
   item: PainelPedidoItem;
   tipoKey: string;
-  stale: boolean;
   nowMs: number;
   conn: Connection;
   usuarioCod: number;
@@ -56,8 +55,6 @@ type Props = {
   onAbrir: () => void;
   onChanged: () => void;
 };
-
-const STALE_COLOR = "#e53935";
 
 // Retorna "" (sem hora) quando o pedido já passou de 24h aberto — a data
 // (linha 2 do card) já indica que é de outro dia, mostrar "26:43" (ou
@@ -76,17 +73,26 @@ function formatTempoAberto(data: string | null, horaAberto: string, nowMs: numbe
 }
 
 export default function PainelPedidoCard({
-  item, tipoKey, stale, nowMs, conn, usuarioCod, funcaoCod, classe, isMaster,
+  item, tipoKey, nowMs, conn, usuarioCod, funcaoCod, classe, isMaster,
   canAddItem, canFaturar, canImprimir, canTaxaServico, formasPagamento, onAbrir, onChanged,
 }: Props) {
   const feedback = useFeedback();
   const icon = TIPO_ICON[tipoKey];
-  // Borda esquerda + ícone replicam a cor da coluna (TIPO_COLOR, mesma da
-  // Painel de Pedidos) — o texto NÃO muda de cor por tipo, só fica
-  // vermelho quando o pedido está parado (pedido explícito do usuário,
-  // 2026-07-17: "a fonte mantém a cor").
-  const accentColor = stale ? STALE_COLOR : (TIPO_COLOR[tipoKey] || colors.brandPrimary);
-  const textColor = stale ? STALE_COLOR : colors.onSurface;
+  // Borda esquerda + ícone + texto sempre replicam a cor da COLUNA
+  // (TIPO_COLOR) — nunca sobrescritos por vermelho só porque o pedido
+  // está parado. Antes (2026-07-17) "parado" virava vermelho sólido,
+  // mascarando a cor do tipo; corrigido 2026-08-11, pedido explícito do
+  // usuário ("quero que o tema de cor dos cards da coluna Mesa tenha a
+  // cor da coluna. propague para as demais colunas") — motivado por
+  // "parado" ter deixado de ser um sinal de Fiado (ver `stale` doc em
+  // `pedidos.tsx`: fiado agora é decidido só por arrasto manual pra
+  // coluna Fiado, cuja própria TIPO_COLOR já é vermelha). O reordenar
+  // pedidos parados pro fim da coluna (`isStale`/`ordenar` em
+  // `pedidos.tsx`) continua sem mudança — só a COR deixou de depender
+  // disso, por isso a prop `stale` (que só servia pra isso) foi removida
+  // deste componente.
+  const accentColor = TIPO_COLOR[tipoKey] || colors.brandPrimary;
+  const textColor = colors.onSurface;
 
   // -------- Tooltip dos botões de ação — um só de cada vez, hover no web
   // (mobile não tem hover, os ícones ficam só com o testID pra achar no toque).
@@ -543,7 +549,7 @@ export default function PainelPedidoCard({
               ) : null}
             </Pressable>
           </View>
-          <Text style={[ps.line1Valor, { color: stale ? STALE_COLOR : colors.brandPrimary }]}>{formatBRL(item.total)}</Text>
+          <Text style={[ps.line1Valor, { color: colors.brandPrimary }]}>{formatBRL(item.total)}</Text>
         </Pressable>
 
         <View style={ps.line2}>

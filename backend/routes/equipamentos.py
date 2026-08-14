@@ -63,6 +63,23 @@ class AlterarNumeroSerieRequest(AuditFields):
     novo_cliente: Optional[int] = None
 
 
+@router.get("/equipamentos/{codigo}/qrcode")
+async def gerar_qrcode(codigo: int, servidor: str, banco: str):
+    """QR Code impresso a partir do Cadastro de Equipamento (Assistência
+    Técnica — AssistenciaTecnicaCampo.md, regra 1: "impressão feita pelo
+    cadastro de equipamento"). Já coberto pela permissão `IMPRIMIR`
+    (`ACOES_PADRAO`, herdada por `ACOES_EQUIPAMENTOS`) — não precisa de
+    ação nova no catálogo."""
+    return await equipamentos_service.gerar_qrcode(servidor, banco, codigo)
+
+
+@router.get("/equipamentos/{codigo}/historico-os")
+async def historico_os(codigo: int, servidor: str, banco: str):
+    """Histórico de O.S. já atendidas neste equipamento — usado pela tela de
+    Atendimento de Campo ao carregar via QR Code (regra 1)."""
+    return await equipamentos_service.historico_os(servidor, banco, codigo)
+
+
 @router.get("/equipamentos/find/by-serie")
 async def find_by_serie(servidor: str, banco: str, numero_de_serie: str):
     return await equipamentos_service.find_by_serie(servidor, banco, numero_de_serie)

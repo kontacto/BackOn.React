@@ -1,6 +1,6 @@
 // Seção "Itens do Pedido": lista de itens + botões de desconto geral/concedidos + subtotal.
 import { useState, type ReactNode } from "react";
-import { ActivityIndicator, Platform, Pressable, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 // Ícone de garçom/prato servido pra Taxa de Serviço (pedido explícito do
@@ -46,6 +46,16 @@ export type ItemListItens = {
   setPrintItem: (item: ItemRow) => void;
   setAgendarItem: (item: ItemRow) => void;
   setPedidoTotalizadoOpen: (open: boolean) => void;
+  // Pontuação de Técnicos (O.S. Completa, exclusivo — `useOSItens.ts`) —
+  // opcional (`?`) porque só a O.S. tem essa noção; `usePedidoItens` não
+  // precisa implementar no-op nenhum, TS já aceita a ausência de campo
+  // opcional. Ver "Pontuação inline na linha do serviço", 2026-08-13,
+  // user-directed.
+  savePontuacao?: (
+    codOsProd: number,
+    valores: { pontuacao_e?: number | null; pontuacao_v?: number | null; pontuacao_a?: number | null },
+  ) => void;
+  pontuacaoSaving?: boolean;
 };
 
 type Props = {
@@ -104,13 +114,106 @@ type Props = {
   // botão de WhatsApp na mesma linha (pedido explícito do usuário,
   // 2026-07-17), sem o ItemList precisar conhecer `conn`/`documentId`/etc.
   footerRight?: ReactNode;
+  // Tempo Gasto por Serviço, acessível direto da linha (O.S. Completa,
+  // exclusivo) — a tela dona decide como abrir o modal (pré-selecionando
+  // o serviço do item clicado), o ItemList só avisa qual item foi tocado.
+  // 2026-08-13, user-directed ("tempo gasto por serviço na linha do
+  // serviço").
+  onTempoGastoItem?: (item: ItemRow) => void;
 };
 
 const isWeb = Platform.OS === "web";
 
+// Pontuação de Técnicos inline, direto na linha do item (O.S. Completa —
+// 2026-08-13, user-directed: "coloque a pontuação do técnico na linha do
+// serviço"). 3 campos numéricos bem estreitos (Técnico/Vendedor/Atendente,
+// 0-999) + 1 ícone de salvar — mesma faixa 0-999 e mesmo formato de dado
+// do `PontuacaoModal.tsx` (que continua existindo, pra consulta/edição em
+// lote), só que sem precisar abrir modal pra pontuar um item isolado.
+function clampPontos(v: string): number | null {
+  const n = parseInt(v.replace(/\D/g, ""), 10);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(999, n));
+}
+
+function PontuacaoInline({
+  item, saving, onSave,
+}: {
+  item: ItemRow;
+  saving: boolean;
+  onSave: NonNullable<ItemListItens["savePontuacao"]>;
+}) {
+  const [e, setE] = useState(item.pontuacao_e != null ? String(item.pontuacao_e) : "");
+  const [v, setV] = useState(item.pontuacao_v != null ? String(item.pontuacao_v) : "");
+  const [a, setA] = useState(item.pontuacao_a != null ? String(item.pontuacao_a) : "");
+  const [hoverLabel, setHoverLabel] = useState<string | null>(null);
+
+  const salvar = (ev: import("react-native").GestureResponderEvent) => {
+    ev.stopPropagation();
+    if (item.cod_os_prod == null) return;
+    onSave(item.cod_os_prod, { pontuacao_e: clampPontos(e), pontuacao_v: clampPontos(v), pontuacao_a: clampPontos(a) });
+  };
+
+  const campo = (label: string, valor: string, setValor: (v: string) => void, testID: string) => (
+    <View
+      style={{ position: "relative" }}
+      onStartShouldSetResponder={() => true}
+      onResponderTerminationRequest={() => false}
+    >
+      <TextInput
+        value={valor}
+        onChangeText={setValor}
+        onFocus={(ev: any) => ev.stopPropagation?.()}
+        keyboardType="number-pad"
+        maxLength={3}
+        placeholder="0"
+        onPressIn={(ev: any) => ev.stopPropagation?.()}
+        {...(isWeb ? { onMouseEnter: () => setHoverLabel(label), onMouseLeave: () => setHoverLabel(null) } : {})}
+        style={ps.input}
+        testID={testID}
+      />
+      {isWeb && hoverLabel === label ? (
+        <View style={ps.tooltip} pointerEvents="none">
+          <Text style={ps.tooltipText}>{label}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+
+  return (
+    <View style={ps.wrap}>
+      <Ionicons name="star-outline" size={12} color={colors.muted} />
+      {campo("Técnico", e, setE, `pontuacao-inline-e-${item.cod_os_prod}`)}
+      {campo("Vendedor", v, setV, `pontuacao-inline-v-${item.cod_os_prod}`)}
+      {campo("Atendente", a, setA, `pontuacao-inline-a-${item.cod_os_prod}`)}
+      <Pressable onPress={salvar} disabled={saving} style={[ps.saveBtn, saving && { opacity: 0.6 }]} testID={`pontuacao-inline-salvar-${item.cod_os_prod}`}>
+        {saving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Ionicons name="checkmark" size={12} color={colors.onBrandPrimary} />}
+      </Pressable>
+    </View>
+  );
+}
+
+const ps = {
+  wrap: { flexDirection: "row" as const, alignItems: "center" as const, gap: 4 },
+  input: {
+    width: 34, height: 26, borderWidth: 1, borderColor: colors.border, borderRadius: 6,
+    backgroundColor: colors.surface, textAlign: "center" as const, fontSize: 12, color: colors.onSurface,
+    paddingHorizontal: 2, paddingVertical: 0,
+  },
+  saveBtn: {
+    width: 22, height: 22, borderRadius: 5, backgroundColor: colors.brandPrimary,
+    alignItems: "center" as const, justifyContent: "center" as const,
+  },
+  tooltip: {
+    position: "absolute" as const, bottom: "100%" as const, left: 0, marginBottom: 3,
+    backgroundColor: "#1a1a1a", borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, zIndex: 1000,
+  },
+  tooltipText: { color: "#fff", fontSize: 10, fontWeight: "600" as const },
+};
+
 export default function ItemList({
   editing, isAberto, it, tela = "PEDIDO", onAnalisar, onFechar, fechando, onFaturar, faturando, isFechado,
-  onDividir, onReabrir, reabrindo, onCancelar, cancelando, onImprimir, footerRight,
+  onDividir, onReabrir, reabrindo, onCancelar, cancelando, onImprimir, footerRight, onTempoGastoItem,
 }: Props) {
   const router = useRouter();
   const { itens, subtotal, itensLoading, descTotalItens, geralAtual } = it;
@@ -174,6 +277,15 @@ export default function ItemList({
   const canAgendar =
     (tela === "PEDIDO_COMP" && (moduleOn("CLINICA") || moduleOn("Assistencia")) && can(`${tela}.AGENDAR`)) ||
     (tela === "OS_COMP" && moduleOn("Assistencia") && can(`${tela}.AGENDAR`));
+  // Pontuação de Técnicos inline na linha (2026-08-13, user-directed) —
+  // substitui o modal em lote (PontuacaoModal) como forma PRINCIPAL de
+  // pontuar; o modal continua existindo (consulta/edição em lote), só
+  // deixou de ser o único caminho.
+  const canPontuacaoInline = tela === "OS_COMP" && !!it.savePontuacao && can(`${tela}.PONTUACAO`);
+  // Tempo Gasto acessível direto da linha (mesmo pedido, mesmo dia) — só
+  // serviço, mesma restrição do combo do TempoGastoModal (peça nunca grava
+  // em os_tempo, ver PENDENCIAS.md > "Tempo Gasto por Serviço").
+  const canTempoGastoInline = tela === "OS_COMP" && !!onTempoGastoItem && can(`${tela}.TEMPO`);
   const canVerDescontos = descTotalItens > 0 && can(`${tela}.VER_DESCONTOS`);
   // Taxa de Serviço continua EXCLUSIVA do Pedido Bar — único recurso
   // deliberadamente não trazido ao Pedido Completo/Geral (pedido explícito
@@ -387,7 +499,14 @@ export default function ItemList({
                 key={item.codauto}
                 onPress={canEditItem ? () => it.openEditModal(item) : undefined}
                 disabled={!canEditItem}
-                style={({ pressed }) => [styles.itemRowCompact, pressed && canEditItem && { opacity: 0.8 }]}
+                style={({ pressed }) => [
+                  styles.itemRowCompact,
+                  // Design Desktop / Pontuação+Tempo Gasto inline: a O.S.
+                  // Completa pode ter mais elementos na linha do que o
+                  // Pedido — deixa quebrar linha em vez de estourar largura.
+                  (canPontuacaoInline || canTempoGastoInline) && { flexWrap: "wrap" as const, rowGap: 6 },
+                  pressed && canEditItem && { opacity: 0.8 },
+                ]}
                 testID={`pedido-form-item-${item.codauto}`}
               >
                 <View
@@ -488,6 +607,22 @@ export default function ItemList({
                     style={styles.imprimirItemTag}
                     testID={`pedido-form-item-ver-agenda-${item.codauto}`}
                   />
+                ) : null}
+                {canTempoGastoInline && item.tipo === "S" ? (
+                  <IconButtonWithTooltip
+                    icon="time-outline"
+                    label="Tempo Gasto"
+                    size={13}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      onTempoGastoItem!(item);
+                    }}
+                    style={styles.imprimirItemTag}
+                    testID={`pedido-form-item-tempo-gasto-${item.codauto}`}
+                  />
+                ) : null}
+                {canPontuacaoInline ? (
+                  <PontuacaoInline item={item} saving={!!it.pontuacaoSaving} onSave={it.savePontuacao!} />
                 ) : null}
                 <Text style={[styles.itemTotal, styles.itemTotalCompact]}>{formatBRL(item.total)}</Text>
               </Pressable>

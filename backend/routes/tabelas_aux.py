@@ -1711,6 +1711,11 @@ async def list_dscr_icms(servidor: str, banco: str):
     return await tabelas_aux_service.list_dscr_icms(servidor, banco)
 
 
+@router.get("/tabelas/nfse-indop")
+async def list_nfse_indop(servidor: str, banco: str):
+    return await tabelas_aux_service.list_nfse_indop(servidor, banco)
+
+
 @router.get("/tabelas/classtrib/lookup")
 async def classtrib_lookup(servidor: str, banco: str, cst: str, cclasstrib: str):
     return await tabelas_aux_service.classtrib_lookup(servidor, banco, cst, cclasstrib)

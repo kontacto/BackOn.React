@@ -12,6 +12,7 @@ import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Campo = { campo: string; label: string };
+type Grupo = { chave: string; titulo: string; hint?: string; campos: string[]; exclusivo?: boolean };
 
 // "Bar", "Cilindro", "Pedido de Venda", "Metro Quadrado" e "Clínica" são 5
 // versões/segmentos diferentes da mesma tela de Pedido de Venda — mutuamente
@@ -24,6 +25,26 @@ type Campo = { campo: string; label: string };
 // já aplicada ao Painel Posto de Combustível — ver CLAUDE.md > "Card List
 // Ordering").
 const SEGMENTOS_PEDIDO_EXCLUSIVOS = ["Bar", "Cilindro", "Pedido_venda", "metro_quadrado", "CLINICA"];
+
+// Grupos nomeados exibidos no topo da lista (nesta ordem), cada um quebrando
+// a ordem alfabética igual ao grupo "Pedidos" já existente. Generalizado
+// 2026-08-10 (user-directed — grupo "Automação Comercial" novo) a partir do
+// único grupo hardcoded que existia antes (só "Pedidos") — campos fora de
+// todo grupo continuam na lista alfabética normal ("outrosCampos" abaixo).
+const GRUPOS: Grupo[] = [
+  {
+    chave: "pedidos",
+    titulo: "Pedidos",
+    hint: "Bar, Cilindro, Pedido de Venda, Metro Quadrado e Clínica são versões diferentes da mesma tela — só uma pode ficar ativa.",
+    campos: SEGMENTOS_PEDIDO_EXCLUSIVOS,
+    exclusivo: true,
+  },
+  {
+    chave: "automacao_comercial",
+    titulo: "Automação Comercial",
+    campos: ["balanca_toledo", "balanca_pre_pesagem"],
+  },
+];
 
 export default function ModulosRecursosScreen() {
   const router = useRouter();
@@ -78,11 +99,13 @@ export default function ModulosRecursosScreen() {
   const toggle = (campo: string) => {
     setValores((v) => {
       const novo = !v[campo];
-      if (novo && SEGMENTOS_PEDIDO_EXCLUSIVOS.includes(campo)) {
-        // Ligar um dos 3 segmentos de Pedido de Venda desliga os outros
-        // dois automaticamente — mutuamente exclusivos.
+      const grupoExclusivo = GRUPOS.find((g) => g.exclusivo && g.campos.includes(campo));
+      if (novo && grupoExclusivo) {
+        // Ligar um campo de um grupo exclusivo desliga os outros do mesmo
+        // grupo automaticamente — mesma regra de sempre, generalizada pra
+        // qualquer grupo marcado `exclusivo`, não só "Pedidos".
         const next = { ...v };
-        SEGMENTOS_PEDIDO_EXCLUSIVOS.forEach((c) => { next[c] = c === campo; });
+        grupoExclusivo.campos.forEach((c) => { next[c] = c === campo; });
         return next;
       }
       return { ...v, [campo]: novo };
@@ -112,10 +135,12 @@ export default function ModulosRecursosScreen() {
     }
   };
 
-  const pedidosCampos = SEGMENTOS_PEDIDO_EXCLUSIVOS
-    .map((c) => campos.find((x) => x.campo === c))
-    .filter((c): c is Campo => !!c);
-  const outrosCampos = campos.filter((c) => !SEGMENTOS_PEDIDO_EXCLUSIVOS.includes(c.campo));
+  const camposEmGrupo = new Set(GRUPOS.flatMap((g) => g.campos));
+  const gruposComCampos = GRUPOS.map((g) => ({
+    grupo: g,
+    itens: g.campos.map((c) => campos.find((x) => x.campo === c)).filter((c): c is Campo => !!c),
+  })).filter((g) => g.itens.length > 0);
+  const outrosCampos = campos.filter((c) => !camposEmGrupo.has(c.campo));
 
   const renderRow = (item: Campo) => {
     const on = !!valores[item.campo];
@@ -154,14 +179,16 @@ export default function ModulosRecursosScreen() {
           keyExtractor={(c) => c.campo}
           renderItem={({ item }) => renderRow(item)}
           ListHeaderComponent={
-            pedidosCampos.length > 0 ? (
-              <View testID="mod-grupo-pedidos">
-                <Text style={styles.groupTitle}>Pedidos</Text>
-                <Text style={styles.groupHint}>
-                  Bar, Cilindro, Pedido de Venda, Metro Quadrado e Clínica são versões diferentes da mesma tela — só uma pode ficar ativa.
-                </Text>
-                {pedidosCampos.map((item) => renderRow(item))}
-                <View style={styles.groupDivider} />
+            gruposComCampos.length > 0 ? (
+              <View>
+                {gruposComCampos.map(({ grupo, itens }) => (
+                  <View key={grupo.chave} testID={`mod-grupo-${grupo.chave}`}>
+                    <Text style={styles.groupTitle}>{grupo.titulo}</Text>
+                    {grupo.hint ? <Text style={styles.groupHint}>{grupo.hint}</Text> : null}
+                    {itens.map((item) => renderRow(item))}
+                    <View style={styles.groupDivider} />
+                  </View>
+                ))}
               </View>
             ) : null
           }

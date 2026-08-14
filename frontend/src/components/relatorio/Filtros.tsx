@@ -13,6 +13,11 @@ const SITUACOES = [
   { value: "F", label: "Fechado" },
   { value: "PG", label: "Faturado" },
   { value: "C", label: "Cancelado" },
+  // "Pendentes" (Aberto OU Fechado, nunca Cancelado/Faturado) — migração de
+  // "Pedidos Pendentes" (Painel de Relatórios > Pré Venda, `FrmRelPeP.frm`),
+  // implementado como preset CSV em vez de tela dedicada (backend já aceita
+  // `situacao` como lista separada por vírgula — ver relatorios_service.py).
+  { value: "A,F", label: "Pendentes" },
 ];
 
 type Props = {
@@ -77,7 +82,7 @@ export default function Filtros(p: Props) {
               key={s.value || "all"}
               onPress={() => p.setSituacao(s.value)}
               style={[styles.chip, sel && styles.chipSel]}
-              testID={`relpedidos-sit-${s.value || "todos"}`}
+              testID={`relpedidos-sit-${(s.value || "todos").replace(",", "-")}`}
             >
               <Text style={[styles.chipText, sel && styles.chipTextSel]}>{s.label}</Text>
             </Pressable>

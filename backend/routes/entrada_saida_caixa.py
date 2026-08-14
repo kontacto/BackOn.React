@@ -60,6 +60,11 @@ async def get_config(servidor: str, banco: str):
     return await entrada_saida_caixa_service.get_config(servidor, banco)
 
 
+@router.get("/entrada-saida-caixa/relatorio")
+async def relatorio(servidor: str, banco: str, tipo: str, data_de: str, data_ate: str):
+    return await entrada_saida_caixa_service.relatorio(servidor, banco, tipo, data_de, data_ate)
+
+
 @router.get("/entrada-saida-caixa")
 async def list_lancamentos(
     servidor: str, banco: str,

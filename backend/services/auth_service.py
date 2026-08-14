@@ -5,7 +5,7 @@ from typing import Optional
 import pymssql
 
 from db.connection import (
-    _pick_sql_credentials, SQL_TDS_VERSION, _to_json_safe, _err_origin, friendly_db_error,
+    _pick_sql_credentials, _connect_with_tds_fallback, _to_json_safe, _err_origin, friendly_db_error,
 )
 from models.schemas import LoginRequest, LoginResponse
 
@@ -95,6 +95,18 @@ def _enrich_funcionario(row: Optional[dict]) -> Optional[dict]:
     if row is None:
         return None
     out = dict(row)
+    # `funcionarios.codigo_int` é INT no SQL Server, mas o cliente KPDV
+    # (C#) espera string em `FuncionarioInfo.CodigoInt` (mesmo motivo já
+    # documentado pra `cod_funcao`: precisa acomodar o valor sintético do
+    # usuário master, que não é numérico). Sem essa conversão, o JSON sai
+    # com `"codigo_int": 2` (número) em vez de `"codigo_int": "2"`
+    # (string), e o `System.Text.Json` do KPDV rejeita a resposta inteira
+    # com "formato inesperado" — achado ao vivo, 2026-08-11, login real
+    # (usuário "carlos") contra BAIXO BRISA REAL/DESKTOP-TDK482U. O login
+    # master (`_build_master_session` acima) nunca expôs esse bug porque
+    # nem inclui `codigo_int` no dict sintético.
+    if "codigo_int" in out and out["codigo_int"] is not None:
+        out["codigo_int"] = str(out["codigo_int"])
     sit_map = {"A": "Ativo", "I": "Inativo", "F": "Férias", "D": "Desligado"}
     if out.get("situacao"):
         out["situacao_label"] = sit_map.get(str(out["situacao"]).strip().upper(),
@@ -137,15 +149,19 @@ def _sql_login_sync(payload: LoginRequest) -> LoginResponse:
     }
 
     # ------- Etapa 1: abrir conexão -------
+    # Cascata de versão TDS (mesma usada por `_open_conn`, ver
+    # `_connect_with_tds_fallback`) — achado ao vivo 2026-08-11: sem isso,
+    # o login reproduz "Adaptive Server connection failed" pra qualquer
+    # servidor que só negocie uma versão TDS mais antiga (ex.:
+    # `DESKTOP-TDK482U`/SQL Server 2014 SP1), mesmo já corrigido em
+    # `_open_conn` — o login abre sua PRÓPRIA conexão, fora daquele helper.
     try:
-        conn = pymssql.connect(
+        conn = _connect_with_tds_fallback(
             server=servidor,                        # ← do app, sem alteração
             user=sql_user,                          # ← suporte (Azure) | sa (local)
             password=sql_password,
-            database=payload.banco,                 # ← do app
-            login_timeout=payload.timeout or 8,
+            banco=payload.banco,                    # ← do app
             timeout=payload.timeout or 8,
-            tds_version=SQL_TDS_VERSION,
         )
     except pymssql.OperationalError as e:
         line, code = _err_origin()

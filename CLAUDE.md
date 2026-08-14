@@ -403,6 +403,78 @@ advances whenever Fechamento de Turno runs). Instead:
 - This isn't unique to `DATESIST` — apply the same rule to any other VB6 global found
   while porting a screen (session globals, "current company" globals, etc.).
 
+### Cada app precisa se auto-atualizar no banco, de forma INTEGRAL — nunca script de migração manual `[GLOBAL]`
+
+**Added 2026-08-11, user-directed** ("os bancos de dados dos clientes pode
+haver tabelas desatualizadas. isso é um dos problemas de versionamento que
+temos no VB6. quando a equipe do VB6 libera uma versão, tem que liberar
+também um script para atualizar o banco. por isso os apps que estamos
+criando, tem que persistir no BD para não acontecer mais esse problema").
+Motivo real, não hipotético: o VB6 legado depende de alguém rodar um
+script de atualização de banco manualmente a cada release — em centenas de
+instalações de cliente diferentes, isso falha com frequência (script
+esquecido, aplicado fora de ordem, cliente atrasado várias versões) e
+resulta em bancos com colunas/tabelas faltando, divergentes entre clientes.
+
+**Correção no mesmo dia, user-directed** ("a persistência não pode ser de
+forma pontual. tem que ser integral"): a 1ª versão desta regra só
+formalizava o padrão `_ensure_<algo>` já em uso — um helper idempotente
+por coluna/tabela, chamado individualmente dentro da função que precisa
+dele. Isso é **pontual**: um cliente cuja instalação nunca exercitou uma
+feature específica (ex.: nunca abriu a tela de Contratos) fica com a
+coluna daquela feature faltando indefinidamente, mesmo que o resto do
+schema já esteja em dia — cada `_ensure_*` só remenda o pedaço que a
+PRÓPRIA feature que o chama precisa, nunca o todo.
+
+**A garantia real é INTEGRAL, não por feature**: `backend/services/
+schema_ensure.py` reúne TODOS os `_ensure_*` de schema (DDL) já
+existentes num único registro (`_MIGRACOES`) e os aplica de uma vez só
+(`ensure_all_schema`) — chamado a partir de `db/connection.py::_open_conn`
+(o ÚNICO ponto de abertura de conexão de todo o backend), na primeira
+conexão de cada `servidor`+`banco` por execução do processo (cache em
+memória, `_SCHEMA_JA_GARANTIDO` — evita repetir ~23 checagens `EXISTS` em
+toda requisição). Isso significa: a partir do primeiro request de
+QUALQUER endpoint contra um banco de cliente, TODO o schema pendente do
+sistema inteiro é aplicado de uma vez — não só o pedaço que aquele
+endpoint específico usa.
+
+- **Padrão pra migração nova**: escrever o `_ensure_<algo>(cur) -> None`
+  (mesmo formato de sempre — `IF NOT EXISTS (SELECT 1 FROM sys.columns/
+  sys.tables WHERE ...) ALTER TABLE ... ADD .../CREATE TABLE ...`) no
+  service dono da tabela, **e também registrar em
+  `schema_ensure.py::_MIGRACOES`** — é esse segundo passo que torna a
+  cobertura integral em vez de pontual de novo. Os `_ensure_*` continuam
+  podendo ser chamados também no ponto de uso original de cada service
+  (rede de segurança adicional, idempotente e barata) — não é obrigatório
+  remover, mas a garantia real agora vem do registro central.
+- **Isolamento por migração**: `ensure_all_schema` roda cada migração em
+  try/except própria — uma falhar (bug pontual, nome de coluna
+  conflitante nesse banco específico) nunca bloqueia as outras 22+; a
+  falha é logada (`logging.getLogger`), nunca silenciosa nem fatal pra
+  conexão em si.
+- **Cursor precisa ser `as_dict=True`** — todo `_ensure_*` já escrito
+  assume esse formato (mesmo padrão do resto do backend); achado ao vivo
+  na implementação (`AttributeError: 'tuple' object has no attribute
+  'get'` até corrigir).
+- **Exclusão deliberada**: helpers que garantem uma LINHA de dado de
+  negócio (não schema — ex.: `contratos_service._ensure_forma_pag_
+  contrato_sync`, que faz `INSERT` de uma forma de pagamento padrão, não
+  `ALTER`/`CREATE`) não entram neste registro — categoria diferente
+  (bootstrap de dado, não de estrutura).
+- **Efeito prático**: um cliente pode estar rodando uma versão desta
+  migração de 3 meses atrás — no PRIMEIRO request de qualquer tela contra
+  o banco dele, TODO o schema pendente do sistema inteiro é aplicado de
+  uma vez, não só o pedaço da tela que foi aberta. Resolve o problema de
+  versionamento do VB6 descrito pelo usuário, por construção — e de forma
+  integral, não pontual.
+- **Aplica a toda mudança de schema daqui pra frente** — coluna nova,
+  tabela nova, índice novo que uma feature precisa: sempre os 2 passos
+  (helper `_ensure_*` no service + registro em `schema_ensure.py`).
+- **Não é retroativo por si só** — os 23 `_ensure_*` já existentes foram
+  todos registrados nesta correção (cobertura completa no dia em que a
+  regra foi escrita); dali pra frente, é responsabilidade de cada
+  migração nova se registrar, não uma varredura automática.
+
 ### Don't blindly replicate VB6-era hacks as business rules
 
 **Added 2026-07-13, user-directed** ("tem rotina que às vezes acho que nem vale a pena
@@ -1120,15 +1192,105 @@ repetida por pedido.
   com o `router.back()` de sempre — só o painel precisa desse atalho, já
   que ele nunca tem uma tela de pedido aberta esperando o cliente voltar.
 
+## "Design Desktop" — App Web como Substituto do Desktop VB6, não "App Mobile Esticado" `[GLOBAL]`
+
+**Apelido definido 2026-08-13, user-directed** ("vou nomear de Design
+Desktop") — mesmo padrão do "Modo Didático" mais abaixo neste arquivo: o
+usuário pode pedir só "aplique Design Desktop nessa tela" (ou "essa tela
+precisa de Design Desktop") pra disparar toda a regra abaixo, sem precisar
+reexplicar. Ao ouvir esse termo em qualquer sessão futura, aplicar esta
+seção inteira.
+
+**Added 2026-08-13, user-directed `[GLOBAL]`** ("app web é designada a
+substituição do vb6 desktop. Então vai trabalhar em desktop" + "temos uma
+versão única para mobile. web tem que se comportar como desktop"). Toda a
+seção "Web Layout Standard" abaixo (tokens `WEB_CONTENT_MAX_WIDTH`/
+`WEB_FILTER_CARD`/etc., o padrão de card centralizado com bastante
+padding) foi construída com uma mentalidade "app mobile que também roda
+no navegador" — coluna única, bastante espaço em branco, campos grandes
+empilhados. Isso está errado pro papel real do Web neste projeto: é o
+substituto direto das telas do VB6 desktop (ver "Platform Scope" no topo
+deste arquivo — Web tem o escopo completo da aplicação), rodando em
+monitor grande, mouse+teclado, e precisa da mesma densidade de informação
+que o VB6 sempre teve — não uma versão "responsiva" do app mobile.
+
+**Referência visual obrigatória**: antes de desenhar/revisar qualquer tela
+web, olhar a tela VB6 correspondente (ver "Legacy VB6 Source Reference")
+não só pra regra de negócio, mas pra DENSIDADE. Exemplo concreto que
+motivou esta regra (`Cadastro de OS`, `FrmTraOsNew.frm`):
+
+- **Campos pequenos, muitos por linha, zero espaço desperdiçado** — o
+  cabeçalho inteiro (Nº OS, Referência, Status, Cliente, Situação, Tipo,
+  Entrada/Término, Atendente, Responsável) cabe em ~4 linhas compactas.
+  Nenhum campo curto (combo, código, status) ocupa a largura toda.
+- **Coluna de botões de ação SEMPRE visível** — Gravar/Consultar/Novo/
+  Fechar/Faturar/Cancelar/Imprimir/Anexos/etc. ficam todos como botões
+  ícone+rótulo numa coluna fixa, nunca escondidos atrás de um ícone com
+  tooltip só-no-hover (o padrão atual deste projeto pro cabeçalho de
+  Pedido/O.S. — `PedidoHeader.tsx`'s ícones de Ajuda/Anexos/Formulários —
+  é exatamente o oposto disso, ver "Pontos em aberto" abaixo).
+  ("Modo Didático" — ícone único de Ajuda — continua válido como
+  EXPLICAÇÃO de botões, não substitui o próprio botão estar visível.)
+- **Painéis independentes lado a lado, não empilhados** — no exemplo, o
+  bloco de texto (Cliente Descreve/Observações/Serviço Executado) e o
+  bloco de checkboxes (Opções de Impressão) ocupam a mesma faixa
+  horizontal, um do lado do outro — não um embaixo do outro.
+- **Grade de itens é tabela densa**, não um card grande por linha.
+- **Totais/valores em destaque** num bloco compacto (não espalhados).
+
+**Correção concreta já aplicada como referência (2026-08-13)**:
+`OSEquipamentoCard.tsx` (card de equipamento vinculado à O.S., Assistência
+Técnica) tinha 4 campos de texto empilhados full-width + um botão "Salvar"
+do tamanho da tela inteira — exatamente o anti-padrão. Corrigido pra
+campos agrupados em `fieldsRow`/`colHalf` (2 colunas) e um botão "Salvar"
+pill pequeno alinhado à direita (nunca full-width — já era regra em
+"Padrões de UI" > 3 abaixo, só não tinha sido aplicada aqui). Usar este
+componente como referência de "campo denso" ao tocar qualquer outro card/
+formulário.
+
+- **Isto complementa, não substitui, "Field Width Standard"/"Padrões de
+  UI" já existentes neste arquivo** — aquelas regras já diziam "não
+  esticar campo curto"/"não esticar botão sozinho"; esta seção eleva isso
+  a princípio organizador de TODA tela web, não só um detalhe de
+  formatação.
+- **Mobile continua intocado** — "temos uma versão única para mobile":
+  as telas mobile (Pedido Bar/O.S. rápidos, cadastro rápido de cliente,
+  etc.) já são deliberadamente enxutas pro toque em tela pequena (ver
+  "Platform Scope") e não são afetadas por esta regra. Componentes que só
+  renderizam em tela web-only (a maioria das "cadastro completo"/
+  "Pedido Geral"/"O.S. Completa") podem assumir densidade desktop sem
+  precisar de fallback mobile — não existe esse fallback pra elas.
+- **Escopo desta rodada, user-directed ("varredura completa desde já")**:
+  aplicar retroativamente em TODA tela web já construída — diferente do
+  padrão de não-retroatividade das demais regras `[GLOBAL]` deste
+  arquivo. Trabalho em andamento, várias sessões — ver PENDENCIAS.md pro
+  acompanhamento da varredura tela por tela.
+- **Pontos em aberto, não resolvidos ainda**: o redesenho da barra de
+  ação (`PedidoHeader.tsx`) de "ícones com tooltip" pra "coluna/barra de
+  botões rotulados sempre visíveis" é um componente COMPARTILHADO por
+  Pedido Bar/Pedido Geral/O.S. Geral — mudança de maior risco (afeta
+  várias telas já testadas de uma vez), ainda não iniciada, aguardando
+  decisão de como conduzir antes de mexer.
+
 ## Web Layout Standard
 
 Use the shared web layout tokens from:
 
 - `frontend/src/theme/webLayout.ts`
 
+**Atualizado 2026-08-13** — ver regra `[GLOBAL]` acima. O padrão abaixo
+ainda vale pro ESQUELETO da tela (scroll centralizado, cards com borda/
+radius consistentes), mas "max width" deixou de significar "coluna
+estreita tipo mobile": `WEB_CONTENT_MAX_WIDTH` foi alargado (1120 → 1600)
+pra realmente aproveitar tela de desktop, e o conteúdo DENTRO do shell
+deve seguir a densidade descrita acima (campos agrupados, painéis lado a
+lado), não uma pilha vertical de blocos full-width.
+
 Required pattern for web screens:
 
-1. Centered content container with consistent max width.
+1. Centered content container with consistent max width — largo o
+   suficiente pra densidade desktop (ver regra `[GLOBAL]` acima), não
+   uma coluna estreita.
 2. Filter and form blocks rendered as visual cards.
 3. Scroll content aligned to center on web.
 4. Prefer shared base styles/tokens instead of per-screen custom values.

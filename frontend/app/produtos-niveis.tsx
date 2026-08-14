@@ -12,7 +12,7 @@ import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { apiGet, apiSend } from "@/src/utils/api";
 import { colors, radius, spacing } from "@/src/theme/colors";
-import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
+import { WEB_CONTENT_SHELL, WEB_FIELD_COL_HALF, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { buildTree, NivelFlat, NivelNode } from "@/src/utils/nivelTree";
 
 type ModoFiltro = "nivel" | "ncm";
@@ -1076,8 +1076,8 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 14, fontWeight: "700", color: colors.onSurface, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: spacing.sm },
   subTitle: { fontSize: 12, fontWeight: "700", color: colors.brandPrimary, marginTop: spacing.sm, marginBottom: 4, textTransform: "uppercase" },
   hint: { fontSize: 12, color: colors.muted, marginTop: 4, marginBottom: spacing.sm, fontStyle: "italic" },
-  formGrid: { flexDirection: "row", flexWrap: "wrap", columnGap: spacing.md },
-  colHalf: { width: "49%" },
+  formGrid: { flexDirection: "row", flexWrap: "wrap", columnGap: spacing.md, rowGap: spacing.sm },
+  colHalf: WEB_FIELD_COL_HALF,
   colThird: { width: "32%" },
   fieldLabel: { fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "500" },
   input: {

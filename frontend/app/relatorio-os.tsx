@@ -26,6 +26,12 @@ const SIT_OPTS: SelectOption[] = [
   { value: "F", label: "Fechado" },
   { value: "PG", label: "Pago" },
   { value: "C", label: "Cancelado" },
+  // "Não Faturadas" (Aberta OU Fechada, nunca Cancelada/Paga) — migração de
+  // "O.S. Não Faturadas" (Painel de Relatórios > Pré Venda,
+  // `frmRelOSRes.frm`), implementado como preset CSV em vez de tela
+  // dedicada (backend já aceita `situacao` como lista separada por vírgula
+  // — ver relatorios_service.py).
+  { value: "A,F", label: "Não Faturadas" },
 ];
 
 function formatBRL(v: number): string {

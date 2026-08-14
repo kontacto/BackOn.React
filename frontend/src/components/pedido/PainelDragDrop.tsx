@@ -33,30 +33,37 @@ export function DraggablePedidoCard({
     const node = ref.current as unknown as HTMLElement | null;
     if (!node) return;
     // O card renderizado (`ps.card` em PainelPedidoCard.tsx) é o único
-    // filho real deste wrapper `display:contents` — aplica cursor/opacity
-    // nele diretamente (o wrapper em si não gera caixa própria, então
-    // estilizar o wrapper não teria efeito visual nenhum).
+    // filho real deste wrapper `display:contents`. O atributo `draggable`
+    // e os listeners de drag precisam ir NELE, nunca no wrapper — achado
+    // ao vivo 2026-08-11 (drag-and-drop nunca iniciava em nenhum
+    // navegador testado, sem erro nenhum no console): um elemento com
+    // `display:contents` não gera caixa própria, e a HTML5 Drag and Drop
+    // API exige uma caixa real pra servir de fonte do arrasto — setar
+    // `draggable="true"` no wrapper simplesmente não tem efeito. O
+    // wrapper em si continua existindo só pelo layout (ver comentário no
+    // JSX abaixo), nunca participa da mecânica de drag.
     const card = node.firstElementChild as HTMLElement | null;
+    if (!card) return;
     if (!enabled) {
-      node.removeAttribute("draggable");
-      if (card) card.style.cursor = "";
+      card.removeAttribute("draggable");
+      card.style.cursor = "";
       return;
     }
-    node.setAttribute("draggable", "true");
-    if (card) card.style.cursor = "grab";
+    card.setAttribute("draggable", "true");
+    card.style.cursor = "grab";
     const onDragStart = (e: DragEvent) => {
       e.dataTransfer?.setData("text/plain", String(pedidoId));
       if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-      if (card) card.style.opacity = "0.4";
+      card.style.opacity = "0.4";
     };
     const onDragEnd = () => {
-      if (card) card.style.opacity = "";
+      card.style.opacity = "";
     };
-    node.addEventListener("dragstart", onDragStart);
-    node.addEventListener("dragend", onDragEnd);
+    card.addEventListener("dragstart", onDragStart);
+    card.addEventListener("dragend", onDragEnd);
     return () => {
-      node.removeEventListener("dragstart", onDragStart);
-      node.removeEventListener("dragend", onDragEnd);
+      card.removeEventListener("dragstart", onDragStart);
+      card.removeEventListener("dragend", onDragEnd);
     };
   }, [pedidoId, enabled]);
 

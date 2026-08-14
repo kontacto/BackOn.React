@@ -22,6 +22,7 @@ from models.schemas import (
     CheckoutAbrirRequest, CheckoutItemRequest, CheckoutCancelarItemRequest,
     CheckoutDescontoGeralRequest, CheckoutFecharRequest, CheckoutFormaPagamentoItem,
     CheckoutCancelarVendaRequest, CheckoutImportarDavRequest,
+    CheckoutImportarAbastecimentoRequest, CheckoutImportarAgendamentoRequest,
 )
 
 
@@ -120,11 +121,88 @@ def _importar_dav_req(**over):
     return CheckoutImportarDavRequest(**base)
 
 
+def _importar_abastecimento_req(**over):
+    base = dict(servidor="srv", banco="bd", num_abastecimento=555, vendedor=1, master=True,
+                usuario_alteracao=1, classe=None, plataforma="web")
+    base.update(over)
+    return CheckoutImportarAbastecimentoRequest(**base)
+
+
+def _importar_agendamento_req(**over):
+    base = dict(servidor="srv", banco="bd", codagenda=777, vendedor=1, master=True,
+                usuario_alteracao=1, classe=None, plataforma="web")
+    base.update(over)
+    return CheckoutImportarAgendamentoRequest(**base)
+
+
 PECA_ROW = {
     "codigo": "P001", "descricao": "Produto X", "codigo_fab": "P001", "valor": 50.0,
     "uni": "UN", "custo_reposicao": 30.0, "controla_num_serie": False, "aceita_desconto": True,
 }
 SERVICO_ROW = {"codigo": "S001", "descricao": "Serviço X", "valor": 100.0}
+
+
+class TestBuscarProdutoPesoVariavel:
+    """Automação Comercial (2026-08-10) — `_buscar_produto_sync` decodifica
+    código de barras de peso variável (EAN-13, prefixo "2") antes de resolver
+    o produto, e expõe `peso_variado`/`peso_kg` na resposta. Isola do resto
+    da cadeia de resolução (já coberta em outros testes) via monkeypatch dos
+    colaboradores — mais robusto do que contar fetchone() em sequência por
+    uma cadeia de 4-5 funções internas."""
+
+    # Mesmo código válido de test_pedido_common_balanca.py: prefixo "2" +
+    # código produto "00123" + peso "00500" (500g) + dígito extra + dígito
+    # verificador EAN-13.
+    CODIGO_BARRAS_PESO_VARIAVEL = "2001230050009"
+
+    def _stub_colaboradores(self, monkeypatch, resolve_fn):
+        monkeypatch.setattr(svc, "_resolve_produto_completo", resolve_fn)
+        monkeypatch.setattr(svc, "_preco_promocional", lambda *a, **k: None)
+        monkeypatch.setattr(svc, "_preco_por_qtd", lambda *a, **k: None)
+        monkeypatch.setattr(svc, "_limites_desconto", lambda *a, **k: {"desc_g": 0, "desc_s": 0, "desc_v": 0})
+
+    def test_decodifica_e_resolve_pelo_codigo_embutido(self, monkeypatch):
+        cur = FakeCursor(one=[{"qtd": 10.0}])
+        _patch(monkeypatch, cur)
+        codigos_resolvidos = []
+
+        def fake_resolve(cur, codigo):
+            codigos_resolvidos.append(codigo)
+            return {
+                "tipo": "P", "codigo": "00123", "cod_fab": "FAB1", "descricao": "Banana Prata",
+                "valor": 6.5, "unidade": "KG", "custo": 3.0, "peso_variado": True,
+            }
+
+        self._stub_colaboradores(monkeypatch, fake_resolve)
+
+        r = svc._buscar_produto_sync("srv", "bd", self.CODIGO_BARRAS_PESO_VARIAVEL, 1)
+
+        assert r["success"] is True
+        # Resolveu pelo código EMBUTIDO no código de barras, não pelo código
+        # de barras cru de 13 dígitos.
+        assert codigos_resolvidos == ["00123"]
+        assert r["peso_variado"] is True
+        assert r["peso_kg"] == 0.5
+
+    def test_codigo_normal_nao_decodifica(self, monkeypatch):
+        cur = FakeCursor(one=[{"qtd": 10.0}])
+        _patch(monkeypatch, cur)
+        codigos_resolvidos = []
+
+        def fake_resolve(cur, codigo):
+            codigos_resolvidos.append(codigo)
+            return {
+                "tipo": "S", "codigo": "S001", "cod_fab": "S001", "descricao": "Serviço X",
+                "valor": 100.0, "unidade": "HR", "custo": 100.0, "peso_variado": False,
+            }
+
+        self._stub_colaboradores(monkeypatch, fake_resolve)
+
+        r = svc._buscar_produto_sync("srv", "bd", "S001", 1)
+
+        assert codigos_resolvidos == ["S001"]  # código normal, sem decodificação
+        assert r["peso_variado"] is False
+        assert r["peso_kg"] is None
 
 
 class TestAbrirVenda:
@@ -143,7 +221,7 @@ class TestAbrirVenda:
 class TestAddItem:
     def test_adiciona_servico_sem_desconto(self, monkeypatch):
         cur = FakeCursor(
-            one=[{"situacao": "A"}, SERVICO_ROW, {"desc_g": 10, "desc_s": 15, "desc_v": 5},
+            one=[{"situacao": "A"}, SERVICO_ROW, {"emite_nf_comanda": False}, {"desc_g": 10, "desc_s": 15, "desc_v": 5},
                  {"id_mov": 55}, None, {"total": 100.0}],
         )
         conn = _patch(monkeypatch, cur)
@@ -155,7 +233,7 @@ class TestAddItem:
 
     def test_bloqueia_desconto_acima_do_limite_do_vendedor(self, monkeypatch):
         cur = FakeCursor(
-            one=[{"situacao": "A"}, PECA_ROW, {"agora": datetime(2026, 1, 1)}, None,
+            one=[{"situacao": "A"}, PECA_ROW, {"emite_nf_comanda": False}, {"agora": datetime(2026, 1, 1)}, None,
                  {"desc_g": 20, "desc_s": 15, "desc_v": 10}],
             many=[[]],
         )
@@ -167,7 +245,7 @@ class TestAddItem:
 
     def test_autorizado_por_libera_desconto_acima_do_limite(self, monkeypatch):
         cur = FakeCursor(
-            one=[{"situacao": "A"}, PECA_ROW, {"agora": datetime(2026, 1, 1)}, None,
+            one=[{"situacao": "A"}, PECA_ROW, {"emite_nf_comanda": False}, {"agora": datetime(2026, 1, 1)}, None,
                  {"desc_g": 20, "desc_s": 15, "desc_v": 10}, {"id_mov": 77}, {"ok": 1}, {"total": 80.0}],
             many=[[]],
         )
@@ -186,6 +264,81 @@ class TestAddItem:
         result = svc._add_item_sync(_item_req(), comanda=1)
         assert result["success"] is False
         assert "fechada" in result["message"].lower()
+
+
+class TestAddItemTaxaNfce:
+    """Checagem de Taxa (taxas_nfce) ao adicionar item — réplica de
+    `RetornaDadosProduto`/`Campo_Validate` (FrmPafOFF.frm), rastreada ao
+    vivo 2026-08-06. Gateada por `controle.emite_nf_comanda` — decisão
+    explícita do usuário de NÃO replicar a inconsistência do legado (lá
+    roda sempre, incondicional; aqui só quando a empresa emite NF direto)."""
+
+    def test_bloqueia_item_sem_taxa_cadastrada_quando_emite_nf_comanda(self, monkeypatch):
+        peca = {**PECA_ROW, "cod_icms": "0"}
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, peca, {"emite_nf_comanda": True}, {"uf": "RJ"}, None,
+        ])
+        conn = _patch(monkeypatch, cur)
+        result = svc._add_item_sync(_item_req(codigo="P001", qtd=1), comanda=1)
+        assert result["success"] is False
+        assert "Tabela de Taxas" in result["message"]
+        assert conn.committed is False
+        taxa_q, taxa_p = next(q for q in cur.queries if "taxas_nfce" in q[0])
+        assert "Tipo_Mov='S01'" in taxa_q
+        assert taxa_p == ("RJ", "0")
+
+    def test_permite_item_quando_taxa_cadastrada(self, monkeypatch):
+        peca = {**PECA_ROW, "cod_icms": "0"}
+        cur = FakeCursor(
+            one=[
+                {"situacao": "A"}, peca, {"emite_nf_comanda": True}, {"uf": "RJ"}, {"ok": 1},
+                {"agora": datetime(2026, 1, 1)}, None,
+                {"desc_g": 20, "desc_s": 15, "desc_v": 10},
+                {"id_mov": 90}, {"ok": 1}, {"total": 50.0},
+            ],
+            many=[[]],
+        )
+        conn = _patch(monkeypatch, cur)
+        result = svc._add_item_sync(_item_req(codigo="P001", qtd=1), comanda=1)
+        assert result["success"] is True
+        assert conn.committed is True
+
+    def test_nao_verifica_taxa_quando_emite_nf_comanda_desligado(self, monkeypatch):
+        peca = {**PECA_ROW, "cod_icms": "0"}
+        cur = FakeCursor(
+            one=[
+                {"situacao": "A"}, peca, {"emite_nf_comanda": False},
+                {"agora": datetime(2026, 1, 1)}, None,
+                {"desc_g": 20, "desc_s": 15, "desc_v": 10},
+                {"id_mov": 91}, {"ok": 1}, {"total": 60.0},
+            ],
+            many=[[]],
+        )
+        conn = _patch(monkeypatch, cur)
+        result = svc._add_item_sync(_item_req(codigo="P001", qtd=1), comanda=1)
+        assert result["success"] is True
+        assert conn.committed is True
+        assert not any("taxas_nfce" in q for q, _ in cur.queries)
+
+    def test_produto_sem_cod_icms_nunca_bloqueia_mesmo_com_emite_nf_comanda(self, monkeypatch):
+        # PECA_ROW não tem chave "cod_icms" — _linha_peca_completo devolve
+        # "" (get() retorna None -> strip vazio), e _verifica_taxa_nfce
+        # trata string vazia como "sem crivo" (mesmo raciocínio de outros
+        # campos fiscais opcionais no projeto).
+        cur = FakeCursor(
+            one=[
+                {"situacao": "A"}, PECA_ROW, {"emite_nf_comanda": True},
+                {"agora": datetime(2026, 1, 1)}, None,
+                {"desc_g": 20, "desc_s": 15, "desc_v": 10},
+                {"id_mov": 92}, {"ok": 1}, {"total": 70.0},
+            ],
+            many=[[]],
+        )
+        conn = _patch(monkeypatch, cur)
+        result = svc._add_item_sync(_item_req(codigo="P001", qtd=1), comanda=1)
+        assert result["success"] is True
+        assert conn.committed is True
+        assert not any("taxas_nfce" in q for q, _ in cur.queries)
 
 
 class TestCancelarItem:
@@ -276,13 +429,16 @@ class TestFecharVenda:
         assert result["troco"] == 50.0
         assert any("TROCO_COMANDA" in q for q, _ in cur.queries)
 
-    def test_cartao_credito_exige_administradora_e_parcelador(self, monkeypatch):
+    def test_cartao_credito_nao_exige_mais_administradora_e_parcelador(self, monkeypatch):
+        """Crivo de Administradora/Parcelador desativado nesta versão — pedido
+        explícito do usuário, 2026-08-06 ("não fazer o crivo da administradora
+        e parcelador nessa versão"). Fecha normalmente mesmo sem os dois."""
         cur = FakeCursor(one=[{"situacao": "A"}, {"c": 1}, {"valor_venda": 100.0}])
-        _patch(monkeypatch, cur)
+        conn = _patch(monkeypatch, cur)
         formas = [CheckoutFormaPagamentoItem(tipo="CC", forma_pag="002", valor=100.0)]
         result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
-        assert result["success"] is False
-        assert "administradora" in result["message"].lower()
+        assert result["success"] is True
+        assert conn.committed is True
 
     def test_cartao_credito_valida_parcelamento_e_grava_financiado_com_valor_pago(self, monkeypatch):
         """Confirma a divergência de schema real do legado: `comanda_financiado`
@@ -296,6 +452,200 @@ class TestFecharVenda:
         insert_q = next(q for q, _ in cur.queries if "comanda_financiado" in q)
         assert "valor_pago" in insert_q
         assert "valor_pag" not in insert_q.replace("valor_pago", "")
+
+
+class TestFecharVendaValeDevolucao:
+    """Vale de Devolução usado como companheiro de DI/DU/VA — ao portador,
+    sem duplicidade na mesma venda, e com a assimetria real do legado: só
+    DU/VA geram vale residual quando o valor usado é menor que o saldo."""
+
+    def test_di_consome_vale_integralmente_sem_residual_mesmo_com_sobra(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"c": 1}, {"valor_venda": 60.0},
+            {"codvale": 55, "cliente": 10, "valor": 100.0, "situacao": "A"},
+        ])
+        conn = _patch(monkeypatch, cur)
+        formas = [CheckoutFormaPagamentoItem(tipo="DI", forma_pag="001", valor=60.0, codigo_vale_devolucao=55)]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is True
+        assert conn.committed is True
+        assert any("UPDATE vale_devolucao SET situacao='F'" in q for q, _ in cur.queries)
+        assert any("INSERT INTO comanda_vale_devolucao" in q for q, _ in cur.queries)
+        # DI nunca gera vale residual, mesmo havendo sobra (100 - 60 = 40).
+        assert not any(q.startswith("INSERT INTO vale_devolucao") for q, _ in cur.queries)
+
+    def test_va_parcial_gera_vale_residual_com_saldo_restante(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"c": 1}, {"valor_venda": 60.0},
+            {"codvale": 55, "cliente": 10, "valor": 100.0, "situacao": "A"},
+        ])
+        conn = _patch(monkeypatch, cur)
+        formas = [CheckoutFormaPagamentoItem(tipo="VA", forma_pag="004", valor=60.0, codigo_vale_devolucao=55)]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is True
+        assert conn.committed is True
+        residual_q, residual_p = next(q for q in cur.queries if q[0].startswith("INSERT INTO vale_devolucao"))
+        assert residual_p[0] == 10  # mesmo cliente do vale original (ao portador, clonado)
+        assert residual_p[1] == 40.0  # 100 - 60
+
+    def test_du_parcial_gera_vale_residual(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"c": 1}, {"valor_venda": 30.0},
+            {"codvale": 55, "cliente": 10, "valor": 100.0, "situacao": "A"},
+        ])
+        _patch(monkeypatch, cur)
+        formas = [CheckoutFormaPagamentoItem(tipo="DU", forma_pag="005", valor=30.0, codigo_vale_devolucao=55)]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is True
+        assert any(q.startswith("INSERT INTO vale_devolucao") for q, _ in cur.queries)
+
+    def test_bloqueia_vale_nao_encontrado(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "A"}, {"c": 1}, {"valor_venda": 100.0}, None])
+        _patch(monkeypatch, cur)
+        formas = [CheckoutFormaPagamentoItem(tipo="DI", forma_pag="001", valor=100.0, codigo_vale_devolucao=999)]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is False
+        assert "não encontrado" in result["message"]
+
+    def test_bloqueia_vale_ja_utilizado(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"c": 1}, {"valor_venda": 100.0},
+            {"codvale": 55, "cliente": 10, "valor": 100.0, "situacao": "F"},
+        ])
+        _patch(monkeypatch, cur)
+        formas = [CheckoutFormaPagamentoItem(tipo="DI", forma_pag="001", valor=100.0, codigo_vale_devolucao=55)]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is False
+        assert "já foi utilizado" in result["message"]
+
+    def test_bloqueia_vale_cancelado(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"c": 1}, {"valor_venda": 100.0},
+            {"codvale": 55, "cliente": 10, "valor": 100.0, "situacao": "C"},
+        ])
+        _patch(monkeypatch, cur)
+        formas = [CheckoutFormaPagamentoItem(tipo="DI", forma_pag="001", valor=100.0, codigo_vale_devolucao=55)]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is False
+        assert "cancelado" in result["message"]
+
+    def test_bloqueia_valor_maior_que_saldo_do_vale(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"c": 1}, {"valor_venda": 100.0},
+            {"codvale": 55, "cliente": 10, "valor": 40.0, "situacao": "A"},
+        ])
+        _patch(monkeypatch, cur)
+        formas = [CheckoutFormaPagamentoItem(tipo="DI", forma_pag="001", valor=100.0, codigo_vale_devolucao=55)]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is False
+        assert "maior que o saldo" in result["message"]
+
+    def test_bloqueia_mesmo_vale_usado_duas_vezes_na_mesma_venda(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"c": 1}, {"valor_venda": 100.0},
+            {"codvale": 55, "cliente": 10, "valor": 100.0, "situacao": "A"},
+        ])
+        _patch(monkeypatch, cur)
+        formas = [
+            CheckoutFormaPagamentoItem(tipo="DI", forma_pag="001", valor=50.0, codigo_vale_devolucao=55),
+            CheckoutFormaPagamentoItem(tipo="DI", forma_pag="001", valor=50.0, codigo_vale_devolucao=55),
+        ]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is False
+        assert "já foi usado nesta mesma venda" in result["message"]
+
+
+class TestFecharVendaCartaoPresente:
+    """Cartão Presente — tipo `CP` novo (sem forma_pag própria), resgate
+    tudo-ou-nada ao portador, gera cartão residual com o saldo restante
+    (mesma mecânica do Vale de Devolução, sem a assimetria de tipo já que
+    Cartão Presente não tem um tipo `DI`/`DU`/`VA` próprio — decisão
+    explícita do usuário, "TEM QUE SER FIEL AO LEGADO" aplicada ao análogo
+    mais próximo, já que o legado nunca implementou resgate de verdade)."""
+
+    def test_resgate_total_sem_residual(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"c": 1}, {"valor_venda": 100.0},
+            {"pecas_cartao_presente_auto": 9, "codigo_int": "CARTAO01"},
+            {"comanda_cartao_presente_auto": 77, "valor_venda": 100.0},
+        ])
+        conn = _patch(monkeypatch, cur)
+        formas = [CheckoutFormaPagamentoItem(tipo="CP", forma_pag="", valor=100.0, codigo_cartao_presente="ABC123")]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is True
+        assert conn.committed is True
+        assert any(
+            "UPDATE comanda_cartao_presente SET situacao='F'" in q and p == (77,)
+            for q, p in cur.queries
+        )
+        resgate_q, resgate_p = next(q for q in cur.queries if "comanda_cartao_presente_resgate" in q[0] and q[0].startswith("INSERT"))
+        assert resgate_p == (1, 77, 100.0)
+        # Sem sobra (100 - 100 = 0) — nenhum cartão residual deve ser criado.
+        assert not any(q.startswith("INSERT INTO pecas_cartao_presente") for q, _ in cur.queries)
+
+    def test_resgate_parcial_gera_cartao_residual(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"c": 1}, {"valor_venda": 60.0},
+            {"pecas_cartao_presente_auto": 9, "codigo_int": "CARTAO01"},
+            {"comanda_cartao_presente_auto": 77, "valor_venda": 100.0},
+            {"pecas_cartao_presente_auto": 88},
+        ])
+        conn = _patch(monkeypatch, cur)
+        formas = [CheckoutFormaPagamentoItem(tipo="CP", forma_pag="", valor=60.0, codigo_cartao_presente="ABC123")]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is True
+        assert conn.committed is True
+        novo_cartao_q, novo_cartao_p = next(q for q in cur.queries if q[0].startswith("INSERT INTO pecas_cartao_presente"))
+        assert novo_cartao_p[0] == "CARTAO01"
+        assert novo_cartao_p[1] == "ABC123-R77"
+        vinculo_q, vinculo_p = next(q for q in cur.queries if q[0].startswith("INSERT INTO comanda_cartao_presente ") or q[0].startswith("INSERT INTO comanda_cartao_presente\n"))
+        assert vinculo_p == (1, 88, 40.0)
+
+    def test_bloqueia_cartao_nao_encontrado(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "A"}, {"c": 1}, {"valor_venda": 100.0}, None])
+        _patch(monkeypatch, cur)
+        formas = [CheckoutFormaPagamentoItem(tipo="CP", forma_pag="", valor=100.0, codigo_cartao_presente="ZZZ")]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is False
+        assert "não encontrado" in result["message"]
+
+    def test_bloqueia_cartao_ja_resgatado(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"c": 1}, {"valor_venda": 100.0},
+            {"pecas_cartao_presente_auto": 9, "codigo_int": "X"}, None,
+        ])
+        _patch(monkeypatch, cur)
+        formas = [CheckoutFormaPagamentoItem(tipo="CP", forma_pag="", valor=100.0, codigo_cartao_presente="X")]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is False
+        assert "já foi resgatado" in result["message"]
+
+    def test_bloqueia_valor_maior_que_saldo_do_cartao(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"c": 1}, {"valor_venda": 100.0},
+            {"pecas_cartao_presente_auto": 9, "codigo_int": "X"},
+            {"comanda_cartao_presente_auto": 77, "valor_venda": 50.0},
+        ])
+        _patch(monkeypatch, cur)
+        formas = [CheckoutFormaPagamentoItem(tipo="CP", forma_pag="", valor=100.0, codigo_cartao_presente="X")]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is False
+        assert "maior que o saldo" in result["message"]
+
+    def test_bloqueia_mesmo_cartao_usado_duas_vezes_na_mesma_venda(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"c": 1}, {"valor_venda": 100.0},
+            {"pecas_cartao_presente_auto": 9, "codigo_int": "Y"},
+            {"comanda_cartao_presente_auto": 77, "valor_venda": 100.0},
+        ])
+        _patch(monkeypatch, cur)
+        formas = [
+            CheckoutFormaPagamentoItem(tipo="CP", forma_pag="", valor=50.0, codigo_cartao_presente="Y"),
+            CheckoutFormaPagamentoItem(tipo="CP", forma_pag="", valor=50.0, codigo_cartao_presente="Y"),
+        ]
+        result = svc._fechar_venda_sync(_fechar_req(formas), comanda=1)
+        assert result["success"] is False
+        assert "já foi usado nesta mesma venda" in result["message"]
 
 
 class TestCancelarVenda:
@@ -346,7 +696,7 @@ class TestCancelarItemBloqueiaDav:
         _patch(monkeypatch, cur)
         result = svc._cancelar_item_sync(_cancel_item_req(), comanda=1, id_mov=10)
         assert result["success"] is False
-        assert "importado" in result["message"].lower()
+        assert "importada" in result["message"].lower()
 
     def test_permite_cancelar_item_direto(self, monkeypatch):
         cur = FakeCursor(one=[{"situacao": "A"}, {"codigo_int": "P001", "qtd": 2.0, "tipo_dav": ""}, {"ok": 1}, {"total": 50.0}])
@@ -354,6 +704,36 @@ class TestCancelarItemBloqueiaDav:
         result = svc._cancelar_item_sync(_cancel_item_req(), comanda=1, id_mov=10)
         assert result["success"] is True
         assert conn.committed is True
+
+
+class TestListDavPendentes:
+    def test_lista_pedidos_fechados(self, monkeypatch):
+        cur = FakeCursor(
+            many=[[{"documento": 100, "data": "2026-08-06", "valor": 150.0, "cliente_nome": "MARIA"}]],
+        )
+        _patch(monkeypatch, cur)
+        result = svc._list_dav_pendentes_sync("srv", "bd", "PED")
+        assert result["success"] is True
+        assert result["items"][0]["documento"] == 100
+        assert "pedido_venda" in cur.queries[0][0]
+        assert "situacao = 'F'" in cur.queries[0][0]
+
+    def test_lista_os_fechadas(self, monkeypatch):
+        cur = FakeCursor(
+            many=[[{"documento": 200, "data": "2026-08-06", "valor": 80.0, "cliente_nome": "JOÃO"}]],
+        )
+        _patch(monkeypatch, cur)
+        result = svc._list_dav_pendentes_sync("srv", "bd", "OS")
+        assert result["success"] is True
+        assert result["items"][0]["documento"] == 200
+        assert "FROM os o" in cur.queries[0][0]
+
+    def test_bloqueia_tipo_invalido(self, monkeypatch):
+        cur = FakeCursor()
+        _patch(monkeypatch, cur)
+        result = svc._list_dav_pendentes_sync("srv", "bd", "XXX")
+        assert result["success"] is False
+        assert "inválido" in result["message"].lower()
 
 
 class TestImportarDav:
@@ -460,3 +840,171 @@ class TestCancelarVendaBloqueiaJaFechada:
         result = svc._cancelar_venda_sync(_cancelar_venda_req(), comanda=1)
         assert result["success"] is False
         assert "Gestor de Comandas" in result["message"]
+
+
+class TestListAbastecimentosPendentes:
+    def test_lista_com_modulo_ativo(self, monkeypatch):
+        cur = FakeCursor(
+            one=[{"Posto": 1}],
+            many=[[{"num": 555, "descricao": "GASOLINA COMUM", "preco_un": 5.9, "volume": 20.0, "valor": 118.0}]],
+        )
+        _patch(monkeypatch, cur)
+        result = svc._list_abastecimentos_pendentes_sync("srv", "bd")
+        assert result["success"] is True
+        assert result["items"][0]["num"] == 555
+
+    def test_bloqueia_modulo_desativado(self, monkeypatch):
+        cur = FakeCursor(one=[{"Posto": 0}])
+        _patch(monkeypatch, cur)
+        result = svc._list_abastecimentos_pendentes_sync("srv", "bd")
+        assert result["success"] is False
+        assert result["items"] == []
+        assert "desativado" in result["message"].lower()
+
+
+class TestImportarAbastecimento:
+    def test_importa_com_sucesso_e_marca_emitido(self, monkeypatch):
+        cur = FakeCursor(
+            one=[
+                {"Posto": 1},
+                {"situacao": "A"},
+                {"codigo_int": "COMB01", "preco_un": 5.9, "volume": 20.0, "status_abastecimento": "PENDENTE"},
+                {"id_mov": 900},
+                {"total": 118.0},
+            ],
+        )
+        conn = _patch(monkeypatch, cur)
+        result = svc._importar_abastecimento_sync(_importar_abastecimento_req(), comanda=1)
+        assert result == {"success": True, "id_mov": 900, "valor_venda": 118.0}
+        assert conn.committed is True
+        mov_q, mov_p = next(q for q in cur.queries if q[0].startswith("INSERT INTO movimentacao"))
+        assert "tipo_dav" in mov_q
+        assert "ABA" in mov_p
+        assert any(
+            q == ("UPDATE abastecimento SET status_abastecimento='EMITIDO CF' WHERE num=%s", (555,))
+            for q in cur.queries
+        )
+        # Não decrementa pecas.qtd — combustível já saiu fisicamente do tanque.
+        assert not any("UPDATE pecas SET qtd" in q for q, _ in cur.queries)
+
+    def test_bloqueia_ja_emitido(self, monkeypatch):
+        cur = FakeCursor(
+            one=[
+                {"Posto": 1},
+                {"situacao": "A"},
+                {"codigo_int": "COMB01", "preco_un": 5.9, "volume": 20.0, "status_abastecimento": "EMITIDO CF"},
+            ],
+        )
+        _patch(monkeypatch, cur)
+        result = svc._importar_abastecimento_sync(_importar_abastecimento_req(), comanda=1)
+        assert result["success"] is False
+        assert "outra venda" in result["message"].lower()
+
+    def test_bloqueia_modulo_desativado(self, monkeypatch):
+        cur = FakeCursor(one=[{"Posto": 0}])
+        _patch(monkeypatch, cur)
+        result = svc._importar_abastecimento_sync(_importar_abastecimento_req(), comanda=1)
+        assert result["success"] is False
+        assert "desativado" in result["message"].lower()
+
+
+class TestListAgendamentosPendentes:
+    def test_lista_com_modulo_ativo(self, monkeypatch):
+        cur = FakeCursor(
+            one=[{"CLINICA": 1, "Assistencia": 0}],
+            many=[[{"codagenda": 777, "cliente_nome": "MARIA", "servico_descricao": "Corte", "valor": 50.0}]],
+        )
+        _patch(monkeypatch, cur)
+        result = svc._list_agendamentos_pendentes_sync("srv", "bd")
+        assert result["success"] is True
+        assert result["items"][0]["codagenda"] == 777
+
+    def test_bloqueia_modulo_desativado(self, monkeypatch):
+        cur = FakeCursor(one=[{"CLINICA": 0, "Assistencia": 0}])
+        _patch(monkeypatch, cur)
+        result = svc._list_agendamentos_pendentes_sync("srv", "bd")
+        assert result["success"] is False
+        assert result["items"] == []
+
+
+class TestImportarAgendamento:
+    def test_importa_com_sucesso_e_grava_vinculo(self, monkeypatch):
+        cur = FakeCursor(
+            one=[
+                {"CLINICA": 1, "Assistencia": 0},
+                {"situacao": "A"},
+                {"servico": "SERV01", "valor": 50.0, "situacao_atendimento": "Confirmado", "situacao_caixa": "A"},
+                None,  # agenda_comanda ainda não faturado
+                {"id_mov": 950},
+                {"total": 50.0},
+            ],
+        )
+        conn = _patch(monkeypatch, cur)
+        result = svc._importar_agendamento_sync(_importar_agendamento_req(), comanda=1)
+        assert result == {"success": True, "id_mov": 950, "valor_venda": 50.0}
+        assert conn.committed is True
+        mov_q, mov_p = next(q for q in cur.queries if q[0].startswith("INSERT INTO movimentacao"))
+        assert "tipo_dav" in mov_q
+        assert "AGE" in mov_p
+        assert any(
+            q == ("INSERT INTO agenda_comanda (codagenda, codcomanda, situacao_atendimento, ID_MOVIMENTACAO) "
+                  "VALUES (%s,%s,%s,%s)", (777, 1, "Confirmado", 950))
+            for q in cur.queries
+        )
+        assert any(q == ("UPDATE AGENDA SET situacao_caixa='P' WHERE codagenda=%s", (777,)) for q in cur.queries)
+        # Não troca o cliente da venda automaticamente (diferente do legado).
+        assert not any("UPDATE comanda SET cliente" in q for q, _ in cur.queries)
+
+    def test_bloqueia_ja_faturado(self, monkeypatch):
+        cur = FakeCursor(
+            one=[
+                {"CLINICA": 1, "Assistencia": 0},
+                {"situacao": "A"},
+                {"servico": "SERV01", "valor": 50.0, "situacao_atendimento": "Confirmado", "situacao_caixa": "P"},
+            ],
+        )
+        _patch(monkeypatch, cur)
+        result = svc._importar_agendamento_sync(_importar_agendamento_req(), comanda=1)
+        assert result["success"] is False
+        assert "já foi faturado" in result["message"]
+
+    def test_bloqueia_modulo_desativado(self, monkeypatch):
+        cur = FakeCursor(one=[{"CLINICA": 0, "Assistencia": 0}])
+        _patch(monkeypatch, cur)
+        result = svc._importar_agendamento_sync(_importar_agendamento_req(), comanda=1)
+        assert result["success"] is False
+
+
+class TestCancelarItemBloqueiaOrigemAbaAge:
+    def test_bloqueia_cancelamento_de_item_abastecimento(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "A"}, {"codigo_int": "COMB01", "qtd": 20.0, "tipo_dav": "ABA"}])
+        _patch(monkeypatch, cur)
+        result = svc._cancelar_item_sync(_cancel_item_req(), comanda=1, id_mov=10)
+        assert result["success"] is False
+
+    def test_bloqueia_cancelamento_de_item_agendamento(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "A"}, {"codigo_int": "SERV01", "qtd": 1.0, "tipo_dav": "AGE"}])
+        _patch(monkeypatch, cur)
+        result = svc._cancelar_item_sync(_cancel_item_req(), comanda=1, id_mov=10)
+        assert result["success"] is False
+
+
+class TestCancelarVendaReverteAbastecimentoEAgendamento:
+    def test_reverte_abastecimento_e_agendamento(self, monkeypatch):
+        cur = FakeCursor(
+            one=[{"situacao": "A"}],
+            many=[[
+                {"codigo_int": "COMB01", "qtd": 20.0, "tipo_dav": "ABA", "COD_AUTO_DAV": 555},
+                {"codigo_int": "SERV01", "qtd": 1.0, "tipo_dav": "AGE", "COD_AUTO_DAV": 777},
+            ]],
+        )
+        conn = _patch(monkeypatch, cur)
+        result = svc._cancelar_venda_sync(_cancelar_venda_req(), comanda=1)
+        assert result == {"success": True}
+        assert conn.committed is True
+        assert any(
+            q == ("UPDATE abastecimento SET status_abastecimento='PENDENTE' WHERE num=%s", (555,))
+            for q in cur.queries
+        )
+        assert any(q == ("DELETE FROM agenda_comanda WHERE codagenda=%s", (777,)) for q in cur.queries)
+        assert any(q == ("UPDATE AGENDA SET situacao_caixa='A' WHERE codagenda=%s", (777,)) for q in cur.queries)

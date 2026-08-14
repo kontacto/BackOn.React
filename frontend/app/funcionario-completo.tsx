@@ -15,7 +15,7 @@ import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoM
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
-import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
+import { WEB_CONTENT_SHELL, WEB_FIELD_COL_HALF, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 
 type TabKey = "dados" | "comissoes" | "horarios" | "ausencias" | "especialidades";
 
@@ -1178,8 +1178,9 @@ const styles = StyleSheet.create({
   tabLabel: { fontSize: 13, fontWeight: "500", color: colors.muted },
   tabLabelSel: { color: colors.onBrandPrimary },
   card: { ...WEB_FILTER_CARD, marginBottom: spacing.lg },
-  formGrid: { flexDirection: "row", flexWrap: "wrap", columnGap: spacing.md },
-  colHalf: { width: "49%" },
+  formGrid: { flexDirection: "row", flexWrap: "wrap", columnGap: spacing.md, rowGap: spacing.sm },
+  // Design Desktop (CLAUDE.md): teto de largura em vez de % do container.
+  colHalf: WEB_FIELD_COL_HALF,
   colQuarter: { width: "24%" },
   fullWidth: { width: "100%" },
   fieldLabel: { fontSize: 12, color: colors.muted, marginBottom: 4, fontWeight: "500" },

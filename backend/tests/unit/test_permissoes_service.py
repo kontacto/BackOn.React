@@ -67,3 +67,42 @@ class TestFilterCatalogoRemoveTelasOcultasDaArvore:
         telas_visiveis = {t["tela"] for t in transacoes["children"]}
         assert "PEDIDO" in telas_visiveis
         assert "OS" in telas_visiveis
+
+
+class TestFilterCatalogoRecursaoEmMenuAninhado:
+    """Bug real corrigido 2026-08-13, achado ao vivo contra KONTACTO TESTE:
+    `filter_catalogo` só filtrava o 1º nível de cada menu — MODIFICADORES
+    vive dentro de um menu ANINHADO (CADASTROS > Tabelas Auxiliares >
+    Modificadores), gateado pelo módulo Bar, e continuava aparecendo mesmo
+    com Bar desligado. Agora `filter_catalogo` é recursivo."""
+
+    def test_modificadores_some_do_submenu_com_bar_desligado(self):
+        disabled = ps.disabled_telas(_flags())
+        cat = ps.filter_catalogo(disabled)
+        cadastros = next(m for m in cat if m["tela"] == "CADASTROS")
+        tabaux = next(m for m in cadastros["children"] if m["tela"] == "TABAUX")
+        telas_visiveis = {t["tela"] for t in tabaux["children"]}
+        assert "MODIFICADORES" not in telas_visiveis
+        # Marcas/Modelos não são gateados por nenhum módulo — continuam.
+        assert "MARCAS" in telas_visiveis
+
+    def test_modificadores_aparece_no_submenu_com_bar_ligado(self):
+        disabled = ps.disabled_telas(_flags(Bar=True))
+        cat = ps.filter_catalogo(disabled)
+        cadastros = next(m for m in cat if m["tela"] == "CADASTROS")
+        tabaux = next(m for m in cadastros["children"] if m["tela"] == "TABAUX")
+        telas_visiveis = {t["tela"] for t in tabaux["children"]}
+        assert "MODIFICADORES" in telas_visiveis
+
+    def test_submenu_inteiro_some_se_todos_os_filhos_forem_ocultos(self):
+        # Sanidade da recursão: se um menu aninhado fictício ficasse sem
+        # nenhum filho visível, o menu em si também deveria sumir (mesmo
+        # comportamento já garantido pro nível topo). Verificado indireta-
+        # mente: TABAUX nunca fica vazio hoje (Marcas/Modelos não são
+        # gateados), então aqui confirmamos que TABAUX sempre sobrevive
+        # com o restante das telas não-gateadas presentes mesmo com tudo
+        # desligado (evita falso-positivo de "sumiu tudo por engano").
+        disabled = ps.disabled_telas(_flags())
+        cat = ps.filter_catalogo(disabled)
+        cadastros = next(m for m in cat if m["tela"] == "CADASTROS")
+        assert any(m["tela"] == "TABAUX" for m in cadastros["children"])

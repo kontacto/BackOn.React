@@ -9,9 +9,11 @@ Total do item = qtd_pedida * p_venda - desconto + acrescimo
 pedido_venda.total = SUM dos itens não cancelados.
 """
 import asyncio
+import json
 
 from db.connection import _open_conn
 from models.schemas import ItemSaveRequest, TaxaServicoRequest
+from services import impressao_service
 from services.constants import SITUACAO_LABEL
 from services.descontos_service import _validar_limite_desconto, _log_desconto_item
 from services.pedido_common import (
@@ -185,17 +187,63 @@ def _add_item_sync(req: ItemSaveRequest, pedido: int) -> dict:
         # project_impressao_automatica_finalidade / PENDENCIAS.md).
         tipo_peca = prod.get("tipo_peca")
         finalidade_descricao = ""
+        alvos_impressao = []
         if tipo_peca is not None:
             cur.execute("SELECT descricao FROM tipo_peca WHERE codigo=%s", (tipo_peca,))
             tp_row = cur.fetchone()
             finalidade_descricao = ((tp_row.get("descricao") if tp_row else None) or "").strip()
 
+            # Impressão automática por Finalidade (Fase 2a) — só LEVANTA os
+            # alvos aqui (ainda dentro da mesma transação/cursor do item,
+            # leitura sem efeito colateral); o enfileiramento em si roda
+            # DEPOIS do commit/close abaixo, pra nunca deixar um job na fila
+            # referenciando um item que possa não ter sido persistido de
+            # verdade. Pode haver mais de uma estação configurada pra mesma
+            # Finalidade (ex.: 2 cozinhas) — enfileira pra todas.
+            try:
+                cur.execute(
+                    "SELECT computador, impressora FROM direcionamento_impressora "
+                    "WHERE tipo=%s AND automatica=1",
+                    (tipo_peca,),
+                )
+                alvos_impressao = [
+                    {"computador": (r.get("computador") or "").strip(), "impressora": (r.get("impressora") or "").strip()}
+                    for r in cur.fetchall()
+                ]
+                alvos_impressao = [a for a in alvos_impressao if a["computador"]]
+            except Exception:
+                alvos_impressao = []
+
         conn.commit()
         cur.close()
         conn.close()
+
+        # Enfileira o job LEVE (referência, não o ticket já pronto — quem
+        # monta o texto final é o app consumidor, ex. KPDV, ver
+        # PENDENCIAS.md > "KPDV" > "Fase 2a") pra cada estação encontrada
+        # acima. Best-effort: falha aqui nunca derruba a resposta de
+        # sucesso do add-item — o item já foi incluído, a impressão
+        # automática é um bônus.
+        impressao_fila = []
+        for alvo in alvos_impressao:
+            try:
+                payload = json.dumps({"pedido": pedido, "codauto": codauto, "tipo_peca": tipo_peca})
+                r = impressao_service._enfileirar_sync(
+                    req.servidor, req.banco, alvo["computador"], alvo["impressora"] or None,
+                    payload, "COMANDA_ITEM",
+                )
+                if r.get("success"):
+                    impressao_fila.append({
+                        "computador": alvo["computador"], "impressora": alvo["impressora"],
+                        "fila_id": r.get("id"),
+                    })
+            except Exception:
+                pass
+
         return {
             "success": True, "codauto": codauto, "total": novo_total,
             "tipo_peca": tipo_peca, "finalidade_descricao": finalidade_descricao,
+            "impressao_fila": impressao_fila,
             "item": {
                 "codauto": codauto, "produto": codigo, "tipo": prod["tipo"],
                 "descricao": prod["descricao"], "complemento": complemento,
