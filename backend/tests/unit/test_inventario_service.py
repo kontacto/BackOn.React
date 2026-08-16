@@ -817,6 +817,7 @@ class TestExecutarRotinasAutomaticas:
     def test_posto_ativo_so_roda_mensal_posto(self, monkeypatch):
         cur = FakeCursor()
         conn = _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_controla_abertura_dia_ativo", lambda c: True)
         monkeypatch.setattr(svc, "modulo_posto_ativo", lambda c: True)
         chamadas = []
         monkeypatch.setattr(svc, "_inventario_posto_automatico_mensal_sync", lambda c, h: chamadas.append("posto") or True)
@@ -824,12 +825,14 @@ class TestExecutarRotinasAutomaticas:
         monkeypatch.setattr(svc, "_inventario_contabil_diario_sync", lambda c, h: chamadas.append("diario") or True)
         r = svc._executar_rotinas_automaticas_sync("srv", "bd")
         assert r["success"] is True
+        assert r["abertura_dia_ativa"] is True
         assert chamadas == ["posto"]
         assert conn.committed is True
 
     def test_sem_posto_roda_mensal_e_diario(self, monkeypatch):
         cur = FakeCursor()
         _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_controla_abertura_dia_ativo", lambda c: True)
         monkeypatch.setattr(svc, "modulo_posto_ativo", lambda c: False)
         chamadas = []
         monkeypatch.setattr(svc, "_inventario_posto_automatico_mensal_sync", lambda c, h: chamadas.append("posto") or True)
@@ -837,4 +840,31 @@ class TestExecutarRotinasAutomaticas:
         monkeypatch.setattr(svc, "_inventario_contabil_diario_sync", lambda c, h: chamadas.append("diario") or True)
         r = svc._executar_rotinas_automaticas_sync("srv", "bd")
         assert r["success"] is True
+        assert r["abertura_dia_ativa"] is True
         assert chamadas == ["geral", "diario"]
+
+    def test_controla_abertura_dia_desligado_nao_roda_nada(self, monkeypatch):
+        cur = FakeCursor()
+        conn = _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_controla_abertura_dia_ativo", lambda c: False)
+        chamadas = []
+        monkeypatch.setattr(svc, "modulo_posto_ativo", lambda c: (_ for _ in ()).throw(AssertionError("não deveria checar Posto")))
+        monkeypatch.setattr(svc, "_inventario_posto_automatico_mensal_sync", lambda c, h: chamadas.append("posto") or True)
+        monkeypatch.setattr(svc, "_inventario_automatico_mensal_sync", lambda c, h: chamadas.append("geral") or True)
+        monkeypatch.setattr(svc, "_inventario_contabil_diario_sync", lambda c, h: chamadas.append("diario") or True)
+        r = svc._executar_rotinas_automaticas_sync("srv", "bd")
+        assert r["success"] is True
+        assert r["abertura_dia_ativa"] is False
+        assert r["mensal_executado"] is False
+        assert r["diario_executado"] is False
+        assert chamadas == []
+        assert conn.committed is False
+
+    def test_controla_abertura_dia_le_a_coluna_certa(self, monkeypatch):
+        cur = FakeCursor(one=[{"CONTROLA_ABERTURA_DIA": True}])
+        assert svc._controla_abertura_dia_ativo(cur) is True
+        assert cur.queries[0][0] == "SELECT TOP 1 CONTROLA_ABERTURA_DIA FROM controle_configuracao"
+
+    def test_controla_abertura_dia_ausente_e_falsy(self, monkeypatch):
+        cur = FakeCursor(one=[None])
+        assert svc._controla_abertura_dia_ativo(cur) is False

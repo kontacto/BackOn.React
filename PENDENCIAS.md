@@ -8516,6 +8516,40 @@ de `MudaDataSistema` (linhas 6933-6942), lidos por completo.
   si (join com `tanque_estoque`, idempotência por combustível) foi só
   validada por teste unitário mockado, não contra dados reais.
 
+### Gate por `CONTROLA_ABERTURA_DIA` adicionado 2026-08-16, user-directed
+
+A coluna `controle_configuracao.CONTROLA_ABERTURA_DIA` já existia como
+toggle em Módulos e Recursos ("Controla Abertura do Dia") desde antes da
+Fase 3 acima, mas nunca tinha efeito nenhum no orquestrador — as rotinas
+automáticas (mensal + diária contábil) sempre rodavam, independente do
+flag. Usuário confirmou o propósito real da coluna: no legado, ela é lida
+uma vez no boot e atribuída ao global `Dados_Controle_Configuracao.
+Abertura_do_dia`, decidindo se o dia abre sozinho ou não.
+
+- Corrigido: `_controla_abertura_dia_ativo(cur)` (novo helper em
+  `inventario_service.py`, mesmo padrão de leitura fresca por request de
+  `posto_common.modulo_posto_ativo`) checado logo no início de
+  `_executar_rotinas_automaticas_sync`, antes de qualquer coisa (inclusive
+  antes da migração idempotente `_ensure_automatico_col`) — com o flag
+  desligado, a função retorna cedo sem tocar em `pecas`/`inventario_old`/
+  `inventario_contabil`/etc., sem `commit`. Resposta ganhou o campo
+  `abertura_dia_ativa` (novo, informativo — o frontend já ignora o corpo
+  da resposta hoje, `useDashboard.ts` só dispara e engole erro).
+  Empresa com o flag desligado fica só com o fluxo manual (Abertura/
+  Digitação/Fechar já existentes) — nenhuma rotina automática roda.
+- **A reconciliação de estoque hardcoded por CNPJ continua fora de
+  escopo** (já descartada no levantamento original — "pode ser
+  desconsiderada, pois está em desuso", reconfirmado nesta mesma rodada)
+  — este gate não reabre essa questão, só liga/desliga as duas rotinas de
+  SNAPSHOT (mensal `inventario_old` e diário `inventario_contabil`, ambas
+  sem efeito em `pecas.qtd`) que já eram a decisão final.
+- 3 testes novos em `test_inventario_service.py`
+  (`TestExecutarRotinasAutomaticas` + 2 casos diretos do helper) — flag
+  desligado não chama nenhuma das sub-rotinas nem o `modulo_posto_ativo`,
+  nem faz `commit`; os 2 testes já existentes (Posto ativo/inativo)
+  atualizados para mockar o novo helper como ligado. 73/73 passando no
+  arquivo.
+
 ### Tipo de balanço "Parcial" adicionado 2026-07-23, user-directed ("o mais importante")
 
 Terceiro tipo de balanço, confirmado pelo usuário via foto da tela real do

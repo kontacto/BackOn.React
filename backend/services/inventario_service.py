@@ -1292,6 +1292,21 @@ def _inventario_contabil_diario_sync(cur, hoje: date) -> bool:
     return True
 
 
+def _controla_abertura_dia_ativo(cur) -> bool:
+    """`controle_configuracao.CONTROLA_ABERTURA_DIA` — espelha o global VB6
+    `Dados_Controle_Configuracao.Abertura_do_dia`, lido uma vez no boot do
+    app legado a partir desta mesma coluna pra decidir se o dia abre
+    sozinho ou não. Aqui, decide se as rotinas automáticas de Abertura do
+    Dia (Fase 3 abaixo — snapshots mensal/diário) rodam sozinhas no
+    primeiro acesso, ou ficam totalmente desligadas (empresa que não quer
+    abertura automática). Leitura fresca por request, mesmo padrão de
+    `posto_common.modulo_posto_ativo` — nunca cache global de processo."""
+    cur.execute("SELECT TOP 1 CONTROLA_ABERTURA_DIA FROM controle_configuracao")
+    row = cur.fetchone()
+    val = row.get("CONTROLA_ABERTURA_DIA") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
+
+
 def _executar_rotinas_automaticas_sync(servidor: str, banco: str) -> dict:
     """Fase 3 (2026-07-23) — dispara as rotinas automáticas do legado
     (mensal + diária contábil) no primeiro acesso do dia/mês de QUALQUER
@@ -1303,6 +1318,12 @@ def _executar_rotinas_automaticas_sync(servidor: str, banco: str) -> dict:
     este mês/dia antes de fazer qualquer coisa, sem depender de nenhum
     estado de processo (mesmo princípio de `posto_common.data_movimento` —
     leitura fresca por request, nunca cache global).
+
+    Gate por `CONTROLA_ABERTURA_DIA` (2026-08-16, user-directed — a coluna
+    já existia como toggle em Módulos e Recursos, mas não tinha efeito
+    algum aqui): com o flag desligado, nenhuma rotina automática roda —
+    empresa que optou por não ter abertura automática do dia fica só com
+    o fluxo manual (Abertura/Digitação/Fechar já existentes).
 
     Módulo Posto ativo → só `_inventario_posto_automatico_mensal_sync`
     (sem o diário contábil pra esse segmento). Sem Posto → o mensal
@@ -1316,6 +1337,9 @@ def _executar_rotinas_automaticas_sync(servidor: str, banco: str) -> dict:
         return {"success": False, "message": f"Falha conexão: {e}"}
     try:
         cur = conn.cursor(as_dict=True)
+        if not _controla_abertura_dia_ativo(cur):
+            cur.close()
+            return {"success": True, "abertura_dia_ativa": False, "mensal_executado": False, "diario_executado": False}
         _ensure_automatico_col(cur)
         hoje = date.today()
         posto_ativo = modulo_posto_ativo(cur)
@@ -1327,7 +1351,12 @@ def _executar_rotinas_automaticas_sync(servidor: str, banco: str) -> dict:
             diario_executado = _inventario_contabil_diario_sync(cur, hoje)
         conn.commit()
         cur.close()
-        return {"success": True, "mensal_executado": mensal_executado, "diario_executado": diario_executado}
+        return {
+            "success": True,
+            "abertura_dia_ativa": True,
+            "mensal_executado": mensal_executado,
+            "diario_executado": diario_executado,
+        }
     except Exception as e:
         try:
             conn.rollback()
