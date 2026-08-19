@@ -35,7 +35,7 @@ regra fiscal):
   - Endpoint/UF resolvidos por dict explícito e testável.
 """
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Optional
 
 from services import nfe_fiscal_common
@@ -197,11 +197,22 @@ def montar_url_qrcode(
 def _montar_xml_nfce(
     *, chave_acesso: str, cod_ibge: str, cnpj_emit: str, nome_emit: str, cliente: Optional[dict],
     itens: list[dict], forma_pagamento: str, valor_total: float, tp_amb: str, numero: int, serie: str,
-    data_emissao: datetime, url_qrcode: str,
+    data_emissao: datetime, url_qrcode: str, ibs_cbs_totais_xml: str = "",
+    tp_emis: str = "1", dh_cont: Optional[str] = None, x_just: Optional[str] = None,
 ) -> tuple[bytes, str]:
     """Monta `<NFe><infNFe Id="NFe...">` conforme layout NFCe 4.00. `itens`
     é uma lista de dicts já com tributação resolvida
-    (`_resolver_tributacao_sync`) e valores calculados por item."""
+    (`_resolver_tributacao_sync`) e valores calculados por item.
+
+    `item.get("ibs_cbs_xml")` — fragmento `<IBSCBS>...</IBSCBS>` já pronto
+    (`ibs_cbs_service.calcular_item_ibs_cbs`'s `xml_item`), embutido dentro
+    de `<imposto>` de cada item. `ibs_cbs_totais_xml` — fragmento agregado
+    `<IBSCBSTot>...</IBSCBSTot>` (`ibs_cbs_service.calcular_totais_ibs_cbs`),
+    embutido dentro de `<total>`. Posicionamento segue o layout público de
+    transição da Reforma Tributária (NT vigente) — mesma ressalva já
+    registrada na docstring do módulo: não foi extraído de uma DLL
+    tag-a-tag, validar contra o XSD oficial antes de qualquer transmissão
+    real."""
     id_nfe = f"NFe{chave_acesso}"
     dh_emi = data_emissao.astimezone().isoformat(timespec="seconds")
 
@@ -229,6 +240,7 @@ def _montar_xml_nfce(
             f'<ICMS><ICMSSN102><orig>{item.get("origem", 0)}</orig><CSOSN>{item.get("csosn", "102")}</CSOSN></ICMSSN102></ICMS>'
             f'<PIS><PISNT><CST>{item.get("cst_pis", "07")}</CST></PISNT></PIS>'
             f'<COFINS><COFINSNT><CST>{item.get("cst_cofins", "07")}</CST></COFINSNT></COFINS>'
+            f'{item.get("ibs_cbs_xml") or ""}'
             f'</imposto>'
             f'</det>'
         )
@@ -252,7 +264,7 @@ def _montar_xml_nfce(
         f'<idDest>1</idDest>'
         f'<cMunFG>{cod_ibge}00000</cMunFG>'
         f'<tpImp>4</tpImp>'
-        f'<tpEmis>1</tpEmis>'
+        f'<tpEmis>{tp_emis}</tpEmis>'
         f'<cDV>{chave_acesso[-1]}</cDV>'
         f'<tpAmb>{tp_amb}</tpAmb>'
         f'<finNFe>1</finNFe>'
@@ -260,6 +272,12 @@ def _montar_xml_nfce(
         f'<indPres>1</indPres>'
         f'<procEmi>0</procEmi>'
         f'<verProc>1.0</verProc>'
+        # <dhCont>/<xJust> — só presentes em emissão por contingência
+        # (tp_emis != "1"). Achado 2026-08-19 (Gestor NFCe): réplica de
+        # GeraNFe (NFe.vb:2206-2208/2240-2242) — grava a data/hora de
+        # início da contingência e a justificativa (motivo já validado
+        # ≥15 chars por contingencia_nfce_service).
+        f'{f"<dhCont>{dh_cont}</dhCont><xJust>{nfe_fiscal_common.escapar_xml(x_just or "")}</xJust>" if tp_emis != "1" else ""}'
         f'</ide>'
         f'<emit>'
         f'<CNPJ>{re.sub(r"[^0-9]", "", cnpj_emit)}</CNPJ>'
@@ -268,7 +286,7 @@ def _montar_xml_nfce(
         f'</emit>'
         f'{dest_xml}'
         f'{det_xml}'
-        f'<total><ICMSTot><vNF>{valor_total:.2f}</vNF></ICMSTot></total>'
+        f'<total><ICMSTot><vNF>{valor_total:.2f}</vNF></ICMSTot>{ibs_cbs_totais_xml}</total>'
         f'<transp><modFrete>9</modFrete></transp>'
         f'<pag><detPag><tPag>{forma_pagamento}</tPag><vPag>{valor_total:.2f}</vPag></detPag></pag>'
         f'<infNFeSupl><qrCode>{nfe_fiscal_common.escapar_xml(url_qrcode)}</qrCode></infNFeSupl>'
@@ -353,28 +371,44 @@ def emitir_nfce_sync(
     cur, *, comanda: int, cnpj_emit: str, nome_emit: str, uf_sigla: str, uf_controle_sigla: str,
     proximo_numero: int, serie: str, cliente: Optional[dict], itens_resolvidos: list[dict],
     forma_pagamento: str, valor_total: float, tp_amb: str, csc_id: str, csc: str,
+    ibs_cbs_totais_xml: str = "", contingencia: Optional[dict] = None,
 ) -> dict:
     """Orquestra a emissão de uma NFC-e a partir de uma comanda já faturada
     — assina, transmite ao SEFAZ (grupo SVRS) e devolve o resultado. `cur`
     é o cursor já aberto (mesma transação de quem chama, pra ler o
     certificado). `itens_resolvidos` já deve trazer a tributação resolvida
     (`_resolver_tributacao_sync`) — este orquestrador não resolve tributos
-    sozinho, só monta/assina/transmite."""
+    sozinho, só monta/assina/transmite. `itens_resolvidos[i].get("ibs_cbs_xml")`
+    e `ibs_cbs_totais_xml` — fragmentos já calculados por
+    `ibs_cbs_service` (ver `_montar_xml_nfce`), repassados tal qual.
+
+    `contingencia` — a linha devolvida por `contingencia_nfce_service.
+    contingencia_aberta_sync` (ou `None` se não há contingência aberta).
+    Quando presente, réplica de `GeraNFe` em contingência (achado
+    2026-08-19, Gestor NFCe — `NFe.vb:2570`/`2586-2594`): grava `tpEmis`/
+    `<dhCont>`/`<xJust>` mas **pula a transmissão ao SEFAZ por completo**
+    — devolve a nota assinada com `situacao="G"` (aguardando), sem
+    protocolo/cStat. O endpoint SVRS nem precisa existir/estar disponível
+    nesse caso (nunca é chamado)."""
     if not itens_resolvidos:
         return {"success": False, "message": "Comanda sem itens de produto — nada a emitir."}
 
     cod_ibge = nfe_fiscal_common.IBGE_POR_UF.get((uf_sigla or "").strip().upper())
     if not cod_ibge:
         return {"success": False, "message": f"UF '{uf_sigla}' não reconhecida."}
-    url = _resolver_url_autorizacao(cod_ibge, "65", tp_amb)
-    if not url:
-        return {
-            "success": False,
-            "message": (
-                f"Emissão automática de NFC-e ainda não está disponível pra UF '{uf_sigla}' — "
-                "emita pelo sistema legado (VB6) por enquanto."
-            ),
-        }
+
+    em_contingencia = contingencia is not None
+    url = None
+    if not em_contingencia:
+        url = _resolver_url_autorizacao(cod_ibge, "65", tp_amb)
+        if not url:
+            return {
+                "success": False,
+                "message": (
+                    f"Emissão automática de NFC-e ainda não está disponível pra UF '{uf_sigla}' — "
+                    "emita pelo sistema legado (VB6) por enquanto."
+                ),
+            }
 
     cert = nfe_fiscal_common.carregar_certificado_sync(cur)
     if not cert:
@@ -382,9 +416,20 @@ def emitir_nfce_sync(
     key_pem, cert_pem = cert
 
     try:
+        tp_emis = str(contingencia["tipo_contingencia"]) if em_contingencia else "1"
+        dh_cont = None
+        x_just = None
+        if em_contingencia:
+            hora_partes = [int(p) for p in str(contingencia["hora_inicio"]).split(":")]
+            while len(hora_partes) < 3:
+                hora_partes.append(0)
+            inicio_dt = datetime.combine(contingencia["data_inicio"], time(*hora_partes[:3]))
+            dh_cont = inicio_dt.astimezone().isoformat(timespec="seconds")
+            x_just = contingencia["motivo"]
+
         chave_acesso = montar_chave_acesso(
             uf_ibge=cod_ibge, data_emissao=date.today(), cnpj=cnpj_emit, modelo="65",
-            serie=serie, numero=proximo_numero, tp_emis="1", codigo_numerico=str(comanda),
+            serie=serie, numero=proximo_numero, tp_emis=tp_emis, codigo_numerico=str(comanda),
         )
         url_qrcode = montar_url_qrcode(
             chave_acesso=chave_acesso, tp_amb=tp_amb, csc_id=csc_id, csc=csc, uf_sigla=uf_sigla,
@@ -394,8 +439,22 @@ def emitir_nfce_sync(
             cliente=cliente, itens=itens_resolvidos, forma_pagamento=forma_pagamento,
             valor_total=valor_total, tp_amb=tp_amb, numero=proximo_numero, serie=serie,
             data_emissao=datetime.now(timezone.utc), url_qrcode=url_qrcode,
+            ibs_cbs_totais_xml=ibs_cbs_totais_xml, tp_emis=tp_emis, dh_cont=dh_cont, x_just=x_just,
         )
         xml_assinado = nfe_fiscal_common.assinar_xml(xml_nfce, id_nfe, key_pem, cert_pem)
+
+        if em_contingencia:
+            return {
+                "success": True,
+                "message": (
+                    "NFC-e emitida em contingência — ficará aguardando até a contingência ser "
+                    "encerrada e \"Validar Contingência\" ser usado no Gestor NFCe pra transmitir ao SEFAZ."
+                ),
+                "chave_acesso": chave_acesso, "protocolo_sefaz": None, "dh_recbto": None,
+                "xml": xml_assinado.decode("utf-8"), "numero": proximo_numero, "serie": serie,
+                "url_qrcode": url_qrcode, "situacao": "G", "cstat": None,
+            }
+
         envelope = _montar_envelope_autorizacao(xml_assinado, tp_amb)
         resposta = nfe_fiscal_common.transmitir(envelope, url, key_pem, cert_pem)
     except Exception as e:
@@ -421,4 +480,6 @@ def emitir_nfce_sync(
         "numero": proximo_numero,
         "serie": serie,
         "url_qrcode": url_qrcode,
+        "situacao": "A",
+        "cstat": c_stat,
     }

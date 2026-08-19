@@ -23,7 +23,7 @@ type Entry = {
 // direto por rota.
 export default function FinanceiroScreen() {
   const router = useRouter();
-  const { can } = usePermissions();
+  const { can, isMaster } = usePermissions();
   const isWeb = Platform.OS === "web";
 
   if (!isWeb) {
@@ -77,8 +77,20 @@ export default function FinanceiroScreen() {
         // "Contratos" em transacoes.tsx.
         visible: can("BANCOS.ABRIR") || can("GERACAO_BOLETOS.ABRIR") || can("RETORNO_BANC.ABRIR"),
       },
+      {
+        key: "chave-renovacao",
+        label: "Chave de Renovação",
+        hint: "Uso exclusivo Kontacto — libera o sistema dos clientes conforme Contas a Receber",
+        icon: "key-outline",
+        route: "/chave-renovacao",
+        // NÃO entra na regra de Permissões (catálogo de classe) — pedido
+        // explícito do usuário, 2026-08-17. Visibilidade só por ser
+        // usuário master (Kontacto), mesmo padrão de "Módulos e Recursos"
+        // em configuracoes.tsx, nunca por `can(...)`.
+        visible: isMaster,
+      },
     ],
-    [can]
+    [can, isMaster]
   );
 
   const visible = entries.filter((e) => e.visible).sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));

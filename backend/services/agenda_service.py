@@ -597,6 +597,41 @@ def _verificar_garantia_sync(servidor: str, banco: str, cliente: int, servico: s
         return {"success": False, "message": f"Erro ao verificar garantia: {e}"}
 
 
+def _recalc_data_agendamento_os_sync(cur, os_codigo: int) -> None:
+    """Recalcula `os.data_agendamento`/`hora_agendamento` a partir do
+    agendamento mais próximo entre os itens de serviço da OS (mesma
+    semântica de `proxima_agenda`, os_service.py — exceto que aqui
+    excluímos agendamentos com SITUACAO_ATENDIMENTO='Desistência', o que
+    `proxima_agenda` não faz por ser só um indicador decorativo; aqui o
+    valor alimenta de verdade a Lista de Atendimento por Calendário,
+    então a correção é intencional). Chamada depois de qualquer
+    criação/cancelamento de agendamento de item (`_salvar_agendamento_sync`/
+    `_cancelar_agendamento_sync`, `origem="os"`) — user-directed
+    2026-08-15: "data e hora agendada deverá ser alimentada pela agenda".
+
+    NUNCA sobrescreve um compromisso de CABEÇALHO direto já setado
+    (`os.codagenda_atendimento IS NOT NULL`, ver
+    `os_completo_service._sincronizar_agendamento_cabecalho_sync`) — esse
+    tem precedência; evita os dois mecanismos brigarem pelo mesmo campo."""
+    cur.execute("SELECT codagenda_atendimento FROM os WHERE codigo=%s", (os_codigo,))
+    row = cur.fetchone()
+    if row and row.get("codagenda_atendimento"):
+        return
+    cur.execute(
+        "SELECT TOP 1 a.data, a.hora_ini FROM AGENDA_OS ao "
+        "JOIN os_produto op ON op.cod_os_prod = ao.CODOS "
+        "JOIN AGENDA a ON a.codagenda = ao.CODAGENDA "
+        "WHERE op.os = %s AND a.situacao_atendimento <> 'Desistência' "
+        "ORDER BY a.data ASC, a.hora_ini ASC",
+        (os_codigo,),
+    )
+    prox = cur.fetchone()
+    cur.execute(
+        "UPDATE os SET data_agendamento=%s, hora_agendamento=%s WHERE codigo=%s",
+        (prox["data"] if prox else None, prox["hora_ini"] if prox else None, os_codigo),
+    )
+
+
 def _salvar_agendamento_sync(
     req: AgendarItemRequest, codauto: Optional[int], origem: str = "pedido", tela: str = "PEDIDO_COMP",
 ) -> dict:
@@ -775,6 +810,7 @@ def _salvar_agendamento_sync(
                     "UPDATE os_produto SET data_servico=%s, executor_agenda=%s WHERE cod_os_prod=%s",
                     (req.data, req.funcionario, codauto),
                 )
+                _recalc_data_agendamento_os_sync(cur, item["pedido"])
             else:
                 cur.execute(
                     "UPDATE pedido_venda_prod SET data_servico=%s, executor_agenda=%s WHERE codauto=%s",
@@ -822,11 +858,15 @@ def _cancelar_agendamento_sync(
             (agendamento_atual["codagenda"],),
         )
         if origem == "os":
+            cur.execute("SELECT os FROM os_produto WHERE cod_os_prod=%s", (codauto,))
+            os_row = cur.fetchone()
             cur.execute(
                 "UPDATE os_produto SET data_servico=NULL, executor_agenda=0 WHERE cod_os_prod=%s",
                 (codauto,),
             )
             cur.execute("DELETE FROM AGENDA_OS WHERE CODAGENDA=%s", (agendamento_atual["codagenda"],))
+            if os_row and os_row.get("os"):
+                _recalc_data_agendamento_os_sync(cur, int(os_row["os"]))
         else:
             cur.execute(
                 "UPDATE pedido_venda_prod SET data_servico=NULL, executor_agenda=0 WHERE codauto=%s",

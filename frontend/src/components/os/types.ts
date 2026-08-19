@@ -130,4 +130,9 @@ export type OSData = {
   // soft-FK de `tecnico_responsavel` logo acima.
   auxiliar_tecnico: number | null;
   auxiliar_tecnico_nome: string;
+  // Data/Hora do Atendimento Agendado (regra 2, AssistenciaTecnicaCampo.md
+  // — colunas legadas os.data_agendamento/hora_agendamento, reativadas
+  // 2026-08-15 pra alimentar a Lista de Atendimento por Calendário).
+  data_agendamento: string | null;
+  hora_agendamento: string;
 };

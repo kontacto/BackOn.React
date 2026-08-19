@@ -558,6 +558,6 @@ const styles = StyleSheet.create({
   inputMultiline: { minHeight: 70, textAlignVertical: "top" },
   inputDisabled: { backgroundColor: colors.surfaceSecondary, color: colors.muted },
   warnText: { fontSize: 12, color: colors.error, marginTop: spacing.md },
-  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 14, alignItems: "center", marginTop: spacing.lg, marginBottom: spacing.sm },
+  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 12, paddingHorizontal: spacing.xl, minWidth: 160, alignSelf: "flex-end", alignItems: "center", marginTop: spacing.lg, marginBottom: spacing.sm },
   primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
 });

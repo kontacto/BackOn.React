@@ -33,6 +33,15 @@ def _ip(request: Request) -> Optional[str]:
     return request.client.host if request.client else None
 
 
+def _sufixo_via_auxiliar(via_auxiliar: Optional[int]) -> str:
+    """Ver `routes/os.py::_sufixo_via_auxiliar` — mesma rastreabilidade,
+    aplicada aqui pra edição de campos de equipamento via Atendimento de
+    Campo (regra 11)."""
+    if not via_auxiliar:
+        return ""
+    return f" (via auxiliar #{via_auxiliar}, em nome do técnico)"
+
+
 def _depois_item_os(req: OSItemSaveRequest) -> dict:
     return {
         "quant": req.qtd, "preco_unitario": req.valor_unitario,
@@ -360,7 +369,7 @@ async def update_equipamento_os(codigo: int, item_codigo: int, req: OSEquipament
             req.servidor, req.banco, tela="OS_COMP", comando="EQUIP_ADD",
             usuario=req.usuario_alteracao, classe=req.classe,
             referencia=str(codigo),
-            descricao=f"Equipamento {item_codigo} da O.S. Completa {codigo} atualizado",
+            descricao=f"Equipamento {item_codigo} da O.S. Completa {codigo} atualizado{_sufixo_via_auxiliar(req.via_auxiliar)}",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

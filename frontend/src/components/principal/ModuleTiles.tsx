@@ -30,11 +30,14 @@ const TILES = [
   // Atendimento de Campo (Assistência Técnica, mobile) — ver
   // AssistenciaTecnicaCampo.md. `disabledTelas` já esconde este tile quando
   // o módulo Assistência está desligado (ver src/permissions/index.tsx).
+  // Abre a Lista de Atendimento por Calendário (regra 10 — tela inicial do
+  // técnico), não mais o scanner direto — o scanner (`os-atendimento.tsx`
+  // sem `?os=`) continua alcançável de dentro dela (ícone "Ler QR Code").
   {
     label: "Atendimento de Campo",
     icon: "qr-code-outline" as const,
     perms: ["OS_ATENDIMENTO.ABRIR"],
-    route: () => "/os-atendimento",
+    route: () => "/atendimento-lista",
   },
 ];
 

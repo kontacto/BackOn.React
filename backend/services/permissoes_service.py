@@ -317,6 +317,19 @@ ACOES_ALTERAR_COMANDA = [
     ("EMITIR_NFSE", "Emitir nota fiscal de serviço"),
 ]
 
+# Gestor NFCe (migração de FrmTraNFC.frm, 2026-08-19, user-directed) +
+# mínimo de Contingência NFCe (FrmConNFC.frm) embutido na mesma tela —
+# ver services/gestor_nfce_service.py/contingencia_nfce_service.py.
+ACOES_GESTOR_NFCE = [
+    ("ABRIR", "Abrir tela"),
+    ("CANCELAR", "Cancelar NFC-e (documento fiscal)"),
+    ("CONSULTAR", "Consultar situação no SEFAZ"),
+    ("INUTILIZAR", "Inutilizar numeração"),
+    ("RETRANSMITIR", "Retransmitir NFC-e"),
+    ("VALIDAR_CONT", "Validar contingência"),
+    ("CONTINGENCIA", "Abrir/fechar contingência"),
+]
+
 # Ações da tela de cadastro de Bancos (Financeiro > Cobranças, FrmManBan.frm).
 ACOES_BANCOS = [
     ("ABRIR", "Abrir tela"),
@@ -871,6 +884,11 @@ CATALOGO = [
         # permissão (mesmo padrão de Contrato/Faturar Contratos).
         _tela("COMANDA", "Gestor de Comandas", ACOES_COMANDA),
         _tela("ALTERAR_COMANDA", "Alterar Comandas", ACOES_ALTERAR_COMANDA),
+        # "Gestor NFCe" (2026-08-19, user-directed) — migração de
+        # FrmTraNFC.frm (consulta/cancela/inutiliza/retransmite NFC-e) +
+        # mínimo de Contingência NFCe embutido. Ver PENDENCIAS.md >
+        # "Gestor NFCe" pro rastreio completo.
+        _tela("GESTOR_NFCE", "Gestor NFCe", ACOES_GESTOR_NFCE),
         # "Movimentações" (2026-07-18, user-directed) — Card novo em
         # Transações que abre um hub com estas duas telas. Só scaffolding
         # de navegação por enquanto (telas reais mostram "Em construção") —
@@ -1022,6 +1040,8 @@ CATALOGO = [
         _tela("REL_VEN_CLIPRO", "Venda Cliente/Prod."),
         _tela("REL_VEN_NIVFUN", "Venda Nível/Func"),
         _tela("REL_VEN_REGIAO", "Venda por Região"),
+        _tela("REL_MARGEM_PROD", "Margem de Lucro"),
+        _tela("REL_MARGEM_DAV", "Margem Lucro x DAV"),
         _tela("REL_ETQ_PROD", "Etiqueta de Produto"),
         _tela("REL_LIST_CLI", "Listagem Clientes"),
         _tela("REL_INAT_CLI", "Inatividade Cli."),
@@ -1030,6 +1050,11 @@ CATALOGO = [
     _menu("CONFIG", "Configurações", [
         _tela("CONEXAO", "Conexões"),
         _tela("PERFIL_USUARIO", "Perfil de Usuário"),
+        # Abertura do Dia — migração de "Gerencial > Abertura do Dia"
+        # (Ger_Abr_Click, MdiPrincipal) — reposicionada em Configurações >
+        # Geral, pedido explícito do usuário 2026-08-16. Ver PENDENCIAS.md
+        # > "MDI Principal (VB6)".
+        _tela("ABERTURA_DIA", "Abertura do Dia"),
         _tela("LOG_AUDITORIA", "Log de Auditoria", [("ABRIR", "Abrir Tela")]),
         _tela("CTRL_SISTEMA", "Controle do Sistema", [
             ("ABRIR", "Abrir Tela"), ("GRAVAR", "Gravar"),

@@ -10,7 +10,7 @@ type ReportTile = {
   label: string;
   desc: string;
   icon: keyof typeof Ionicons.glyphMap;
-  route: "/relatorio-descontos" | "/relatorio-pedidos" | "/relatorio-os" | "/relatorio-margem-lucro" | "/relatorio-caixa" | "/relatorio-caixa-analitico" | "/relatorio-entrada-saida-caixa" | "/relatorio-apuracao-vendas" | "/relatorio-resumo-venda" | "/relatorio-descontos-concedidos" | "/relatorio-itens-pedido" | "/relatorio-custo-os" | "/relatorio-itens-vendidos" | "/relatorio-busca-os" | "/relatorio-resumo-atendimento" | "/relatorio-produtos-reservados" | "/relatorio-estoque-nivel" | "/relatorio-estoque" | "/relatorio-movimentacao-itens" | "/relatorio-movimentacao-nivel" | "/relatorio-itens-funcionario" | "/relatorio-ranking-vendas" | "/relatorio-venda-cliente-produto" | "/relatorio-venda-nivel-funcionario" | "/relatorio-venda-regiao" | "/etiqueta-produto" | "/relatorio-listagem-clientes" | "/relatorio-inatividade-clientes" | "/mala-direta" | null;
+  route: "/relatorio-descontos" | "/relatorio-pedidos" | "/relatorio-os" | "/relatorio-margem-lucro" | "/relatorio-caixa" | "/relatorio-caixa-analitico" | "/relatorio-entrada-saida-caixa" | "/relatorio-apuracao-vendas" | "/relatorio-resumo-venda" | "/relatorio-descontos-concedidos" | "/relatorio-itens-pedido" | "/relatorio-custo-os" | "/relatorio-itens-vendidos" | "/relatorio-busca-os" | "/relatorio-resumo-atendimento" | "/relatorio-produtos-reservados" | "/relatorio-estoque-nivel" | "/relatorio-estoque" | "/relatorio-movimentacao-itens" | "/relatorio-movimentacao-nivel" | "/relatorio-itens-funcionario" | "/relatorio-ranking-vendas" | "/relatorio-venda-cliente-produto" | "/relatorio-venda-nivel-funcionario" | "/relatorio-venda-regiao" | "/relatorio-margem-produto" | "/etiqueta-produto" | "/relatorio-listagem-clientes" | "/relatorio-inatividade-clientes" | "/mala-direta" | null;
   params?: Record<string, string>;
   perm: string | null;
 };
@@ -86,11 +86,18 @@ const MARGENS_REPORTS: ReportTile[] = [
     perm: "REL_DESCONTOS.ABRIR",
   },
   {
-    label: "Margem de Lucro",
+    label: "Margem de Lucro x DAV",
     desc: "Faturamento e margem consolidados (multiempresa): Pedidos, O.S. e Comandas, por Empresa → DAV → Itens.",
     icon: "trending-up-outline",
     route: "/relatorio-margem-lucro",
-    perm: null,
+    perm: "REL_MARGEM_DAV.ABRIR",
+  },
+  {
+    label: "Margem de Lucro",
+    desc: "Foto do catálogo hoje: preço de venda × custo de reposição de cada produto Ativo, por Nível.",
+    icon: "pricetag-outline",
+    route: "/relatorio-margem-produto",
+    perm: "REL_MARGEM_PROD.ABRIR",
   },
 ];
 

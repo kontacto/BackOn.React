@@ -5,7 +5,7 @@ só a tabela/coluna muda (`os.forma_pagamento`). Também cobre Faturar O.S.
 (`_faturar_os_sync`, 2026-07-21 — pré-requisito do Gestor de Comandas) e a
 bifurcação de faturamento Garantia×Cliente (2026-08-02)."""
 import services.os_service as svc
-from models.schemas import FormaPagSimplesRequest, FecharRequest, FaturarOSRequest
+from models.schemas import FormaPagSimplesRequest, FecharRequest, FaturarOSRequest, OSSaveRequest
 
 
 class FakeCursor:
@@ -528,3 +528,74 @@ class TestCancelarOS:
         assert r["success"] is True
         perm_query = [p for q, p in cur.queries if "FROM permissoes" in q][0]
         assert perm_query[2] == "OS_COMP"
+
+
+class TestSalvarOSAreaAtuacao:
+    """Réplica de `VerificaAreaAtuacao` — bloqueia nova O.S. quando o
+    funcionário logado não está vinculado à Área de Atuação selecionada.
+    Ver PENDENCIAS.md > "MDI Principal (VB6)"."""
+
+    def _os_req(self, **over):
+        base = dict(servidor="srv", banco="bd", cliente=10, usuario_alteracao=5, classe=1, plataforma="web")
+        base.update(over)
+        return OSSaveRequest(**base)
+
+    def test_funcionario_sem_area_permitida_bloqueia(self, monkeypatch):
+        cur = FakeCursor(
+            one=[{"STATUS_CLIENTE": "A"}, {"descricao": "Oficina"}],
+            many=[[{"area": 1}, {"area": 2}]],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._save_os_sync(self._os_req(area_atuacao=9), None)
+        assert r["success"] is False
+        assert "Oficina" in r["message"]
+
+
+class TestSalvarOSChassiObrigatorio:
+    """`controle.exige_chassi_os` — bloqueia gravar O.S. do segmento Oficina
+    sem Chassi. Ver `_chassi_obrigatorio_ok` (pedido_common.py) e
+    PENDENCIAS.md > "O.S. — Chassi obrigatório (Oficina)"."""
+
+    def _os_req(self, **over):
+        base = dict(servidor="srv", banco="bd", cliente=10, usuario_alteracao=5, classe=1, plataforma="web")
+        base.update(over)
+        return OSSaveRequest(**base)
+
+    def test_oficina_com_flag_ligado_e_chassi_vazio_bloqueia(self, monkeypatch):
+        cur = FakeCursor(
+            one=[
+                {"STATUS_CLIENTE": "A"},
+                {"CONTROLA_ABERTURA_DIA": True},
+                {"Oficina": True},
+                {"exige_chassi_os": True},
+            ],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._save_os_sync(self._os_req(chassi=""), None)
+        assert r["success"] is False
+        assert "Chassi" in r["message"]
+
+    def test_oficina_com_flag_ligado_e_chassi_preenchido_libera(self, monkeypatch):
+        cur = FakeCursor(
+            one=[
+                {"STATUS_CLIENTE": "A"},
+                {"CONTROLA_ABERTURA_DIA": True},
+                {"novo": 501},
+            ],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._save_os_sync(self._os_req(chassi="9BW1234567890ABCD"), None)
+        assert r["success"] is True
+
+    def test_sem_modulo_oficina_libera_mesmo_com_chassi_vazio(self, monkeypatch):
+        cur = FakeCursor(
+            one=[
+                {"STATUS_CLIENTE": "A"},
+                {"CONTROLA_ABERTURA_DIA": True},
+                {"Oficina": False},
+                {"novo": 502},
+            ],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._save_os_sync(self._os_req(chassi=""), None)
+        assert r["success"] is True

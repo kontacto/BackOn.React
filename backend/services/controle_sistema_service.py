@@ -84,6 +84,13 @@ CAMPOS_CONTROLE = [
     # `controle.controle` (licença) via função proprietária do legado
     # (`RetornaCodigo`), não uma coluna própria.
     "codigo_kontacto", "situacao", "exige_cpf_cliente", "aceita_duplicar_cnpj", "inc_prod_os",
+    # "exige_chassi_os" — coluna NOVA (2026-08-17, avisada pela equipe VB6,
+    # ainda sem tela própria no .frm legado até esta data) — decide se o
+    # Chassi é obrigatório ao gravar O.S. do segmento Oficina. Colocada
+    # junto de "exige_cpf_cliente" por ser a mesma forma de flag
+    # (obrigatoriedade condicional de um campo em outra tela), não porque
+    # veio do rastreio do .frm como o resto desta lista.
+    "exige_chassi_os",
 ]
 
 # Campo somente-leitura (nunca editável — Enabled=0 no legado, é a licença
@@ -98,7 +105,7 @@ _CONTROLE_BOOL_FIELDS = {
     "Inclui_Classe_Caixa_Mov", "senha_gerente_cx", "AgrupaComandas_Cx",
     "Transf_Caixa_Contabil", "Exclui_Recebimento_Automatico",
     "fatura_os_contrato",
-    "exige_cpf_cliente", "aceita_duplicar_cnpj", "inc_prod_os",
+    "exige_cpf_cliente", "aceita_duplicar_cnpj", "inc_prod_os", "exige_chassi_os",
 }
 # `PROTOCOLO_TLS_NFSE`/`protocolo_tls_email` são `int`, não `bit` — apesar de a
 # tela mostrar um radio de 2 opções (TLS 1.0/1.2), o valor gravado não é um
@@ -306,6 +313,15 @@ def _get_controle_sistema_sync(servidor: str, banco: str) -> dict:
 
 
 def _save_controle_sistema_sync(servidor: str, banco: str, dados: dict) -> dict:
+    # Guarda defensiva — o UPDATE abaixo é às cegas (todo campo de
+    # CAMPOS_CONTROLE/CAMPOS_CONTROLE_AUX, sem WHERE por campo alterado); um
+    # `dados` vazio gravaria tudo como NULL/0, apagando a configuração real
+    # da empresa. Achado ao vivo 2026-08-17 (ver PENDENCIAS.md > "O.S.
+    # Oficina — Ciclo de Teste ao Vivo") — a causa raiz (`dados: dict = {}`
+    # como default no request) já foi corrigida em routes/controle_sistema.py,
+    # esta é a segunda camada (nunca confiar só no frontend/schema).
+    if not dados:
+        return {"success": False, "message": "Nenhum dado informado para gravar."}
     vals_c = _coerce_vals(dados, CAMPOS_CONTROLE, _CONTROLE_BOOL_FIELDS, _CONTROLE_TEXT_FIELDS)
     vals_a = _coerce_vals(dados, CAMPOS_CONTROLE_AUX, _CONTROLE_AUX_BOOL_FIELDS, _CONTROLE_AUX_TEXT_FIELDS)
     conn = _open_conn(servidor, banco)
@@ -343,6 +359,10 @@ async def save_controle_sistema(servidor, banco, dados):
 
 
 def _save_grupo_sync(servidor: str, banco: str, tabela: str, empresa_col: str, campos: list, text_fields: set, dados: dict) -> dict:
+    # Mesma guarda defensiva de `_save_controle_sistema_sync` acima — este
+    # UPDATE também é às cegas (todo campo do grupo, sem WHERE por campo).
+    if not dados:
+        return {"success": False, "message": "Nenhum dado informado para gravar."}
     vals = _coerce_vals(dados, campos, set(), text_fields)
     conn = _open_conn(servidor, banco)
     try:

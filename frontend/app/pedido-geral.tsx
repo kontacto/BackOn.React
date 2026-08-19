@@ -47,6 +47,8 @@ import ScreenToast from "@/src/components/pedido/ScreenToast";
 import { clienteSearchParams } from "@/src/hooks/useClienteForm";
 import WhatsappButton from "@/src/components/WhatsappButton";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
+import { useEmitirNotaFiscal } from "@/src/hooks/useEmitirNotaFiscal";
+import NotaFiscalCard from "@/src/components/fiscal/NotaFiscalCard";
 
 // Funções que podem alterar vendedor: 01 (Administrador) e 02 (Gerente) — mesma
 // regra do Pedido Bar (pedido-form.tsx).
@@ -549,6 +551,9 @@ function PedidoGeralWebScreen({ router }: { router: ReturnType<typeof useRouter>
   // (que só chama `pedidos_service.faturar_pedido` com tela="PEDIDO_COMP").
   // Trazido 2026-07-20.
   const [faturando, setFaturando] = useState(false);
+  // Comanda gerada ao faturar — só pra decidir quando mostrar o
+  // NotaFiscalCard (emissão sempre MANUAL, ver `useEmitirNotaFiscal.ts`).
+  const [comandaFaturada, setComandaFaturada] = useState<number | null>(null);
   const handleFaturar = useCallback(async () => {
     if (!conn || !pedidoId) return;
     if (!it.itens.length) { showToast("Inclua pelo menos um produto ou serviço.", "error"); return; }
@@ -560,6 +565,7 @@ function PedidoGeralWebScreen({ router }: { router: ReturnType<typeof useRouter>
       if (j?.success) {
         showToast(j.message || "Pedido faturado.", "success");
         setPedido((p) => (p ? { ...p, situacao: "PG", situacao_label: "Faturado" } : p));
+        setComandaFaturada(typeof j.comanda === "number" ? j.comanda : null);
         // Reaproveita a impressão pra emitir o pedido logo após faturar,
         // mesmo comportamento do Pedido Bar.
         setReciboOpen(true);
@@ -570,6 +576,10 @@ function PedidoGeralWebScreen({ router }: { router: ReturnType<typeof useRouter>
       showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally { setFaturando(false); }
   }, [conn, pedidoId, it.itens.length, classe, isMaster, usuarioCod, showToast]);
+
+  const notaFiscal = useEmitirNotaFiscal({
+    conn, session: { usuarioCodigo: usuarioCod, classe }, comanda: comandaFaturada, isMaster,
+  });
 
   // Reabrir Pedido (situação F -> A) — mesma função/regra do Pedido Bar.
   // Trazido 2026-07-20.
@@ -929,6 +939,15 @@ function PedidoGeralWebScreen({ router }: { router: ReturnType<typeof useRouter>
                 <Text style={pedidoStyles.whatsappDisabledHint}>
                   O envio por WhatsApp está desativado em Configurações.
                 </Text>
+              ) : null}
+              {comandaFaturada ? (
+                <NotaFiscalCard
+                  docFiscal={notaFiscal.docFiscal} emitindoNfce={notaFiscal.emitindoNfce} emitindoNfse={notaFiscal.emitindoNfse}
+                  onEmitirNfce={notaFiscal.emitirNfce} onEmitirNfse={notaFiscal.emitirNfse}
+                  canEmitirNfce={can("ALTERAR_COMANDA.EMITIR_NF") || isMaster}
+                  canEmitirNfse={can("ALTERAR_COMANDA.EMITIR_NFSE") || isMaster}
+                  testIDPrefix="pedido-geral"
+                />
               ) : null}
             </>
           )}

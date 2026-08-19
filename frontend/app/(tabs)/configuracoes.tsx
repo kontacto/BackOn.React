@@ -178,6 +178,15 @@ export default function ConfiguracoesScreen() {
                     testID="config-formulario-dinamico"
                   />
                 ) : null}
+                {isWeb && (can("ABERTURA_DIA.ABRIR") || isMaster) ? (
+                  <Item
+                    icon="calendar-outline"
+                    label="Abertura do Dia"
+                    hint="Controla a Data de Movimento do sistema"
+                    onPress={() => router.push("/abertura-dia")}
+                    testID="config-abertura-dia"
+                  />
+                ) : null}
               </View>
 
               {hasBio ? (

@@ -79,6 +79,34 @@ class TestCheckin:
         assert "já registrado" in r["message"]
         assert conn.committed is False
 
+    def test_checkin_bloqueia_por_conflito_de_versao(self, monkeypatch):
+        """Sincronização offline (AssistenciaTecnicaCampo.md) — quando
+        `versao_esperada` não bate com `os.versao_atendimento` atual, a
+        gravação é bloqueada em vez de sobrescrever silenciosamente."""
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"checkin_em": None}, {"versao_atendimento": b"\x00\x00\xcc\xdd"},
+        ])
+        conn = FakeConn(cur)
+        monkeypatch.setattr(os_svc, "_open_conn", lambda *a, **k: conn)
+
+        r = os_svc._checkin_os_sync(_req(versao_esperada="aabb"), 123)
+
+        assert r["success"] is False
+        assert r["conflito"] is True
+        assert conn.committed is False
+
+    def test_checkin_sucesso_com_versao_esperada_correta(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A"}, {"checkin_em": None}, {"versao_atendimento": b"\xaa\xbb"},
+        ])
+        conn = FakeConn(cur)
+        monkeypatch.setattr(os_svc, "_open_conn", lambda *a, **k: conn)
+
+        r = os_svc._checkin_os_sync(_req(versao_esperada="aabb"), 123)
+
+        assert r["success"] is True
+        assert conn.committed is True
+
     def test_checkin_bloqueado_se_os_nao_aberta(self, monkeypatch):
         cur = FakeCursor(one=[{"situacao": "F"}])
         conn = FakeConn(cur)
@@ -226,6 +254,48 @@ class TestLimparLocalizacao:
 
         assert r["success"] is True
         assert conn.committed is True
+
+
+class TestEnsureVersaoAtendimentoCol:
+    def test_migracao_idempotente(self):
+        queries = []
+
+        class Cur:
+            def execute(self, q, p=None):
+                queries.append(q)
+
+        os_svc._ensure_os_versao_atendimento_col(Cur())
+        assert len(queries) == 1
+        assert "IF NOT EXISTS" in queries[0]
+        assert "ALTER TABLE os ADD versao_atendimento ROWVERSION" in queries[0]
+
+
+class TestCheckarConflitoVersao:
+    def test_sem_versao_esperada_nao_checa(self, monkeypatch):
+        """Gravação online direta (fila offline não envolvida) nunca passa
+        `versao_esperada` — não deve nem consultar o banco."""
+        cur = FakeCursor()
+        r = os_svc._checar_conflito_versao(cur, 123, None)
+        assert r is None
+        assert cur.queries == []
+
+    def test_versao_diferente_bloqueia(self):
+        cur = FakeCursor(one=[{"versao_atendimento": b"\x00\xff"}])
+        r = os_svc._checar_conflito_versao(cur, 123, "aabb")
+        assert r is not None
+        assert r["success"] is False
+        assert r["conflito"] is True
+
+    def test_versao_igual_libera(self):
+        cur = FakeCursor(one=[{"versao_atendimento": b"\xaa\xbb"}])
+        r = os_svc._checar_conflito_versao(cur, 123, "aabb")
+        assert r is None
+
+    def test_os_sumiu_entre_o_cache_e_a_sincronizacao_bloqueia(self):
+        cur = FakeCursor(one=[None])
+        r = os_svc._checar_conflito_versao(cur, 999, "aabb")
+        assert r is not None
+        assert r["conflito"] is True
 
 
 class TestHistoricoOs:

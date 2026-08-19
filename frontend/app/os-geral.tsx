@@ -40,6 +40,8 @@ import ScreenToast from "@/src/components/pedido/ScreenToast";
 import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 import { clienteSearchParams } from "@/src/hooks/useClienteForm";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
+import { useEmitirNotaFiscal } from "@/src/hooks/useEmitirNotaFiscal";
+import NotaFiscalCard from "@/src/components/fiscal/NotaFiscalCard";
 import EquipamentoSearchModal, { EquipamentoRow } from "@/src/components/EquipamentoSearchModal";
 import { OSData } from "@/src/components/os/types";
 import { useOSItens } from "@/src/components/os/useOSItens";
@@ -250,6 +252,9 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
   const [km, setKm] = useState("");
   const [ano, setAno] = useState("");
   const [chassi, setChassi] = useState("");
+  // `controle.exige_chassi_os` — Chassi obrigatório na O.S. Oficina. Só mostra
+  // asterisco/pré-valida; o backend é quem reforça de verdade (os_completo_service.py).
+  const [exigeChassiOs, setExigeChassiOs] = useState(false);
   const [marcasList, setMarcasList] = useState<{ codigo: string; descricao: string }[]>([]);
   const [modelosList, setModelosList] = useState<{ codigo: string; descricao: string }[]>([]);
   const [equipModalOpen, setEquipModalOpen] = useState(false);
@@ -268,6 +273,26 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
   const [previsaoTermino, setPrevisaoTermino] = useState<string | null>(null);
   const [dataTermino, setDataTermino] = useState<string | null>(null);
   const [horaFechamento, setHoraFechamento] = useState("");
+  // Data/Hora do Atendimento Agendado (regra 2, AssistenciaTecnicaCampo.md
+  // — "quando o atendimento foi agendado, não só quando foi executado").
+  // Colunas LEGADAS (os.data_agendamento/hora_agendamento) reativadas
+  // 2026-08-15 pra alimentar a Lista de Atendimento por Calendário
+  // (frontend/app/atendimento-lista.tsx) — é aqui, na retaguarda, que
+  // alguém marca a data/hora do atendimento do técnico.
+  const [dataAgendamento, setDataAgendamento] = useState<string | null>(null);
+  const [horaAgendamento, setHoraAgendamento] = useState("");
+  // Agendar um ITEM (AgendarModal, dentro de `it`/useOSItens abaixo) agora
+  // TAMBÉM alimenta esses campos no backend (user-directed 2026-08-15) —
+  // recarrega só o cabeçalho pra refletir isso na tela sem precisar sair e
+  // voltar, mesmo padrão de `handleFormaPagModalChanged` acima.
+  const handleAgendamentoItemChanged = useCallback(async () => {
+    if (!conn || !osId) return;
+    const j = await apiGet(conn, `/api/os-completo/${osId}`);
+    if (j?.success && j.os) {
+      setDataAgendamento(j.os.data_agendamento || null);
+      setHoraAgendamento((j.os.hora_agendamento || "").slice(0, 5));
+    }
+  }, [conn, osId]);
 
   // Doc. Origem / Revisão Programada (migração de `Campo(150)`/`Campo(151)`/
   // `Option9`/`Option10` em `FrmTraOsNew.frm`) — ver PENDENCIAS.md > "O.S.
@@ -304,7 +329,7 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
 
   const it = useOSItens({
     conn, editing, osId, isAberto, usuarioCod, funcaoCod, classe, master: isMaster, showToast,
-    servicosOn: moduleOn("servicos"),
+    servicosOn: moduleOn("servicos"), onAgendamentoAlterado: handleAgendamentoItemChanged,
   });
   const eq = useOSEquipamentos({ conn, editing, osId, usuarioCod, classe, showToast });
 
@@ -327,13 +352,14 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
 
       if (c) {
         try {
-          const [ra, rf, rfp, rso, rto, rm] = await Promise.all([
+          const [ra, rf, rfp, rso, rto, rm, rctrl] = await Promise.all([
             apiGet(c, `/api/area-atuacao`).catch(() => null),
             apiGet(c, `/api/funcionarios`).catch(() => null),
             apiGet(c, `/api/forma-pagamento`).catch(() => null),
             apiGet(c, `/api/status-os`).catch(() => null),
             apiGet(c, `/api/tipo-os`).catch(() => null),
             apiGet(c, `/api/tabelas/marcas`, { marca_produto: "false" }).catch(() => null),
+            apiGet(c, `/api/controle/empresa`).catch(() => null),
           ]);
           if (ra?.success) {
             const arr = ra.items || [];
@@ -345,6 +371,7 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
           if (rso?.success) setStatusOsList(rso.items || []);
           if (rto?.success) setTipoOsList(rto.items || []);
           if (rm?.success) setMarcasList(rm.items || []);
+          if (rctrl?.success) setExigeChassiOs(!!rctrl.exige_chassi_os);
         } catch {
           // combos ficam vazios
         }
@@ -379,6 +406,8 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
             setPrevisaoTermino(o.previsao_termino || null);
             setDataTermino(o.data_termino || null);
             setHoraFechamento((o.hora_fechamento || "").slice(0, 5));
+            setDataAgendamento(o.data_agendamento || null);
+            setHoraAgendamento((o.hora_agendamento || "").slice(0, 5));
             setDocOrigem(o.os_original != null ? String(o.os_original) : "");
             setDocOrigemTipo(o.tipo_doc_original === "P" ? "P" : "O");
             setQtdRevisoes(o.qtd_revisoes != null ? String(o.qtd_revisoes) : "");
@@ -497,6 +526,10 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
     if (!conn) return;
     if (!cliente) { showToast("Selecione um cliente.", "error"); return; }
     if (atendente == null) { showToast("A O.S. precisa de um atendente.", "error"); return; }
+    if (isOficina && !isAssist && exigeChassiOs && !chassi.trim()) {
+      showToast("Chassi é obrigatório para O.S. do segmento Oficina.", "error");
+      return;
+    }
     setSaving(true);
     try {
       const body: Record<string, unknown> = {
@@ -523,6 +556,8 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
         posicao_os: posicaoOs,
         previsao_termino: previsaoTermino,
         data_termino: dataTermino,
+        data_agendamento: dataAgendamento,
+        hora_agendamento: horaAgendamento,
         os_original: docOrigem.trim() ? parseInt(docOrigem, 10) || null : null,
         tipo_doc_original: docOrigemTipo,
         qtd_revisoes: qtdRevisoes.trim() ? parseInt(qtdRevisoes, 10) || null : null,
@@ -593,6 +628,14 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
   // vez de tratar como erro.
   const [faturarBucketOpen, setFaturarBucketOpen] = useState(false);
   const [faturarBucketTotais, setFaturarBucketTotais] = useState({ cliente: 0, garantia: 0 });
+  // Comanda gerada ao faturar o bloco CLIENTE — só esse bloco mostra
+  // NotaFiscalCard. **Decisão confirmada pelo usuário 2026-08-19**: a
+  // comanda de Garantia/Interno/Contrato (as 3 situações do bucket
+  // "garantia", ver comentário acima) NUNCA emite nota fiscal nesta
+  // migração — nenhuma das 3 mostra o card, mesmo faturada. Se precisar
+  // diferenciar Contrato das outras duas no futuro, é pedido novo, não
+  // presumir a partir daqui.
+  const [comandaFaturadaCliente, setComandaFaturadaCliente] = useState<number | null>(null);
   const handleFaturar = useCallback(async (bucket?: "cliente" | "garantia" | "ambos") => {
     if (!conn || !osId) return;
     setFaturando(true);
@@ -606,6 +649,7 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
         setOs((o) => (o ? { ...o, situacao: "PG", situacao_label: "Faturado" } : o));
         setFaturarBucketOpen(false);
         setReciboOpen(true);
+        if (typeof j.comanda === "number") setComandaFaturadaCliente(j.comanda);
       } else if (j?.needs_choice) {
         setFaturarBucketTotais({ cliente: j.total_cliente || 0, garantia: j.total_garantia || 0 });
         setFaturarBucketOpen(true);
@@ -616,6 +660,10 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
       showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally { setFaturando(false); }
   }, [conn, osId, classe, isMaster, usuarioCod, showToast]);
+
+  const notaFiscalCliente = useEmitirNotaFiscal({
+    conn, session: { usuarioCodigo: usuarioCod, classe }, comanda: comandaFaturadaCliente, isMaster,
+  });
 
   const [reabrindo, setReabrindo] = useState(false);
   const handleReabrir = useCallback(async () => {
@@ -958,6 +1006,31 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
                     testID="os-geral-hora-fechamento"
                   />
                 </View>
+                <View style={{ width: 160 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                    <Text style={styles.topLabel}>Data Agendada</Text>
+                    <InfoTooltip
+                      testID="os-geral-data-agendada-info"
+                      text="Data em que o atendimento foi marcado com o cliente (diferente da data em que ele de fato acontecer) — usada pela Lista de Atendimento por Calendário do técnico em campo. Ao gravar, o sistema reserva de verdade esse horário na Agenda do Técnico Responsável — se ele não atender nesse dia/hora, ou já tiver outro compromisso, a gravação é bloqueada com o motivo."
+                    />
+                  </View>
+                  <WebDateField
+                    value={dataAgendamento}
+                    onChange={setDataAgendamento}
+                    disabled={camposTravados}
+                    testID="os-geral-data-agendada"
+                  />
+                </View>
+                <View style={{ width: 120 }}>
+                  <Text style={styles.topLabel}>Hora Agendada</Text>
+                  <WebDateField
+                    type="time"
+                    value={horaAgendamento || null}
+                    onChange={(v) => setHoraAgendamento(v || "")}
+                    disabled={camposTravados}
+                    testID="os-geral-hora-agendada"
+                  />
+                </View>
                 <View style={{ width: 110 }} testID="os-geral-doc-origem">
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
                     <Text style={styles.topLabel}>Revisão Programada</Text>
@@ -1169,7 +1242,7 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
                   </Field>
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Field label="Chassi">
+                  <Field label={exigeChassiOs ? "Chassi *" : "Chassi"}>
                     <TextInput
                       value={chassi}
                       onChangeText={setChassi}
@@ -1358,6 +1431,15 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
                   setTempoModalOpen(true);
                 }}
               />
+              {comandaFaturadaCliente ? (
+                <NotaFiscalCard
+                  docFiscal={notaFiscalCliente.docFiscal} emitindoNfce={notaFiscalCliente.emitindoNfce} emitindoNfse={notaFiscalCliente.emitindoNfse}
+                  onEmitirNfce={notaFiscalCliente.emitirNfce} onEmitirNfse={notaFiscalCliente.emitirNfse}
+                  canEmitirNfce={can("ALTERAR_COMANDA.EMITIR_NF") || isMaster}
+                  canEmitirNfse={can("ALTERAR_COMANDA.EMITIR_NFSE") || isMaster}
+                  testIDPrefix="os-geral-cliente"
+                />
+              ) : null}
             </>
           )}
 

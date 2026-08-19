@@ -106,14 +106,26 @@ def montar_id_dps(*, cod_municipio: str, tipo_inscricao: str, inscricao_federal:
 def _montar_xml_dps(
     *, id_dps: str, tp_amb: str, cod_municipio: str, serie: str, numero_dps: int, data_competencia: date,
     cnpj_prest: str, opcao_simples_nacional: bool, regime_especial_tributacao: int,
-    tomador: Optional[dict], itens: list[dict],
+    tomador: Optional[dict], itens: list[dict], ibs_cbs_cst: str = "", ibs_cbs_classtrib: str = "",
 ) -> tuple[bytes, str]:
     """Monta `<DPS><infDPS Id="...">` conforme o exemplo público oficial
     (ver docstring do módulo). `itens` já deve trazer o serviço com
     `cod_lista_servico`/`descricao`/`valor` resolvidos — este módulo não
     agrega/soma serviços diferentes numa mesma DPS (uma DPS = um serviço
     principal, mesma simplificação já aceita implicitamente pelo legado,
-    que emite uma NFSe por comanda)."""
+    que emite uma NFSe por comanda).
+
+    `ibs_cbs_cst`/`ibs_cbs_classtrib` — CST/cClassTrib do IBS/CBS do
+    serviço principal (`ibs_cbs_service.calcular_item_ibs_cbs`, chamado
+    por quem orquestra). **Só CST/cClassTrib, nunca valor monetário** —
+    decisão de leiaute confirmada pelo usuário pra fase de transição da
+    Reforma Tributária (ver `[[project_ibs_cbs_vb6_pendente]]`: "durante a
+    fase de transição, o leiaute do XML de envio da DPS deliberadamente só
+    informa CST/cClassTrib, sem mandar o valor monetário calculado" — o
+    sistema local já calcula o valor, só não é enviado no XML ainda).
+    **Posicionamento do grupo dentro de `<serv>` não foi confirmado contra
+    o XSD oficial da DPS Nacional** — mesma ressalva já registrada na
+    docstring do módulo pro restante do layout."""
     dh_emi = datetime.now().astimezone().isoformat(timespec="seconds")
     d_compet = data_competencia.isoformat()
 
@@ -161,6 +173,7 @@ def _montar_xml_dps(
         f'<serv>'
         f'<locPrest><cLocPrestacao>{cod_municipio_num}</cLocPrestacao></locPrest>'
         f'<cServ><cTribNac>{c_trib_nac}</cTribNac><xDescServ>{x_desc_serv}</xDescServ></cServ>'
+        f'{f"<gIBSCBS><CST>{ibs_cbs_cst}</CST><cClassTrib>{ibs_cbs_classtrib}</cClassTrib></gIBSCBS>" if ibs_cbs_cst else ""}'
         f'</serv>'
         f'<valores>'
         f'<vServPrest><vServ>{valor_total:.2f}</vServ></vServPrest>'
@@ -189,12 +202,14 @@ def _desempacotar_nfse(nfse_gzip_b64: str) -> str:
 def emitir_nfse_sync(
     cur, *, comanda: int, cnpj_prest: str, cod_municipio: str, opcao_simples_nacional: bool,
     regime_especial_tributacao: int, proximo_numero: int, serie: str, tomador: Optional[dict],
-    itens: list[dict], tp_amb: str,
+    itens: list[dict], tp_amb: str, ibs_cbs_cst: str = "", ibs_cbs_classtrib: str = "",
 ) -> dict:
     """Orquestra a emissão de uma NFS-e (DPS Nacional) a partir de uma
     comanda já faturada com itens de serviço — monta/assina a DPS, envia ao
     ADN (`sefin.nfse.gov.br`) e devolve o resultado. `cur` é o cursor já
-    aberto (mesma transação de quem chama, pra ler o certificado)."""
+    aberto (mesma transação de quem chama, pra ler o certificado).
+    `ibs_cbs_cst`/`ibs_cbs_classtrib` — repassados tal qual pra
+    `_montar_xml_dps` (ver a docstring de lá)."""
     if not itens:
         return {"success": False, "message": "Comanda sem itens de serviço — nada a emitir."}
     if not cod_municipio:
@@ -219,7 +234,7 @@ def emitir_nfse_sync(
             id_dps=id_dps, tp_amb=tp_amb, cod_municipio=cod_municipio, serie=serie,
             numero_dps=proximo_numero, data_competencia=date.today(), cnpj_prest=cnpj_prest,
             opcao_simples_nacional=opcao_simples_nacional, regime_especial_tributacao=regime_especial_tributacao,
-            tomador=tomador, itens=itens,
+            tomador=tomador, itens=itens, ibs_cbs_cst=ibs_cbs_cst, ibs_cbs_classtrib=ibs_cbs_classtrib,
         )
         xml_assinado = nfe_fiscal_common.assinar_xml(xml_dps, id_dps, key_pem, cert_pem)
         payload = {"dpsXmlGZipB64": _empacotar_dps(xml_assinado)}

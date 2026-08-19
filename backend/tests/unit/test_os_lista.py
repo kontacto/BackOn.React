@@ -56,7 +56,8 @@ _ITEM_ROW = {
     "codigo": 294, "cliente": 10, "data_entrada": None, "hora_entrada": "10:00", "situacao": "A",
     "valor_calc": 100.0, "area_atuacao": None, "cliente_nome": "Cliente X", "atendente_nome": "Ana",
     "tecnico_responsavel": 30, "tecnico_nome": "João", "auxiliar_tecnico": 55, "auxiliar_nome": "Maria",
-    "checkin_em": None, "checkout_em": None, "proxima_agenda": None,
+    "checkin_em": None, "checkout_em": None, "data_agendamento": None, "hora_agendamento": None,
+    "proxima_agenda": None,
 }
 
 
@@ -121,6 +122,29 @@ class TestFiltrosTecnicoAuxiliar:
         assert 55 in count_p
 
 
+class TestFiltroDataAgenda:
+    """Lista de Atendimento por Calendário (atendimento-lista.tsx) — filtra
+    por dia exato contra `os.data_agendamento` (coluna legada reativada,
+    ver AssistenciaTecnicaCampo.md). Comparação direta, sem EXISTS/JOIN —
+    diferente de `data_fat_ini`/`data_fat_fim`, que precisam do JOIN por
+    não terem coluna própria em `os`."""
+
+    def test_filtro_data_agenda(self, monkeypatch):
+        cur = FakeCursor(one=[{"c": 1}], many=[[_ITEM_ROW]])
+        _patch(monkeypatch, cur)
+        svc._list_os_sync(_req(data_agenda="2026-08-20"))
+        count_q, count_p = next((q, p) for q, p in cur.queries if q.strip().startswith("SELECT COUNT"))
+        assert "o.data_agendamento = %s" in count_q
+        assert "2026-08-20" in count_p
+
+    def test_sem_data_agenda_nao_filtra(self, monkeypatch):
+        cur = FakeCursor(one=[{"c": 1}], many=[[_ITEM_ROW]])
+        _patch(monkeypatch, cur)
+        svc._list_os_sync(_req())
+        count_q, _ = next((q, p) for q, p in cur.queries if q.strip().startswith("SELECT COUNT"))
+        assert "data_agendamento" not in count_q
+
+
 class TestCamposNovosNoItem:
     def test_item_traz_tecnico_auxiliar_checkin_checkout_agenda(self, monkeypatch):
         cur = FakeCursor(one=[{"c": 1}], many=[[_ITEM_ROW]])
@@ -133,4 +157,6 @@ class TestCamposNovosNoItem:
         assert item["auxiliar_nome"] == "Maria"
         assert item["checkin_em"] is None
         assert item["checkout_em"] is None
+        assert item["data_agendamento"] is None
+        assert item["hora_agendamento"] == ""
         assert item["proxima_agenda"] is None

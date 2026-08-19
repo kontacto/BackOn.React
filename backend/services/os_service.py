@@ -16,7 +16,8 @@ from models.schemas import (
 )
 from services.constants import SITUACAO_LABEL
 from services.pedido_common import (
-    _check_cliente_ativo, DavPagamento, DAV_OS, _fecha_fpag_dav, _qtd_formas, _liberar_reservado, _mover_estoque,
+    _check_cliente_ativo, _check_area_atuacao, _auto_abrir_dia_se_necessario, _chassi_obrigatorio_ok,
+    DavPagamento, DAV_OS, _fecha_fpag_dav, _qtd_formas, _liberar_reservado, _mover_estoque,
     _ensure_os_forma_pagamento_garantia_col,
 )
 from services.permissoes_service import tem_permissao
@@ -44,6 +45,63 @@ def _ensure_os_checkin_cols(cur) -> None:
             f"WHERE Name='{nome}' AND Object_ID=Object_ID('os')) "
             f"ALTER TABLE os ADD {nome} {tipo}"
         )
+
+
+def _ensure_os_versao_atendimento_col(cur) -> None:
+    """Concorrência otimista pra sincronização OFFLINE da tela de
+    Atendimento de Campo (Assistência Técnica — ver
+    AssistenciaTecnicaCampo.md, "Sincronização Offline"). `ROWVERSION` é
+    tipo nativo do SQL Server: auto-incrementa sozinho em QUALQUER UPDATE
+    da linha (não pode ser setado manualmente), e o `ALTER TABLE ... ADD`
+    já auto-preenche todas as linhas existentes — não precisa de `NULL`/
+    `DEFAULT` como as outras migrações deste arquivo. Só 1 coluna
+    `ROWVERSION` é permitida por tabela (limite do próprio SQL Server),
+    confirmado que `os` ainda não tem nenhuma.
+
+    Uso: o app cacheia este valor (hex) ao carregar uma OS pra uso
+    offline; ao sincronizar uma mutação da fila local, manda de volta
+    como `versao_esperada` — se o valor atual da linha mudou nesse
+    meio-tempo, a gravação é bloqueada com um aviso de conflito em vez de
+    sobrescrever silenciosamente (decisão do usuário, 2026-08-14: nunca
+    merge automático)."""
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='versao_atendimento' AND Object_ID=Object_ID('os')) "
+        "ALTER TABLE os ADD versao_atendimento ROWVERSION"
+    )
+
+
+def _versao_atendimento_hex(valor) -> Optional[str]:
+    """`pymssql` devolve ROWVERSION como `bytes` — converte pra hex
+    (string) pra trafegar em JSON. Token opaco: nunca decodificado nem
+    interpretado no frontend, só comparado byte-a-byte (como string)."""
+    if valor is None:
+        return None
+    if isinstance(valor, (bytes, bytearray)):
+        return valor.hex()
+    return str(valor)
+
+
+def _checar_conflito_versao(cur, codigo: int, versao_esperada: Optional[str]) -> Optional[dict]:
+    """Concorrência otimista pra mutações vindas da fila offline (ver
+    `_ensure_os_versao_atendimento_col`) — chamado com o cursor já aberto,
+    ANTES do UPDATE de negócio. `versao_esperada` vazio/None = gravação
+    online direta, nunca checa (comportamento de sempre, inalterado).
+    Retorna um dict de erro pronto pra devolver quando há conflito, ou
+    `None` quando pode prosseguir."""
+    if not versao_esperada:
+        return None
+    cur.execute("SELECT versao_atendimento FROM os WHERE codigo=%s", (codigo,))
+    row = cur.fetchone()
+    atual = _versao_atendimento_hex(row.get("versao_atendimento")) if row else None
+    if atual != versao_esperada:
+        return {
+            "success": False,
+            "conflito": True,
+            "message": "Esta OS foi alterada desde a última vez que você a carregou. "
+                       "Abra a OS de novo pra ver os dados atuais antes de tentar sincronizar.",
+        }
+    return None
 
 
 def _list_os_sync(req: OSListRequest) -> dict:
@@ -96,6 +154,9 @@ def _list_os_sync(req: OSListRequest) -> dict:
         if req.auxiliar:
             where_parts.append("o.auxiliar_tecnico = %s")
             params.append(req.auxiliar)
+        if req.data_agenda:
+            where_parts.append("o.data_agendamento = %s")
+            params.append(req.data_agenda)
         # Restrição de visibilidade da Lista de Atendimento (os-lista.tsx) —
         # opt-in: só ativa quando o chamador manda classe+usuario_codigo (só
         # os-lista.tsx manda; os.tsx/os-form.tsx nunca preenchem esses campos,
@@ -124,6 +185,7 @@ def _list_os_sync(req: OSListRequest) -> dict:
             f"       o.tecnico_responsavel, COALESCE(NULLIF(ft.nome_guerra,''), ft.nome) AS tecnico_nome, "
             f"       o.auxiliar_tecnico, COALESCE(NULLIF(fa.nome_guerra,''), fa.nome) AS auxiliar_nome, "
             f"       o.checkin_em, o.checkout_em, "
+            f"       o.data_agendamento, o.hora_agendamento, "
             f"       (SELECT MIN(a.data) FROM AGENDA_OS ao "
             f"        JOIN os_produto op ON op.cod_os_prod = ao.CODOS "
             f"        JOIN AGENDA a ON a.codagenda = ao.CODAGENDA "
@@ -164,6 +226,10 @@ def _list_os_sync(req: OSListRequest) -> dict:
                 "auxiliar_nome": (r.get("auxiliar_nome") or "").strip(),
                 "checkin_em": r["checkin_em"].isoformat() if r.get("checkin_em") else None,
                 "checkout_em": r["checkout_em"].isoformat() if r.get("checkout_em") else None,
+                "data_agendamento": (
+                    r["data_agendamento"].isoformat() if hasattr(r.get("data_agendamento"), "isoformat") else None
+                ),
+                "hora_agendamento": (str(r.get("hora_agendamento") or "").strip()[:5]),
                 "proxima_agenda": (
                     r["proxima_agenda"].isoformat() if hasattr(r.get("proxima_agenda"), "isoformat") else None
                 ),
@@ -195,6 +261,7 @@ def _get_os_sync(servidor: str, banco: str, codigo: int) -> dict:
             "       o.forma_pagamento, fp.descricao AS forma_pagamento_descricao, "
             "       o.checkin_em, o.checkin_lat, o.checkin_lng, o.checkin_usuario, "
             "       o.checkout_em, o.checkout_lat, o.checkout_lng, o.checkout_usuario, "
+            "       o.versao_atendimento, "
             "       c.nome AS cliente_nome, c.cgc_cpf AS cliente_cgc, "
             "       a.descricao AS area_descricao, "
             "       f.nome AS atendente_nome, f.nome_guerra AS atendente_guerra "
@@ -251,6 +318,7 @@ def _get_os_sync(servidor: str, banco: str, codigo: int) -> dict:
                 "checkout_lat": float(row["checkout_lat"]) if row.get("checkout_lat") is not None else None,
                 "checkout_lng": float(row["checkout_lng"]) if row.get("checkout_lng") is not None else None,
                 "checkout_usuario": int(row["checkout_usuario"]) if row.get("checkout_usuario") is not None else None,
+                "versao_atendimento": _versao_atendimento_hex(row.get("versao_atendimento")),
             },
         }
     except Exception as e:
@@ -291,6 +359,14 @@ def _save_os_sync(req: OSSaveRequest, codigo: Optional[int]) -> dict:
                     "success": False,
                     "message": f"Cliente com situação '{label}' não pode gerar nova O.S.",
                 }
+            ok, label = _check_area_atuacao(cur, req.usuario_alteracao, req.area_atuacao)
+            if not ok:
+                conn.close()
+                return {
+                    "success": False,
+                    "message": f"Você não está vinculado à Área de Atuação '{label}' — não é possível abrir O.S. nela.",
+                }
+            _auto_abrir_dia_se_necessario(cur)
 
         sizes = _get_col_sizes(conn, req.banco, "os")
         descricao_cliente = req.descricao_cliente or ""
@@ -301,6 +377,9 @@ def _save_os_sync(req: OSSaveRequest, codigo: Optional[int]) -> dict:
         modelo = _trunc(req.modelo or "", sizes, "modelo", 3)
         ano = _trunc(req.ano or "", sizes, "ano", 9)
         chassi = _trunc(req.chassi or "", sizes, "chassi", 20)
+        if not _chassi_obrigatorio_ok(cur, chassi):
+            conn.close()
+            return {"success": False, "message": "Chassi é obrigatório para O.S. do segmento Oficina."}
         num_serie = _trunc(req.numero_de_serie or "", sizes, "numero_de_serie", 20)
         km = int(req.km) if req.km is not None else 0
         status_os = req.status_os if req.status_os is not None else 0
@@ -413,6 +492,10 @@ def _checkin_os_sync(req: OSCheckinRequest, codigo: int) -> dict:
         if row and row.get("checkin_em"):
             conn.close()
             return {"success": False, "message": f"Check-in já registrado nesta OS em {row['checkin_em']}."}
+        conflito = _checar_conflito_versao(cur, codigo, req.versao_esperada)
+        if conflito:
+            conn.close()
+            return conflito
         cur.execute(
             "UPDATE os SET checkin_em=GETDATE(), checkin_lat=%s, checkin_lng=%s, checkin_usuario=%s WHERE codigo=%s",
             (req.latitude, req.longitude, req.usuario_alteracao, codigo),
@@ -448,6 +531,10 @@ def _checkout_os_sync(req: OSCheckinRequest, codigo: int) -> dict:
         if row.get("checkout_em"):
             conn.close()
             return {"success": False, "message": f"Check-out já registrado nesta OS em {row['checkout_em']}."}
+        conflito = _checar_conflito_versao(cur, codigo, req.versao_esperada)
+        if conflito:
+            conn.close()
+            return conflito
         cur.execute(
             "UPDATE os SET checkout_em=GETDATE(), checkout_lat=%s, checkout_lng=%s, checkout_usuario=%s WHERE codigo=%s",
             (req.latitude, req.longitude, req.usuario_alteracao, codigo),
@@ -558,6 +645,10 @@ def _fechar_os_sync(req: FecharRequest, codigo: int, tela: str = "OS") -> dict:
         if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, tela, "SITUACAO"):
             conn.close()
             return {"success": False, "message": "Sem permissão para fechar a O.S."}
+        conflito = _checar_conflito_versao(cur, codigo, req.versao_esperada)
+        if conflito:
+            conn.close()
+            return conflito
         cur.execute(
             "SELECT TOP 1 1 AS ok FROM os_produto WHERE os=%s AND ISNULL(item_cancelado,0)=0",
             (codigo,),

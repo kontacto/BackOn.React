@@ -19,7 +19,8 @@ from db.connection import _open_conn, _get_col_sizes, _trunc
 from models.schemas import OSCompletoSaveRequest, FecharRequest, FaturarOSRequest
 from services.constants import SITUACAO_LABEL
 from services.pedido_common import (
-    _check_cliente_ativo, _exige_aprovacao_itens_os_ativo, _exige_expedicao_itens_os_ativo,
+    _check_cliente_ativo, _check_area_atuacao, _auto_abrir_dia_se_necessario, _chassi_obrigatorio_ok,
+    _exige_aprovacao_itens_os_ativo, _exige_expedicao_itens_os_ativo,
     _ensure_os_doc_origem_cols, _ensure_osrevisao_table, _validar_doc_origem,
     _controla_revisao_os_ativo, _exige_os_original_garantia_ativo, _mover_estoque,
     _ensure_os_forma_pagamento_garantia_col,
@@ -27,6 +28,7 @@ from services.pedido_common import (
 from services.os_itens_service import _recalc_os_total
 from services.permissoes_service import tem_permissao
 from services import os_service
+from services.agenda_service import _validar_disponibilidade, _somar_minutos
 
 
 def _ensure_os_auxiliar_tecnico_col(cur) -> None:
@@ -55,6 +57,111 @@ def _ensure_os_auxiliar_tecnico_col(cur) -> None:
     )
 
 
+def _ensure_os_codagenda_atendimento_col(cur) -> None:
+    """Soft-FK opcional pra `AGENDA.codagenda` — rastreia o compromisso
+    REAL da Agenda vinculado ao cabeçalho da OS (não a um item de
+    serviço), criado/atualizado por `_sincronizar_agendamento_cabecalho_
+    sync` quando "Data Agendada"/"Hora Agendada" são preenchidos
+    diretamente em `os-geral.tsx` — user-directed 2026-08-15 ("data e hora
+    agendada deverá ser alimentada pela agenda ou imputada diretamente no
+    campo de acordo com a disponibilidade da agenda"). Quando setada, tem
+    PRECEDÊNCIA sobre a agregação por item (`_recalc_data_agendamento_os_
+    sync`, agenda_service.py) — ver comentário lá."""
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='codagenda_atendimento' AND Object_ID=Object_ID('os')) "
+        "ALTER TABLE os ADD codagenda_atendimento INT NULL"
+    )
+
+
+def _sincronizar_agendamento_cabecalho_sync(
+    cur, codigo: int, cliente: Optional[int], tecnico_responsavel: Optional[int],
+    data_agendamento: Optional[str], hora_agendamento: Optional[str], usuario_alteracao: Optional[int],
+) -> tuple[Optional[str], Optional[int]]:
+    """Sincroniza Data/Hora Agendada do CABEÇALHO da OS com um compromisso
+    REAL na Agenda — user-directed 2026-08-15 ("data e hora agendada
+    deverá ser alimentada pela agenda ou imputada diretamente no campo de
+    acordo com a disponibilidade da agenda"). Reaproveita só a peça de
+    validação do módulo Agenda (`_validar_disponibilidade`) — NÃO
+    reaproveita `_salvar_agendamento_sync` literalmente, porque aquela
+    função exige um `servico`/checagem de especialidade (agendamento por
+    ITEM de serviço), conceito que não existe pra um compromisso de
+    cabeçalho (a visita inteira, sem uma linha de serviço específica).
+
+    Retorna `(mensagem_de_erro, novo_codagenda_atendimento)` — chamada de
+    dentro de `_save_os_completo_sync` ANTES do UPDATE principal da OS,
+    pra poder abortar o Gravar inteiro se a disponibilidade não bater
+    (`mensagem_de_erro` não-None). Sem mudança nos campos em relação ao
+    que já está gravado: no-op, retorna o `codagenda_atendimento` atual
+    sem tocar a Agenda.
+
+    Nota de implementação: diferente do fluxo de agendamento por item
+    (`AgendarModal`/`_salvar_agendamento_sync`), esta função NÃO checa
+    permissão `OS_COMP.AGENDAR` — `_save_os_completo_sync` não tem acesso
+    a `master` (só a `classe`, "só pro log de auditoria" segundo o
+    schema) e bloquear por `tem_permissao` sem bypass de master quebraria
+    o usuário master (que nunca tem linha própria em `permissoes`, o
+    bypass é só frontend — ver "Master Has Full Permission" em
+    CLAUDE.md). O Gravar da OS Completa como um todo já é gated só no
+    frontend (`can("OS_COMP.GRAVAR")`), mesmo padrão que o resto desta
+    função já segue (nenhum outro campo daqui checa permissão granular
+    própria)."""
+    hora = (hora_agendamento or "").strip()[:5] or None
+    data = data_agendamento or None
+
+    cur.execute(
+        "SELECT data_agendamento, hora_agendamento, codagenda_atendimento FROM os WHERE codigo=%s",
+        (codigo,),
+    )
+    atual = cur.fetchone() or {}
+    data_atual_raw = atual.get("data_agendamento")
+    data_atual = data_atual_raw.isoformat() if hasattr(data_atual_raw, "isoformat") else data_atual_raw
+    hora_atual = str(atual.get("hora_agendamento") or "").strip()[:5] or None
+    codagenda_atual = int(atual["codagenda_atendimento"]) if atual.get("codagenda_atendimento") else None
+
+    if data == data_atual and hora == hora_atual:
+        return None, codagenda_atual
+
+    if not data and not hora:
+        # Campos limpos — cancela o compromisso existente (mantém como
+        # histórico, mesmo padrão de `_cancelar_agendamento_sync`).
+        if codagenda_atual:
+            cur.execute(
+                "UPDATE AGENDA SET SITUACAO_ATENDIMENTO='Desistência' WHERE codagenda=%s",
+                (codagenda_atual,),
+            )
+        return None, None
+
+    if not tecnico_responsavel:
+        return "Defina o Técnico Responsável antes de marcar Data/Hora Agendada.", codagenda_atual
+    if not data or not hora:
+        return "Informe Data e Hora Agendada juntas.", codagenda_atual
+
+    horario, erro = _validar_disponibilidade(cur, tecnico_responsavel, data, hora, excluir_codagenda=codagenda_atual)
+    if erro:
+        return erro, codagenda_atual
+
+    hora_fim = _somar_minutos(hora, int(horario.get("intervalo1") or 30))
+    if codagenda_atual:
+        cur.execute(
+            "UPDATE AGENDA SET funcionario=%s, cliente=%s, data=%s, hora_ini=%s, hora_fim=%s, "
+            "SITUACAO_ATENDIMENTO='Confirmado' WHERE codagenda=%s",
+            (tecnico_responsavel, cliente, data, hora, hora_fim, codagenda_atual),
+        )
+        return None, codagenda_atual
+
+    cur.execute(
+        "INSERT INTO AGENDA (funcionario, cliente, data, hora_ini, hora_fim, valor, VALOR_ORIGINAL, "
+        "encaixe, revisao, data_agenda, hora_agenda, usuario_agenda, situacao, SITUACAO_ATENDIMENTO, SITUACAO_CAIXA) "
+        "OUTPUT INSERTED.codagenda "
+        "VALUES (%s,%s,%s,%s,%s,0,0,0,0,GETDATE(),CONVERT(VARCHAR(8),GETDATE(),108),%s,'A','Confirmado','A')",
+        (tecnico_responsavel, cliente, data, hora, hora_fim, usuario_alteracao or 0),
+    )
+    row = cur.fetchone()
+    novo_codagenda = int(row["codagenda"] if isinstance(row, dict) else row[0])
+    return None, novo_codagenda
+
+
 def _get_os_completo_sync(servidor: str, banco: str, codigo: int) -> dict:
     """Chama `os_service._get_os_sync` (cabeçalho base) e ENRIQUECE com os
     campos extras da tela completa — mesmo padrão de "só enriquece, sem
@@ -72,12 +179,14 @@ def _get_os_completo_sync(servidor: str, banco: str, codigo: int) -> dict:
         _ensure_osrevisao_table(cur)
         _ensure_os_forma_pagamento_garantia_col(cur)
         _ensure_os_auxiliar_tecnico_col(cur)
+        _ensure_os_codagenda_atendimento_col(cur)
         cur.execute(
             "SELECT o.referencia_os, o.tecnico_responsavel, "
             "       COALESCE(NULLIF(f.nome_guerra,''), f.nome) AS tecnico_nome, "
             "       o.auxiliar_tecnico, COALESCE(NULLIF(fa.nome_guerra,''), fa.nome) AS auxiliar_nome, "
             "       o.posicao_os, t.descricao AS tipo_os_descricao, "
             "       o.previsao_termino, o.data_termino, o.hora_entrada, o.hora_fechamento, "
+            "       o.data_agendamento, o.hora_agendamento, "
             "       s.descricao AS status_os_descricao, "
             "       o.os_original, o.Tipo_Doc_Original, o.VALIDOU_GARANTIA, o.QtdRevisoes, "
             "       o.forma_pagamento_garantia, fpg.descricao AS forma_pagamento_garantia_descricao "
@@ -143,6 +252,10 @@ def _get_os_completo_sync(servidor: str, banco: str, codigo: int) -> dict:
             base["os"]["data_termino"] = row["data_termino"].isoformat() if row.get("data_termino") else None
             base["os"]["hora_entrada"] = (row.get("hora_entrada") or "").strip()
             base["os"]["hora_fechamento"] = (row.get("hora_fechamento") or "").strip()
+            base["os"]["data_agendamento"] = (
+                row["data_agendamento"].isoformat() if row.get("data_agendamento") else None
+            )
+            base["os"]["hora_agendamento"] = str(row.get("hora_agendamento") or "").strip()[:5]
             base["os"]["status_os_descricao"] = (row.get("status_os_descricao") or "").strip()
             base["os"]["os_original"] = int(row["os_original"]) if row.get("os_original") else None
             base["os"]["tipo_doc_original"] = (row.get("Tipo_Doc_Original") or "").strip() or None
@@ -182,6 +295,7 @@ def _save_os_completo_sync(req: OSCompletoSaveRequest, codigo: Optional[int]) ->
         _ensure_osrevisao_table(cur)
         _ensure_os_forma_pagamento_garantia_col(cur)
         _ensure_os_auxiliar_tecnico_col(cur)
+        _ensure_os_codagenda_atendimento_col(cur)
 
         if codigo is not None:
             cur.execute("SELECT situacao FROM os WHERE codigo=%s", (codigo,))
@@ -202,6 +316,14 @@ def _save_os_completo_sync(req: OSCompletoSaveRequest, codigo: Optional[int]) ->
                     "success": False,
                     "message": f"Cliente com situação '{label}' não pode gerar nova O.S.",
                 }
+            ok, label = _check_area_atuacao(cur, req.usuario_alteracao, req.area_atuacao)
+            if not ok:
+                conn.close()
+                return {
+                    "success": False,
+                    "message": f"Você não está vinculado à Área de Atuação '{label}' — não é possível abrir O.S. nela.",
+                }
+            _auto_abrir_dia_se_necessario(cur)
 
         # Doc. Origem / Revisão Programada (`FrmTraOsNew.frm`, `Campo(150)`/
         # `Campo(151)`/`Option9`/`Option10`) — validação cruzada de OS/Pedido
@@ -241,6 +363,9 @@ def _save_os_completo_sync(req: OSCompletoSaveRequest, codigo: Optional[int]) ->
         modelo = _trunc(req.modelo or "", sizes, "modelo", 3)
         ano = _trunc(req.ano or "", sizes, "ano", 9)
         chassi = _trunc(req.chassi or "", sizes, "chassi", 20)
+        if not _chassi_obrigatorio_ok(cur, chassi):
+            conn.close()
+            return {"success": False, "message": "Chassi é obrigatório para O.S. do segmento Oficina."}
         num_serie = _trunc(req.numero_de_serie or "", sizes, "numero_de_serie", 20)
         km = int(req.km) if req.km is not None else 0
         status_os = req.status_os if req.status_os is not None else 0
@@ -251,6 +376,8 @@ def _save_os_completo_sync(req: OSCompletoSaveRequest, codigo: Optional[int]) ->
         previsao_termino = req.previsao_termino or None
         data_termino = req.data_termino or None
         hora_fechamento = (req.hora_fechamento or "").strip() or None
+        data_agendamento = req.data_agendamento or None
+        hora_agendamento = (req.hora_agendamento or "").strip() or None
 
         if codigo is None:
             cur.execute("SELECT ISNULL(MAX(codigo),0)+1 AS novo FROM os")
@@ -261,34 +388,46 @@ def _save_os_completo_sync(req: OSCompletoSaveRequest, codigo: Optional[int]) ->
                 " area_atuacao, descricao_cliente, obs, resumo, status_os, atendente, "
                 " placa, marca, modelo, km, ano, chassi, numero_de_serie, forma_pagamento, "
                 " forma_pagamento_garantia, referencia_os, tecnico_responsavel, auxiliar_tecnico, posicao_os, previsao_termino, "
-                " data_termino, hora_fechamento, OS_ORIGINAL, Tipo_Doc_Original, "
+                " data_termino, hora_fechamento, data_agendamento, hora_agendamento, OS_ORIGINAL, Tipo_Doc_Original, "
                 " VALIDOU_GARANTIA, QtdRevisoes) "
                 "VALUES (%s, %s, CAST(GETDATE() AS DATE), CONVERT(NVARCHAR(8), GETDATE(), 108), "
                 "        %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-                "        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     novo, req.cliente, situacao, req.area_atuacao, descricao_cliente, obs, resumo,
                     status_os, req.atendente, placa, marca, modelo, km, ano, chassi, num_serie, forma_pagamento,
                     forma_pagamento_garantia, referencia, req.tecnico_responsavel, req.auxiliar_tecnico, req.posicao_os, previsao_termino,
-                    data_termino, hora_fechamento, os_original, tipo_doc_original,
+                    data_termino, hora_fechamento, data_agendamento, hora_agendamento, os_original, tipo_doc_original,
                     1 if validou_garantia else 0, qtd_revisoes,
                 ),
             )
             os_id = novo
         else:
+            # Data/Hora Agendada — sincroniza com um compromisso REAL na
+            # Agenda ANTES do UPDATE principal, pra poder abortar o Gravar
+            # inteiro se a disponibilidade do Técnico Responsável não
+            # bater (user-directed 2026-08-15, ver função pra detalhe).
+            erro_agenda, codagenda_atendimento = _sincronizar_agendamento_cabecalho_sync(
+                cur, codigo, req.cliente, req.tecnico_responsavel,
+                data_agendamento, hora_agendamento, req.usuario_alteracao,
+            )
+            if erro_agenda:
+                conn.rollback()
+                conn.close()
+                return {"success": False, "message": erro_agenda}
             cur.execute(
                 "UPDATE os SET cliente=%s, area_atuacao=%s, descricao_cliente=%s, obs=%s, "
                 " resumo=%s, status_os=%s, atendente=%s, situacao=%s, "
                 " placa=%s, marca=%s, modelo=%s, km=%s, ano=%s, chassi=%s, numero_de_serie=%s, "
                 " forma_pagamento=%s, forma_pagamento_garantia=%s, referencia_os=%s, tecnico_responsavel=%s, auxiliar_tecnico=%s, posicao_os=%s, "
-                " previsao_termino=%s, data_termino=%s, hora_fechamento=%s, OS_ORIGINAL=%s, "
+                " previsao_termino=%s, data_termino=%s, hora_fechamento=%s, data_agendamento=%s, hora_agendamento=%s, codagenda_atendimento=%s, OS_ORIGINAL=%s, "
                 " Tipo_Doc_Original=%s, VALIDOU_GARANTIA=%s, QtdRevisoes=%s "
                 "WHERE codigo=%s",
                 (
                     req.cliente, req.area_atuacao, descricao_cliente, obs, resumo, status_os,
                     req.atendente, situacao, placa, marca, modelo, km, ano, chassi, num_serie,
                     forma_pagamento, forma_pagamento_garantia, referencia, req.tecnico_responsavel, req.auxiliar_tecnico, req.posicao_os,
-                    previsao_termino, data_termino, hora_fechamento, os_original,
+                    previsao_termino, data_termino, hora_fechamento, data_agendamento, hora_agendamento, codagenda_atendimento, os_original,
                     tipo_doc_original, 1 if validou_garantia else 0, qtd_revisoes, codigo,
                 ),
             )
@@ -511,7 +650,7 @@ def _criar_copia_os_sync(
             " placa, marca, modelo, km, ano, chassi, numero_de_serie, forma_pagamento, "
             " referencia_os, tecnico_responsavel, posicao_os, OS_ORIGINAL) "
             "VALUES (%s, %s, CAST(GETDATE() AS DATE), CONVERT(NVARCHAR(8), GETDATE(), 108), "
-            "        'A', 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0)",
+            "        'A', 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0)",
             (
                 novo, origem["cliente"], origem.get("area_atuacao"), origem.get("descricao_cliente") or "",
                 origem.get("obs") or "", origem.get("resumo") or "", origem.get("status_os"),

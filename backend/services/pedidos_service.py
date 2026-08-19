@@ -9,7 +9,8 @@ from models.schemas import (
 )
 from services.constants import SITUACAO_LABEL
 from services.pedido_common import (
-    _check_cliente_ativo, _mover_estoque, _liberar_reservado, _fechar_pedido_itens,
+    _check_cliente_ativo, _check_area_atuacao, _auto_abrir_dia_se_necessario,
+    _mover_estoque, _liberar_reservado, _fechar_pedido_itens,
     _ensure_hora_inclusao_item_col, _recalc_pedido_total, _ensure_qtd_pessoas_col,
     _resolve_tipo_pedido, TIPO_EFETIVO_PEDIDO_SQL,
 )
@@ -366,6 +367,14 @@ def _save_pedido_sync(req: PedidoSaveRequest, pedido_codigo: Optional[int]) -> d
                     "success": False,
                     "message": f"Cliente com situação '{label}' não pode gerar novo pedido.",
                 }
+            ok, label = _check_area_atuacao(cur, req.usuario_alteracao, req.area_atuacao)
+            if not ok:
+                conn.close()
+                return {
+                    "success": False,
+                    "message": f"Você não está vinculado à Área de Atuação '{label}' — não é possível abrir pedido nela.",
+                }
+            _auto_abrir_dia_se_necessario(cur)
         # Busca o nome/telefone do cliente (denormalizados em NOME_CLIENTE /
         # TELEFONE_CLIENTE) + fantasia/cliente_forn, usados logo abaixo pra
         # resolver o campo "Tipo" do pedido.

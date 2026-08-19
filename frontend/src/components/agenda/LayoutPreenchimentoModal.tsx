@@ -87,10 +87,16 @@ type Props = {
   // preenchimento, nunca digitados no formulário. Pedido explícito do
   // usuário: "trazer da entidade se existir".
   dadosExtras?: { label: string; valor: string }[];
+  // Sincronização Offline (Atendimento de Campo, ver AssistenciaTecnicaCampo.md)
+  // — opcional, só passada por os-atendimento.tsx. Quando `salvar()` falha
+  // por rede (offline), em vez do erro genérico chama isto com o mesmo
+  // payload que seria enviado ao backend, pra o chamador enfileirar. Sem
+  // essa prop (Agenda, O.S. Completa web), comportamento 100% inalterado.
+  onSalvarOffline?: (payload: Record<string, unknown>) => void;
 };
 
 export default function LayoutPreenchimentoModal({
-  visible, onClose, conn, entidade, codentidade, usuarioCod, title, dadosExtras,
+  visible, onClose, conn, entidade, codentidade, usuarioCod, title, dadosExtras, onSalvarOffline,
 }: Props) {
   const feedback = useFeedback();
   const [loading, setLoading] = useState(false);
@@ -154,14 +160,15 @@ export default function LayoutPreenchimentoModal({
   const salvar = async () => {
     if (!conn || !formLayout) return;
     setSaving(true);
+    const payload = {
+      entidade, codentidade, codlayout: formLayout.codlayout, codigo: formLayout.codigo,
+      usuario_alteracao: usuarioCod,
+      respostas: campos
+        .filter((c) => !c.calculado && (c.conteudo || "").trim())
+        .map((c) => ({ codigo_campo: c.codigo, conteudo: c.conteudo || "" })),
+    };
     try {
-      const j = await apiSend(conn, "/api/layout/preencher", "POST", {
-        entidade, codentidade, codlayout: formLayout.codlayout, codigo: formLayout.codigo,
-        usuario_alteracao: usuarioCod,
-        respostas: campos
-          .filter((c) => !c.calculado && (c.conteudo || "").trim())
-          .map((c) => ({ codigo_campo: c.codigo, conteudo: c.conteudo || "" })),
-      });
+      const j = await apiSend(conn, "/api/layout/preencher", "POST", payload);
       if (!j?.success) { feedback.showError(friendlyApiError(j, "Falha ao gravar preenchimento.")); return; }
       feedback.showSuccess("Preenchimento gravado.");
       const codigoGravado = formLayout.codigo ?? j.codigo;
@@ -169,6 +176,11 @@ export default function LayoutPreenchimentoModal({
       const jh = await apiGet(conn, "/api/layout/preenchidos", { entidade, codentidade });
       setPreenchidos(jh?.success ? jh.items || [] : []);
     } catch (e) {
+      if (e instanceof TypeError && onSalvarOffline) {
+        onSalvarOffline(payload);
+        feedback.showInfo("Salvo localmente — sincroniza quando a conexão voltar.");
+        return;
+      }
       feedback.showError(friendlyCatchError(e, "Falha ao gravar preenchimento."));
     } finally {
       setSaving(false);

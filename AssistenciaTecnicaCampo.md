@@ -1,12 +1,22 @@
 # Módulo: Assistência Técnica — Atendimento de Campo (Mobile)
 
 Status: fundação de retaguarda implementada 2026-08-13 (múltiplos
-equipamentos por OS + Motor de Layout na O.S. Completa) **e a "tela de
+equipamentos por OS + Motor de Layout na O.S. Completa), a "tela de
 atendimento" (check-in/check-out por geolocalização + QR Code)
-implementada e testada ao vivo 2026-08-14** — ver seção "Tela de
-Atendimento — Implementação (2026-08-14)" mais abaixo. O que ainda falta —
-Lista de Atendimento (tela nova, calendário), offline, técnico auxiliar —
-continua EM ANÁLISE, não implementar sem nova liberação explícita.
+implementada e testada ao vivo 2026-08-14 (seção 6), e as extensões
+pedidas na sequência (seção 7) TAMBÉM implementadas no mesmo dia:
+exibição de check-in/check-out na O.S. Completa, campo Auxiliar do
+técnico, Lista de Atendimento (`os-lista.tsx` estendida), indicador de
+atendimento parado, ferramenta de conformidade LGPD, índices de
+performance, e o **fluxo completo do Auxiliar** (regra 11 — auxiliar
+edita a OS com a credencial do técnico titular, reaproveitando
+`AuthorizationSlide`). **Sincronização Offline** (seção 8) e a **Lista de
+Atendimento por Calendário** (seção 9, `frontend/app/atendimento-lista.tsx`
+— reverte a extensão de `os-lista.tsx` acima em favor da tela dedicada
+originalmente pedida) foram implementadas em 2026-08-15. Módulo completo
+dentro do que tinha liberação — ver seção 9 pro único ponto ainda em
+aberto (dependência de alguém popular `data_agendamento` pra o calendário
+mostrar algo).
 
 ## 1. Visão geral
 
@@ -627,15 +637,24 @@ implementar (sessão de wireframe/UX que a seção 4 já previa):
 
 ### Fora do escopo desta rodada (fica pra depois, não é lacuna esquecida)
 
-- **Lista de Atendimento** (tela separada, calendário) — não construída.
+**Atualizado — 2 dos 5 itens abaixo foram implementados depois, na seção
+7 (mesmo dia): "Lista de Atendimento" (via extensão de `os-lista.tsx`, não
+a tela separada por calendário originalmente cogitada aqui) e "Técnico
+auxiliar" (regra 5/11, fluxo completo de credencial). Mantidos riscados
+aqui só como histórico — ver seção 7 pro estado real.**
+
+- ~~**Lista de Atendimento** (tela separada, calendário) — não
+  construída.~~ RESOLVIDO seção 7 — `os-lista.tsx` estendida faz esse
+  papel (busca/situação/período/técnico/auxiliar, não por calendário).
 - **Sincronização offline** — doc já marcava como "decidir só quando a
-  implementação mobile realmente começar".
-- **Técnico auxiliar** (regra 5) — não implementado, mobile sempre pede a
-  credencial de quem está logado.
+  implementação mobile realmente começar". **Ainda não implementado.**
+- ~~**Técnico auxiliar** (regra 5) — não implementado, mobile sempre pede
+  a credencial de quem está logado.~~ RESOLVIDO seção 7 — fluxo completo
+  de "auxiliar edita em nome do técnico" via `AuthorizationSlide`.
 - **"Data/hora da marcação do atendimento"** (regra 2) — investigado se
   dava pra reaproveitar `AGENDA_OS`, mas essa tabela liga a **item de
   serviço** (`os_produto.cod_os_prod`), não à OS inteira — conceito
-  diferente, não mapeado.
+  diferente, não mapeado. **Ainda não implementado.**
 - **Teste real de câmera/GPS/dispositivo físico** — nunca exercitado
   nesta sessão (sem hardware/emulador com câmera disponível); antes de
   considerar esta feature pronta pra produção, testar em dispositivo real
@@ -765,6 +784,72 @@ geolocalização (LGPD), sem precisar decidir de antemão prazo/retenção.
   ferramenta só torna possível cumprir uma solicitação pontual de
   exclusão, não decide uma regra geral.
 
+### Fluxo completo do Auxiliar — credencial do técnico titular (2026-08-14, mesmo dia)
+
+Regra 11 (celular do técnico titular sem bateria → auxiliar preenche em
+nome dele) — a única peça deste módulo que o próprio documento sempre
+marcou como "não implementar sem liberação explícita" desde a análise
+original. Antes de codar, 2 decisões reais confirmadas com o usuário via
+`AskUserQuestion` (não presumidas):
+
+1. **Mecanismo**: reaproveitar `AuthorizationSlide` (já usado no projeto
+   pra elevar gerente/supervisor), pedindo usuário+senha — só que aqui a
+   credencial precisa ser EXATAMENTE a do técnico responsável por aquela
+   OS (`os.tecnico_responsavel`), não "qualquer gerente". Uma vez
+   validado, fica elevado pelo resto da visita (não pede de novo a cada
+   ação).
+2. **Gestor com `OS_COMP.VER_TODAS`** edita livre, sem precisar elevar —
+   só quem não é nem o técnico nem tem essa permissão de supervisão
+   precisa "emprestar" a credencial.
+
+**Implementação**:
+- `AuthorizationSlide.tsx` ganhou prop opcional `codigoEsperado` — quando
+  informada, substitui a checagem padrão (gerente/supervisor/master) por
+  "o login digitado é exatamente esta pessoa" (`funcionarios.codigo_int`).
+  Reaproveita 100% da UI/fluxo de validação já existente (chama
+  `POST /api/login` de novo, sem abrir sessão nova — mesmo princípio já
+  documentado no componente).
+- `os-atendimento.tsx` passou a buscar `GET /api/os-completo/{codigo}`
+  (não mais `GET /api/os/{codigo}`) — precisa de `tecnico_responsavel`/
+  `tecnico_responsavel_nome`, que só a camada "completa" expõe.
+- `needsElevation` = tem técnico atribuído E não é quem está logado E não
+  tem `OS_COMP.VER_TODAS`. Guarda check-in, check-out, Fechar O.S. e
+  salvar campos de equipamento — qualquer uma dessas ações abre o
+  `AuthorizationSlide` em vez de gravar direto quando `needsElevation &&
+  !elevado`.
+- Uma vez elevado, `effectiveUsuarioCod` passa a ser o **técnico**, não
+  quem está com o celular — toda gravação subsequente (check-in/out,
+  fechar, campos de equipamento via `useOSEquipamentos`) é atribuída a
+  ele, "em nome dele" de verdade, não só "com a permissão dele". Banner
+  visível na tela ("Atuando em nome de {técnico}") enquanto elevado.
+- **Nenhuma mudança de backend** — a validação de credencial é 100%
+  frontend (mesmo modelo de segurança leve já usado por
+  `AuthorizationSlide` em todo o resto do projeto: sem token/sessão por
+  requisição, `usuario_alteracao` é um int auto-declarado depois de uma
+  verificação de senha real via `/api/login`).
+- Modo Didático: item novo no modal de Ajuda explicando o mecanismo.
+
+**Não testado ao vivo**: a validação de credencial em si (preciso de
+usuário/senha reais de um funcionário em ARGEN-TESTE, que não tenho nesta
+sessão) — mesma classe de limitação já registrada pra câmera/GPS.
+Confirmado por leitura de código + `tsc` limpo (baseline preservado) que
+a lógica de decisão (`needsElevation`) e o fluxo de UI compilam e
+encadeiam corretamente.
+
+**Achado numa revisão retroativa (análise Gauntlet, papel Leandro) —
+corrigido no mesmo dia**: sem mais nada, o log de auditoria gravava só
+`usuario_alteracao = técnico`, sem nenhum rastro de que a ação foi feita
+FISICAMENTE por um auxiliar em nome dele — um problema real de
+rastreabilidade (ex.: técnico alega "não estava lá", nada no log
+provaria o contrário). Corrigido com um campo novo `via_auxiliar`
+(opcional) em `OSCheckinRequest`/`FecharRequest`/`OSEquipamentoSaveRequest`
+— carrega o código de quem estava logado de fato, só enriquece a
+`descricao` do log (nunca usado em regra de negócio, `usuario_alteracao`
+continua sendo o técnico). **Testado ao vivo** contra ARGEN-TESTE
+(checkout na OS #293 com `via_auxiliar`): log de auditoria confirmado
+com `usuario=81` (técnico) e descrição "Check-out registrado na O.S. 293
+(via auxiliar #55, em nome do técnico)".
+
 ### Índices — risco de performance do item 3 (2026-08-14, mesmo dia)
 
 Item 3 da análise Gauntlet (papel Thomé). Diagnóstico ao vivo contra
@@ -795,3 +880,416 @@ O.S. Completa, a tela de Atendimento, ou a Lista de Atendimento carregam.
 - Testes de migração existentes (`test_cria_tabela_e_faz_backfill`,
   `TestEnsureAuxiliarTecnicoCol`) atualizados pra cobrir as novas
   queries. Suíte inteira sem regressão.
+
+## 8. Sincronização Offline (2026-08-14, mesmo dia)
+
+Último item genuinamente pendente do módulo — o próprio documento sempre
+marcou como "1º módulo offline-first do projeto, decidir só quando a
+implementação realmente começar." Decisões de negócio confirmadas com o
+usuário ANTES de desenhar (`AskUserQuestion`, não presumidas):
+
+1. **Conflito**: quando a OS mudou no servidor entre o carregamento
+   offline e a sincronização, o sistema **bloqueia a gravação e avisa** —
+   nunca sobrescreve silenciosamente, nunca faz merge automático.
+2. **Escopo offline**: check-in/check-out (GPS), edição de campos do
+   equipamento, Fechar O.S. e Formulário Dinâmico — **tudo** funciona sem
+   conexão.
+3. **Pré-carga**: automática, sem ação manual — toda OS que aparece na
+   Lista de Atendimento, com internet, fica salva localmente sozinha.
+4. **Detecção de rede**: sem biblioteca nova (`@react-native-community/
+   netinfo` rejeitado explicitamente) — sempre tenta gravar direto; cai
+   pra fila local só quando falha por rede (`e instanceof TypeError`,
+   mesmo critério que `friendlyCatchError` já usa). Sincroniza ao abrir a
+   tela, ao puxar pra atualizar, ou por um botão manual — nunca monitora a
+   conexão em tempo real.
+
+### Backend — coluna de versão + checagem de conflito
+
+- **`os.versao_atendimento ROWVERSION`** — tipo nativo do SQL Server pra
+  concorrência otimista, auto-incrementa em QUALQUER `UPDATE` da linha
+  (não pode ser setado manualmente). Migração
+  `_ensure_os_versao_atendimento_col` (`os_service.py`), registrada em
+  `schema_ensure.py`. `pymssql` devolve `bytes` — lido como `.hex()`
+  (`_versao_atendimento_hex`) pra trafegar em JSON; nunca decodificado/
+  interpretado no frontend, é só um token opaco de comparação.
+- Exposto em `_get_os_sync` (e por herança em `os_completo_service`) como
+  `versao_atendimento` — mesmo mecanismo de "enriquece, não duplica" já
+  usado pelos campos de checkin/checkout.
+- **`versao_esperada: Optional[str] = None`** — campo novo, opt-in, em
+  `OSCheckinRequest`, `FecharRequest` e `OSEquipamentoSaveRequest`. Quando
+  vem preenchido, `_checar_conflito_versao(cur, codigo_os, versao_esperada)`
+  (`os_service.py`) compara contra o valor ATUAL antes de gravar —
+  divergente retorna `{"success": False, "conflito": True, "message":
+  "Esta OS foi alterada desde a última vez que você a carregou..."}` em
+  vez de gravar. Chamado em `_checkin_os_sync`/`_checkout_os_sync`/
+  `_fechar_os_sync` (antes do `UPDATE`) e em `_update_equipamento_sync`
+  (`os_equipamento_service.py`, mesma checagem contra `os.versao_atendimento`
+  — `os_equipamento` não tem coluna de versão própria, a concorrência é
+  sempre resolvida pela versão da OS-pai). Gravações ONLINE diretas (sem
+  `versao_esperada`) nunca são afetadas — o mecanismo só entra em ação pra
+  mutações vindas da fila offline.
+- **Testado ao vivo contra ARGEN-TESTE** (2026-08-14): `versao_atendimento`
+  confirmado presente no `GET /api/os-completo/{codigo}`; check-in com
+  `versao_esperada` desatualizada de propósito bloqueou com `conflito:
+  true`; check-in com a versão correta gravou normalmente E bumpou a
+  versão (`...83fe35` → `...841c51`); `PUT /equipamentos/{codigo}` com
+  versão desatualizada também bloqueou. Suíte de testes (`test_os_checkin.py`,
+  `test_os_equipamento_service.py`) cobre a migração e os 3 cenários
+  (sem versão informada = não checa, divergente = bloqueia, igual =
+  libera) por unidade — 39 testes, sem regressão.
+
+### Frontend — cache + fila + motor de sincronização
+
+- **`frontend/src/utils/storage/offlineAtendimento.ts`** (novo) — mesma
+  convenção de storage já usada no projeto (funções simples sobre
+  AsyncStorage, chave `@back_on/...`, sem ORM/`expo-sqlite` — decisão
+  explícita do usuário, a fila cabe tranquilamente num JSON). Dois
+  mecanismos distintos:
+  - **Cache por OS** (`cacheOsParaOffline`/`getOsCacheada`/
+    `listarTodasCacheadas`) — bundle `{os, equipamentos, historico,
+    statusOsOptions, versaoAtendimento, cachedAt}`, indexado também numa
+    lista de códigos (pra resolução de nº de série offline varrer todo o
+    cache, não só a OS já aberta).
+  - **Fila de mutações pendentes** (`enfileirarMutacao`/
+    `listarFilaPendente`/`removerDaFila`/`marcarConflito`/
+    `incrementarTentativa`) — array único, cada item `{id, tipo:
+    "checkin"|"checkout"|"fechar"|"equipamento"|"formulario", osId,
+    itemCodigo?, payload, criadaEm, tentativas, conflito?}`.
+- **`os-lista.tsx`** — depois de todo `load()` bem-sucedido (só quando
+  `moduleOn("Assistencia")`), dispara `prefetchOffline` em segundo plano:
+  busca `GET /api/os-completo/{codigo}` + equipamentos + status-os de
+  CADA linha visível e cacheia — implementa a pré-carga automática
+  (decisão 3).
+- **`os-atendimento.tsx`**:
+  - `loadOs` tenta rede primeiro; em `TypeError`, cai pro cache local e
+    marca a tela em "modo offline" (banner fixo com o horário do cache).
+    Um `useEffect` separado REGRAVA o cache sempre que dados online
+    frescos chegam (reforça a pré-carga automática e garante que
+    `versaoAtendimento` usado pela sincronização é sempre o mais recente
+    já confirmado online).
+  - `resolveSerie` (leitura de QR/busca manual), em `TypeError`, procura o
+    número de série em TODOS os bundles cacheados localmente
+    (`listarTodasCacheadas`) — se achar, navega pro `?os=&serie=` como se
+    tivesse resolvido online.
+  - Cada handler de escrita (`handleCheckin`/`handleCheckout`/
+    `handleFechar`, e `useOSEquipamentos.handleUpdate` via nova prop
+    `onOfflineFallback`) segue o mesmo padrão: em `TypeError`, enfileira a
+    mutação, atualiza o estado local otimisticamente (a tela continua
+    utilizável offline sem esperar sincronizar) e mostra um toast
+    informativo — nunca lança o erro genérico de rede.
+  - **`LayoutPreenchimentoModal`** ganhou prop opcional
+    `onSalvarOffline?: (payload) => void` — o `catch` de `salvar()` checa
+    `e instanceof TypeError && onSalvarOffline` antes do erro genérico.
+    Sem a prop (Agenda, O.S. Completa web — os outros 2 consumidores deste
+    componente compartilhado), comportamento 100% inalterado.
+  - **Motor de sincronização** (`sincronizarFila`): disparado ao montar a
+    tela com `?os=`, por um botão manual "Sincronizar" (visível só com
+    fila não-vazia) e por pull-to-refresh. Reenvia cada mutação pendente
+    na ORDEM em que foi enfileirada, sempre incluindo `versao_esperada`;
+    depois de cada sucesso, busca a versão FRESCA da OS antes do próximo
+    item da fila — necessário porque checkin/checkout/fechar bumpam a
+    mesma coluna que a checagem de equipamento também usa, então usar uma
+    versão desatualizada faria a própria sincronização gerar um "falso
+    conflito" contra si mesma. Em `{conflito: true}`, marca a mutação,
+    para o processamento desse ponto em diante (não tenta os itens
+    seguintes da fila nesse ciclo) e mostra um banner bloqueante com um
+    único botão "Recarregar dados atuais" (descarta SÓ a mutação
+    conflitante e força um `loadOs()` fresco — sem merge automático, o
+    técnico revisa e refaz manualmente, decisão 1). Os itens restantes da
+    fila (enfileirados depois do conflitante) permanecem pendentes e são
+    tentados de novo no próximo ciclo de sincronização, já contra o estado
+    recarregado.
+  - Indicador visual: banner com contagem "N alteração(ões) pendente(s)
+    de sincronização" + botão Sincronizar. **Simplificação consciente**:
+    o plano original previa "pill" por campo/ação; implementado como um
+    indicador único por OS em vez de pill por campo dentro de
+    `OSEquipamentoCard` (componente compartilhado com `os-geral.tsx`,
+    retaguarda) — evita acoplar um componente sempre-online a um conceito
+    offline-only. Mesma simplificação: o status_os_descricao do
+    equipamento não é re-resolvido no estado otimista local (mantém o
+    texto antigo até sincronizar) — gap cosmético aceito.
+
+### Verificação e limitações conhecidas
+
+- `tsc --noEmit`: baseline de 12 erros pré-existentes preservado, nenhum
+  novo erro introduzido pelas mudanças desta seção.
+- Testado ao vivo contra ARGEN-TESTE (ver acima) — cobre o CONTRATO do
+  backend (conflito bloqueia, sucesso libera e bumpa a versão) de ponta a
+  ponta via curl.
+- **Não testado**: fila/sincronização de ponta a ponta com um dispositivo
+  real offline de verdade (Wi-Fi/dados desligados) — mesma classe de
+  limitação já registrada pras outras features de campo desta sessão
+  (sem hardware disponível neste ambiente). O código do motor de
+  sincronização foi revisado estaticamente (tipos, fluxo de estado) mas
+  não exercitado com uma perda de rede real.
+- Escopo do "1 checkin/checkout por OS" (regra de negócio já existente,
+  não alterada por esta feature) permanece — offline não introduz
+  reentrância nova nesse fluxo, só atrasa o envio ao servidor.
+
+### Correção — revisão Gauntlet retroativa (2026-08-14, mesmo dia)
+
+Ao entregar a seção acima, o usuário perguntou diretamente "isso passou no
+crivo da equipe?" — resposta honesta: não, fui direto do Plan Mode pra
+implementação sem rodar o Protocolo Gauntlet nem declarar "fluxo
+simplificado" (ver [[feedback_gauntlet_multiagent_protocol]]). Rodei a
+revisão retroativa (mesmo padrão já usado antes pro fluxo do Auxiliar) e
+achei **3 problemas reais**, todos corrigidos no mesmo dia com 2 decisões
+de negócio confirmadas via `AskUserQuestion` antes de codar:
+
+1. **Carlos (negócio) — escopo de sincronização incompleto.**
+   `sincronizarFila` só sincronizava a fila da OS **aberta na tela** — um
+   técnico que visita várias OS's offline e só volta a ter internet horas
+   depois (de volta à base) não sincronizava nada automaticamente até
+   reabrir manualmente cada OS. Corrigido extraindo o motor pra
+   `frontend/src/utils/offlineSync/atendimentoSync.ts`
+   (`syncFilaOS(conn, osId, versaoInicial)` — pura, sem estado de
+   componente) e criando `syncTodasFilasPendentes(conn)` — varre TODA a
+   fila do dispositivo (todas as OS's, não só as da página atual) e
+   tenta sincronizar cada uma. Chamado por `os-lista.tsx` (função
+   `sincronizarEPurgar`) sempre que a lista carrega com conexão — best-
+   effort/silencioso, sem UI de conflito própria ali; um conflito marcado
+   nesse fluxo só reaparece com o banner bloqueante certo quando o
+   técnico reabrir aquela OS específica em `os-atendimento.tsx` (que roda
+   `syncFilaOS` de novo pra essa OS individual).
+2. **Leandro (LGPD) — sem política de retenção do cache local.**
+   `cacheOsParaOffline` gravava nome de cliente + coordenadas de GPS de
+   check-in/check-out no `AsyncStorage` do celular do técnico
+   indefinidamente. Decisão confirmada com o usuário: **expira
+   automaticamente 7 dias após a última sincronização bem-sucedida**.
+   `purgarCacheExpirado()` (`offlineAtendimento.ts`) apaga bundles com
+   `cachedAt` há mais de 7 dias E sem nenhuma mutação pendente pra aquela
+   OS (uma mutação ainda não sincronizada precisa do `versaoAtendimento`
+   cacheado pra checagem de conflito, então nunca é purgada enquanto
+   pendente). Chamado junto com `syncTodasFilasPendentes` no load de
+   `os-lista.tsx`.
+3. **Thomé (técnico) — mutação travada bloqueava a fila inteira.**
+   Quando uma mutação falhava por regra de negócio genuína (não conflito,
+   não rede — ex.: "check-in já registrado"), o motor original fazia
+   `break` no laço inteiro, travando também as mutações SEGUINTES daquela
+   OS (mesmo de tipos diferentes que sincronizariam com sucesso) atrás da
+   que falhou — sem forma de descartar, sem forma de saber o motivo além
+   de um toast passageiro. Decisão confirmada com o usuário: **pula a
+   mutação com erro e continua o resto da fila**, marcando-a com
+   `erro: string` (campo novo em `MutacaoPendente`, distinto de
+   `conflito` — nunca dispara o banner bloqueante) — `os-atendimento.tsx`
+   mostra cada mutação com erro numa linha própria com um botão
+   "Descartar" (`filaErroRow`), pro técnico revisar o motivo e decidir.
+   **Testado ao vivo**: um 2º check-in na OS #292 (ARGEN-TESTE, já
+   checada nesta mesma rodada) retorna `{"success": false, "message":
+   "Check-in já registrado..."}` **sem** `conflito: true` — confirma que
+   `syncFilaOS` categoriza esse caso corretamente como erro (marca e
+   pula), não como conflito (que pararia o laço).
+
+`tsc --noEmit`: baseline de 12 preservado. Suíte backend completa: 1861
+passando (1 falha pré-existente e não-relacionada em
+`test_cnab_itau_service.py`, teste de remessa bancária comparando data
+fixa contra um fixture antigo — nada a ver com esta feature).
+
+## 9. Lista de Atendimento por Calendário (2026-08-15)
+
+Último item pendente do módulo (regras 6/7/10) — reverte a decisão de
+2026-08-14 (seção 7, "Lista de Atendimento" via `os-lista.tsx` estendida)
+em favor da tela dedicada originalmente pedida, confirmado explicitamente
+com o usuário via `AskUserQuestion` (Protocolo Gauntlet acionado — ver
+CLAUDE.md — Carlos+Krause+Thomé, já que envolve decisões reais de UX/
+negócio, não só código).
+
+### Achado que corrigiu a pergunta original
+
+A primeira pergunta feita ao usuário ("qual data o calendário deve
+filtrar?") foi respondida com base numa premissa que estava **errada**:
+achei (via investigação de código, `Explore` agent) que não existia
+conceito de "data agendada da OS inteira" no schema — só agendamento por
+ITEM de serviço (`AGENDA_OS`→`os_produto`). O usuário escolheu reaproveitar
+essa agregação (`proxima_agenda`, já calculada pra exibição). Antes de
+implementar, ao editar `models/schemas.py`, um comentário pré-existente
+mencionava `data_agendamento` como se fosse coluna real de `os` — query
+direta contra `INFORMATION_SCHEMA.COLUMNS` em ARGEN-TESTE confirmou:
+**`os.data_agendamento`/`os.hora_agendamento` existem de fato** (colunas
+legadas, tipo `date`) — exatamente o conceito certo pra regra 2 ("data/
+hora da marcação do atendimento, não de execução"), só que **nunca lidas/
+gravadas por este backend** (achado ao vivo: 1 de 294 O.S. em ARGEN-TESTE
+tinha o campo preenchido, registro de 2016 — coluna existe, mas está
+morta na prática). Voltei ao usuário com essa informação corrigida antes
+de prosseguir — ele escolheu reativar a coluna certa em vez de manter a
+agregação por item. **Lição**: a investigação inicial checou só o código
+da aplicação, não o schema bruto do banco — mesmo espírito da regra
+"nunca marcar rotina como não implementada sem checar o .vbp" (CLAUDE.md),
+aplicado aqui a "nunca concluir que um conceito não existe no schema sem
+checar a tabela real primeiro".
+
+### Backend
+
+- `models/schemas.py`: `OSCompletoSaveRequest.data_agendamento`/
+  `.hora_agendamento` (novo — grava as colunas legadas reativadas);
+  `OSListRequest.data_agenda` (novo — filtra `_list_os_sync` por dia
+  exato, comparação direta `o.data_agendamento = %s`, sem `EXISTS`/`JOIN`
+  já que agora é coluna própria de `os`, diferente do padrão usado por
+  `data_fat_ini`/`data_fat_fim`).
+- `os_service.py::_list_os_sync`: filtro novo + `data_agendamento`/
+  `hora_agendamento` expostos por item (ao lado de `proxima_agenda`, que
+  continua existindo — não removida, ainda útil como indicador informal).
+- `os_completo_service.py::_get_os_completo_sync`/`_save_os_completo_sync`:
+  leitura/gravação das colunas — mesmo padrão já usado por
+  `previsao_termino`/`data_termino`/`hora_fechamento` (INSERT e UPDATE).
+- Testado ao vivo contra ARGEN-TESTE (OS #292): `PUT /api/os-completo/292`
+  gravou `data_agendamento=2026-08-20`/`hora_agendamento=09:00`, confirmado
+  no `GET` seguinte; `POST /api/os` com `data_agenda=2026-08-20` retornou
+  a OS #292; com uma data sem nada, retornou lista vazia. 6 testes novos
+  (`test_os_lista.py`, `test_os_completo_service.py`), suíte 1867/1868
+  (mesma falha pré-existente de CNAB, não-relacionada).
+
+### Frontend
+
+- **`frontend/src/components/atendimento/AtendimentoCalendario.tsx`**
+  (novo) — calendário mensal INLINE (não popup), cross-platform.
+  `agenda/AgendaCalendarField.tsx` foi investigado e descartado como
+  reaproveitável: é web-only (`if (!isWeb) return null`) e seu prop
+  `diasAtende` não tem modo "sem restrição" (`null` desabilita TODO dia)
+  — construído componente novo, mais simples por não precisar de popup/
+  backdrop (aqui o calendário é o corpo principal da tela, sempre
+  visível). Sem marcador de "dia com atendimento" (bolinha) — exigiria
+  endpoint de agregação por mês que não existe; fora do escopo desta
+  rodada, melhoria futura possível.
+- **`frontend/app/atendimento-lista.tsx`** (novo) — tela inicial do app
+  do técnico (regra 10): calendário no topo (default hoje) + lista dos
+  atendimentos do dia selecionado (`POST /api/os` com `data_agenda`),
+  reaproveitando a mesma restrição de visibilidade (`OS_COMP.VER_TODAS`)
+  e o mesmo padrão de tap-through por plataforma (`os-geral.tsx` web /
+  `os-atendimento.tsx` mobile) já usados em `os-lista.tsx`. Ícone "Ler QR
+  Code" no cabeçalho preserva a regra 8 (caminho alternativo à lista,
+  abre o scanner de `os-atendimento.tsx` sem `?os=`). Permissão
+  reaproveitada (`OS_ATENDIMENTO.ABRIR` — esta tela é a nova porta de
+  entrada da mesma feature, não uma capacidade nova, sem `BOTAO` extra no
+  catálogo). Modo Didático aplicado (ícone "i" + `AjudaPedidoModal`
+  reaproveitado).
+- **`frontend/app/os-geral.tsx`**: campos novos "Data Agendada"/"Hora
+  Agendada" (retaguarda marca quando o atendimento foi combinado com o
+  cliente — sem isso, o calendário da Lista de Atendimento fica vazio),
+  mesma linha de "Previsão de Término"/"Data de Término"/"Hora de
+  Fechamento", com `InfoTooltip` explicando a diferença pro usuário final
+  (mesmo padrão já usado em "Revisão Programada" na mesma linha).
+- **`ModuleTiles.tsx`**: tile "Atendimento de Campo" aponta pra
+  `/atendimento-lista` em vez de `/os-atendimento` direto — o scanner
+  continua alcançável (de dentro da nova tela, ou por navegação direta).
+- **`os-lista.tsx`**: comentário de topo corrigido — não se autodenomina
+  mais "a Lista de Atendimento" (função transferida pra
+  `atendimento-lista.tsx`). Nenhuma mudança de comportamento/código —
+  continua a lista completa de O.S. da retaguarda, mesmos filtros.
+- `tsc --noEmit`: baseline de 12 preservado, nenhum erro novo.
+
+### Achado tangencial, NÃO corrigido nesta rodada (fora de escopo)
+
+Ao mexer em `os-geral.tsx`, achei que o campo "Hora de Fechamento"
+(`horaFechamento`/`setHoraFechamento`, adicionado 2026-08-13) é lido e
+exibido, mas **nunca é enviado no payload de Gravar** — bug pré-existente,
+não relacionado a esta rodada (não fiz o mesmo erro nos campos novos
+"Data/Hora Agendada", que estão no payload). Registrado aqui pra não se
+perder; corrigir quando a tela for tocada de novo por outro motivo, ou se
+pedido explicitamente.
+
+### Limitação conhecida
+
+Como só a Data Agendada é reaproveitada de uma coluna legada morta
+(1/294 O.S. populada em ARGEN-TESTE antes desta rodada), a Lista de
+Atendimento por Calendário só mostra algo depois que a retaguarda passar
+a usar os campos novos de `os-geral.tsx` — comportamento esperado, não é
+um bug do calendário. Teste real em dispositivo físico (toque, câmera,
+GPS) continua não feito, mesma ressalva de todo o resto do módulo.
+
+## 10. Data/Hora Agendada — integração com o módulo Agenda (2026-08-15)
+
+No mesmo dia da seção 9, o usuário pediu pra ir além de campos soltos:
+"data e hora agendada deverá ser alimentada pela agenda ou imputada
+diretamente no campo de acordo com a disponibilidade da agenda." Protocolo
+Gauntlet acionado (Carlos+Thomé — decisão de negócio real, não só código).
+Duas decisões confirmadas via `AskUserQuestion` antes de desenhar: (1)
+marcar Data/Hora Agendada cria um **compromisso REAL** na Agenda (reserva
+o horário de verdade, reaproveitando a mesma validação de disponibilidade
+do módulo Agenda), não só valida sem reservar; (2) agendar um ITEM
+específico da OS (fluxo já existente, `AgendarModal`→`AGENDA_OS`) também
+alimenta os campos do cabeçalho automaticamente.
+
+### Achado que mudou o desenho no meio da investigação
+
+O módulo Agenda (`AGENDA`/`AGENDA_OS`, `agenda_service.py`) sempre exigiu
+um **`servico`** pra qualquer agendamento — mesmo o fluxo "avulso"
+(`_salvar_agendamento_sync`, "Cliente e serviço são obrigatórios") — e
+passa por checagem de **elegibilidade por especialidade** (funcionário ×
+`servicos.codigo_especialidade`). Um compromisso de CABEÇALHO da OS (a
+visita inteira, sem uma linha de serviço específica) não se encaixa nesse
+modelo — não faz sentido pedir pra escolher um "serviço" só pra marcar
+quando o técnico aparece. Por isso o compromisso de cabeçalho usa um
+caminho novo mais simples, que pula cliente/serviço/especialidade e
+reaproveita só a peça de validação pura (`_validar_disponibilidade`) —
+não reaproveita `_salvar_agendamento_sync` literalmente.
+
+### Backend
+
+- **Coluna nova** `os.codagenda_atendimento INT NULL` (soft-FK pra
+  `AGENDA.codagenda`, migração `_ensure_os_codagenda_atendimento_col`,
+  `os_completo_service.py`) — rastreia o compromisso de cabeçalho, tem
+  **precedência** sobre a agregação por item (ver abaixo).
+- **`_recalc_data_agendamento_os_sync(cur, os_codigo)`** (`agenda_service.py`)
+  — recalcula `os.data_agendamento`/`hora_agendamento` a partir do
+  agendamento mais próximo entre os itens de serviço da OS (mesma
+  semântica de `proxima_agenda`, mas filtrando `SITUACAO_ATENDIMENTO <>
+  'Desistência'`, correção que `proxima_agenda` — só decorativa — não
+  tinha). **Só recalcula quando `codagenda_atendimento IS NULL`** — um
+  compromisso de cabeçalho direto nunca é sobrescrito silenciosamente
+  pela agregação de itens. Chamada no fim do branch `origem == "os"` de
+  `_salvar_agendamento_sync`/`_cancelar_agendamento_sync`.
+- **`_sincronizar_agendamento_cabecalho_sync(...)`** (`os_completo_service.py`)
+  — chamada de dentro de `_save_os_completo_sync` (só no branch de
+  UPDATE, ANTES do UPDATE principal) sempre que Data/Hora Agendada
+  mudaram em relação ao que já estava gravado: campos limpos cancela o
+  compromisso (mantém histórico, `SITUACAO_ATENDIMENTO='Desistência'`);
+  preenchidos exige `tecnico_responsavel` (senão erro claro) e chama
+  `_validar_disponibilidade` — erro **bloqueia o Gravar inteiro** (rollback,
+  nada é escrito); sucesso cria/atualiza a linha em `AGENDA` e grava o
+  `codagenda` resultante em `codagenda_atendimento`, junto no MESMO UPDATE
+  que já grava `data_agendamento`/`hora_agendamento`.
+- **Correção durante a implementação**: o plano original previa exigir
+  permissão `OS_COMP.AGENDAR` nesse fluxo — revertido ao descobrir que
+  `OSCompletoSaveRequest` não tem campo `master` (só `classe`, "só pro log
+  de auditoria"), e checar `tem_permissao` sem bypass de master quebraria
+  o usuário master (que nunca tem linha própria em `permissoes` — o
+  bypass é só frontend, ver "Master Has Full Permission" em CLAUDE.md).
+  `_save_os_completo_sync` já não checa nenhuma permissão granular pra
+  nenhum outro campo (só `OS_COMP.GRAVAR`, frontend) — mantido consistente.
+- **Testado ao vivo contra ARGEN-TESTE** (OS #294, técnico #20 sem
+  `funcionarios_horarios` cadastrado): `PUT /api/os-completo/294` com
+  Data/Hora Agendada retornou `{"success": false, "message": "Profissional
+  não atende neste dia da semana."}` — confirmado que a OS **não foi
+  alterada** (GET seguinte mostra `data_agendamento: null` e `obs`
+  original intactos), prova de que o bloqueio aborta a transação inteira,
+  não só o campo. 13 testes novos (migração, `_sincronizar_agendamento_
+  cabecalho_sync` — no-op/cancela/bloqueia sem técnico/bloqueia por
+  indisponibilidade/cria/reagenda —, `_recalc_data_agendamento_os_sync` —
+  pula quando cabeçalho já setado/recalcula/limpa —, integração real em
+  `TestSalvarAgendamentoViaOS`/`TestCancelarAgendamentoOS`). Suíte
+  1877/1878 (mesma falha CNAB pré-existente, não-relacionada).
+- **Não testado ao vivo**: o caminho de SUCESSO (criar/reagendar um
+  compromisso real) — exigiria configurar `funcionarios_horarios` de um
+  técnico de teste via edição completa do cadastro (`FuncionarioSaveRequest`
+  tem dezenas de campos obrigatórios), desproporcional pro ganho de
+  confiança adicional dado que esse caminho já está coberto por testes
+  unitários dedicados com `_validar_disponibilidade` mockado. O caminho
+  mais arriscado (bloqueio + integridade transacional) foi validado ao
+  vivo, que é o que importa mais aqui.
+
+### Frontend
+
+- `os-geral.tsx`: campos "Data Agendada"/"Hora Agendada" já existentes
+  (seção 9) — `InfoTooltip` atualizado explicando que a gravação reserva
+  de verdade o horário e pode ser bloqueada.
+- **Achado durante a implementação, corrigido**: agendar um item via
+  `AgendarModal` (dentro de `os-geral.tsx`) nunca recarregava o cabeçalho
+  da OS — como agora isso pode alimentar Data/Hora Agendada (decisão 2),
+  os campos ficariam visualmente desatualizados até a tela ser recarregada
+  manualmente. Corrigido com nova prop opcional `onAgendamentoAlterado`
+  em `useOSItens.ts` (chamada por `salvarAgendamento`/`cancelarAgendamento`
+  em sucesso, ao lado do já existente `loadItens()`), e um novo
+  `handleAgendamentoItemChanged` em `os-geral.tsx` (mesmo padrão de
+  `handleFormaPagModalChanged`, já existente) que rebusca só o cabeçalho.
+- `tsc --noEmit`: baseline de 12 preservado.

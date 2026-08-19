@@ -5,8 +5,10 @@ Mantidas em módulo próprio para evitar import circular entre itens_service e
 descontos_service.
 """
 from dataclasses import dataclass
+from datetime import date
 from typing import Optional
 
+from db.connection import iso
 from services.constants import STATUS_CLIENTE_LABEL
 
 
@@ -20,6 +22,96 @@ def _check_cliente_ativo(cur, cliente_codigo: int) -> tuple[bool, str]:
     if not status or status == "A":
         return True, ""
     return False, STATUS_CLIENTE_LABEL.get(status, status)
+
+
+def _check_area_atuacao(cur, funcionario_codigo: Optional[int], area_atuacao: Optional[int]) -> tuple[bool, str]:
+    """Réplica de `VerificaAreaAtuacao` (`MdiPrincipal`/`Geral\\mdl_proc.bas`)
+    — no legado, bloqueia abrir Pedido/O.S. quando o usuário logado não está
+    vinculado (`funcionarios_area_atuacao`) à Área de Atuação selecionada.
+    Nunca implementado nesta migração até agora — ver PENDENCIAS.md > "MDI
+    Principal (VB6)".
+
+    Decisões desta migração (documentadas por não serem cópia literal do
+    legado):
+    - Sem `funcionario_codigo` resolvido (ex.: usuário master, que não
+      depende de linha em `funcionarios` — ver `usuarios_service.py`) ou
+      sem `area_atuacao` informado no Pedido/O.S., não há o que checar —
+      permitido. O legado tem uma exceção explícita pro usuário KONTACTO;
+      como o backend aqui não recebe o login (só o código do funcionário),
+      "sem funcionário resolvido" cobre o mesmo caso na prática.
+    - Funcionário SEM nenhuma área cadastrada em `funcionarios_area_atuacao`
+      é tratado como sem restrição (acesso livre a qualquer área) — evita
+      bloquear de surpresa toda uma instalação que nunca configurou esse
+      vínculo antes desta feature existir. Só bloqueia quando o
+      funcionário TEM área(s) configurada(s) e a solicitada não está entre
+      elas.
+    """
+    if not funcionario_codigo or not area_atuacao:
+        return True, ""
+    cur.execute("SELECT area FROM funcionarios_area_atuacao WHERE func=%s", (funcionario_codigo,))
+    areas = {int(r["area"]) for r in cur.fetchall() if r.get("area") is not None}
+    if not areas or int(area_atuacao) in areas:
+        return True, ""
+    cur.execute("SELECT descricao FROM area_atuacao WHERE area=%s", (area_atuacao,))
+    row = cur.fetchone()
+    label = (row.get("descricao") if row else "") or str(area_atuacao)
+    return False, label
+
+
+def _chassi_obrigatorio_ok(cur, chassi: Optional[str]) -> bool:
+    """`controle.exige_chassi_os` (bit) — avisado pela equipe VB6, 2026-08-17:
+    "Se exige ou não na OS oficina o chassi do veículo". Quando ligado, o
+    Chassi é obrigatório ao gravar (criar OU editar) uma O.S. — mas só
+    quando o segmento Oficina está ativo (`controle_configuracao.Oficina`);
+    Oficina e Assistência compartilham a mesma tela de O.S. (ver
+    `MODULE_TELAS`/`disabled_telas` em `controle_config_service.py`/
+    `permissoes_service.py`), mas só Oficina lida com veículo — Assistência
+    nunca exige chassi, independente do flag. Sem o módulo Oficina ligado,
+    ou sem o flag `exige_chassi_os` ligado (ou sem registro de `controle`),
+    chassi continua opcional — comportamento já existente antes desta
+    regra, mesmo princípio de "Regra de Módulo Ativo" já aplicado a outras
+    entidades.
+    """
+    if (chassi or "").strip():
+        return True
+    cur.execute("SELECT TOP 1 Oficina FROM controle_configuracao")
+    row = cur.fetchone()
+    if not row or not bool(row.get("Oficina")):
+        return True
+    cur.execute("SELECT TOP 1 exige_chassi_os FROM controle")
+    row2 = cur.fetchone()
+    return not (row2 and bool(row2.get("exige_chassi_os")))
+
+
+def _auto_abrir_dia_se_necessario(cur) -> None:
+    """Réplica do lado AUTOMÁTICO de `MudaDataSistema`/`Ger_Abr_Click`
+    (`MdiPrincipal`) — quando a empresa NÃO usa a Abertura do Dia manual
+    (`controle_configuracao.CONTROLA_ABERTURA_DIA` desligado — o
+    comportamento default de toda instalação até hoje, confirmado pela
+    equipe VB6 2026-08-16, ninguém nunca ligou o flag), a Data de
+    Movimento avança sozinha pra hoje na próxima criação de Pedido/O.S.,
+    sem exigir que o operador use a tela "Gerencial > Abertura do Dia"
+    (`abertura_dia_service.py`). A reconciliação de estoque que o legado
+    fazia junto disso está CONFIRMADA em desuso — não replicada aqui, só
+    a Data de Movimento em si.
+
+    Melhor esforço: qualquer falha (coluna/tabela ausente numa instalação
+    muito antiga, etc.) é silenciosamente ignorada — nunca deve bloquear
+    a criação do Pedido/O.S. por causa disso.
+    """
+    try:
+        cur.execute("SELECT TOP 1 CONTROLA_ABERTURA_DIA FROM controle_configuracao")
+        row = cur.fetchone()
+        if row and bool(row.get("CONTROLA_ABERTURA_DIA")):
+            return  # empresa usa o fluxo manual — não mexe sozinho
+        cur.execute("SELECT TOP 1 Data_Movimento FROM controle")
+        row = cur.fetchone()
+        data_atual = iso((row or {}).get("Data_Movimento"))
+        hoje = date.today().isoformat()
+        if not data_atual or data_atual < hoje:
+            cur.execute("UPDATE controle SET Data_Movimento = %s", (hoje,))
+    except Exception:
+        pass
 
 
 def _item_total(qtd, pv) -> float:
@@ -811,6 +903,19 @@ def _ensure_os_forma_pagamento_garantia_col(cur) -> None:
         "IF NOT EXISTS (SELECT 1 FROM sys.columns "
         "WHERE Name='forma_pagamento_garantia' AND Object_ID=Object_ID('os')) "
         "ALTER TABLE os ADD forma_pagamento_garantia NVARCHAR(3) NULL"
+    )
+
+
+def _ensure_exige_chassi_os_col(cur) -> None:
+    """Migração idempotente: `controle.exige_chassi_os` (bit) — decide se o
+    Chassi é obrigatório ao gravar uma O.S. do segmento Oficina. Avisado
+    pela equipe VB6, 2026-08-17 — coluna nova no legado, ainda não existe
+    em nenhuma instalação até esta data. Ver `_chassi_obrigatorio_ok`
+    acima nesse mesmo módulo pra regra de enforcement."""
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='exige_chassi_os' AND Object_ID=Object_ID('controle')) "
+        "ALTER TABLE controle ADD exige_chassi_os BIT NULL"
     )
 
 

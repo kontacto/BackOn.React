@@ -797,6 +797,8 @@ class TestEmitirNfceComandaSync:
             {"cgc": "12345678000199", "uf": "RJ", "rz_social": "EMPRESA TESTE"},
             {"numero_nfce": 10, "serie_nfce": "1", "csc": "1", "csc_hash": "h"},
             None,  # PECAS_PROTOCOLO_ST
+            {},  # taxas_nfce (resolver_taxa_nfce_para_ibs_cbs_sync) — sem flags de IBS/CBS
+            None,  # contingencia_aberta_sync — sem contingência aberta
             {"codigo": 999},  # OUTPUT INSERTED.codigo do INSERT n_fiscal
         ]
         cur = FakeCursor(one=ones, many=[[self._item_mov()]])
@@ -818,11 +820,56 @@ class TestEmitirNfceComandaSync:
         assert any("INSERT INTO comanda_nf" in q[0] for q in cur.queries)
         assert any("UPDATE controle_aux SET numero_nfce" in q[0] for q in cur.queries)
 
+    def test_ibs_cbs_resolve_de_taxas_nfce_nao_de_taxas(self, monkeypatch):
+        # Achado 2026-08-19: IBS/CBS usa `taxas_nfce` (por cod_icms), NÃO a
+        # linha de `taxas` já resolvida por `_resolver_tributacao_sync`
+        # (essa é só pro sistema tributário antigo — ICMS/CSOSN/PIS/
+        # COFINS). Este teste prova a separação: a linha de `taxas` não
+        # tem NENHUM campo de IBS/CBS, só a de `taxas_nfce` tem — se o
+        # código (por engano) reaproveitasse a linha errada, o item
+        # sairia sem `<IBSCBS>` no XML.
+        ones = [
+            {"comanda": 1, "situacao": "PG", "cliente": None, "valor_venda": 50.0}, None,
+            {"cgc": "12345678000199", "uf": "RJ", "rz_social": "EMPRESA TESTE"},
+            {"numero_nfce": 10, "serie_nfce": "1", "csc": "1", "csc_hash": "h"},
+            None,  # PECAS_PROTOCOLO_ST
+            {  # taxas_nfce (resolver_taxa_nfce_para_ibs_cbs_sync) — COM IBS/CBS real
+                "INFORMA_CBS_IBS": 1, "CST_IBS": "000", "CCLASSTRIB_IBS": "000001",
+                "ALQT_IBS_ESTADO": 8.0, "ALQT_IBS_MUNICIPIO": 2.0, "ALQT_CBS_ESTADO": 0.9,
+            },
+            None,  # contingencia_aberta_sync — sem contingência aberta
+            {"codigo": 999},
+        ]
+        cur = FakeCursor(one=ones, many=[[self._item_mov()]])
+        _patch(monkeypatch, cur)
+        # `taxas` (sistema antigo) NÃO tem nenhum campo de IBS/CBS —
+        # prova que o item não reaproveita essa linha por engano.
+        monkeypatch.setattr(svc.nfe_emissao_service, "_resolver_tributacao_sync", lambda *a, **k: {"cfop_livro": "5102"})
+
+        itens_capturados = {}
+
+        def _emitir_fake(cur_, **kw):
+            itens_capturados["itens"] = kw["itens_resolvidos"]
+            return {
+                "success": True, "message": "ok", "chave_acesso": "3" * 44, "protocolo_sefaz": "135000000001",
+                "dh_recbto": "2026-07-21T10:00:00-03:00", "xml": "<NFe/>", "numero": 11, "serie": "1",
+                "url_qrcode": "https://x",
+            }
+
+        monkeypatch.setattr(svc.nfe_emissao_service, "emitir_nfce_sync", _emitir_fake)
+        r = svc._emitir_nfce_comanda_sync(_emitir_nfce_req(), 1)
+        assert r["success"] is True
+        xml_item = itens_capturados["itens"][0]["ibs_cbs_xml"]
+        assert "<IBSCBS>" in xml_item
+        assert "<CST>000</CST>" in xml_item
+        assert "<vIBSUF>4.00</vIBSUF>" in xml_item  # 50.0 (qtd*p_unit) * 8% / 100
+
     def test_bloqueia_quando_sefaz_recusa(self, monkeypatch):
         ones = [
             {"comanda": 1, "situacao": "PG", "cliente": None, "valor_venda": 50.0}, None,
             {"cgc": "1", "uf": "RJ", "rz_social": "X"}, {"numero_nfce": 10, "serie_nfce": "1", "csc": "1", "csc_hash": "h"},
             None,
+            {},  # taxas_nfce (resolver_taxa_nfce_para_ibs_cbs_sync)
         ]
         cur = FakeCursor(one=ones, many=[[self._item_mov()]])
         conn = _patch(monkeypatch, cur)
@@ -948,6 +995,43 @@ class TestEmitirNfseComandaSync:
         assert any(q[0].strip().upper().startswith("INSERT INTO N_FISCAL") for q in cur.queries)
         assert any("INSERT INTO comanda_nf" in q[0] and "%s, %s, 2, 'A'" in q[0] for q in cur.queries)
         assert any("UPDATE controle_aux SET numero_DPS" in q[0] for q in cur.queries)
+
+    def test_ibs_cbs_do_servico_resolve_de_taxas_nfce_por_cod_icms(self, monkeypatch):
+        # Achado 2026-08-19: a fonte resolve IBS/CBS de serviço com o MESMO
+        # padrão simples de produto (`taxas_nfce` por `cod_icms`, sem
+        # tipo_mov/destino/etc.) — corrige uma integração anterior que
+        # reaproveitava por engano a cascata de `_resolver_tributacao_sync`
+        # (pro sistema tributário antigo, tabela `taxas`).
+        item_com_icms = {**self._item_mov(), "cod_icms": "05"}
+        ones = [
+            {"sefin_nacional": 1}, {"comanda": 1, "situacao": "PG", "cliente": None, "valor_venda": 100.0}, None,
+            self._controle_row(), self._controle_aux_row(),
+            {  # taxas_nfce (resolver_taxa_nfce_para_ibs_cbs_sync)
+                "INFORMA_CBS_IBS": 1, "CST_IBS": "200", "CCLASSTRIB_IBS": "000123",
+                "ALQT_IBS_ESTADO": 5.0, "ALQT_IBS_MUNICIPIO": 1.0, "ALQT_CBS_ESTADO": 0.5,
+            },
+            {"codigo": 999},
+        ]
+        cur = FakeCursor(one=ones, many=[[item_com_icms]])
+        _patch(monkeypatch, cur)
+
+        kwargs_capturados = {}
+
+        def _emitir_fake(cur_, **kw):
+            kwargs_capturados.update(kw)
+            return {
+                "success": True, "message": "ok", "chave_acesso": "3" * 50, "id_dps": "DPS" + "0" * 42,
+                "xml_dps": "<DPS/>", "xml_nfse": "<NFse/>", "numero": 11, "serie": "1",
+            }
+
+        monkeypatch.setattr(svc.nfse_emissao_service, "emitir_nfse_sync", _emitir_fake)
+        r = svc._emitir_nfse_comanda_sync(_emitir_nfse_req(), 1)
+        assert r["success"] is True
+        assert kwargs_capturados["ibs_cbs_cst"] == "200"
+        assert kwargs_capturados["ibs_cbs_classtrib"] == "000123"
+        # `execute` da resolução de taxas_nfce foi feita com cod_icms do
+        # item + UF da própria empresa (_controle_row()'s uf="RJ") + tipo_mov="S01".
+        assert any("taxas_nfce" in q and p == ("05", "RJ", "S01") for q, p in cur.queries)
 
     def test_bloqueia_quando_adn_recusa(self, monkeypatch):
         ones = [

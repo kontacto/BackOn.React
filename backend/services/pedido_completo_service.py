@@ -31,7 +31,8 @@ from models.schemas import PedidoCompletoSaveRequest, ItemSaveRequest, FecharReq
 from services.constants import SITUACAO_LABEL
 from services.descontos_service import _validar_limite_desconto, _log_desconto_item
 from services.pedido_common import (
-    _check_cliente_ativo, _check_pedido_aberto, _item_total, _recalc_pedido_total,
+    _check_cliente_ativo, _check_area_atuacao, _auto_abrir_dia_se_necessario,
+    _check_pedido_aberto, _item_total, _recalc_pedido_total,
     _modulo_servicos_ativo, _modulo_agenda_ativo, _resolve_produto_completo, _kit_componentes,
     _ensure_hora_inclusao_item_col, _fechar_pedido_itens, _resolve_tipo_pedido,
     _modulo_metro_quadrado_ativo, _config_m2, _area_preco, TIPOS_PRECO_M2,
@@ -194,6 +195,14 @@ def _save_pedido_completo_sync(req: PedidoCompletoSaveRequest, pedido_codigo: Op
                     "success": False,
                     "message": f"Cliente com situação '{label}' não pode gerar novo pedido.",
                 }
+            ok, label = _check_area_atuacao(cur, req.usuario_alteracao, req.area_atuacao)
+            if not ok:
+                conn.close()
+                return {
+                    "success": False,
+                    "message": f"Você não está vinculado à Área de Atuação '{label}' — não é possível abrir pedido nela.",
+                }
+            _auto_abrir_dia_se_necessario(cur)
 
         cur.execute(
             "SELECT TOP 1 c.nome, c.fantasia, c.cliente_forn, "

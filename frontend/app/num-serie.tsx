@@ -233,47 +233,57 @@ export default function NumSerieScreen() {
       <ScrollView contentContainerStyle={[styles.scroll, styles.scrollWeb]}>
         <View style={styles.webShell}>
           <View style={styles.card}>
-            <Text style={styles.label}>Produto</Text>
-            <Pressable onPress={abrirPickerProduto} style={styles.input} testID="num-serie-produto">
-              <Text style={produtoDescricao ? styles.pickerText : styles.pickerPlaceholder} numberOfLines={1}>
-                {produtoDescricao || "Buscar produto…"}
-              </Text>
-            </Pressable>
+            <View style={styles.rowFields}>
+              <View style={styles.colFlex}>
+                <Text style={styles.label}>Produto</Text>
+                <Pressable onPress={abrirPickerProduto} style={styles.input} testID="num-serie-produto">
+                  <Text style={produtoDescricao ? styles.pickerText : styles.pickerPlaceholder} numberOfLines={1}>
+                    {produtoDescricao || "Buscar produto…"}
+                  </Text>
+                </Pressable>
+              </View>
+              <View style={styles.colNarrow}>
+                <Text style={styles.label}>Código Fab.</Text>
+                <TextInput value={codigoFab} editable={false} style={[styles.input, styles.inputDisabled]} testID="num-serie-codigo-fab" />
+              </View>
+            </View>
 
-            <Text style={styles.label}>Código Fab.</Text>
-            <TextInput value={codigoFab} editable={false} style={[styles.input, styles.inputDisabled]} testID="num-serie-codigo-fab" />
-
-            <Text style={styles.label}>Número de Série</Text>
-            <TextInput
-              value={numSerie}
-              onChangeText={setNumSerie}
-              onBlur={() => buscarSerie(numSerie)}
-              placeholder="Digite ou selecione na lista abaixo"
-              placeholderTextColor={colors.muted}
-              style={styles.input}
-              maxLength={30}
-              testID="num-serie-numero"
-            />
-            {buscandoSerie ? <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 4 }} /> : null}
-
-            <Text style={styles.label}>Disponível</Text>
-            <View style={styles.pillRow}>
-              <Pressable
-                disabled={!canEditDisponivel}
-                onPress={() => setDisponivel(true)}
-                style={[styles.pill, disponivel && styles.pillActive, !canEditDisponivel && styles.pillDisabled]}
-                testID="num-serie-disponivel-sim"
-              >
-                <Text style={[styles.pillText, disponivel && styles.pillTextActive]}>Sim</Text>
-              </Pressable>
-              <Pressable
-                disabled={!canEditDisponivel}
-                onPress={() => setDisponivel(false)}
-                style={[styles.pill, !disponivel && styles.pillActive, !canEditDisponivel && styles.pillDisabled]}
-                testID="num-serie-disponivel-nao"
-              >
-                <Text style={[styles.pillText, !disponivel && styles.pillTextActive]}>Não</Text>
-              </Pressable>
+            <View style={styles.rowFields}>
+              <View style={styles.colNarrow}>
+                <Text style={styles.label}>Número de Série</Text>
+                <TextInput
+                  value={numSerie}
+                  onChangeText={setNumSerie}
+                  onBlur={() => buscarSerie(numSerie)}
+                  placeholder="Digite ou selecione na lista abaixo"
+                  placeholderTextColor={colors.muted}
+                  style={styles.input}
+                  maxLength={30}
+                  testID="num-serie-numero"
+                />
+                {buscandoSerie ? <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 4 }} /> : null}
+              </View>
+              <View style={styles.colNarrow}>
+                <Text style={styles.label}>Disponível</Text>
+                <View style={styles.pillRow}>
+                  <Pressable
+                    disabled={!canEditDisponivel}
+                    onPress={() => setDisponivel(true)}
+                    style={[styles.pill, disponivel && styles.pillActive, !canEditDisponivel && styles.pillDisabled]}
+                    testID="num-serie-disponivel-sim"
+                  >
+                    <Text style={[styles.pillText, disponivel && styles.pillTextActive]}>Sim</Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={!canEditDisponivel}
+                    onPress={() => setDisponivel(false)}
+                    style={[styles.pill, !disponivel && styles.pillActive, !canEditDisponivel && styles.pillDisabled]}
+                    testID="num-serie-disponivel-nao"
+                  >
+                    <Text style={[styles.pillText, !disponivel && styles.pillTextActive]}>Não</Text>
+                  </Pressable>
+                </View>
+              </View>
             </View>
 
             <Text style={styles.label}>Detalhes</Text>
@@ -374,9 +384,12 @@ const styles = StyleSheet.create({
   scroll: { padding: spacing.lg, paddingBottom: 40 },
   scrollWeb: WEB_SCROLL_CENTER,
   webShell: WEB_CONTENT_SHELL,
-  card: { ...WEB_FILTER_CARD, maxWidth: 560, gap: spacing.xs },
+  card: { ...WEB_FILTER_CARD, maxWidth: 820, gap: spacing.xs },
   cardTitle: { fontSize: 14, fontWeight: "700", color: colors.onSurface, marginBottom: spacing.xs },
   label: { fontSize: 12, color: colors.muted, fontWeight: "500", marginTop: spacing.sm },
+  rowFields: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
+  colFlex: { flex: 1, minWidth: 220 },
+  colNarrow: { width: 220 },
   input: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: 11, fontSize: 14, color: colors.onSurface, justifyContent: "center" },
   inputDisabled: { backgroundColor: colors.surfaceSecondary, color: colors.muted },
   pickerText: { fontSize: 14, color: colors.onSurface },

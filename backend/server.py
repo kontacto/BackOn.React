@@ -29,10 +29,10 @@ from starlette.middleware.cors import CORSMiddleware  # noqa: E402
 
 from db import mongo  # noqa: E402
 from routes import (  # noqa: E402
-    afericao_abastecimento, agenda, auth, balanca, bancos, bomba, bordero, checkout, cilindro, clientes, combustivel, combustivel_meta, comanda, conta_func, contas, contatos,
+    abertura_dia, afericao_abastecimento, agenda, auth, balanca, bancos, bomba, bordero, checkout, cilindro, clientes, combustivel, combustivel_meta, comanda, conta_func, contas, contatos,
     contratos, controle, controle_config, controle_sistema, cotacao_compra, curva_abc, custo_combustivel, descontos, devolucao,
     entrada_saida_caixa, envio_massa, equipamentos, estoque_combustivel, etiqueta_produto, fechamento_turno, financeiro, fornecedores, funcionarios,
-    geracao_boletos, gestao_compras, gestor_documentos, ia_config, ilha, impressao, inventario, layout, log_auditoria, lookups, margem_lucro, misc, modificadores, movimentacao_produtos,
+    geracao_boletos, gestao_compras, gestor_documentos, gestor_nfce, ia_config, ilha, impressao, inventario, layout, log_auditoria, lookups, margem_lucro, misc, modificadores, movimentacao_produtos,
     mov_encerrante, notas_fiscais, os, os_completo, pedido_completo, pedido_compra, pedidos, permissoes, produto_completo, produtos,
     produtos_compostos, produtos_niveis, projetos, reabertura_turno, relatorio_clientes, relatorios, requisicao, retifica, servicos, tabelas_aux, tanque,
     tanque_estoque, tanque_nf, telemarketing, usuarios, veiculos, viagem, whatsapp,
@@ -67,6 +67,7 @@ api_router.include_router(etiqueta_produto.router)
 api_router.include_router(relatorio_clientes.router)
 api_router.include_router(envio_massa.router)
 api_router.include_router(margem_lucro.router)
+api_router.include_router(abertura_dia.router)
 api_router.include_router(lookups.router)
 api_router.include_router(permissoes.router)
 api_router.include_router(controle_config.router)
@@ -81,6 +82,7 @@ api_router.include_router(equipamentos.router)
 api_router.include_router(cilindro.router)
 api_router.include_router(balanca.router)
 api_router.include_router(comanda.router)
+api_router.include_router(gestor_nfce.router)
 api_router.include_router(checkout.router)
 api_router.include_router(devolucao.router)
 api_router.include_router(movimentacao_produtos.router)

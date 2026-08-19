@@ -493,12 +493,26 @@ export default function TelemarketingScreen() {
                   editable={!!cliente}
                   testID="telemarketing-texto"
                 />
-                <Pressable onPress={limpar} disabled={!cliente} style={[styles.secondaryBtn, !cliente && { opacity: 0.5 }]} testID="telemarketing-limpar">
+                <Pressable onPress={limpar} disabled={!cliente} style={[styles.secondaryBtn, { alignSelf: "flex-start" }, !cliente && { opacity: 0.5 }]} testID="telemarketing-limpar">
                   <Text style={styles.secondaryBtnText}>Limpar</Text>
                 </Pressable>
                 <View style={styles.rowFields}>
                   {canSave ? (
-                    <Pressable onPress={gravar} disabled={saving || !cliente} style={[styles.primaryBtn, { flex: 1 }, (saving || !cliente) && { opacity: 0.6 }]} testID="telemarketing-gravar">
+                    <Pressable
+                      onPress={gravar}
+                      disabled={saving || !cliente}
+                      style={[
+                        styles.primaryBtn,
+                        // Divide a linha 50/50 com o WhatsappButton (que já
+                        // nasce `flex:1` no modo `compact`) só quando ele de
+                        // fato vai renderizar ao lado — senão, Gravar sozinho
+                        // esticaria full-width (comportamento padrão do RN
+                        // pra filho sem alignSelf num container de coluna).
+                        canWhatsapp && cliente ? { flex: 1 } : { alignSelf: "flex-end", paddingHorizontal: spacing.xl, minWidth: 160 },
+                        (saving || !cliente) && { opacity: 0.6 },
+                      ]}
+                      testID="telemarketing-gravar"
+                    >
                       {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Gravar</Text>}
                     </Pressable>
                   ) : null}

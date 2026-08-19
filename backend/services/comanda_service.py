@@ -21,7 +21,7 @@ from models.comanda import (
     ComandaAddNumSerieRequest, ComandaAlterarFormaPagamentoRequest, ComandaAlterarVendedorItemRequest,
     ComandaCancelarRequest, ComandaGravarRequest, EmitirNfceRequest, EmitirNfseRequest, ListarComandasRequest,
 )
-from services import fechamento_caixa_service, nfe_cancelamento_service, nfe_emissao_service, nfse_emissao_service
+from services import contingencia_nfce_service, fechamento_caixa_service, ibs_cbs_service, nfe_cancelamento_service, nfe_emissao_service, nfse_emissao_service
 from services.constants import SITUACAO_LABEL
 from services.permissoes_service import tem_permissao
 
@@ -1116,6 +1116,7 @@ def _emitir_nfce_comanda_sync(req: EmitirNfceRequest, comanda: int) -> dict:
         consumidor_final = bool(cliente and cliente.get("consumidor_final")) if cliente else True
 
         itens_resolvidos = []
+        ibs_cbs_calculados = []  # ver ibs_cbs_service.calcular_totais_ibs_cbs abaixo
         for item in itens_mov:
             codigo_int = (item.get("codigo_int") or "").strip()
             cod_icms = (item.get("cod_icms") or "").strip()
@@ -1132,6 +1133,16 @@ def _emitir_nfce_comanda_sync(req: EmitirNfceRequest, comanda: int) -> dict:
                 return {"success": False, "message": f"Produto '{codigo_int}' sem tributação cadastrada em Taxas (Tabelas Auxiliares)."}
             qtd = float(item.get("qtd") or 0)
             valor_unitario = float(item.get("p_unit") or 0)
+            # IBS/CBS usa uma resolução PRÓPRIA, diferente da cascata de
+            # `tributos` acima (essa é só pro sistema tributário antigo —
+            # ICMS/CSOSN/PIS/COFINS) — ver docstring de
+            # `resolver_taxa_nfce_para_ibs_cbs_sync`, achado 2026-08-19.
+            taxa_nfce = ibs_cbs_service.resolver_taxa_nfce_para_ibs_cbs_sync(cur, cod_icms=cod_icms, destino=uf_sigla)
+            ibs_cbs_item = (
+                ibs_cbs_service.calcular_item_ibs_cbs(qtd=qtd, p_unit=valor_unitario, codigo_int=codigo_int, taxa=taxa_nfce)
+                if taxa_nfce else None
+            )
+            ibs_cbs_calculados.append(ibs_cbs_item)
             itens_resolvidos.append({
                 "codigo_int": codigo_int, "descricao": (item.get("descricao") or "").strip(),
                 "ncm": (item.get("ncm") or "").strip(), "cfop": tributos.get("cfop_livro") or "5102",
@@ -1139,8 +1150,14 @@ def _emitir_nfce_comanda_sync(req: EmitirNfceRequest, comanda: int) -> dict:
                 "valor_total": round(qtd * valor_unitario, 2), "origem": int(item.get("origem") or 0),
                 "csosn": "102" if simples_nacional_cliente else "400",
                 "cst_pis": "07", "cst_cofins": "07",
+                "ibs_cbs_xml": (ibs_cbs_item or {}).get("xml_item") or "",
             })
 
+        ibs_cbs_totais = ibs_cbs_service.calcular_totais_ibs_cbs(ibs_cbs_calculados)
+        # Contingência (Gestor NFCe, achado 2026-08-19) — se aberta, a
+        # emissão segue um caminho alternativo (tpEmis 5/9, sem
+        # transmissão) — ver docstring de `emitir_nfce_sync`.
+        contingencia = contingencia_nfce_service.contingencia_aberta_sync(cur)
         resultado = nfe_emissao_service.emitir_nfce_sync(
             cur, comanda=comanda, cnpj_emit=(controle.get("cgc") or ""), nome_emit=(controle.get("rz_social") or ""),
             uf_sigla=uf_sigla, uf_controle_sigla=uf_sigla,
@@ -1148,27 +1165,30 @@ def _emitir_nfce_comanda_sync(req: EmitirNfceRequest, comanda: int) -> dict:
             serie=str(controle_aux.get("serie_nfce") or "1"), cliente=cliente, itens_resolvidos=itens_resolvidos,
             forma_pagamento="01", valor_total=float(cab.get("valor_venda") or 0), tp_amb="1",
             csc_id=str(controle_aux.get("csc") or ""), csc=(controle_aux.get("csc_hash") or ""),
+            ibs_cbs_totais_xml=ibs_cbs_totais["xml_totais"], contingencia=contingencia,
         )
         if not resultado.get("success"):
             conn.close()
             return resultado
 
+        situacao_n_fiscal = resultado.get("situacao") or "A"
+        cstat_n_fiscal = resultado.get("cstat") or "100"
         cur.execute(
             "INSERT INTO n_fiscal (num_nf, serie_nf, uf, data_nf, data_mov, valor_total, situacao, "
             "chave_acesso, protocolo_sefaz, dhRecbto, cstat, xml) "
             "OUTPUT INSERTED.codigo "
-            "VALUES (%s, %s, %s, CONVERT(date, GETDATE()), CONVERT(date, GETDATE()), %s, 'A', %s, %s, %s, '100', %s)",
-            (resultado["numero"], resultado["serie"], uf_sigla, cab.get("valor_venda"),
-             resultado["chave_acesso"], resultado["protocolo_sefaz"], resultado.get("dh_recbto"), resultado["xml"]),
+            "VALUES (%s, %s, %s, CONVERT(date, GETDATE()), CONVERT(date, GETDATE()), %s, %s, %s, %s, %s, %s, %s)",
+            (resultado["numero"], resultado["serie"], uf_sigla, cab.get("valor_venda"), situacao_n_fiscal,
+             resultado["chave_acesso"], resultado["protocolo_sefaz"], resultado.get("dh_recbto"), cstat_n_fiscal, resultado["xml"]),
         )
         codigo_n_fiscal = int(cur.fetchone()["codigo"])
         cur.execute(
             "INSERT INTO comanda_nfce (comanda, num_nfce, situacao, protocolo_sefaz, chave_acesso, dhemi, vnf, xml) "
-            "VALUES (%s, %s, 'F', %s, %s, GETDATE(), %s, %s)",
-            (comanda, resultado["numero"], resultado["protocolo_sefaz"], resultado["chave_acesso"],
-             cab.get("valor_venda"), resultado["xml"]),
+            "VALUES (%s, %s, %s, %s, %s, GETDATE(), %s, %s)",
+            (comanda, resultado["numero"], ("G" if situacao_n_fiscal == "G" else "F"), resultado["protocolo_sefaz"],
+             resultado["chave_acesso"], cab.get("valor_venda"), resultado["xml"]),
         )
-        cur.execute("INSERT INTO comanda_nf (comanda, nota_fisc, tipo, situacao) VALUES (%s, %s, 1, 'A')", (comanda, codigo_n_fiscal))
+        cur.execute("INSERT INTO comanda_nf (comanda, nota_fisc, tipo, situacao) VALUES (%s, %s, 1, %s)", (comanda, codigo_n_fiscal, situacao_n_fiscal))
         cur.execute("UPDATE controle_aux SET numero_nfce = %s", (resultado["numero"],))
         conn.commit()
         cur.close()
@@ -1263,7 +1283,7 @@ def _emitir_nfse_comanda_sync(req: EmitirNfseRequest, comanda: int) -> dict:
             return {"success": False, "message": "Esta comanda já tem uma NFS-e emitida."}
 
         cur.execute(
-            "SELECT m.codigo_int, s.descricao, s.cod_lista_servico, m.qtd, m.p_unit "
+            "SELECT m.codigo_int, s.descricao, s.cod_lista_servico, s.cod_icms, m.qtd, m.p_unit "
             "FROM movimentacao m JOIN servicos s ON s.codigo = m.codigo_int "
             "WHERE m.serie_nf = 'CM' AND m.num_nf = %s AND ISNULL(m.Estornado, 0) = 0",
             (comanda,),
@@ -1279,6 +1299,34 @@ def _emitir_nfse_comanda_sync(req: EmitirNfseRequest, comanda: int) -> dict:
             "SELECT numero_DPS, serie_DPS, opcao_simples, RegimeEspecialTributacao FROM controle_aux"
         )
         controle_aux = cur.fetchone() or {}
+
+        # IBS/CBS do serviço principal — só CST/cClassTrib são enviados no
+        # XML da DPS durante a fase de transição (ver docstring de
+        # `nfse_emissao_service._montar_xml_dps`); mesma simplificação já
+        # existente de "uma DPS = um serviço principal" (só o primeiro item
+        # é considerado). Resolução PRÓPRIA de `taxas_nfce` por `cod_icms` +
+        # `destino` (UF da própria empresa, nunca a do cliente) +
+        # `tipo_mov` fixo `"S01"` — mesma função usada pro lado NFC-e, ver
+        # docstring de `resolver_taxa_nfce_para_ibs_cbs_sync` (valores
+        # confirmados diretamente pelo usuário 2026-08-19, não inferidos).
+        ibs_cbs_cst = ""
+        ibs_cbs_classtrib = ""
+        cod_icms_serv = (itens_mov[0].get("cod_icms") or "").strip()
+        uf_sigla_serv = (controle.get("uf") or "").strip().upper()
+        if cod_icms_serv and uf_sigla_serv:
+            taxa_nfce_serv = ibs_cbs_service.resolver_taxa_nfce_para_ibs_cbs_sync(
+                cur, cod_icms=cod_icms_serv, destino=uf_sigla_serv,
+            )
+            if taxa_nfce_serv:
+                qtd0 = float(itens_mov[0].get("qtd") or 0)
+                p_unit0 = float(itens_mov[0].get("p_unit") or 0)
+                ibs_cbs_serv = ibs_cbs_service.calcular_item_ibs_cbs(
+                    qtd=qtd0, p_unit=p_unit0, codigo_int=(itens_mov[0].get("codigo_int") or ""),
+                    taxa=taxa_nfce_serv,
+                )
+                if ibs_cbs_serv:
+                    ibs_cbs_cst = ibs_cbs_serv["cst_ibs_uf"]
+                    ibs_cbs_classtrib = ibs_cbs_serv["classtrib_ibs_uf"]
 
         cod_municipio = _resolver_cod_municipio_ibge(controle.get("cidade"), controle.get("uf"))
         if not cod_municipio:
@@ -1312,6 +1360,7 @@ def _emitir_nfse_comanda_sync(req: EmitirNfseRequest, comanda: int) -> dict:
             regime_especial_tributacao=int(controle_aux.get("RegimeEspecialTributacao") or 0),
             proximo_numero=int(controle_aux.get("numero_DPS") or 0) + 1,
             serie=str(controle_aux.get("serie_DPS") or "1"), tomador=tomador, itens=itens, tp_amb="1",
+            ibs_cbs_cst=ibs_cbs_cst, ibs_cbs_classtrib=ibs_cbs_classtrib,
         )
         if not resultado.get("success"):
             conn.close()

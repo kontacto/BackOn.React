@@ -23,6 +23,17 @@ def _ip(request: Request) -> Optional[str]:
     return request.client.host if request.client else None
 
 
+def _sufixo_via_auxiliar(via_auxiliar: Optional[int]) -> str:
+    """Enriquece a descrição do log de auditoria com o rastro de quem
+    estava fisicamente logado (o auxiliar), quando a ação foi feita "em
+    nome do técnico" (regra 11, AssistenciaTecnicaCampo.md seção 7) —
+    `usuario_alteracao` continua sendo o técnico (regra de negócio), isto
+    é só rastreabilidade extra na descrição, não muda quem é o autor."""
+    if not via_auxiliar:
+        return ""
+    return f" (via auxiliar #{via_auxiliar}, em nome do técnico)"
+
+
 def _depois_item_os(req: OSItemSaveRequest) -> dict:
     return {
         "quant": req.qtd, "preco_unitario": req.valor_unitario,
@@ -170,7 +181,8 @@ async def checkin_os(codigo: int, req: OSCheckinRequest, request: Request):
         await log_auditoria_service.registrar_log(
             req.servidor, req.banco, tela="OS_ATENDIMENTO", comando="CHECKIN",
             usuario=req.usuario_alteracao, classe=req.classe,
-            referencia=str(codigo), descricao=f"Check-in registrado na O.S. {codigo}",
+            referencia=str(codigo),
+            descricao=f"Check-in registrado na O.S. {codigo}{_sufixo_via_auxiliar(req.via_auxiliar)}",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result
@@ -183,7 +195,8 @@ async def checkout_os(codigo: int, req: OSCheckinRequest, request: Request):
         await log_auditoria_service.registrar_log(
             req.servidor, req.banco, tela="OS_ATENDIMENTO", comando="CHECKOUT",
             usuario=req.usuario_alteracao, classe=req.classe,
-            referencia=str(codigo), descricao=f"Check-out registrado na O.S. {codigo}",
+            referencia=str(codigo),
+            descricao=f"Check-out registrado na O.S. {codigo}{_sufixo_via_auxiliar(req.via_auxiliar)}",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result
@@ -199,7 +212,8 @@ async def fechar_os_atendimento(codigo: int, req: FecharRequest, request: Reques
         await log_auditoria_service.registrar_log(
             req.servidor, req.banco, tela="OS_ATENDIMENTO", comando="SITUACAO",
             usuario=req.usuario_alteracao, classe=req.classe,
-            referencia=str(codigo), descricao=f"O.S. {codigo} fechada via Atendimento de Campo",
+            referencia=str(codigo),
+            descricao=f"O.S. {codigo} fechada via Atendimento de Campo{_sufixo_via_auxiliar(req.via_auxiliar)}",
             campos_alterados=[{"campo": "situacao", "antes": "A", "depois": "F"}],
             ip_origem=_ip(request), plataforma=req.plataforma,
         )

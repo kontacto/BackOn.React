@@ -66,6 +66,7 @@ def _os_req(**over):
         numero_de_serie="", forma_pagamento=None,
         referencia_os="", tecnico_responsavel=None, posicao_os=None,
         previsao_termino=None, data_termino=None, hora_entrada="", hora_fechamento="",
+        data_agendamento=None, hora_agendamento="",
         usuario_alteracao=1, classe=1, plataforma="web",
     )
     base.update(over)
@@ -145,6 +146,44 @@ class TestGetOsCompleto:
         assert r["os"]["auxiliar_tecnico"] is None
         assert r["os"]["auxiliar_tecnico_nome"] == ""
 
+    def test_data_agendamento_presente(self, monkeypatch):
+        """Data/Hora do Atendimento Agendado (regra 2, AssistenciaTecnicaCampo.md)
+        — colunas legadas reativadas 2026-08-15, ver Lista de Atendimento
+        por Calendário."""
+        import datetime as dt
+        base = {"success": True, "os": {"codigo": 1, "cliente": 10}}
+        monkeypatch.setattr(svc.os_service, "_get_os_sync", lambda *a, **k: base)
+        row = {
+            "referencia_os": "", "tecnico_responsavel": None, "tecnico_nome": None,
+            "posicao_os": None, "tipo_os_descricao": "", "previsao_termino": None,
+            "data_termino": None, "hora_entrada": "", "hora_fechamento": "",
+            "data_agendamento": dt.date(2026, 8, 20), "hora_agendamento": "09:00:00",
+            "status_os_descricao": "",
+            "forma_pagamento_garantia": "", "forma_pagamento_garantia_descricao": "",
+        }
+        cur = FakeCursor(one=[row])
+        _patch(monkeypatch, cur)
+        r = svc._get_os_completo_sync("srv", "bd", 1)
+        assert r["os"]["data_agendamento"] == "2026-08-20"
+        assert r["os"]["hora_agendamento"] == "09:00"
+
+    def test_data_agendamento_ausente_fica_none(self, monkeypatch):
+        base = {"success": True, "os": {"codigo": 1, "cliente": 10}}
+        monkeypatch.setattr(svc.os_service, "_get_os_sync", lambda *a, **k: base)
+        row = {
+            "referencia_os": "", "tecnico_responsavel": None, "tecnico_nome": None,
+            "posicao_os": None, "tipo_os_descricao": "", "previsao_termino": None,
+            "data_termino": None, "hora_entrada": "", "hora_fechamento": "",
+            "data_agendamento": None, "hora_agendamento": None,
+            "status_os_descricao": "",
+            "forma_pagamento_garantia": "", "forma_pagamento_garantia_descricao": "",
+        }
+        cur = FakeCursor(one=[row])
+        _patch(monkeypatch, cur)
+        r = svc._get_os_completo_sync("srv", "bd", 1)
+        assert r["os"]["data_agendamento"] is None
+        assert r["os"]["hora_agendamento"] == ""
+
 
 class TestSaveOsCompleto:
     def test_criar_cliente_inativo_bloqueia(self, monkeypatch):
@@ -153,8 +192,20 @@ class TestSaveOsCompleto:
         r = svc._save_os_completo_sync(_os_req(), None)
         assert r["success"] is False and "situação" in r["message"].lower()
 
+    def test_criar_funcionario_sem_area_permitida_bloqueia(self, monkeypatch):
+        """Réplica de `VerificaAreaAtuacao` — ver PENDENCIAS.md > "MDI
+        Principal (VB6)"."""
+        cur = FakeCursor(
+            one=[{"STATUS_CLIENTE": "A"}, {"descricao": "Oficina"}],
+            many=[[{"area": 1}, {"area": 2}]],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._save_os_completo_sync(_os_req(usuario_alteracao=5, area_atuacao=9), None)
+        assert r["success"] is False
+        assert "Oficina" in r["message"]
+
     def test_criar_sucesso_grava_campos_extras(self, monkeypatch):
-        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"novo": 501}])
+        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"CONTROLA_ABERTURA_DIA": True}, {"Oficina": False}, {"novo": 501}])
         conn = _patch(monkeypatch, cur)
         r = svc._save_os_completo_sync(
             _os_req(referencia_os="REF-9", tecnico_responsavel=30, forma_pagamento_garantia="DI"), None,
@@ -166,6 +217,11 @@ class TestSaveOsCompleto:
         assert "forma_pagamento_garantia" in insert_q
         insert_p = next(p for q, p in cur.queries if q.strip().startswith("INSERT INTO os "))
         assert "DI" in insert_p
+        # Regressão (achado ao vivo 2026-08-17, BD_PAJE/CASCADURA AUTOCENTER)
+        # — ver mesma nota em TestCriarCopiaOS.
+        assert insert_q.count("%s") == len(insert_p), (
+            f"placeholders ({insert_q.count('%s')}) != valores na tupla ({len(insert_p)})"
+        )
 
     def test_atualizar_nao_encontrada(self, monkeypatch):
         cur = FakeCursor(one=[None])
@@ -199,7 +255,7 @@ class TestSaveOsCompleto:
         assert conn.rolled is True
 
     def test_criar_grava_auxiliar_tecnico(self, monkeypatch):
-        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"novo": 501}])
+        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"CONTROLA_ABERTURA_DIA": True}, {"Oficina": False}, {"novo": 501}])
         _patch(monkeypatch, cur)
         r = svc._save_os_completo_sync(_os_req(tecnico_responsavel=30, auxiliar_tecnico=55), None)
         assert r["success"] is True
@@ -215,6 +271,81 @@ class TestSaveOsCompleto:
         assert r["success"] is True
         update_q = next(q for q, _ in cur.queries if q.strip().startswith("UPDATE os SET"))
         assert "auxiliar_tecnico=%s" in update_q
+
+    def test_criar_grava_data_agendamento(self, monkeypatch):
+        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"CONTROLA_ABERTURA_DIA": True}, {"Oficina": False}, {"novo": 501}])
+        _patch(monkeypatch, cur)
+        r = svc._save_os_completo_sync(
+            _os_req(data_agendamento="2026-08-20", hora_agendamento="09:00"), None,
+        )
+        assert r["success"] is True
+        insert_q = next(q for q, _ in cur.queries if q.strip().startswith("INSERT INTO os "))
+        assert "data_agendamento" in insert_q and "hora_agendamento" in insert_q
+        insert_p = next(p for q, p in cur.queries if q.strip().startswith("INSERT INTO os "))
+        assert "2026-08-20" in insert_p and "09:00" in insert_p
+
+    def test_atualizar_grava_data_agendamento(self, monkeypatch):
+        """Data/Hora Agendada mudando na edição passa por
+        `_sincronizar_agendamento_cabecalho_sync` (compromisso REAL na
+        Agenda, user-directed 2026-08-15) — aqui a disponibilidade é
+        mockada (coberta em detalhe em TestSincronizarAgendamentoCabecalho),
+        só confirmando que o UPDATE principal recebe o `codagenda_
+        atendimento` resultante junto com os campos de data/hora."""
+        monkeypatch.setattr(svc, "_validar_disponibilidade", lambda *a, **k: ({"intervalo1": 30}, None))
+        cur = FakeCursor(
+            one=[
+                {"situacao": "A"},
+                {"Oficina": False},
+                {"data_agendamento": None, "hora_agendamento": None, "codagenda_atendimento": None},
+                {"codagenda": 999},
+            ],
+            rowcount=1,
+        )
+        _patch(monkeypatch, cur)
+        r = svc._save_os_completo_sync(
+            _os_req(tecnico_responsavel=30, data_agendamento="2026-08-21", hora_agendamento="14:30"), 555,
+        )
+        assert r["success"] is True
+        update_q = next(q for q, _ in cur.queries if q.strip().startswith("UPDATE os SET"))
+        assert "data_agendamento=%s" in update_q and "hora_agendamento=%s" in update_q and "codagenda_atendimento=%s" in update_q
+        update_p = next(p for q, p in cur.queries if q.strip().startswith("UPDATE os SET"))
+        assert "2026-08-21" in update_p and "14:30" in update_p and 999 in update_p
+
+
+class TestSaveOsCompletoChassiObrigatorio:
+    """`controle.exige_chassi_os` — bloqueia gravar O.S. Completa do
+    segmento Oficina sem Chassi. Ver `_chassi_obrigatorio_ok`
+    (pedido_common.py) e PENDENCIAS.md > "O.S. — Chassi obrigatório
+    (Oficina)"."""
+
+    def test_oficina_com_flag_ligado_e_chassi_vazio_bloqueia(self, monkeypatch):
+        cur = FakeCursor(
+            one=[
+                {"STATUS_CLIENTE": "A"}, {"CONTROLA_ABERTURA_DIA": True},
+                {"Oficina": True}, {"exige_chassi_os": True},
+            ],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._save_os_completo_sync(_os_req(chassi=""), None)
+        assert r["success"] is False
+        assert "Chassi" in r["message"]
+
+    def test_oficina_com_flag_ligado_e_chassi_preenchido_libera(self, monkeypatch):
+        cur = FakeCursor(
+            one=[{"STATUS_CLIENTE": "A"}, {"CONTROLA_ABERTURA_DIA": True}, {"novo": 900}],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._save_os_completo_sync(_os_req(chassi="9BW1234567890ABCD"), None)
+        assert r["success"] is True
+
+    def test_atualizar_com_flag_ligado_e_chassi_vazio_bloqueia(self, monkeypatch):
+        cur = FakeCursor(
+            one=[{"situacao": "A"}, {"Oficina": True}, {"exige_chassi_os": True}],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._save_os_completo_sync(_os_req(chassi=""), 555)
+        assert r["success"] is False
+        assert "Chassi" in r["message"]
 
 
 class TestEnsureAuxiliarTecnicoCol:
@@ -232,6 +363,101 @@ class TestEnsureAuxiliarTecnicoCol:
         assert "CREATE INDEX IX_os_auxiliar_tecnico ON os(auxiliar_tecnico)" in queries[1]
 
 
+class TestEnsureCodagendaAtendimentoCol:
+    def test_migracao_idempotente(self):
+        queries = []
+
+        class Cur:
+            def execute(self, q, p=None):
+                queries.append(q)
+
+        svc._ensure_os_codagenda_atendimento_col(Cur())
+        assert len(queries) == 1
+        assert "IF NOT EXISTS" in queries[0]
+        assert "ALTER TABLE os ADD codagenda_atendimento INT NULL" in queries[0]
+
+
+class TestSincronizarAgendamentoCabecalho:
+    """Data/Hora Agendada do cabeçalho da OS vira um compromisso REAL na
+    Agenda — user-directed 2026-08-15 ("data e hora agendada deverá ser
+    alimentada pela agenda ou imputada diretamente no campo de acordo com
+    a disponibilidade da agenda")."""
+
+    def test_sem_mudanca_e_no_op(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"data_agendamento": None, "hora_agendamento": None, "codagenda_atendimento": None},
+        ])
+        _patch(monkeypatch, cur)
+        erro, codagenda = svc._sincronizar_agendamento_cabecalho_sync(cur, 555, 10, None, None, "", 1)
+        assert erro is None and codagenda is None
+        # não chegou a tentar validar disponibilidade nem gravar em AGENDA
+        assert not any("AGENDA" in (q or "") for q, _ in cur.queries)
+
+    def test_campos_limpos_cancela_compromisso_existente(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"data_agendamento": "2026-08-20", "hora_agendamento": "09:00", "codagenda_atendimento": 999},
+        ])
+        conn = _patch(monkeypatch, cur)
+        erro, codagenda = svc._sincronizar_agendamento_cabecalho_sync(cur, 555, 10, 30, None, "", 1)
+        assert erro is None and codagenda is None
+        update_q, update_p = next((q, p) for q, p in cur.queries if q.strip().startswith("UPDATE AGENDA SET"))
+        assert "Desistência" in update_q
+        assert update_p == (999,)
+
+    def test_bloqueia_sem_tecnico_responsavel(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"data_agendamento": None, "hora_agendamento": None, "codagenda_atendimento": None},
+        ])
+        _patch(monkeypatch, cur)
+        erro, codagenda = svc._sincronizar_agendamento_cabecalho_sync(
+            cur, 555, 10, None, "2026-08-21", "14:30", 1,
+        )
+        assert erro is not None and "Técnico Responsável" in erro
+
+    def test_bloqueia_por_indisponibilidade(self, monkeypatch):
+        monkeypatch.setattr(
+            svc, "_validar_disponibilidade",
+            lambda *a, **k: (None, "Fora do horário de atendimento (08:00 às 18:00)."),
+        )
+        cur = FakeCursor(one=[
+            {"data_agendamento": None, "hora_agendamento": None, "codagenda_atendimento": None},
+        ])
+        _patch(monkeypatch, cur)
+        erro, codagenda = svc._sincronizar_agendamento_cabecalho_sync(
+            cur, 555, 10, 30, "2026-08-21", "20:00", 1,
+        )
+        assert erro == "Fora do horário de atendimento (08:00 às 18:00)."
+        assert not any(q.strip().startswith("INSERT INTO AGENDA") for q, _ in cur.queries)
+
+    def test_cria_compromisso_novo(self, monkeypatch):
+        monkeypatch.setattr(svc, "_validar_disponibilidade", lambda *a, **k: ({"intervalo1": 30}, None))
+        cur = FakeCursor(one=[
+            {"data_agendamento": None, "hora_agendamento": None, "codagenda_atendimento": None},
+            {"codagenda": 777},
+        ])
+        conn = _patch(monkeypatch, cur)
+        erro, codagenda = svc._sincronizar_agendamento_cabecalho_sync(
+            cur, 555, 10, 30, "2026-08-21", "14:30", 1,
+        )
+        assert erro is None and codagenda == 777
+        insert_q, insert_p = next((q, p) for q, p in cur.queries if q.strip().startswith("INSERT INTO AGENDA"))
+        assert 30 in insert_p and 10 in insert_p and "2026-08-21" in insert_p and "14:30" in insert_p
+
+    def test_reagenda_compromisso_existente(self, monkeypatch):
+        monkeypatch.setattr(svc, "_validar_disponibilidade", lambda *a, **k: ({"intervalo1": 30}, None))
+        cur = FakeCursor(one=[
+            {"data_agendamento": "2026-08-20", "hora_agendamento": "09:00", "codagenda_atendimento": 999},
+        ])
+        _patch(monkeypatch, cur)
+        erro, codagenda = svc._sincronizar_agendamento_cabecalho_sync(
+            cur, 555, 10, 30, "2026-08-22", "11:00", 1,
+        )
+        assert erro is None and codagenda == 999
+        update_q, update_p = next((q, p) for q, p in cur.queries if q.strip().startswith("UPDATE AGENDA SET funcionario"))
+        assert "2026-08-22" in update_p and "11:00" in update_p and 999 in update_p
+        assert not any(q.strip().startswith("INSERT INTO AGENDA") for q, _ in cur.queries)
+
+
 class TestSaveOsCompletoDocOrigem:
     """Doc. Origem / Revisão Programada — a validação cruzada em si já é
     testada de ponta a ponta em `test_pedido_common_doc_origem.py`; aqui só
@@ -239,7 +465,7 @@ class TestSaveOsCompletoDocOrigem:
     corretamente (mockada) e trata o resultado (bloqueio/gravação)."""
 
     def test_pula_validacao_quando_posicao_os_nao_informado(self, monkeypatch):
-        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"novo": 700}])
+        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"CONTROLA_ABERTURA_DIA": True}, {"Oficina": False}, {"novo": 700}])
         _patch(monkeypatch, cur)
         chamou = {"v": False}
 
@@ -253,7 +479,7 @@ class TestSaveOsCompletoDocOrigem:
         assert chamou["v"] is False
 
     def test_bloqueia_quando_validacao_falha(self, monkeypatch):
-        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"descricao": "Revisão"}])
+        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"CONTROLA_ABERTURA_DIA": True}, {"descricao": "Revisão"}])
         _patch(monkeypatch, cur)
         monkeypatch.setattr(
             svc, "_validar_doc_origem", lambda *a, **k: (False, False, "O", "O.S. de origem não encontrada!"),
@@ -264,7 +490,7 @@ class TestSaveOsCompletoDocOrigem:
         assert "não encontrada" in r["message"].lower()
 
     def test_sucesso_grava_os_original_tipo_doc_e_validou_garantia(self, monkeypatch):
-        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"descricao": "Garantia"}, {"novo": 701}])
+        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"CONTROLA_ABERTURA_DIA": True}, {"descricao": "Garantia"}, {"Oficina": False}, {"novo": 701}])
         _patch(monkeypatch, cur)
         monkeypatch.setattr(svc, "_validar_doc_origem", lambda *a, **k: (True, True, "O", None))
         r = svc._save_os_completo_sync(_os_req(posicao_os=5, os_original=300, tipo_doc_original="O"), None)
@@ -274,7 +500,7 @@ class TestSaveOsCompletoDocOrigem:
         assert 300 in insert_p and "O" in insert_p and 1 in insert_p
 
     def test_bypass_com_autorizado_por_libera_gravacao(self, monkeypatch):
-        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"descricao": "Garantia"}, {"novo": 702}])
+        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"CONTROLA_ABERTURA_DIA": True}, {"descricao": "Garantia"}, {"Oficina": False}, {"novo": 702}])
         conn = _patch(monkeypatch, cur)
         monkeypatch.setattr(svc, "_validar_doc_origem", lambda *a, **k: (True, True, "O", None))
         r = svc._save_os_completo_sync(
@@ -291,7 +517,7 @@ class TestSaveOsCompletoRevisoesProgramadas:
     True` incondicional no `Form_Load`)."""
 
     def test_gera_datas_futuras_quando_qtd_revisoes_informado(self, monkeypatch):
-        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"novo": 800}])
+        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"CONTROLA_ABERTURA_DIA": True}, {"Oficina": False}, {"novo": 800}])
         _patch(monkeypatch, cur)
         r = svc._save_os_completo_sync(_os_req(qtd_revisoes=2), None)
         assert r["success"] is True
@@ -301,7 +527,7 @@ class TestSaveOsCompletoRevisoesProgramadas:
         assert len(deletes) == 1
 
     def test_sem_qtd_revisoes_so_limpa_disponiveis_sem_inserir(self, monkeypatch):
-        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"novo": 801}])
+        cur = FakeCursor(one=[{"STATUS_CLIENTE": "A"}, {"CONTROLA_ABERTURA_DIA": True}, {"Oficina": False}, {"novo": 801}])
         _patch(monkeypatch, cur)
         r = svc._save_os_completo_sync(_os_req(), None)
         assert r["success"] is True
@@ -312,7 +538,14 @@ class TestSaveOsCompletoRevisoesProgramadas:
         assert "ISNULL(osrevisao,0)=0" in deletes[0][0]  # nunca apaga linha já consumida
 
     def test_consome_data_disponivel_da_os_de_origem_ao_gravar_revisao(self, monkeypatch):
-        cur = FakeCursor(one=[{"situacao": "A"}, {"descricao": "Revisão"}, {"sequencia": 42}], rowcount=1)
+        cur = FakeCursor(
+            one=[
+                {"situacao": "A"}, {"descricao": "Revisão"}, {"Oficina": False},
+                {"data_agendamento": None, "hora_agendamento": None, "codagenda_atendimento": None},  # sem mudança em Data Agendada -> no-op
+                {"sequencia": 42},
+            ],
+            rowcount=1,
+        )
         _patch(monkeypatch, cur)
         monkeypatch.setattr(svc, "_validar_doc_origem", lambda *a, **k: (True, True, "O", None))
         r = svc._save_os_completo_sync(_os_req(posicao_os=5, os_original=300), 555)
@@ -511,6 +744,14 @@ class TestCriarCopiaOS:
         # OS_ORIGINAL sempre gravado como literal 0 (não parâmetro) — a
         # cópia nunca herda o Doc. Origem da O.S. original.
         assert "OS_ORIGINAL)" in insert_q and insert_q.strip().endswith(", 0)")
+        # Regressão (achado ao vivo 2026-08-17, BD_PAJE/CASCADURA AUTOCENTER):
+        # o INSERT tinha um `%s` a menos que colunas/tupla — SQL Server
+        # rejeitava com "more columns in INSERT than values". FakeCursor não
+        # valida a query de verdade, então checar isso aqui explicitamente é
+        # a única rede de segurança sem precisar de banco real.
+        assert insert_q.count("%s") == len(insert_p), (
+            f"placeholders ({insert_q.count('%s')}) != valores na tupla ({len(insert_p)})"
+        )
 
     def test_copia_itens_de_pecas_e_servicos_ativos(self, monkeypatch):
         cur = FakeCursor(

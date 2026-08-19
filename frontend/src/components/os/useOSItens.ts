@@ -30,12 +30,19 @@ type Params = {
   master?: boolean;
   showToast: (m: string, t?: ToastTone) => void;
   servicosOn: boolean;
+  // Agendar/cancelar o atendimento de um item agora TAMBÉM alimenta
+  // `os.data_agendamento`/`hora_agendamento` no backend (user-directed
+  // 2026-08-15, ver AssistenciaTecnicaCampo.md seção 9) — opcional, chamado
+  // depois de `loadItens()` em sucesso, pro chamador (os-geral.tsx)
+  // recarregar só o cabeçalho e refletir isso na tela sem sair/voltar.
+  onAgendamentoAlterado?: () => void;
 };
 
 const BASE_PATH = "/api/os-completo";
 
 export function useOSItens({
   conn, editing, osId, isAberto, usuarioCod, funcaoCod, classe, master, showToast, servicosOn,
+  onAgendamentoAlterado,
 }: Params) {
   const [itens, setItens] = useState<OSItemRow[]>([]);
   const [subtotal, setSubtotal] = useState(0);
@@ -463,6 +470,7 @@ export function useOSItens({
       showToast("Item agendado.", "success");
       setAgendarItemState(null);
       loadItens();
+      onAgendamentoAlterado?.();
       return true;
     } catch (e) {
       showToast(friendlyCatchError(e, "Falha ao agendar."), "error");
@@ -499,6 +507,7 @@ export function useOSItens({
       showToast("Agendamento cancelado.", "success");
       setAgendarItemState(null);
       loadItens();
+      onAgendamentoAlterado?.();
     } catch (e) {
       showToast(friendlyCatchError(e, "Falha ao cancelar agendamento."), "error");
     } finally { setAgendaSaving(false); }

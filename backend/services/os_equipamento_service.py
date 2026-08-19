@@ -30,6 +30,7 @@ from db.connection import _open_conn, _get_col_sizes, _trunc
 from models.schemas import OSEquipamentoSaveRequest
 from services.os_itens_service import _check_os_aberta
 from services.constants import SITUACAO_LABEL
+from services.os_service import _checar_conflito_versao
 
 
 def _ensure_os_equipamento_table(cur) -> None:
@@ -231,6 +232,10 @@ def _update_equipamento_sync(req: OSEquipamentoSaveRequest, codigo: int, item_co
         if sit != "A":
             conn.close()
             return {"success": False, "message": f"OS '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterada."}
+        conflito = _checar_conflito_versao(cur, codigo, req.versao_esperada)
+        if conflito:
+            conn.close()
+            return conflito
 
         sz = _get_col_sizes(conn, req.banco, "os_equipamento")
         defeito = _trunc((req.defeito_reclamado or "").strip(), sz, "defeito_reclamado", 500)

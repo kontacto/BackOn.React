@@ -55,8 +55,10 @@ from typing import Callable
 from services.balanca_service import _ensure_balancas_table
 from services.checkout_service import _ensure_cartao_presente_resgate_table
 from services.controle_config_service import _ensure_balanca_cols
+from services.contingencia_nfce_service import _ensure_contingencia_nfce_table
 from services.cotacao_compra_service import _ensure_tables as _ensure_tables_cotacao
 from services.etiqueta_produto_service import _ensure_modelo_etiqueta_table
+from services.gestor_nfce_service import _ensure_inutilizacao_nfe_table
 from services.gestao_compras_service import _ensure_alertas_estoque_cache_table
 from services.impressao_service import _ensure_impressao_fila_table
 from services.inventario_service import _ensure_usuario_digitacao_col, _ensure_automatico_col
@@ -64,15 +66,16 @@ from services.ia_config_service import _ensure_anthropic_api_key_col
 from services.layout_service import _ensure_layout_paginas_col
 from services.log_auditoria_service import _ensure_log_auditoria_table
 from services.modificadores_service import _ensure_tables as _ensure_tables_modificadores
-from services.os_completo_service import _ensure_os_auxiliar_tecnico_col
+from services.os_completo_service import _ensure_os_auxiliar_tecnico_col, _ensure_os_codagenda_atendimento_col
 from services.os_equipamento_service import _ensure_os_equipamento_table
-from services.os_service import _ensure_os_checkin_cols
+from services.os_service import _ensure_os_checkin_cols, _ensure_os_versao_atendimento_col
 from services.pedido_common import (
     _ensure_hora_inclusao_item_col,
     _ensure_qtd_pessoas_col,
     _ensure_agenda_forma_pag_tables,
     _ensure_os_doc_origem_cols,
     _ensure_os_forma_pagamento_garantia_col,
+    _ensure_exige_chassi_os_col,
     _ensure_osrevisao_table,
     _ensure_agenda_os_table,
     _ensure_os_produto_agenda_cols,
@@ -88,6 +91,8 @@ from services.tabelas_aux_service import _ensure_nfse_indop_sync
 _MIGRACOES: list[Callable[[object], None]] = [
     _ensure_balancas_table,
     _ensure_cartao_presente_resgate_table,
+    _ensure_contingencia_nfce_table,
+    _ensure_inutilizacao_nfe_table,
     _ensure_balanca_cols,
     _ensure_tables_cotacao,
     _ensure_modelo_etiqueta_table,
@@ -104,6 +109,7 @@ _MIGRACOES: list[Callable[[object], None]] = [
     _ensure_agenda_forma_pag_tables,
     _ensure_os_doc_origem_cols,
     _ensure_os_forma_pagamento_garantia_col,
+    _ensure_exige_chassi_os_col,
     _ensure_osrevisao_table,
     _ensure_agenda_os_table,
     _ensure_os_produto_agenda_cols,
@@ -114,6 +120,8 @@ _MIGRACOES: list[Callable[[object], None]] = [
     _ensure_os_equipamento_table,
     _ensure_os_checkin_cols,
     _ensure_os_auxiliar_tecnico_col,
+    _ensure_os_codagenda_atendimento_col,
+    _ensure_os_versao_atendimento_col,
 ]
 
 # (servidor, banco) já garantidos NESTA execução do processo — evita

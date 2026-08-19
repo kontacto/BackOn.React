@@ -665,6 +665,6 @@ const styles = StyleSheet.create({
   novaAnotacaoText: { fontSize: 12, color: colors.brandPrimary, fontWeight: "600" },
   secondaryBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, borderWidth: 1, borderColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 12, marginTop: spacing.lg },
   secondaryBtnText: { color: colors.brandPrimary, fontWeight: "700", fontSize: 14 },
-  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 14, alignItems: "center", marginTop: spacing.md, marginBottom: spacing.sm },
+  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 12, paddingHorizontal: spacing.xl, minWidth: 160, alignSelf: "flex-end", alignItems: "center", marginTop: spacing.md, marginBottom: spacing.sm },
   primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
 });

@@ -27,6 +27,17 @@ type Params = {
   usuarioCod: number;
   classe: number | null;
   showToast: (m: string, t?: ToastTone) => void;
+  // Rastreabilidade do fluxo "auxiliar edita em nome do técnico" (regra
+  // 11, AssistenciaTecnicaCampo.md) — só usado por `os-atendimento.tsx`;
+  // `os-geral.tsx` nunca passa isto (fica `undefined`, sem efeito).
+  viaAuxiliar?: number | null;
+  // Sincronização Offline (Atendimento de Campo) — opcional, só passado por
+  // os-atendimento.tsx. Quando a gravação falha por rede (offline), em vez
+  // do erro genérico o hook já atualiza `equipamentos` localmente (estado
+  // otimista) e chama isto pro chamador enfileirar a mutação. Sem esta
+  // prop (`os-geral.tsx`, retaguarda web sempre online), comportamento
+  // 100% inalterado.
+  onOfflineFallback?: (itemCodigo: number, draft: OSEquipamentoDraft) => void;
 };
 
 const BASE_PATH = "/api/os-completo";
@@ -39,7 +50,7 @@ export type OSEquipamentoDraft = {
   status_os: number | null;
 };
 
-export function useOSEquipamentos({ conn, editing, osId, usuarioCod, classe, showToast }: Params) {
+export function useOSEquipamentos({ conn, editing, osId, usuarioCod, classe, showToast, viaAuxiliar, onOfflineFallback }: Params) {
   const [equipamentos, setEquipamentos] = useState<OSEquipamentoRow[]>([]);
   const [equipamentosLoading, setEquipamentosLoading] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -83,12 +94,22 @@ export function useOSEquipamentos({ conn, editing, osId, usuarioCod, classe, sho
     setSavingCodigo(itemCodigo);
     try {
       const j = await apiSend(conn, `${BASE_PATH}/${osId}/equipamentos/${itemCodigo}`, "PUT", {
-        ...draft, usuario_alteracao: usuarioCod, classe, plataforma: Platform.OS,
+        ...draft, usuario_alteracao: usuarioCod, classe, plataforma: Platform.OS, via_auxiliar: viaAuxiliar ?? undefined,
       });
       if (!j?.success) { showToast(friendlyApiError(j, "Falha ao gravar equipamento."), "error"); return; }
       showToast("Equipamento atualizado.", "success");
       loadEquipamentos();
     } catch (e) {
+      if (e instanceof TypeError && onOfflineFallback) {
+        // Estado otimista — a tela continua utilizável offline sem esperar
+        // sincronizar (decisão do usuário, ver AssistenciaTecnicaCampo.md
+        // "Sincronização Offline"); status_os_descricao não é reresolvido
+        // aqui (fica com o texto antigo até a próxima sincronização), gap
+        // cosmético conhecido e aceito.
+        setEquipamentos((prev) => prev.map((it) => (it.codigo === itemCodigo ? { ...it, ...draft } : it)));
+        onOfflineFallback(itemCodigo, draft);
+        return;
+      }
       showToast(friendlyCatchError(e, "Falha ao gravar equipamento."), "error");
     } finally {
       setSavingCodigo(null);

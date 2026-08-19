@@ -35,6 +35,8 @@ import DividirPedidoModal from "@/src/components/pedido/DividirPedidoModal";
 import AjudaPedidoModal from "@/src/components/pedido/AjudaPedidoModal";
 import WhatsappButton from "@/src/components/WhatsappButton";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
+import { useEmitirNotaFiscal } from "@/src/hooks/useEmitirNotaFiscal";
+import NotaFiscalCard from "@/src/components/fiscal/NotaFiscalCard";
 
 // Funções que podem alterar vendedor: 01 (Administrador) e 02 (Gerente)
 const VENDEDOR_EDIT_FUNCOES = ["01", "02"];
@@ -455,6 +457,12 @@ export default function PedidoFormScreen() {
   // marca situação PG. Só a parte não-fiscal (sem emissão de NFC-e — ver
   // PENDENCIAS.md > "Pedido Bar").
   const [faturando, setFaturando] = useState(false);
+  // Comanda gerada ao faturar — usada só pra decidir quando mostrar o
+  // NotaFiscalCard (emissão de NFC-e/NFS-e sempre MANUAL aqui, nunca
+  // automática — ver `useEmitirNotaFiscal.ts`). Não sobrevive a um reload
+  // da tela (não é buscada de volta em `GET /api/pedidos/{id}` hoje) —
+  // limitação conhecida, registrada em PENDENCIAS.md.
+  const [comandaFaturada, setComandaFaturada] = useState<number | null>(null);
   const handleFaturar = useCallback(async () => {
     if (!conn || !pedidoId) return;
     if (!it.itens.length) { showToast("Inclua pelo menos um produto ou serviço.", "error"); return; }
@@ -466,6 +474,7 @@ export default function PedidoFormScreen() {
       if (j?.success) {
         showToast(j.message || "Pedido faturado.", "success");
         setPedido((p) => (p ? { ...p, situacao: "PG", situacao_label: "Faturado" } : p));
+        setComandaFaturada(typeof j.comanda === "number" ? j.comanda : null);
         // Reaproveita a impressão pra emitir o pedido logo após faturar
         // (pedido explícito do usuário) — abre o preview automaticamente;
         // o clique em "Imprimir" dentro dele é que dispara window.print().
@@ -477,6 +486,10 @@ export default function PedidoFormScreen() {
       showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally { setFaturando(false); }
   }, [conn, pedidoId, it.itens.length, classe, isMaster, showToast]);
+
+  const notaFiscal = useEmitirNotaFiscal({
+    conn, session: { usuarioCodigo: usuarioCod, classe }, comanda: comandaFaturada, isMaster,
+  });
 
   // Reabrir Pedido (FrmManPedBar.frm, cmdReabrir_Click) — situação F -> A.
   // Pill amarelo entre "Faturar Pedido" e "Anexo" (pedido explícito do
@@ -973,6 +986,16 @@ export default function PedidoFormScreen() {
             <Text style={styles.whatsappDisabledHint}>
               O envio por WhatsApp está desativado em Configurações.
             </Text>
+          ) : null}
+
+          {comandaFaturada ? (
+            <NotaFiscalCard
+              docFiscal={notaFiscal.docFiscal} emitindoNfce={notaFiscal.emitindoNfce} emitindoNfse={notaFiscal.emitindoNfse}
+              onEmitirNfce={notaFiscal.emitirNfce} onEmitirNfse={notaFiscal.emitirNfse}
+              canEmitirNfce={can("ALTERAR_COMANDA.EMITIR_NF") || isMaster}
+              canEmitirNfse={can("ALTERAR_COMANDA.EMITIR_NFSE") || isMaster}
+              testIDPrefix="pedido-form"
+            />
           ) : null}
 
           <View style={{ height: 80 }} />

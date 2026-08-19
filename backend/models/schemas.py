@@ -266,6 +266,20 @@ class OSCheckinRequest(BaseModel):
     usuario_alteracao: Optional[int] = None
     classe: Optional[int] = None
     plataforma: Optional[str] = None
+    # Rastreabilidade do fluxo "auxiliar edita em nome do técnico" (regra
+    # 11) — quando preenchido, `usuario_alteracao` já é o TÉCNICO (a ação é
+    # atribuída a ele, é a regra de negócio), mas este campo guarda o
+    # `funcionarios.codigo_int` de quem estava FISICAMENTE logado (o
+    # auxiliar) — só pra enriquecer a descrição do log de auditoria, nunca
+    # usado em regra de negócio. Ver `AssistenciaTecnicaCampo.md` seção 7.
+    via_auxiliar: Optional[int] = None
+    # Concorrência otimista pra sincronização OFFLINE (ver
+    # `AssistenciaTecnicaCampo.md`, "Sincronização Offline") — hex de
+    # `os.versao_atendimento` (ROWVERSION) no momento em que o app
+    # cacheou os dados. Só enviado por mutações vindas da fila local;
+    # gravação online direta nunca manda isto. Quando presente, o backend
+    # rejeita a gravação (conflito) se a OS mudou desde então.
+    versao_esperada: Optional[str] = None
 
 
 class LimparLocalizacaoRequest(BaseModel):
@@ -345,6 +359,11 @@ class OSListRequest(BaseModel):
     # (funcionarios.codigo_int), ver AssistenciaTecnicaCampo.md.
     tecnico: Optional[int] = None
     auxiliar: Optional[int] = None
+    # Filtro por dia exato — Lista de Atendimento por Calendário
+    # (`frontend/app/atendimento-lista.tsx`), compara direto contra
+    # `os.data_agendamento` (coluna legada reativada, ver
+    # OSCompletoSaveRequest.data_agendamento).
+    data_agenda: Optional[str] = None  # ISO YYYY-MM-DD
     # Identidade de quem pesquisa — só usados pra decidir a restrição de
     # visibilidade (ver `_list_os_sync`: sem `OS_COMP.VER_TODAS`, só vê O.S.
     # onde é técnico responsável ou auxiliar). Opcionais e sem efeito nos
@@ -399,6 +418,16 @@ class OSCompletoSaveRequest(OSSaveRequest):
     data_termino: Optional[str] = None         # yyyy-mm-dd (os.data_termino)
     hora_entrada: Optional[str] = ""           # hh:mm (os.hora_entrada)
     hora_fechamento: Optional[str] = ""        # hh:mm (os.hora_fechamento)
+    # Data/Hora do Atendimento Agendado (regra 2, AssistenciaTecnicaCampo.md
+    # — "quando o atendimento foi agendado, não só quando foi executado").
+    # Colunas LEGADAS já existentes em `os` (`data_agendamento`/
+    # `hora_agendamento`, tipo `date`) — nunca lidas/gravadas por este
+    # backend até 2026-08-15 (achado ao vivo: só 1 de 294 O.S. em
+    # ARGEN-TESTE tinha o campo preenchido, registro de 2016). Reativadas
+    # pra alimentar a Lista de Atendimento por Calendário
+    # (`frontend/app/atendimento-lista.tsx`).
+    data_agendamento: Optional[str] = None     # yyyy-mm-dd (os.data_agendamento)
+    hora_agendamento: Optional[str] = ""       # hh:mm (os.hora_agendamento)
     # Doc. Origem / Revisão programada (migração de `Campo(150)`/`Campo(151)`/
     # `Option9`/`Option10` em `FrmTraOsNew.frm`) — validação cruzada de OS/
     # Pedido de origem pra O.S. do tipo Garantia/Revisão, ver
@@ -471,6 +500,12 @@ class OSEquipamentoSaveRequest(BaseModel):
     usuario_alteracao: Optional[int] = None
     classe: Optional[int] = None
     plataforma: Optional[str] = None
+    # Só usado pela tela de Atendimento de Campo, fluxo do Auxiliar (regra
+    # 11) — ver `OSCheckinRequest.via_auxiliar`. Ignorado por `os-geral.tsx`.
+    via_auxiliar: Optional[int] = None
+    # Idem `OSCheckinRequest.versao_esperada` — só usado por mutações de
+    # equipamento vindas da fila offline.
+    versao_esperada: Optional[str] = None
 
 
 class DescontoGeralRequest(BaseModel):
@@ -580,6 +615,13 @@ class FecharRequest(BaseModel):
     master: Optional[bool] = False  # KONTACTO/master ignora checagem de permissão
     usuario_alteracao: Optional[int] = None  # só pro log de auditoria
     plataforma: Optional[str] = None         # "web"/"android"/"ios" — só pro log de auditoria
+    # Só usado por `POST /os/{codigo}/fechar-atendimento` (regra 11, fluxo
+    # do Auxiliar) — ver `OSCheckinRequest.via_auxiliar`. Ignorado pelos
+    # demais consumidores deste request compartilhado (Pedido/OS normal).
+    via_auxiliar: Optional[int] = None
+    # Idem `OSCheckinRequest.versao_esperada` — só usado por
+    # `fechar-atendimento` vindo da fila offline.
+    versao_esperada: Optional[str] = None
 
 
 class FaturarOSRequest(FecharRequest):

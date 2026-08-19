@@ -326,6 +326,40 @@ class TestSalvarAgendamentoViaPedido:
         assert insert_p[6] == 0.0 and insert_p[7] == 0.0
 
 
+class TestRecalcDataAgendamentoOS:
+    """`_recalc_data_agendamento_os_sync` — alimenta `os.data_agendamento`/
+    `hora_agendamento` a partir do agendamento mais próximo entre os itens
+    de serviço da OS (user-directed 2026-08-15: "data e hora agendada
+    deverá ser alimentada pela agenda"). Chamada de dentro de
+    `_salvar_agendamento_sync`/`_cancelar_agendamento_sync` — ver
+    TestSalvarAgendamentoViaOS/TestCancelarAgendamentoOS pra confirmação
+    de que é de fato chamada no fluxo real."""
+
+    def test_pula_quando_compromisso_de_cabecalho_ja_setado(self, monkeypatch):
+        cur = FakeCursor(one=[{"codagenda_atendimento": 555}])
+        svc._recalc_data_agendamento_os_sync(cur, 777)
+        # só a checagem inicial — nunca chega a recalcular nem gravar
+        assert len(cur.queries) == 1
+        assert not any(q.strip().startswith("UPDATE os SET") for q, _ in cur.queries)
+
+    def test_recalcula_com_item_agendado(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"codagenda_atendimento": None},
+            {"data": date(2026, 8, 21), "hora_ini": "09:00"},
+        ])
+        svc._recalc_data_agendamento_os_sync(cur, 777)
+        update_q, update_p = next((q, p) for q, p in cur.queries if q.strip().startswith("UPDATE os SET"))
+        assert update_p == (date(2026, 8, 21), "09:00", 777)
+        select_q = next(q for q, _ in cur.queries if q.strip().startswith("SELECT TOP 1"))
+        assert "situacao_atendimento <> 'Desistência'" in select_q
+
+    def test_limpa_quando_nenhum_item_agendado(self, monkeypatch):
+        cur = FakeCursor(one=[{"codagenda_atendimento": None}, None])
+        svc._recalc_data_agendamento_os_sync(cur, 777)
+        update_q, update_p = next((q, p) for q, p in cur.queries if q.strip().startswith("UPDATE os SET"))
+        assert update_p == (None, None, 777)
+
+
 class TestSalvarAgendamentoViaOS:
     """Fluxo vinculado a um item de O.S. Completa (`codauto` = `cod_os_prod`,
     `origem="os"`) — mesma máquina de estados do Pedido (validação de
@@ -344,7 +378,13 @@ class TestSalvarAgendamentoViaOS:
     def test_criar_agendamento_sucesso(self, monkeypatch):
         cur = FakeCursor(one=[
             {"CLINICA": 0, "Assistencia": 1}, dict(ITEM_ROW), {"codigo": "S100"}, None, {"ok": 1},
-            dict(HORARIO_ROW), None, {"qtd": 0}, {"codagenda": 900}, dict(AGENDAMENTO_FULL_ROW),
+            dict(HORARIO_ROW), None, {"qtd": 0}, {"codagenda": 900},
+            # Recalculo de os.data_agendamento/hora_agendamento (alimenta a
+            # Lista de Atendimento por Calendário, user-directed 2026-08-15)
+            # — ver TestRecalcDataAgendamentoOS pro detalhe isolado dessa
+            # função. Aqui só confirma que é CHAMADA no fluxo real.
+            {"codagenda_atendimento": None}, {"data": date(2026, 8, 21), "hora_ini": "09:00"},
+            dict(AGENDAMENTO_FULL_ROW),
         ])
         conn = _patch(monkeypatch, cur)
         r = svc._salvar_agendamento_sync(_req(), 501, origem="os", tela="OS_COMP")
@@ -356,6 +396,8 @@ class TestSalvarAgendamentoViaOS:
         assert len(insert_vinculo_pedido) == 0
         update_item = [q for q, _ in cur.queries if q.strip().startswith("UPDATE os_produto SET data_servico")]
         assert len(update_item) == 1
+        recalc_q, recalc_p = next((q, p) for q, p in cur.queries if q.strip().startswith("UPDATE os SET data_agendamento"))
+        assert recalc_p == (date(2026, 8, 21), "09:00", 1)
 
     def test_checa_permissao_tela_os_comp(self, monkeypatch):
         cur = FakeCursor(one=[{"ok": 1}, {"CLINICA": 0, "Assistencia": 1}, None])
@@ -375,7 +417,13 @@ class TestSalvarAgendamentoViaOS:
 class TestCancelarAgendamentoOS:
     def test_cancela_e_desfaz_vinculo_os(self, monkeypatch):
         row = dict(AGENDAMENTO_FULL_ROW, codauto=None, pedido=None, codauto_os=501, os=777)
-        cur = FakeCursor(one=[{"CODAGENDA": 900}, row])
+        cur = FakeCursor(one=[
+            {"CODAGENDA": 900}, row,
+            # Recalculo de os.data_agendamento/hora_agendamento após
+            # cancelar (alimenta a Lista de Atendimento por Calendário,
+            # user-directed 2026-08-15) — ver TestRecalcDataAgendamentoOS.
+            {"os": 777}, {"codagenda_atendimento": None}, None,
+        ])
         conn = _patch(monkeypatch, cur)
         r = svc._cancelar_agendamento_sync(_req(), 501, origem="os", tela="OS_COMP")
         assert r["success"] is True
@@ -385,6 +433,8 @@ class TestCancelarAgendamentoOS:
         limpa_item = [q for q, _ in cur.queries if q.strip().startswith("UPDATE os_produto")]
         apaga_vinculo = [q for q, _ in cur.queries if q.strip().startswith("DELETE FROM AGENDA_OS")]
         limpa_pedido = [q for q, _ in cur.queries if q.strip().startswith("UPDATE pedido_venda_prod")]
+        recalc_q, recalc_p = next((q, p) for q, p in cur.queries if q.strip().startswith("UPDATE os SET data_agendamento"))
+        assert recalc_p == (None, None, 777)  # sem agendamento restante -> limpa
         assert limpa_item and apaga_vinculo and not limpa_pedido
 
 

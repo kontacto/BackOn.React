@@ -1062,6 +1062,7 @@ class TestSalvarPedidoCampoTipo:
         # `test_cliente_tipo_mesa_mas_nao_reservado_aceita_tipo_pedido`).
         cur = FakeCursor(one=[
             {"STATUS_CLIENTE": "A"},
+            {"CONTROLA_ABERTURA_DIA": True},
             {"nome": "M7", "fantasia": "MESA 7", "cliente_forn": 1, "tel": ""},
             {"pedido": 500},
         ])
@@ -1077,6 +1078,7 @@ class TestSalvarPedidoCampoTipo:
     def test_cliente_comanda_reservado_tambem_trava_proprio_tipo(self, monkeypatch):
         cur = FakeCursor(one=[
             {"STATUS_CLIENTE": "A"},
+            {"CONTROLA_ABERTURA_DIA": True},
             {"nome": "C3", "fantasia": "COMANDA 3", "cliente_forn": 3, "tel": ""},
             {"pedido": 501},
         ])
@@ -1090,6 +1092,7 @@ class TestSalvarPedidoCampoTipo:
     def test_cliente_balcao_reservado_tambem_trava_proprio_tipo(self, monkeypatch):
         cur = FakeCursor(one=[
             {"STATUS_CLIENTE": "A"},
+            {"CONTROLA_ABERTURA_DIA": True},
             {"nome": "BALCAO", "fantasia": "BALCÃO", "cliente_forn": 2, "tel": ""},
             {"pedido": 504},
         ])
@@ -1108,6 +1111,7 @@ class TestSalvarPedidoCampoTipo:
         # pedido será entrega").
         cur = FakeCursor(one=[
             {"STATUS_CLIENTE": "A"},
+            {"CONTROLA_ABERTURA_DIA": True},
             {"nome": "Fulano da Silva", "fantasia": "", "cliente_forn": 1, "tel": ""},
             {"pedido": 505},
         ])
@@ -1122,6 +1126,7 @@ class TestSalvarPedidoCampoTipo:
         # o tipo do CLIENTE não muda, só o do PEDIDO.
         cur = FakeCursor(one=[
             {"STATUS_CLIENTE": "A"},
+            {"CONTROLA_ABERTURA_DIA": True},
             {"nome": "Cliente Real", "fantasia": "", "cliente_forn": 4, "tel": ""},
             {"pedido": 502},
         ])
@@ -1134,6 +1139,7 @@ class TestSalvarPedidoCampoTipo:
     def test_sem_tipo_informado_e_cliente_nao_reservado_fica_nulo(self, monkeypatch):
         cur = FakeCursor(one=[
             {"STATUS_CLIENTE": "A"},
+            {"CONTROLA_ABERTURA_DIA": True},
             {"nome": "Cliente Real", "fantasia": "", "cliente_forn": None, "tel": ""},
             {"pedido": 503},
         ])
@@ -1159,3 +1165,34 @@ class TestSalvarPedidoCampoTipo:
         assert "tipo=%s" in update_q
         assert 1 in params
         assert 4 not in params
+
+
+class TestSalvarPedidoAreaAtuacao:
+    """Réplica de `VerificaAreaAtuacao` — bloqueia novo pedido quando o
+    funcionário logado (`usuario_alteracao`) está vinculado a uma Área de
+    Atuação específica e a área do pedido não é uma delas. Ver
+    PENDENCIAS.md > "MDI Principal (VB6)"."""
+
+    def test_funcionario_sem_area_permitida_bloqueia(self, monkeypatch):
+        cur = FakeCursor(
+            one=[{"STATUS_CLIENTE": "A"}, {"descricao": "Oficina"}],
+            many=[[{"area": 1}, {"area": 2}]],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._save_pedido_sync(_pedido_save_req(cliente=10, usuario_alteracao=5, area_atuacao=9), None)
+        assert r["success"] is False
+        assert "Oficina" in r["message"]
+
+    def test_funcionario_com_area_permitida_libera(self, monkeypatch):
+        cur = FakeCursor(
+            one=[
+                {"STATUS_CLIENTE": "A"},
+                {"CONTROLA_ABERTURA_DIA": True},
+                {"nome": "Cliente Real", "fantasia": "", "cliente_forn": None, "tel": ""},
+                {"pedido": 510},
+            ],
+            many=[[{"area": 9}]],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._save_pedido_sync(_pedido_save_req(cliente=10, usuario_alteracao=5, area_atuacao=9), None)
+        assert r["success"] is True

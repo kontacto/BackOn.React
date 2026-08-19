@@ -21,10 +21,18 @@ type Props = {
   message?: string;
   onClose: () => void;
   onAuthorized: (info: { usuario: string }) => void;
+  // Quando informado, a autorização exige que o login digitado pertença
+  // EXATAMENTE a este funcionário (`funcionarios.codigo_int`) — substitui
+  // a checagem padrão de gerente/supervisor/master por "é esta pessoa
+  // específica", independente da função dela. Usado pelo fluxo "auxiliar
+  // edita a OS em nome do técnico titular" (AssistenciaTecnicaCampo.md
+  // regra 11, `os-atendimento.tsx`) — qualquer um pode digitar aqui,
+  // contanto que prove ser o técnico responsável por aquela OS.
+  codigoEsperado?: number;
 };
 
 export default function AuthorizationSlide({
-  visible, conn, title, message, onClose, onAuthorized,
+  visible, conn, title, message, onClose, onAuthorized, codigoEsperado,
 }: Props) {
   const [usuario, setUsuario] = useState("");
   const [senha, setSenha] = useState("");
@@ -45,12 +53,21 @@ export default function AuthorizationSlide({
         empresa: conn.empresa, usuario: usuario.trim(), senha, timeout: 8,
       });
       if (!j?.success) { setErro(j?.message || "Usuário ou senha inválidos."); return; }
-      const isMasterAuth =
-        j?.usuario?.master === true || String(j?.usuario?.usuario ?? "").toUpperCase() === "KONTACTO";
-      const codFuncaoRaw = j?.funcionario?.cod_funcao;
-      const codFuncao = codFuncaoRaw != null ? parseInt(String(codFuncaoRaw), 10) : null;
-      const autorizado = isMasterAuth || codFuncao === 1 || codFuncao === 2;
-      if (!autorizado) { setErro("Este usuário não tem alçada para autorizar esta ação."); return; }
+      if (codigoEsperado != null) {
+        const codigoLogadoRaw = j?.funcionario?.codigo_int ?? j?.funcionario?.codigo;
+        const codigoLogado = codigoLogadoRaw != null ? parseInt(String(codigoLogadoRaw), 10) : null;
+        if (codigoLogado !== codigoEsperado) {
+          setErro("Esta credencial não pertence ao técnico responsável por esta OS.");
+          return;
+        }
+      } else {
+        const isMasterAuth =
+          j?.usuario?.master === true || String(j?.usuario?.usuario ?? "").toUpperCase() === "KONTACTO";
+        const codFuncaoRaw = j?.funcionario?.cod_funcao;
+        const codFuncao = codFuncaoRaw != null ? parseInt(String(codFuncaoRaw), 10) : null;
+        const autorizado = isMasterAuth || codFuncao === 1 || codFuncao === 2;
+        if (!autorizado) { setErro("Este usuário não tem alçada para autorizar esta ação."); return; }
+      }
       onAuthorized({ usuario: usuario.trim() });
     } catch (e) {
       setErro(e instanceof Error ? e.message : "Falha ao validar credenciais.");

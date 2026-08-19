@@ -4,10 +4,8 @@
 // endpoint `POST /api/os` (já suporta busca/situação/período/técnico/
 // auxiliar) que `os.tsx` usa.
 //
-// Também é a "Lista de Atendimento" (Assistência Técnica — ver
-// AssistenciaTecnicaCampo.md) — 2026-08-14, user-directed: em vez de criar
-// uma tela nova, esta mesma lista passou a funcionar TAMBÉM no mobile (não
-// mais `Platform.OS !== "web"` → `LockedView`), e o toque numa linha decide
+// 2026-08-14, user-directed: passou a funcionar TAMBÉM no mobile (não mais
+// `Platform.OS !== "web"` → `LockedView`), e o toque numa linha decide
 // entre abrir a O.S. Completa (`os-geral.tsx`, web/desktop) ou a tela de
 // Atendimento (`os-atendimento.tsx`, mobile/celular) conforme a plataforma
 // — aplicando a permissão respectiva de cada uma (`OS_COMP.ABRIR`/
@@ -17,6 +15,17 @@
 // linha mostra o máximo de informação possível (técnico, auxiliar,
 // check-in, check-out, próxima agenda) sem precisar abrir a OS — com link
 // pra ver o histórico dos equipamentos vinculados.
+//
+// **Correção 2026-08-15**: nesse mesmo dia esta tela chegou a se
+// autodenominar "a Lista de Atendimento" da Assistência Técnica — decisão
+// revertida a pedido explícito do usuário. Essa função (calendário +
+// entrada inicial do app do técnico, regras 6/7/10 de
+// AssistenciaTecnicaCampo.md) agora é `frontend/app/atendimento-lista.tsx`,
+// tela própria. Esta tela (`os-lista.tsx`) não perdeu nenhuma capacidade
+// nem mudou de comportamento — continua sendo a lista completa de O.S. da
+// retaguarda (filtros tradicionais De/Até, hoje também acessível no
+// mobile), só deixou de ser a porta de entrada do tile "Atendimento de
+// Campo" (`ModuleTiles.tsx` aponta pra `/atendimento-lista` agora).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -31,6 +40,9 @@ import SelectField, { SelectOption } from "@/src/components/SelectField";
 import AccordionSection from "@/src/components/pedido/AccordionSection";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
+import { cacheOsParaOffline, purgarCacheExpirado } from "@/src/utils/storage/offlineAtendimento";
+import { syncTodasFilasPendentes } from "@/src/utils/offlineSync/atendimentoSync";
+import { apiGet } from "@/src/utils/api";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { formatBRL, formatDateBR } from "@/src/utils/format";
@@ -90,7 +102,7 @@ function fmtDecorrido(ms: number): string {
 
 export default function OSListaScreen() {
   const router = useRouter();
-  const { can, classe, isMaster, usuarioCodigo } = usePermissions();
+  const { can, classe, isMaster, usuarioCodigo, moduleOn } = usePermissions();
   const feedback = useFeedback();
   const isWeb = Platform.OS === "web";
 
@@ -146,6 +158,54 @@ export default function OSListaScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Pré-carga automática pra Sincronização Offline (Atendimento de Campo
+  // — ver AssistenciaTecnicaCampo.md) — decisão do usuário, 2026-08-14:
+  // toda OS que aparece nesta lista, com internet, fica salva localmente
+  // sozinha, sem ação manual. Roda em segundo plano (nunca aguardada,
+  // nunca bloqueia a UI), sequencial e silenciosa — falha de rede aqui é
+  // só "não pré-carregou esta OS", nunca um erro pro usuário ver. Só faz
+  // sentido pro módulo Assistência (o offline é específico do fluxo de
+  // Atendimento de Campo, Oficina não usa `os-atendimento.tsx`).
+  // Sincroniza TODA fila pendente do dispositivo (todas as OS's visitadas
+  // offline, não só as da página atual) assim que a lista carrega com
+  // conexão — achado de revisão Gauntlet retroativa, 2026-08-14: antes,
+  // só a OS aberta na tela de Atendimento sincronizava, então um técnico
+  // que visitava várias OS's offline e só reabria o app na Lista depois
+  // (não em cada OS individualmente) nunca sincronizava nada. Best-effort/
+  // silencioso — não bloqueia a lista, não mostra erro pro usuário aqui
+  // (um conflito fica marcado na fila e só reaparece com o banner
+  // bloqueante certo quando essa OS específica for reaberta). Também
+  // purga o cache local expirado (LGPD — dado de cliente/GPS não fica
+  // salvo indefinidamente no aparelho, ver `purgarCacheExpirado`).
+  const sincronizarEPurgar = useCallback(async (c: Conn) => {
+    if (!moduleOn("Assistencia")) return;
+    syncTodasFilasPendentes(c);
+    purgarCacheExpirado();
+  }, [moduleOn]);
+
+  const prefetchOffline = useCallback(async (c: Conn, rows: OSRow[]) => {
+    if (!moduleOn("Assistencia")) return;
+    for (const row of rows) {
+      try {
+        const j = await apiGet(c, `/api/os-completo/${row.codigo}`);
+        if (!j?.success || !j.os) continue;
+        const equipJ = await apiGet(c, `/api/os-completo/${row.codigo}/equipamentos`);
+        const statusJ = await apiGet(c, `/api/status-os`);
+        await cacheOsParaOffline(row.codigo, {
+          os: j.os,
+          equipamentos: equipJ?.success ? equipJ.items || [] : [],
+          historico: [],
+          statusOsOptions: statusJ?.success
+            ? (statusJ.items || []).map((s: { codigo: number; descricao: string }) => ({ value: s.codigo, label: s.descricao }))
+            : [],
+          versaoAtendimento: (j.os.versao_atendimento as string | undefined) ?? null,
+        });
+      } catch {
+        // silencioso — ver comentário acima
+      }
+    }
+  }, [moduleOn]);
+
   const load = useCallback(async (
     c: Conn, term: string, sit: string, tec: number | null, aux: number | null,
     di: string | null, df: string | null, pg: number, append: boolean,
@@ -173,6 +233,8 @@ export default function OSListaScreen() {
       } else {
         setItems((prev) => (append ? [...prev, ...j.items] : j.items));
         setTotal(j.total || 0);
+        prefetchOffline(c, j.items || []);
+        sincronizarEPurgar(c);
       }
     } catch (e) {
       if ((e as { name?: string })?.name !== "AbortError") {
@@ -181,7 +243,7 @@ export default function OSListaScreen() {
     } finally {
       if (aborter.current === ac) setLoading(false);
     }
-  }, [feedback, classe, isMaster, usuarioCod]);
+  }, [feedback, classe, isMaster, usuarioCod, prefetchOffline, sincronizarEPurgar]);
 
   useEffect(() => {
     if (!conn) return;

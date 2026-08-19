@@ -14,6 +14,7 @@ from services import (
     relatorio_movimentacao_nivel_service, relatorio_itens_funcionario_service,
     relatorio_ranking_vendas_service, relatorio_venda_cliente_produto_service,
     relatorio_venda_nivel_funcionario_service, relatorio_venda_regiao_service,
+    relatorio_margem_produto_service,
 )
 
 router = APIRouter()
@@ -232,3 +233,8 @@ async def relatorio_venda_nivel_funcionario(
 @router.get("/relatorios/venda-regiao")
 async def relatorio_venda_regiao(servidor: str, banco: str, data_ini: str, data_fim: str, dimensoes: Optional[str] = None):
     return await relatorio_venda_regiao_service.venda_regiao(servidor, banco, data_ini, data_fim, dimensoes)
+
+
+@router.get("/relatorios/margem-produto")
+async def relatorio_margem_produto(servidor: str, banco: str, nivel: Optional[str] = None, ordenar_por: str = "codigo"):
+    return await relatorio_margem_produto_service.margem_produto(servidor, banco, nivel, ordenar_por)

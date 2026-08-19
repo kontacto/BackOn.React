@@ -139,9 +139,22 @@ class TestSavePedidoCompleto:
         r = svc._save_pedido_completo_sync(_pedido_req(), None)
         assert r["success"] is False and "situação" in r["message"].lower()
 
+    def test_criar_funcionario_sem_area_permitida_bloqueia(self, monkeypatch):
+        """Réplica de `VerificaAreaAtuacao` — ver PENDENCIAS.md > "MDI
+        Principal (VB6)"."""
+        cur = FakeCursor(
+            one=[{"STATUS_CLIENTE": "A"}, {"descricao": "Oficina"}],
+            many=[[{"area": 1}, {"area": 2}]],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._save_pedido_completo_sync(_pedido_req(usuario_alteracao=5, area_atuacao=9), None)
+        assert r["success"] is False
+        assert "Oficina" in r["message"]
+
     def test_criar_sucesso(self, monkeypatch):
         cur = FakeCursor(one=[
             {"STATUS_CLIENTE": "A"},
+            {"CONTROLA_ABERTURA_DIA": True},
             {"nome": "Cliente Teste", "tel": "1199999999"},
             {"pedido": 777},
         ])
@@ -164,6 +177,7 @@ class TestSavePedidoCompleto:
         da tela. Trazida ao Pedido Geral 2026-07-20."""
         cur = FakeCursor(one=[
             {"STATUS_CLIENTE": "A"},
+            {"CONTROLA_ABERTURA_DIA": True},
             {"nome": "MESA 5", "fantasia": "MESA 5", "cliente_forn": 7, "tel": ""},
             {"pedido": 777},
         ])

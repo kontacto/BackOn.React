@@ -133,6 +133,14 @@ export default function TransacoesScreen() {
         visible: can("COMANDA.ABRIR"),
       },
       {
+        key: "gestor-nfce",
+        label: "Gestor NFCe",
+        hint: "Consulta situação no SEFAZ, cancela, inutiliza numeração e valida contingência de NFC-e",
+        icon: "receipt-outline",
+        route: "/gestor-nfce",
+        visible: can("GESTOR_NFCE.ABRIR"),
+      },
+      {
         key: "agenda",
         label: "Agenda",
         hint: "Grade semanal de atendimentos por profissional (módulo Clínica ou Assistência)",

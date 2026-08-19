@@ -171,6 +171,33 @@ class TestMontarXmlNfce:
         # É XML bem-formado.
         etree.fromstring(xml_bytes)
 
+    def test_inclui_ibscbs_por_item_e_totais_quando_presentes(self):
+        # Parte A do ecossistema fiscal (2026-08-19) — ver ibs_cbs_service.py.
+        itens = [{
+            "codigo_int": "P001", "descricao": "Produto Teste", "ncm": "12345678", "cfop": "5102",
+            "unidade": "UN", "qtd": 1.0, "valor_unitario": 100.0, "valor_total": 100.0,
+            "origem": 0, "csosn": "102", "cst_pis": "07", "cst_cofins": "07",
+            "ibs_cbs_xml": "<IBSCBS><CST>000</CST><cClassTrib>000001</cClassTrib></IBSCBS>",
+        }]
+        xml_bytes, _ = svc._montar_xml_nfce(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="12345678000199", nome_emit="EMPRESA TESTE",
+            cliente=None, itens=itens, forma_pagamento="01", valor_total=100.0, tp_amb="2",
+            numero=100, serie="1", data_emissao=datetime.datetime.now(datetime.timezone.utc),
+            url_qrcode="", ibs_cbs_totais_xml="<IBSCBSTot><vBCIBSCBS>100.00</vBCIBSCBS></IBSCBSTot>",
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert "<IBSCBS><CST>000</CST><cClassTrib>000001</cClassTrib></IBSCBS>" in xml
+        assert "<IBSCBSTot><vBCIBSCBS>100.00</vBCIBSCBS></IBSCBSTot>" in xml
+        etree.fromstring(xml_bytes)
+
+    def test_sem_ibscbs_nao_quebra_xml_existente(self):
+        xml_bytes, _ = svc._montar_xml_nfce(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", cliente=None, itens=[],
+            forma_pagamento="01", valor_total=0, tp_amb="2", numero=1, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), url_qrcode="",
+        )
+        etree.fromstring(xml_bytes)
+
     def test_inclui_dest_quando_ha_cliente_com_documento(self):
         xml_bytes, _ = svc._montar_xml_nfce(
             chave_acesso="4" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X",

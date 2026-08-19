@@ -14,7 +14,7 @@
 // Layout, entidade O.S.).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -36,6 +36,13 @@ import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
 import { useOSEquipamentos } from "@/src/components/os/useOSEquipamentos";
 import OSEquipamentoCard from "@/src/components/os/OSEquipamentoCard";
 import LayoutPreenchimentoModal from "@/src/components/agenda/LayoutPreenchimentoModal";
+import AuthorizationSlide from "@/src/components/AuthorizationSlide";
+import {
+  cacheOsParaOffline, getOsCacheada, listarTodasCacheadas, enfileirarMutacao,
+  listarFilaPendente, removerDaFila,
+  MutacaoPendente,
+} from "@/src/utils/storage/offlineAtendimento";
+import { syncFilaOS } from "@/src/utils/offlineSync/atendimentoSync";
 
 const LAYOUT_ENTIDADE_OS = 7;
 
@@ -50,6 +57,14 @@ type OSAtendimentoData = {
   status_os_descricao?: string;
   checkin_em: string | null;
   checkout_em: string | null;
+  // Usados pra decidir se quem está atuando precisa "emprestar" a
+  // credencial do técnico titular (regra 11) — ver `needsElevation`.
+  tecnico_responsavel: number | null;
+  tecnico_responsavel_nome: string;
+  // Token opaco de concorrência otimista (ROWVERSION em hex) — ver
+  // "Sincronização Offline" em AssistenciaTecnicaCampo.md. Nunca
+  // interpretado no frontend, só reenviado como `versao_esperada`.
+  versao_atendimento?: string | null;
 };
 
 type HistoricoItem = { codigo: number; data: string | null; situacao: string; resumo: string };
@@ -84,6 +99,11 @@ const AJUDA_ITENS: HelpItem[] = [
     titulo: "Fazer Check-out",
     texto: "Registra a hora e o local (GPS) de saída do atendimento. Exige que o check-in já tenha sido feito nesta OS.",
     icon: { lib: "ion", name: "log-out-outline" },
+  },
+  {
+    titulo: "Credencial do técnico",
+    texto: "Se você não é o técnico responsável por esta OS (ex.: é o auxiliar dele, e o celular do técnico ficou sem bateria), o sistema pede o usuário e a senha do técnico titular antes de gravar qualquer coisa. Digitado uma vez, vale pro resto da visita.",
+    icon: { lib: "ion", name: "key-outline" },
   },
 ];
 
@@ -128,6 +148,20 @@ export default function OSAtendimentoScreen() {
       }
       router.replace({ pathname: "/os-atendimento", params: { os: String(j.os_codigo), serie: s } });
     } catch (e) {
+      if (e instanceof TypeError) {
+        // Sem conexão — procura o número de série em toda OS já pré-
+        // carregada localmente (ver AssistenciaTecnicaCampo.md, "Sincronização
+        // Offline" — pré-carga automática feita por os-lista.tsx).
+        const todas = await listarTodasCacheadas();
+        const achado = todas.find((c) => c.bundle.equipamentos.some((it) => it.numero_de_serie === s));
+        if (achado) {
+          showToast("Sem conexão — abrindo dados salvos localmente.", "info");
+          router.replace({ pathname: "/os-atendimento", params: { os: String(achado.codigo), serie: s } });
+          return;
+        }
+        showToast("Sem conexão e este equipamento ainda não foi salvo localmente.", "error");
+        return;
+      }
       showToast(friendlyCatchError(e, "Falha ao buscar equipamento."), "error");
     } finally {
       setResolvendo(false);
@@ -156,18 +190,80 @@ export default function OSAtendimentoScreen() {
   const [fechando, setFechando] = useState(false);
   const [formulariosOpen, setFormulariosOpen] = useState(false);
 
+  // ---------- Sincronização Offline (ver AssistenciaTecnicaCampo.md) ----------
+  const [offline, setOffline] = useState(false);
+  const [cachedAt, setCachedAt] = useState<string | null>(null);
+  const [filaPendente, setFilaPendente] = useState<MutacaoPendente[]>([]);
+  const [sincronizando, setSincronizando] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [conflito, setConflito] = useState<{ id: string; message: string } | null>(null);
+  const osRef = useRef<OSAtendimentoData | null>(null);
+
+  const refreshFila = useCallback(async () => {
+    if (!osId) { setFilaPendente([]); return; }
+    setFilaPendente(await listarFilaPendente(osId));
+  }, [osId]);
+  useEffect(() => { refreshFila(); }, [refreshFila]);
+
   const isAberta = os?.situacao === "A";
   const jaFezCheckin = !!os?.checkin_em;
   const jaFezCheckout = !!os?.checkout_em;
+
+  // Auxiliar edita a OS em nome do técnico titular (regra 11,
+  // AssistenciaTecnicaCampo.md — celular do técnico sem bateria). Quem
+  // está logado precisa "emprestar" a credencial do técnico atribuído a
+  // esta OS antes de gravar qualquer coisa, A MENOS que já seja o próprio
+  // técnico, ou tenha `OS_COMP.VER_TODAS` (gestor/supervisão — edita
+  // livre, decisão explícita do usuário). Sem técnico atribuído à OS, não
+  // há "titular" pra proteger — ninguém precisa elevar.
+  const [elevado, setElevado] = useState(false);
+  const [authSlideOpen, setAuthSlideOpen] = useState(false);
+  const needsElevation = !!(
+    os?.tecnico_responsavel != null
+    && os.tecnico_responsavel !== usuarioCod
+    && !can("OS_COMP.VER_TODAS")
+  );
+  // Uma vez elevado, toda gravação passa a ser atribuída ao TÉCNICO (não
+  // a quem está com o celular na mão) — "em nome dele", não só "com a
+  // permissão dele".
+  const effectiveUsuarioCod = (needsElevation && elevado && os?.tecnico_responsavel != null)
+    ? os.tecnico_responsavel
+    : usuarioCod;
+  // Rastreabilidade — quem estava FISICAMENTE logado, só pra enriquecer o
+  // log de auditoria (nunca usado em regra de negócio). `undefined` no
+  // caso comum (sem elevação), então os endpoints nem recebem o campo.
+  const viaAuxiliar = (needsElevation && elevado) ? usuarioCod : undefined;
+  // Reseta a elevação ao trocar de OS (não deve "vazar" de uma visita pra
+  // outra) — cada `?os=` novo é uma tela nova pro React, mas o componente
+  // é o mesmo (navegação via router.replace), então o estado sobrevive
+  // sem isto.
+  useEffect(() => { setElevado(false); }, [osId]);
 
   const loadOs = useCallback(async () => {
     if (!conn || !osId) return;
     setOsLoading(true);
     try {
-      const j = await apiGet(conn, `/api/os/${osId}`);
-      if (j?.success && j.os) setOs(j.os);
-      else showToast(friendlyApiError(j, "OS não encontrada."), "error");
+      // /api/os-completo (não só /api/os) — precisa de tecnico_responsavel
+      // pra decidir se quem está atuando precisa da elevação (regra 11).
+      const j = await apiGet(conn, `/api/os-completo/${osId}`);
+      if (j?.success && j.os) {
+        setOs(j.os);
+        setOffline(false);
+        setCachedAt(null);
+      } else showToast(friendlyApiError(j, "OS não encontrada."), "error");
     } catch (e) {
+      if (e instanceof TypeError) {
+        const cache = await getOsCacheada(osId);
+        if (cache) {
+          setOs(cache.os as unknown as OSAtendimentoData);
+          setOffline(true);
+          setCachedAt(cache.cachedAt);
+          showToast("Sem conexão — exibindo dados salvos localmente.", "info");
+          return;
+        }
+        showToast("Sem conexão e esta OS ainda não foi salva localmente.", "error");
+        return;
+      }
       showToast(friendlyCatchError(e, "Falha ao carregar a OS."), "error");
     } finally {
       setOsLoading(false);
@@ -175,6 +271,7 @@ export default function OSAtendimentoScreen() {
   }, [conn, osId, showToast]);
 
   useEffect(() => { loadOs(); }, [loadOs]);
+  useEffect(() => { osRef.current = os; }, [os]);
 
   useEffect(() => {
     if (!conn) return;
@@ -184,8 +281,34 @@ export default function OSAtendimentoScreen() {
   }, [conn]);
 
   const eq = useOSEquipamentos({
-    conn, editing: !!osId, osId, usuarioCod, classe, showToast,
+    conn, editing: !!osId, osId, usuarioCod: effectiveUsuarioCod, classe, showToast, viaAuxiliar,
+    onOfflineFallback: (itemCodigo, draft) => {
+      if (!osId) return;
+      enfileirarMutacao({
+        tipo: "equipamento", osId, itemCodigo,
+        payload: { ...draft, usuario_alteracao: effectiveUsuarioCod, classe, plataforma: Platform.OS, via_auxiliar: viaAuxiliar },
+      });
+      showToast("Sem conexão — alteração salva localmente, sincroniza depois.", "info");
+      refreshFila();
+    },
   });
+
+  // Recarrega o cache local desta OS sempre que os dados online mais
+  // recentes chegam (após loadOs/sincronização bem-sucedidos) — reforça a
+  // pré-carga automática já feita por os-lista.tsx e garante que
+  // `versaoAtendimento` usado pela sincronização é sempre o mais atual já
+  // confirmado online. Nunca grava por cima de dados que já estão em modo
+  // offline (o `cache` já É a fonte, regravar destruiria o `cachedAt` real).
+  useEffect(() => {
+    if (!osId || !os || offline || eq.equipamentosLoading) return;
+    cacheOsParaOffline(osId, {
+      os: os as unknown as Record<string, unknown>,
+      equipamentos: eq.equipamentos,
+      historico: [],
+      statusOsOptions,
+      versaoAtendimento: os.versao_atendimento ?? null,
+    });
+  }, [osId, os, offline, eq.equipamentos, eq.equipamentosLoading, statusOsOptions]);
 
   // Histórico do equipamento lido pelo QR/busca — casado pelo número de
   // série contra a lista de equipamentos já vinculados a esta OS (regra 1:
@@ -211,18 +334,28 @@ export default function OSAtendimentoScreen() {
 
   const handleCheckin = async () => {
     if (!conn || !osId) return;
+    if (needsElevation && !elevado) { setAuthSlideOpen(true); return; }
     setCheckingIn(true);
+    let payload: Record<string, unknown> | null = null;
     try {
       const loc = await capturarLocalizacao();
       if (!loc) return;
-      const j = await apiSend(conn, `/api/os/${osId}/checkin`, "POST", {
+      payload = {
         latitude: loc.latitude, longitude: loc.longitude,
-        usuario_alteracao: usuarioCod, classe, plataforma: Platform.OS,
-      });
+        usuario_alteracao: effectiveUsuarioCod, classe, plataforma: Platform.OS, via_auxiliar: viaAuxiliar,
+      };
+      const j = await apiSend(conn, `/api/os/${osId}/checkin`, "POST", payload);
       if (!j?.success) { showToast(friendlyApiError(j, "Falha ao registrar check-in."), "error"); return; }
       showToast("Check-in registrado.", "success");
       loadOs();
     } catch (e) {
+      if (e instanceof TypeError && payload) {
+        await enfileirarMutacao({ tipo: "checkin", osId, payload });
+        setOs((prev) => (prev ? { ...prev, checkin_em: new Date().toISOString() } : prev));
+        showToast("Sem conexão — check-in salvo localmente, sincroniza depois.", "info");
+        refreshFila();
+        return;
+      }
       showToast(friendlyCatchError(e, "Falha ao registrar check-in."), "error");
     } finally {
       setCheckingIn(false);
@@ -231,18 +364,28 @@ export default function OSAtendimentoScreen() {
 
   const handleCheckout = async () => {
     if (!conn || !osId) return;
+    if (needsElevation && !elevado) { setAuthSlideOpen(true); return; }
     setCheckingOut(true);
+    let payload: Record<string, unknown> | null = null;
     try {
       const loc = await capturarLocalizacao();
       if (!loc) return;
-      const j = await apiSend(conn, `/api/os/${osId}/checkout`, "POST", {
+      payload = {
         latitude: loc.latitude, longitude: loc.longitude,
-        usuario_alteracao: usuarioCod, classe, plataforma: Platform.OS,
-      });
+        usuario_alteracao: effectiveUsuarioCod, classe, plataforma: Platform.OS, via_auxiliar: viaAuxiliar,
+      };
+      const j = await apiSend(conn, `/api/os/${osId}/checkout`, "POST", payload);
       if (!j?.success) { showToast(friendlyApiError(j, "Falha ao registrar check-out."), "error"); return; }
       showToast("Check-out registrado.", "success");
       loadOs();
     } catch (e) {
+      if (e instanceof TypeError && payload) {
+        await enfileirarMutacao({ tipo: "checkout", osId, payload });
+        setOs((prev) => (prev ? { ...prev, checkout_em: new Date().toISOString() } : prev));
+        showToast("Sem conexão — check-out salvo localmente, sincroniza depois.", "info");
+        refreshFila();
+        return;
+      }
       showToast(friendlyCatchError(e, "Falha ao registrar check-out."), "error");
     } finally {
       setCheckingOut(false);
@@ -251,18 +394,27 @@ export default function OSAtendimentoScreen() {
 
   const handleFechar = () => {
     if (!conn || !osId) return;
+    if (needsElevation && !elevado) { setAuthSlideOpen(true); return; }
     feedback.showConfirm(
       "Fechar esta O.S.? Use apenas quando o atendimento foi concluído com sucesso.",
       async () => {
         setFechando(true);
+        const payload = {
+          classe, usuario_alteracao: effectiveUsuarioCod, plataforma: Platform.OS, via_auxiliar: viaAuxiliar,
+        };
         try {
-          const j = await apiSend(conn, `/api/os/${osId}/fechar-atendimento`, "POST", {
-            classe, usuario_alteracao: usuarioCod, plataforma: Platform.OS,
-          });
+          const j = await apiSend(conn, `/api/os/${osId}/fechar-atendimento`, "POST", payload);
           if (!j?.success) { showToast(friendlyApiError(j, "Falha ao fechar a O.S."), "error"); return; }
           showToast("O.S. fechada.", "success");
           loadOs();
         } catch (e) {
+          if (e instanceof TypeError) {
+            await enfileirarMutacao({ tipo: "fechar", osId, payload });
+            setOs((prev) => (prev ? { ...prev, situacao: "F", situacao_label: "Fechada" } : prev));
+            showToast("Sem conexão — fechamento salvo localmente, sincroniza depois.", "info");
+            refreshFila();
+            return;
+          }
           showToast(friendlyCatchError(e, "Falha ao fechar a O.S."), "error");
         } finally {
           setFechando(false);
@@ -271,6 +423,43 @@ export default function OSAtendimentoScreen() {
       { title: "Fechar O.S.", confirmText: "Fechar" },
     );
   };
+
+  // Motor de sincronização — extraído pra `atendimentoSync.ts` (reaproveitado
+  // também por os-lista.tsx, ver AssistenciaTecnicaCampo.md "Sincronização
+  // Offline"). Usa `osRef` (não `os` direto) pra manter a identidade do
+  // callback estável entre renders — senão o efeito de disparo automático
+  // (mount/troca de OS) reexecutaria a cada `loadOs()` que a própria
+  // sincronização provoca.
+  const sincronizarFila = useCallback(async () => {
+    if (!conn || !osId) return;
+    setSincronizando(true);
+    const versaoInicial = osRef.current?.versao_atendimento ?? (await getOsCacheada(osId))?.versaoAtendimento ?? null;
+    const resultado = await syncFilaOS(conn, osId, versaoInicial);
+    setSincronizando(false);
+    if (resultado.conflito) setConflito(resultado.conflito);
+    if (resultado.algumSucesso || resultado.conflito) { loadOs(); eq.loadEquipamentos(); }
+    refreshFila();
+  }, [conn, osId, loadOs, eq.loadEquipamentos, refreshFila]);
+
+  // Dispara automaticamente ao abrir a tela com uma OS (item "a" da
+  // decisão de detecção de rede) — não monitora a conexão, só tenta.
+  useEffect(() => { if (osId) sincronizarFila(); }, [osId, sincronizarFila]);
+
+  const resolverConflito = async () => {
+    if (conflito) await removerDaFila(conflito.id);
+    setConflito(null);
+    await loadOs();
+    await eq.loadEquipamentos();
+    refreshFila();
+  };
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await sincronizarFila();
+    await loadOs();
+    await eq.loadEquipamentos();
+    setRefreshing(false);
+  }, [sincronizarFila, loadOs, eq.loadEquipamentos]);
 
   useEffect(() => {
     (async () => {
@@ -382,7 +571,11 @@ export default function OSAtendimentoScreen() {
           </View>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.scroll} testID="os-atendimento-scroll">
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          testID="os-atendimento-scroll"
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.brandPrimary]} tintColor={colors.brandPrimary} />}
+        >
           {osLoading || !os ? (
             <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
           ) : (
@@ -393,6 +586,67 @@ export default function OSAtendimentoScreen() {
                 {os.resumo ? <Text style={styles.resumoText}>{os.resumo}</Text> : null}
                 {os.descricao_cliente ? <Text style={styles.resumoText}>{os.descricao_cliente}</Text> : null}
               </View>
+
+              {offline ? (
+                <View style={styles.offlineBanner} testID="os-atendimento-offline-banner">
+                  <Ionicons name="cloud-offline-outline" size={14} color={colors.warning} />
+                  <Text style={styles.offlineBannerText}>
+                    Sem conexão — exibindo dados salvos {cachedAt ? `em ${new Date(cachedAt).toLocaleString("pt-BR")}` : "localmente"}. Vai sincronizar quando a conexão voltar.
+                  </Text>
+                </View>
+              ) : null}
+
+              {conflito ? (
+                <View style={styles.conflitoBanner} testID="os-atendimento-conflito-banner">
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Ionicons name="warning-outline" size={16} color={colors.error} />
+                    <Text style={styles.conflitoBannerText}>{conflito.message}</Text>
+                  </View>
+                  <Pressable onPress={resolverConflito} style={styles.conflitoBtn} testID="os-atendimento-conflito-recarregar">
+                    <Text style={styles.conflitoBtnText}>Recarregar dados atuais</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+
+              {!conflito && filaPendente.filter((m) => !m.erro).length > 0 ? (
+                <View style={styles.filaBanner} testID="os-atendimento-fila-banner">
+                  <Ionicons name="sync-outline" size={14} color={colors.brandPrimary} />
+                  <Text style={styles.filaBannerText}>
+                    {filaPendente.filter((m) => !m.erro).length} {filaPendente.filter((m) => !m.erro).length === 1 ? "alteração pendente" : "alterações pendentes"} de sincronização.
+                  </Text>
+                  <Pressable onPress={sincronizarFila} disabled={sincronizando} style={styles.filaBtn} testID="os-atendimento-sincronizar">
+                    {sincronizando ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.filaBtnText}>Sincronizar</Text>}
+                  </Pressable>
+                </View>
+              ) : null}
+
+              {/* Mutações que falharam por regra de negócio (não conflito,
+                  não rede) — não bloqueiam o resto da fila, mas ficam
+                  presas até o técnico revisar e descartar manualmente
+                  (achado de revisão Gauntlet retroativa, ver
+                  AssistenciaTecnicaCampo.md "Sincronização Offline"). */}
+              {filaPendente.filter((m) => m.erro).map((m) => (
+                <View key={m.id} style={styles.filaErroRow} testID={`os-atendimento-fila-erro-${m.id}`}>
+                  <Ionicons name="alert-circle-outline" size={14} color={colors.error} />
+                  <Text style={styles.filaErroText} numberOfLines={3}>{m.erro}</Text>
+                  <Pressable
+                    onPress={async () => { await removerDaFila(m.id); refreshFila(); }}
+                    style={styles.filaErroBtn}
+                    testID={`os-atendimento-descartar-${m.id}`}
+                  >
+                    <Text style={styles.filaErroBtnText}>Descartar</Text>
+                  </Pressable>
+                </View>
+              ))}
+
+              {needsElevation && elevado ? (
+                <View style={styles.elevadoBanner} testID="os-atendimento-elevado-banner">
+                  <Ionicons name="key-outline" size={14} color={colors.brandPrimary} />
+                  <Text style={styles.elevadoBannerText}>
+                    Atuando em nome de {os.tecnico_responsavel_nome || "técnico responsável"} (credencial autorizada)
+                  </Text>
+                </View>
+              ) : null}
 
               {historico.length > 0 ? (
                 <View style={styles.card}>
@@ -443,7 +697,10 @@ export default function OSAtendimentoScreen() {
                       canCancelar={false}
                       saving={eq.savingCodigo === item.codigo}
                       canceling={false}
-                      onSalvar={(draft) => eq.handleUpdate(item.codigo, draft)}
+                      onSalvar={(draft) => {
+                        if (needsElevation && !elevado) { setAuthSlideOpen(true); return; }
+                        eq.handleUpdate(item.codigo, draft);
+                      }}
                       onCancelar={() => {}}
                     />
                   ))}
@@ -509,6 +766,15 @@ export default function OSAtendimentoScreen() {
 
       <ScreenToast toast={toast} testID="os-atendimento-toast" />
       <AjudaPedidoModal visible={ajudaOpen} onClose={() => setAjudaOpen(false)} titulo="Atendimento de Campo" itens={AJUDA_ITENS} />
+      <AuthorizationSlide
+        visible={authSlideOpen}
+        conn={conn}
+        title="Credencial do técnico"
+        message={`Esta OS está atribuída a ${os?.tecnico_responsavel_nome || "outro técnico"}. Peça a ele para informar o usuário e a senha para continuar em nome dele.`}
+        codigoEsperado={os?.tecnico_responsavel ?? undefined}
+        onClose={() => setAuthSlideOpen(false)}
+        onAuthorized={() => { setElevado(true); setAuthSlideOpen(false); }}
+      />
       {osId ? (
         <LayoutPreenchimentoModal
           visible={formulariosOpen}
@@ -518,6 +784,11 @@ export default function OSAtendimentoScreen() {
           codentidade={osId}
           usuarioCod={usuarioCod}
           title="Formulários (Layouts) da O.S."
+          onSalvarOffline={(payload) => {
+            enfileirarMutacao({ tipo: "formulario", osId, payload });
+            showToast("Sem conexão — preenchimento salvo localmente, sincroniza depois.", "info");
+            refreshFila();
+          }}
         />
       ) : null}
     </SafeAreaView>
@@ -541,6 +812,42 @@ const styles = StyleSheet.create({
   },
   clienteNome: { fontSize: 16, fontWeight: "700", color: colors.onSurface },
   metaText: { fontSize: 13, color: colors.muted, marginTop: 2 },
+  elevadoBanner: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    backgroundColor: colors.brandPrimary + "18", borderWidth: 1, borderColor: colors.brandPrimary,
+    borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md,
+  },
+  elevadoBannerText: { fontSize: 12, color: colors.brandPrimary, fontWeight: "600", flex: 1 },
+  offlineBanner: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    backgroundColor: colors.warning + "18", borderWidth: 1, borderColor: colors.warning,
+    borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md,
+  },
+  offlineBannerText: { fontSize: 12, color: colors.warning, fontWeight: "600", flex: 1 },
+  conflitoBanner: {
+    gap: spacing.sm,
+    backgroundColor: colors.error + "18", borderWidth: 1, borderColor: colors.error,
+    borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md,
+  },
+  conflitoBannerText: { fontSize: 12, color: colors.error, fontWeight: "600", flex: 1 },
+  conflitoBtn: { backgroundColor: colors.error, borderRadius: radius.md, paddingVertical: 10, alignItems: "center" },
+  conflitoBtnText: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  filaBanner: {
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    backgroundColor: colors.brandPrimary + "12", borderWidth: 1, borderColor: colors.brandPrimary,
+    borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.md,
+  },
+  filaBannerText: { fontSize: 12, color: colors.brandPrimary, fontWeight: "600", flex: 1 },
+  filaBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: 6, minWidth: 84, alignItems: "center" },
+  filaBtnText: { color: colors.onBrandPrimary, fontSize: 12, fontWeight: "700" },
+  filaErroRow: {
+    flexDirection: "row", alignItems: "center", gap: spacing.sm,
+    backgroundColor: colors.error + "12", borderWidth: 1, borderColor: colors.error,
+    borderRadius: radius.md, padding: spacing.sm, marginBottom: spacing.sm,
+  },
+  filaErroText: { fontSize: 11, color: colors.error, flex: 1 },
+  filaErroBtn: { borderWidth: 1, borderColor: colors.error, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: 6 },
+  filaErroBtnText: { color: colors.error, fontSize: 11, fontWeight: "700" },
   resumoText: { fontSize: 13, color: colors.onSurface, marginTop: 6 },
   sectionTitle: { fontSize: 13, fontWeight: "600", color: colors.onSurface, marginBottom: spacing.sm, textTransform: "uppercase", letterSpacing: 0.4 },
   historicoRow: { borderTopWidth: 1, borderTopColor: colors.border, paddingVertical: spacing.sm },

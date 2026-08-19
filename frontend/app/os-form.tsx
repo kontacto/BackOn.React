@@ -17,6 +17,8 @@ import FormaPagamentoField from "@/src/components/pedido/FormaPagamentoField";
 import WhatsappButton from "@/src/components/WhatsappButton";
 import { clienteSearchParams } from "@/src/hooks/useClienteForm";
 import { ClienteRow, ProdutoServico } from "@/src/components/pedido/types";
+import { useEmitirNotaFiscal } from "@/src/hooks/useEmitirNotaFiscal";
+import NotaFiscalCard from "@/src/components/fiscal/NotaFiscalCard";
 
 const SIT_COLOR: Record<string, string> = { A: "#1e88e5", F: "#43a047", PG: "#8e24aa", C: "#e53935" };
 
@@ -121,6 +123,9 @@ export default function OSFormScreen() {
   const [userFuncao, setUserFuncao] = useState<number | null>(null);
   const [marcasList, setMarcasList] = useState<{ codigo: string; descricao: string }[]>([]);
   const [modelosList, setModelosList] = useState<{ codigo: string; descricao: string }[]>([]);
+  // `controle.exige_chassi_os` — Chassi obrigatório na O.S. Oficina. Só mostra
+  // asterisco/pré-valida; o backend é quem reforça de verdade (ver os_service.py).
+  const [exigeChassiOs, setExigeChassiOs] = useState(false);
   // Atendente só pode ser trocado por funcao 1/2 ou KONTACTO (master).
   const canChangeAtendente = isMaster || userFuncao === 1 || userFuncao === 2;
 
@@ -180,11 +185,12 @@ export default function OSFormScreen() {
       }
       if (c) {
         try {
-          const [ra, rf, rm, rfp] = await Promise.all([
+          const [ra, rf, rm, rfp, rctrl] = await Promise.all([
             apiGet(c, `/api/area-atuacao`).catch(() => null),
             apiGet(c, `/api/funcionarios`).catch(() => null),
             apiGet(c, `/api/tabelas/marcas`, { marca_produto: "false" }).catch(() => null),
             apiGet(c, `/api/forma-pagamento`).catch(() => null),
+            apiGet(c, `/api/controle/empresa`).catch(() => null),
           ]);
           if (ra?.success) {
             const arr = ra.items || [];
@@ -194,6 +200,7 @@ export default function OSFormScreen() {
           if (rf?.success) setFuncionarios(rf.items || []);
           if (rm?.success) setMarcasList(rm.items || []);
           if (rfp?.success) setFormasPag(rfp.items || []);
+          if (rctrl?.success) setExigeChassiOs(!!rctrl.exige_chassi_os);
         } catch {
           // silencioso
         }
@@ -299,9 +306,13 @@ export default function OSFormScreen() {
     if (!conn) return;
     if (!cliente) { showToast("Selecione um cliente.", "error"); return; }
     if (atendente == null) { showToast("A O.S. precisa de um atendente.", "error"); return; }
+    const isOficina = moduleOn("Oficina");
+    if (isOficina && !isAssist && exigeChassiOs && !serie.trim()) {
+      showToast("Chassi é obrigatório para O.S. do segmento Oficina.", "error");
+      return;
+    }
     setSaving(true);
     try {
-      const isOficina = moduleOn("Oficina");
       const body: Record<string, unknown> = {
         cliente: cliente.codigo,
         area_atuacao: areaAtuacao,
@@ -504,6 +515,9 @@ export default function OSFormScreen() {
   // Comandas (2026-07-21). Diferente do Pedido Bar, exige a OS já Fechada
   // (sem atalho "fecha e fatura junto") — só habilitado com `isFechada`.
   const [faturandoOS, setFaturandoOS] = useState(false);
+  // Comanda gerada ao faturar — só pra decidir quando mostrar o
+  // NotaFiscalCard (emissão sempre MANUAL, ver `useEmitirNotaFiscal.ts`).
+  const [comandaFaturada, setComandaFaturada] = useState<number | null>(null);
   const handleFaturarOS = async () => {
     if (!conn || !osId) return;
     setFaturandoOS(true);
@@ -515,6 +529,7 @@ export default function OSFormScreen() {
         showToast(j.message || "OS faturada.", "success");
         setOs((o) => (o ? { ...o, situacao: "PG" } : o));
         setSituacao("PG");
+        setComandaFaturada(typeof j.comanda === "number" ? j.comanda : null);
       } else {
         showToast(j?.message || "Não foi possível faturar.", "error");
       }
@@ -522,6 +537,10 @@ export default function OSFormScreen() {
       showToast(`Erro: ${e instanceof Error ? e.message : String(e)}`, "error");
     } finally { setFaturandoOS(false); }
   };
+
+  const notaFiscal = useEmitirNotaFiscal({
+    conn, session: { usuarioCodigo: waUserId ?? undefined, classe: classe ?? undefined }, comanda: comandaFaturada, isMaster,
+  });
 
 
   const areaOptions: SelectOption[] = useMemo(
@@ -546,7 +565,8 @@ export default function OSFormScreen() {
   const isOficina = moduleOn("Oficina");
   const isAssist = moduleOn("Assistencia");
   const equipLabel = isOficina ? "Veículo" : isAssist ? "Equipamento" : "Veículo / Equipamento";
-  const serieLabel = isOficina ? "Chassi" : isAssist ? "Nº de Série" : "Nº de Série / Chassi";
+  const chassiObrigatorio = isOficina && !isAssist && exigeChassiOs;
+  const serieLabel = (isOficina ? "Chassi" : isAssist ? "Nº de Série" : "Nº de Série / Chassi") + (chassiObrigatorio ? " *" : "");
   const statusOptions: SelectOption[] = STATUS_OS.map((s, i) => ({ value: i, label: s }));
   const situacaoOptions: SelectOption[] = SITUACOES.map((s) => ({ value: s.value, label: s.label }));
 
@@ -846,6 +866,16 @@ export default function OSFormScreen() {
               )}
               <Text style={styles.fecharOsBtnText}>Faturar O.S.</Text>
             </TouchableOpacity>
+          ) : null}
+
+          {comandaFaturada ? (
+            <NotaFiscalCard
+              docFiscal={notaFiscal.docFiscal} emitindoNfce={notaFiscal.emitindoNfce} emitindoNfse={notaFiscal.emitindoNfse}
+              onEmitirNfce={notaFiscal.emitirNfce} onEmitirNfse={notaFiscal.emitirNfse}
+              canEmitirNfce={can("ALTERAR_COMANDA.EMITIR_NF") || isMaster}
+              canEmitirNfse={can("ALTERAR_COMANDA.EMITIR_NFSE") || isMaster}
+              testIDPrefix="os-form"
+            />
           ) : null}
 
           <View style={{ height: 60 }} />

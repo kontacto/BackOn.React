@@ -48,13 +48,22 @@ def _descricao_alteracoes(diffs: list, labels: dict, prefixo: str) -> str:
 class SalvarControleRequest(AuditFields):
     servidor: str
     banco: str
-    dados: dict = {}
+    # Sem default de propósito — `_save_controle_sistema_sync` faz um UPDATE
+    # às cegas de TODOS os campos de `CAMPOS_CONTROLE`/`CAMPOS_CONTROLE_AUX`;
+    # um `dados` ausente/vazio (`= {}` como default antigo) grava tudo como
+    # NULL/0, apagando a configuração real da empresa. Achado ao vivo
+    # 2026-08-17 contra BD_PAJE (CASCADURA AUTOCENTER) — ver PENDENCIAS.md >
+    # "O.S. Oficina — Ciclo de Teste ao Vivo".
+    dados: dict
 
 
 class SalvarGrupoRequest(AuditFields):
     servidor: str
     banco: str
-    dados: dict = {}
+    # Mesmo risco de `SalvarControleRequest` acima (`_save_grupo_sync` também
+    # faz UPDATE às cegas de todo o grupo de campos) — sem default, também de
+    # propósito.
+    dados: dict
 
 
 class SerieNfSaveRequest(AuditFields):

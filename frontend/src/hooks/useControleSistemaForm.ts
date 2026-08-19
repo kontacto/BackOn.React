@@ -48,7 +48,7 @@ const BOOL_FIELDS = [
   "transf_ent_sai_caixa", "vidro_controla_cabeca_chapa",
   "integracao_tray",
   // Kontacto (só Master) — TICKET_PIX não existe nesta base, descartado.
-  "exige_cpf_cliente", "aceita_duplicar_cnpj", "inc_prod_os",
+  "exige_cpf_cliente", "aceita_duplicar_cnpj", "inc_prod_os", "exige_chassi_os",
   "consulta_por_descricao_paf", "imprime_nfse",
   "PERGUNTA_EMITE_NFCE", "USA_PRECO_BASE_NFCE", "IMPRIME_NFCE_NAO_FISCAL", "ESCOLHE_NFE_NFCE",
 ] as const;

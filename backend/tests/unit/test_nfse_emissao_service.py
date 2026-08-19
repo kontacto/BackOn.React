@@ -92,6 +92,29 @@ class TestMontarXmlDps:
         )
         assert "<vServ>50.50</vServ>" in xml_bytes.decode("utf-8")
 
+    def test_ibs_cbs_cst_classtrib_incluidos_quando_presentes(self):
+        # Parte A do ecossistema fiscal (2026-08-19) — só CST/cClassTrib,
+        # nunca valor monetário (leiaute de transição, ver docstring).
+        xml_bytes, _ = svc._montar_xml_dps(
+            id_dps="DPS" + "0" * 42, tp_amb="1", cod_municipio="3304557", serie="1", numero_dps=1,
+            data_competencia=datetime.date(2026, 7, 21), cnpj_prest="1",
+            opcao_simples_nacional=False, regime_especial_tributacao=0, tomador=None,
+            itens=[{"codigo_int": "A", "descricao": "X", "cod_lista_servico": "0101", "valor": 10.0}],
+            ibs_cbs_cst="000", ibs_cbs_classtrib="000001",
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert "<gIBSCBS><CST>000</CST><cClassTrib>000001</cClassTrib></gIBSCBS>" in xml
+        etree.fromstring(xml_bytes)
+
+    def test_sem_ibs_cbs_cst_nao_inclui_bloco(self):
+        xml_bytes, _ = svc._montar_xml_dps(
+            id_dps="DPS" + "0" * 42, tp_amb="1", cod_municipio="3304557", serie="1", numero_dps=1,
+            data_competencia=datetime.date(2026, 7, 21), cnpj_prest="1",
+            opcao_simples_nacional=False, regime_especial_tributacao=0, tomador=None,
+            itens=[{"codigo_int": "A", "descricao": "X", "cod_lista_servico": "0101", "valor": 10.0}],
+        )
+        assert "<gIBSCBS>" not in xml_bytes.decode("utf-8")
+
     def test_sem_tomador_nao_inclui_tag_toma(self):
         xml_bytes, _ = svc._montar_xml_dps(
             id_dps="DPS" + "0" * 42, tp_amb="1", cod_municipio="3304557", serie="1", numero_dps=1,

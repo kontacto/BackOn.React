@@ -687,6 +687,6 @@ const styles = StyleSheet.create({
   tipoBtnSel: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
   tipoBtnText: { fontSize: 13, fontWeight: "600", color: colors.onSurface },
   tipoBtnTextSel: { color: colors.onBrandPrimary },
-  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 14, alignItems: "center", marginTop: spacing.lg, marginBottom: spacing.sm },
+  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 12, paddingHorizontal: spacing.xl, minWidth: 160, alignSelf: "flex-end", alignItems: "center", marginTop: spacing.lg, marginBottom: spacing.sm },
   primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
 });

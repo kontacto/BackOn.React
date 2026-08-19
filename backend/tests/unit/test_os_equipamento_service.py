@@ -194,6 +194,17 @@ class TestUpdateEquipamento:
         assert upd_p[-2] == 55  # codigo
         assert upd_p[-1] == 1   # os
 
+    def test_bloqueia_por_conflito_de_versao(self, monkeypatch):
+        """Sincronização offline (AssistenciaTecnicaCampo.md) — mutação de
+        equipamento vinda da fila local bloqueia se a OS mudou desde o
+        cache."""
+        cur = FakeCursor(one=[{"situacao": "A"}, {"versao_atendimento": b"\xff\xff"}])
+        conn = _patch(monkeypatch, cur)
+        r = svc._update_equipamento_sync(_req(versao_esperada="aabb"), 1, 55)
+        assert r["success"] is False
+        assert r["conflito"] is True
+        assert conn.committed is False
+
 
 class TestCancelarEquipamento:
     def test_os_nao_aberta_bloqueia(self, monkeypatch):

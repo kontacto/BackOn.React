@@ -1182,6 +1182,7 @@ export default function ControleSistemaScreen() {
               <Chk form={f.form} setField={f.setField} campo="exige_cpf_cliente" label="Exige CPF/CNPJ no Cadastro de Clientes" />
               <Chk form={f.form} setField={f.setField} campo="aceita_duplicar_cnpj" label="Aceita Duplicar CPF/CNPJ no Cadastro de Clientes" />
               <Chk form={f.form} setField={f.setField} campo="inc_prod_os" label="Inc Produto Os" />
+              <Chk form={f.form} setField={f.setField} campo="exige_chassi_os" label="Exige Chassi na O.S. Oficina" />
               <Chk form={f.form} setField={f.setField} campo="consulta_por_descricao_paf" label="Consulta de produtos por descrição do PAF ECF" />
 
               <SectionTitle>Paths</SectionTitle>

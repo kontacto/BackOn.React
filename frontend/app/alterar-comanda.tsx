@@ -29,6 +29,8 @@ import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { friendlyApiError } from "@/src/utils/api";
 import { formatBRL } from "@/src/utils/format";
+import { useEmitirNotaFiscal } from "@/src/hooks/useEmitirNotaFiscal";
+import NotaFiscalCard from "@/src/components/fiscal/NotaFiscalCard";
 
 function brDate(iso: string | null): string {
   if (!iso) return "";
@@ -47,7 +49,6 @@ type ItemDetalhe = { id_mov: number; codigo_int: string | null; descricao: strin
 type FormaPagDetalhe = { tipo: string; sequencia: number; forma_pag: string | null; forma_pag_descricao: string; valor: number; conciliado: boolean; alteravel: boolean };
 type FormaPagOpt = { codigo: string; descricao: string; tipo: string };
 type NumSerieVinculo = { sequencia: number; codigo: number; num_serie: string; codigo_int: string | null; descricao: string; data: string | null };
-type DocFiscal = { tipo: string; numero: number | string | null; situacao: string | null; protocolo: string | null; chave_acesso?: string | null };
 type ProdutoNumSerieOpt = { codigo_int: string; codigo_fab: string; descricao: string };
 type NumSerieOpt = { codigo: number; num_serie: string; disponivel: boolean; detalhes: string };
 
@@ -120,9 +121,9 @@ export default function AlterarComandaScreen() {
   const [motivoCancelamento, setMotivoCancelamento] = useState("");
   const [cancelando, setCancelando] = useState(false);
 
-  const [docFiscal, setDocFiscal] = useState<DocFiscal | null>(null);
-  const [emitindoNfce, setEmitindoNfce] = useState(false);
-  const [emitindoNfse, setEmitindoNfse] = useState(false);
+  const { docFiscal, emitindoNfce, emitindoNfse, emitirNfce, emitirNfse, recarregar: recarregarDocFiscal } = useEmitirNotaFiscal({
+    conn, session, comanda: comandaId, isMaster,
+  });
 
   useEffect(() => {
     (async () => {
@@ -183,8 +184,7 @@ export default function AlterarComandaScreen() {
       setPagaComissao(!!j.comanda.paga_comissao);
       const rns = await fetch(`${base}/api/comandas/${comandaId}/num-serie?${qs}`).then((x) => x.json()).catch(() => null);
       setNumSerieItens(rns?.success ? rns.items || [] : []);
-      const rdf = await fetch(`${base}/api/comandas/${comandaId}/doc-fiscal?${qs}`).then((x) => x.json()).catch(() => null);
-      setDocFiscal(rdf?.success ? rdf : null);
+      recarregarDocFiscal();
     } catch (e) {
       fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -377,58 +377,8 @@ export default function AlterarComandaScreen() {
     }
   };
 
-  // Emitir NFC-e real junto ao SEFAZ — Fase 1 do pacote de emissão fiscal
-  // (ver `nfe_emissao_service.py`). Ação irreversível (uma vez autorizada
-  // pelo SEFAZ, só é desfeita por Cancelar Comanda) — por isso pede
-  // confirmação simples antes de disparar, e mostra erro por 5s (pode ter
-  // detalhe importante do SEFAZ pra conferir).
-  const emitirNfce = async () => {
-    if (!conn || !comandaId || !session) return;
-    setEmitindoNfce(true);
-    try {
-      const base = conn.api.replace(/\/+$/, "");
-      const body = {
-        servidor: conn.servidor, banco: conn.banco,
-        usuario_alteracao: session.usuarioCodigo, classe: session.classe, plataforma: "web", master: isMaster,
-      };
-      const r = await fetch(`${base}/api/comandas/${comandaId}/emitir-nfce`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-      const j = await r.json();
-      if (j?.success) { fb.showSuccess(j.message || "NFC-e emitida."); carregar(); }
-      else fb.showError(friendlyApiError(j, "Não foi possível emitir a NFC-e."), undefined, 5000);
-    } catch (e) {
-      fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setEmitindoNfce(false);
-    }
-  };
-
-  // Emitir NFS-e real via DPS Nacional/Sefin Nacional — Fase 3 do pacote de
-  // emissão fiscal (ver `nfse_emissao_service.py`). Mesma lógica de
-  // confirmação/erro de `emitirNfce`, documento diferente (serviço, não
-  // produto).
-  const emitirNfse = async () => {
-    if (!conn || !comandaId || !session) return;
-    setEmitindoNfse(true);
-    try {
-      const base = conn.api.replace(/\/+$/, "");
-      const body = {
-        servidor: conn.servidor, banco: conn.banco,
-        usuario_alteracao: session.usuarioCodigo, classe: session.classe, plataforma: "web", master: isMaster,
-      };
-      const r = await fetch(`${base}/api/comandas/${comandaId}/emitir-nfse`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-      });
-      const j = await r.json();
-      if (j?.success) { fb.showSuccess(j.message || "NFS-e emitida."); carregar(); }
-      else fb.showError(friendlyApiError(j, "Não foi possível emitir a NFS-e."), undefined, 5000);
-    } catch (e) {
-      fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setEmitindoNfse(false);
-    }
-  };
+  // Emitir NFC-e/NFS-e — ver `useEmitirNotaFiscal.ts` (hook compartilhado,
+  // extraído daqui; reaproveitado também por Pedido/O.S. depois de faturar).
 
   // Cancelar Comanda — reversão completa (estoque, Pedido/O.S., pagamentos
   // e, quando houver protocolo SEFAZ, cancelamento fiscal real). Ação
@@ -663,40 +613,14 @@ export default function AlterarComandaScreen() {
               ))}
             </View>
 
-            <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Nota Fiscal</Text>
-              {docFiscal ? (
-                <Text style={styles.gridRowText}>
-                  {docFiscal.tipo === "NFCE" ? "NFC-e" : docFiscal.tipo === "NFSE" ? "NFS-e" : docFiscal.tipo === "NF" ? "Nota Fiscal" : "Cupom"}
-                  {docFiscal.numero != null ? ` nº ${docFiscal.numero}` : ""}
-                  {docFiscal.protocolo ? ` · Protocolo ${docFiscal.protocolo}` : ""}
-                  {docFiscal.chave_acesso ? ` · Chave ${docFiscal.chave_acesso}` : ""}
-                </Text>
-              ) : (
-                <Text style={styles.hint}>Nenhuma nota fiscal emitida para esta comanda ainda.</Text>
-              )}
-              {/* Comanda pode misturar item de produto e de serviço — cada
-                  documento (NFC-e/NFS-e) é independente; `docFiscal` só
-                  reflete o PRIMEIRO já emitido (NFC-e > NFS-e), então os
-                  botões continuam disponíveis mesmo com um dos dois já
-                  emitido, exceto quando é justamente esse tipo que já foi
-                  emitido — ver PENDENCIAS.md > "Emissão Fiscal Real"
-                  pra essa limitação conhecida (exibição mostra só 1 doc). */}
-              {cab?.situacao === "PG" ? (
-                <View style={styles.modalActionsRow}>
-                  {canEmitirNf && docFiscal?.tipo !== "NFCE" ? (
-                    <Pressable onPress={emitirNfce} disabled={emitindoNfce} style={styles.primaryBtn} testID="alterar-comanda-emitir-nfce">
-                      {emitindoNfce ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.primaryBtnText}>Emitir NFC-e</Text>}
-                    </Pressable>
-                  ) : null}
-                  {canEmitirNfse && docFiscal?.tipo !== "NFSE" ? (
-                    <Pressable onPress={emitirNfse} disabled={emitindoNfse} style={styles.primaryBtn} testID="alterar-comanda-emitir-nfse">
-                      {emitindoNfse ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.primaryBtnText}>Emitir NFS-e</Text>}
-                    </Pressable>
-                  ) : null}
-                </View>
-              ) : null}
-            </View>
+            {cab?.situacao === "PG" ? (
+              <NotaFiscalCard
+                docFiscal={docFiscal} emitindoNfce={emitindoNfce} emitindoNfse={emitindoNfse}
+                onEmitirNfce={emitirNfce} onEmitirNfse={emitirNfse}
+                canEmitirNfce={canEmitirNf} canEmitirNfse={canEmitirNfse}
+                testIDPrefix="alterar-comanda"
+              />
+            ) : null}
           </View>
         </ScrollView>
       )}
