@@ -6,6 +6,8 @@ próprios testes quando implementada — ver PENDENCIAS.md > "Gestor de
 Comandas"."""
 import datetime
 
+import pytest
+
 import services.comanda_service as svc
 from models.comanda import (
     ComandaAddNumSerieRequest, ComandaAlterarFormaPagamentoRequest, ComandaAlterarVendedorItemRequest,
@@ -736,6 +738,14 @@ def _emitir_nfce_req(**over):
 
 
 class TestEmitirNfceComandaSync:
+    @pytest.fixture(autouse=True)
+    def _modulo_nfce_ativo(self, monkeypatch):
+        # Módulo "NFCe" (controle_aux.emite_nfce, 2026-08-20) — checado em
+        # runtime dentro de _emitir_nfce_comanda_sync; mockado True por
+        # padrão pra não exigir mais uma linha no FakeCursor de cada teste
+        # já existente (nenhum deles testa o módulo desligado).
+        monkeypatch.setattr(svc.nfe_fiscal_common, "modulo_nfce_ativo_sync", lambda cur: True)
+
     def _item_mov(self):
         return {"codigo_int": "P001", "descricao": "Produto Teste", "qtd": 1.0, "p_unit": 50.0,
                 "cod_icms": "00", "origem": 0, "ncm": "12345678", "unidade": "UN"}

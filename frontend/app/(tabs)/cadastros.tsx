@@ -116,14 +116,6 @@ export default function CadastrosScreen() {
         visible: Platform.OS === "web" && can("EQUIPAMENTOS.ABRIR"),
       },
       {
-        key: "notas-fiscais",
-        label: "Notas Fiscais",
-        hint: "Manutenção de Notas Fiscais (Fase 1 — sem emissão fiscal)",
-        icon: "receipt-outline",
-        route: "/notas-fiscais",
-        visible: Platform.OS === "web" && can("NOTAS_FISCAIS.ABRIR"),
-      },
-      {
         key: "entrada-saida-caixa",
         label: "Entrada/Saída de Caixa",
         hint: "Sangrias, suprimentos e demais lançamentos do caixa operacional",

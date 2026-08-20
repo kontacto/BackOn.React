@@ -56,6 +56,7 @@ from services.balanca_service import _ensure_balancas_table
 from services.checkout_service import _ensure_cartao_presente_resgate_table
 from services.controle_config_service import _ensure_balanca_cols
 from services.contingencia_nfce_service import _ensure_contingencia_nfce_table
+from services.contingencia_nfe_service import _ensure_contingencia_nfe_table
 from services.cotacao_compra_service import _ensure_tables as _ensure_tables_cotacao
 from services.etiqueta_produto_service import _ensure_modelo_etiqueta_table
 from services.gestor_nfce_service import _ensure_inutilizacao_nfe_table
@@ -92,6 +93,7 @@ _MIGRACOES: list[Callable[[object], None]] = [
     _ensure_balancas_table,
     _ensure_cartao_presente_resgate_table,
     _ensure_contingencia_nfce_table,
+    _ensure_contingencia_nfe_table,
     _ensure_inutilizacao_nfe_table,
     _ensure_balanca_cols,
     _ensure_tables_cotacao,

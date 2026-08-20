@@ -4,6 +4,53 @@ Formato e processo definidos em `promptPendencias.md` (seção 10 — "Gestão d
 pendências entre telas"). Ao retomar uma tela listada aqui, ler a seção
 inteira antes de continuar — não reanalisar do zero.
 
+## Estado Atual do Projeto
+
+**Última atualização: 2026-08-20.** Esta seção é um RESUMO VIVO — sempre
+reescrita ao concluir a próxima frente de trabalho relevante, nunca
+empilhada (o histórico completo mora no resto do arquivo, abaixo). Ver
+CLAUDE.md > "Início de sessão sempre orienta sobre onde o projeto parou"
+pra regra que exige ler isto no começo de toda sessão nova.
+
+**Frente de trabalho ativa: Ecossistema Fiscal.** Nesta rodada (mesmo
+dia), implementado de ponta a ponta: motor de emissão NF-e modelo 55
+(`nfe_emissao_service.py`), Agrupar Comandas em NF-e ([[project_
+nfe_agrupada]] na memória), NF-e Avulsa/"Gerar NFe" ([[project_nfe_
+avulsa]]), hub de navegação "Gestor Fiscal" (Transações — reúne Gerar
+NFe Comanda/Gerar NFe/Gestor NFCe/Notas Fiscais), 3 módulos fiscais
+reais em Configurações > Módulos e Recursos (`emite_nfce`/`nfe_ws`/
+`emite_nfse`, tabela `controle_aux` — ver "Módulos NFCe/NFe/NFSe" mais
+abaixo pro mapeamento real, corrigido depois de um erro real no mesmo
+dia), e Contingência NFe (achou e corrigiu um bug real em Contingência
+NFCe de pé desde uma rodada anterior — coluna `id` que não existe na
+tabela real).
+
+**NADA deste pacote fiscal foi testado ao vivo no navegador ainda** —
+só testes unitários (suíte completa: 2128 passando, 1 falha
+pré-existente não relacionada em `test_cnab_itau_service.py`, data
+hardcoded). Antes de continuar empilhando telas fiscais novas, considerar
+testar o que já existe (ver seções "Agrupar Comandas em NF-e", "NF-e
+Avulsa", "Módulos NFCe/NFe/NFSe", "Contingência NFe" mais abaixo pro
+detalhe completo de cada uma).
+
+**Pendências reais em aberto, mais relevantes agora**:
+- Reorganização "Gestor Fiscal" ainda incompleta: faltam telas pra
+  Recebimento, Gestor NFSe (RPS municipal), Contingência NFe (agora
+  pronta) já conectada à emissão de NF-e (ainda não está), Inutilização
+  de Faixa NFe (só a metade NFCe existe, dentro de Gestor NFCe).
+- "Ambiente NFe" (Homologação/Produção) e "Danfe" (Retrato) — campos
+  reais do legado (`controle_aux.ambiente_nfe`/`modelo_danfe`) nunca
+  portados; `nfe_emissao_service.py` hoje hardcoda produção (`tp_amb=
+  "1"`) em todo lugar.
+- Reorganização do menu "Gestor Fiscal" pro pedido original do usuário
+  incluía também agrupar os módulos fiscais em Configurações > Módulos
+  — feito (grupo "Fiscal"), mas TSO/DMC/Alterdata não foram totalmente
+  esclarecidos quanto a pertencerem ou não a esse grupo (só Alterdata
+  entrou, por pedido explícito).
+- As 6 sub-rotinas de importação automática de "Gerar NFe" (Pedido/
+  Devolução/Compra/Requisição/NF/Complementar) — Fase A implementada foi
+  só digitação livre, sem nenhuma importação.
+
 ---
 
 ## "Design Desktop" — Varredura de Densidade em Todas as Telas Web
@@ -262,6 +309,79 @@ varredura geral, se retomada: as categorias de prioridade menor
 ("Tabelas Auxiliares", "Posto de Combustível", "Relatórios", "Listas/
 painéis", "Hubs/tabs") — ver a lista completa mais abaixo.
 
+### 5ª rodada (2026-08-19) — Posto de Combustível completo + amostra de Tabelas Auxiliares
+
+Pedido explícito do usuário ("continue nas 20 telas que restam") — como a
+categoria "Cadastro completo" já estava 100% concluída na 4ª rodada,
+avançou pra próxima categoria da lista de prioridade: **Posto de
+Combustível, 13/13 telas revisadas** (categoria inteira concluída) +
+**amostra de 7 telas de Tabelas Auxiliares**.
+
+**Posto de Combustível — achados e correções**:
+- `posto-custo.tsx`: modal de edição (Data/Entrada/Saída/Custo, 4 campos)
+  tinha tudo empilhado — reagrupado em 2 linhas (`colHalf`) + botão
+  Gravar corrigido (esticava full-width dentro do modal de 480px).
+- `posto-fechamento-turno.tsx`/`posto-reabertura-turno.tsx`: o botão de
+  ação única ("Fechar Turno"/"Reabrir Turno") esticava a largura inteira
+  do card `WEB_FILTER_CARD` (até 1600px em monitor grande) — o pior caso
+  encontrado até agora, pior que os 560px das rodadas anteriores. Card
+  também limitado a `maxWidth: 640` (tela só mostra 2 valores + 1 botão,
+  não precisa de card largo) e botão corrigido pra `alignSelf:
+  "flex-start"` (mantém alinhamento com o texto de status acima, ao
+  contrário do padrão `flex-end` usado em formulários — aqui não há
+  campo nenhum pra alinhar à direita).
+- `posto-afericoes.tsx`: botão "Aferir Selecionados" com o mesmo problema
+  (card largo, botão esticado) — corrigido, card mantido largo de
+  propósito (é uma lista de seleção múltipla, precisa do espaço).
+- `posto-tanque-nf.tsx`: campos "Vincular Tanque" (Tanque + Quantidade)
+  reagrupados numa linha; botão Gravar corrigido; cards limitados a
+  `maxWidth: 720` (telas de 2-3 campos, sem necessidade de largura
+  total).
+- `posto-tanques.tsx`: botão Gravar corrigido (modal 480px, 3 campos —
+  mesmo raciocínio de `posto-custo.tsx`: forms de múltiplos campos
+  contam como "formulário real", não "confirmação pontual", mesmo em
+  modal estreito).
+- `posto-ilhas.tsx`: Data + Ilha (Bomba) reagrupados numa linha (antes
+  cada um na própria linha, só Turno+Funcionário já estavam pareados).
+- `posto-bombas.tsx`/`posto-combustiveis.tsx`: campos já bem agrupados
+  (`rowFields`/`colNarrow`/`colFlex` ao longo de todo o formulário denso)
+  — só o botão Gravar final tinha o problema recorrente, corrigido.
+- **Já conformes, sem mudança**: `posto-tanque-estoque.tsx`,
+  `posto-estoque.tsx`, `posto-mov-encerrantes.tsx`, `posto-meta.tsx`
+  (Grupo/Meta ficaram cada um na própria linha — caso limítrofe,
+  considerado aceitável e não forçado, ver critério abaixo) — todas já
+  usam o padrão "Gravar no cabeçalho" (`saveBtn`, pill, não esticado) em
+  vez de botão de rodapé, que é o padrão preferencial e já está correto
+  por construção.
+
+**Critério refinado nesta rodada** (registrar pra não repetir a dúvida):
+botão único full-width só é aceitável quando é genuinamente um modal de
+CONFIRMAÇÃO de 0-1 campo (ex.: "Confirmar Retorno" em
+`envio-terceiros.tsx`, já verificado na 4ª rodada). Formulário de
+múltiplos campos — mesmo dentro de um modal estreito de 420-560px — conta
+como formulário real e o botão deve ser dimensionado ao conteúdo
+(`alignSelf: flex-end`, `paddingHorizontal`, `minWidth`), não esticado.
+
+**Tabelas Auxiliares — amostra de 7 telas** (`area.tsx`, `area-atuacao.tsx`,
+`cfop.tsx`, `cfop-pis-cofins.tsx`, `centro-custo.tsx`, `cores.tsx`,
+`marcas.tsx`): todas as 7 tinham o MESMO botão Gravar esticado (template
+copiado) — corrigido nas 7. `cfop.tsx` (a mais densa da amostra, 5 campos)
+também teve Código + Código Contábil reagrupados numa linha (Descrição/
+Descrição N.F./Aplicação continuam em linha própria — são textareas
+multilinha, correto ficarem largos). `area-atuacao.tsx`/
+`cfop-pis-cofins.tsx`/`centro-custo.tsx` têm formulários igualmente
+densos (9-10 campos cada) mas só o botão foi corrigido nesta rodada — o
+reagrupamento de campos dessas 3 fica pendente pra continuação (mesmo
+padrão de "identificado, não totalmente corrigido" já usado com
+`telemarketing.tsx` na 4ª rodada). **Restam ~28 telas de Tabelas
+Auxiliares não tocadas** (`icms.tsx`, `grupo-mercadologico.tsx`,
+`unidade-medida.tsx`, `situacao.tsx`, `tipo-cliente.tsx`, etc. — lista
+completa já registrada mais abaixo neste arquivo).
+
+`tsc --noEmit`: baseline de 12 erros pré-existentes inalterada em todo o
+lote (20 arquivos tocados: 13 Posto + 7 Tabelas Auxiliares). **Nenhuma
+tela vista rodando no navegador** — mesma ressalva de sempre.
+
 ### Fora do escopo desta rodada — pontos em aberto maiores
 
 - **Pedido (Bar e Geral) fica de fora desta varredura por enquanto,
@@ -312,12 +432,15 @@ densidade — grande demais pra revisar de uma vez, retomar por categoria:
   `pedidos.tsx`, `PedidoHeader.tsx`, e agora também `os-form.tsx`) — ver
   "Fora do escopo" acima.
 - **Tabelas Auxiliares** (prioridade menor — telas pequenas, geralmente
-  lista + modal compacto, já usam o "Compact Size Variant"):
-  `area.tsx`, `area-atuacao.tsx`, `cfop.tsx`, `cfop-pis-cofins.tsx`,
-  `centro-custo.tsx`, `cores.tsx`, `marcas.tsx`, `modelos.tsx`,
-  `origem.tsx`, `regioes.tsx`, `rotas.tsx`, `segmentos.tsx`,
-  `situacao.tsx`, `status-os.tsx`, `tamanho.tsx`, `taxas.tsx`,
-  `tipo-cliente.tsx`, `tipo-doc.tsx`, `tipo-mov.tsx`,
+  lista + modal compacto, já usam o "Compact Size Variant"). **Amostra de
+  7 corrigida (5ª rodada, 2026-08-19)**: `area.tsx`, `area-atuacao.tsx`,
+  `cfop.tsx`, `cfop-pis-cofins.tsx`, `centro-custo.tsx`, `cores.tsx`,
+  `marcas.tsx` (ver "5ª rodada" acima — botão Gravar corrigido nas 7;
+  reagrupamento de campos só feito em `cfop.tsx`, pendente em
+  `area-atuacao.tsx`/`cfop-pis-cofins.tsx`/`centro-custo.tsx`). Restantes,
+  não tocadas: `modelos.tsx`, `origem.tsx`, `regioes.tsx`, `rotas.tsx`,
+  `segmentos.tsx`, `situacao.tsx`, `status-os.tsx`, `tamanho.tsx`,
+  `taxas.tsx`, `tipo-cliente.tsx`, `tipo-doc.tsx`, `tipo-mov.tsx`,
   `tipo-mov-mensagens.tsx`, `tipo-os.tsx`, `tipo-os-prod.tsx`,
   `tipo-peca.tsx`, `tipo-servico.tsx`, `tributacao.tsx`,
   `unidade-medida.tsx`, `icms.tsx`, `grupo-mercadologico.tsx`,
@@ -325,12 +448,13 @@ densidade — grande demais pra revisar de uma vez, retomar por categoria:
   `executor-padrao.tsx`, `forma-pagamento.tsx`, `mensagens.tsx`,
   `mensagens-pdv.tsx`, `plano-contas.tsx`, `tabelas-auxiliares.tsx`
   (hub).
-- **Posto de Combustível** (13 telas, prioridade a avaliar):
-  `posto-afericoes.tsx`, `posto-bombas.tsx`, `posto-combustiveis.tsx`,
-  `posto-custo.tsx`, `posto-estoque.tsx`, `posto-fechamento-turno.tsx`,
-  `posto-ilhas.tsx`, `posto-meta.tsx`, `posto-mov-encerrantes.tsx`,
-  `posto-reabertura-turno.tsx`, `posto-tanque-estoque.tsx`,
-  `posto-tanque-nf.tsx`, `posto-tanques.tsx`.
+- **Posto de Combustível — ✅ CATEGORIA 100% REVISADA (5ª rodada,
+  2026-08-19)**, nada pendente aqui — ver detalhe completo em "5ª
+  rodada" acima. 13 telas: `posto-afericoes.tsx`, `posto-bombas.tsx`,
+  `posto-combustiveis.tsx`, `posto-custo.tsx`, `posto-estoque.tsx`,
+  `posto-fechamento-turno.tsx`, `posto-ilhas.tsx`, `posto-meta.tsx`,
+  `posto-mov-encerrantes.tsx`, `posto-reabertura-turno.tsx`,
+  `posto-tanque-estoque.tsx`, `posto-tanque-nf.tsx`, `posto-tanques.tsx`.
 - **Relatórios** (prioridade menor — já são filtro+tabela, naturalmente
   mais densos; conferir se algum filtro ainda usa campo esticado):
   todas as ~28 `relatorio-*.tsx`.
@@ -1690,12 +1814,222 @@ emissão nesta tela, inclusive a de 1 comanda só.
   do dia/mês), essa funcionalidade **não existe hoje** nesta migração —
   gap real a registrar, não presumir que "emitir NF de uma comanda" já
   cobre isso.
-- **Pendência de rastreio, não resolvida agora**: a criação do registro
-  DEFINITIVO de nota fiscal (`n_fiscal`) a partir da `lista_comandas_nfe`
-  não foi localizada ainda dentro de `FrmTraImpNFE.frm` (9009 linhas, só
-  uma fração lida até agora) — precisa de rastreio mais profundo antes de
-  desenhar a versão desta migração (provavelmente em `CmdOk_Click` ou
-  função de emissão chamada por ele, ainda não confirmado).
+- **✅ RESOLVIDO 2026-08-19** (antes "pendência de rastreio"): a criação
+  do registro definitivo (`n_fiscal`/`n_fiscal_itens`) a partir da
+  `lista_comandas_nfe` acontece em `Sub grava()` (`Geral\ModNF.bas:1104`,
+  via `Public Sub ImprimeNota`) — mesma rotina compartilhada entre
+  comanda única e lista agrupada. Ver seção "Agrupamento de Comandas —
+  rastreio completo de `FrmTraImpNFE.frm`" logo abaixo pro detalhe
+  completo (consolidação de itens, cabeçalho, `comanda_nf`, bugs/gaps
+  confirmados — inclusive que **NFSe agrupada é código morto no
+  legado**, sem comportamento de referência a portar).
+
+### Agrupamento de Comandas — rastreio completo de `FrmTraImpNFE.frm`, 2026-08-19
+
+Continuação do achado de 2026-08-18 acima — agora com leitura completa
+de `NFe\FrmTraImpNFE.frm` (6684 linhas, canônica — confirmada contra
+`backon.vbp`; `Geral\FrmTraImpNFE.frm`, 4400 linhas, é a cópia
+desatualizada, mesmo padrão de `frmtranfe.frm`/`FrmTraNFe.frm`).
+
+- **Não existe bifurcação "comanda única" vs "lista agrupada"** — é o
+  mesmo mecanismo sempre (`TestaComanda(Metodo)`): `Metodo=1` (Pedido/
+  O.S./Checkout) cria uma lista nova de 1 item; `Metodo=0`
+  (`ChamaListaComandas`, vindo de `FrmSelComandas`) reaproveita a lista
+  já populada. Toda leitura de dado da tela filtra por
+  `lista_comandas_nfe.lista`, nunca por comanda direta — "1 comanda" é
+  só o caso degenerado de "1 lista com 1 item".
+- **Itens de comandas diferentes são SOMADOS automaticamente** (mesmo
+  `codigo_int`+preço unitário, cruzando comandas) ao montar o grid
+  consolidado — não é opcional aqui (diferente do `Check3` só-pro-Recibo
+  de `FrmSelComandas`). **Rastreabilidade de quantidade↔comanda de
+  origem se perde** nesse ponto — só sobra o vínculo em nível de comanda
+  inteira via `comanda_nf` (não de item/quantidade). Exceções que NUNCA
+  somam: item de Posto de Combustível (dados de bico/bomba/tanque não
+  podem ser mesclados) e item com controle de número de série.
+- **Cabeçalho da NF agrupada**: cliente único (garantido por
+  `FrmSelComandas`); **data de emissão é sempre "hoje" (`DATESIST`),
+  nunca a data original de cada venda**; `n_fiscal.usuario` é o operador
+  logado no momento da emissão, não o vendedor/atendente de nenhuma
+  comanda (isso vira só texto solto concatenado em observação).
+- **Bug confirmado no legado, não replicar**: a observação "Forma(s) de
+  Pagamento" (`RetornaFormas`) só funciona em modo comanda única —
+  em modo lista, a função recebe um campo vazio/desabilitado e sempre
+  devolve string vazia (não foi adaptada quando o agrupamento foi
+  bolado sobre uma tela originalmente 1-comanda).
+- **`n_fiscal`/`n_fiscal_itens` são criados em `Sub grava()`
+  (`Geral\ModNF.bas:1104`)**, via `Public Sub ImprimeNota` — MESMA
+  rotina compartilhada entre comanda única e lista agrupada (resolve o
+  item em aberto #1 da seção anterior). Vínculo de volta confirmado:
+  **`comanda_nf (comanda, nota_fisc, tipo)`**, 1 `INSERT...SELECT` em
+  lote gravando TODAS as comandas da lista apontando pro mesmo
+  `nota_fisc` — essa é a granularidade real de rastreabilidade (por
+  comanda, não por item/quantidade).
+- **`lista_nfe`/`lista_comandas_nfe` nunca são limpas após emissão bem-
+  sucedida** — 3 `DELETE` que fariam essa limpeza estão **comentados**
+  (código morto, sem explicação) nos 3 pontos onde fariam sentido. Só
+  são limpas quando o MESMO cliente inicia uma NOVA seleção. Não
+  replicar esse "vazamento" sem decisão consciente sobre semântica de
+  limpeza real na migração.
+- **NFSe agrupada é código morto no legado atual, não uma feature que
+  só falta portar** — achado importante: `GerarNfse_Click` em modo
+  lista bate primeiro num `MsgBox "Defina o número da comanda!"` (porque
+  o campo Comanda fica vazio em modo lista) e sai; mesmo se isso não
+  bloqueasse, o resto do bloco (~55 linhas, incluindo a chamada
+  genérica que usaria a lista) está atrás de um `Exit Sub`
+  incondicional — código morto/inalcançável. **Não existe hoje
+  comportamento de referência funcional pra "NFSe a partir de lista
+  agrupada"** — qualquer decisão de design aqui é NOVA, não um port.
+- **IBS/CBS não é calculado no caminho de lista** — `CalculaIBSCBS` só
+  tem uma chamada no arquivo inteiro, guardada por `If Metodo = 1`
+  (comanda única) — nunca disparada no ramo `Metodo = 0` (lista vinda
+  de `FrmSelComandas`). Mesmo padrão de gap já visto em `frmtranfe.frm`
+  (só confirmado no ramo de reemissão) — reforça que IBS/CBS ainda não
+  está uniformemente encaixado em todos os caminhos de emissão do
+  legado; **decisão de negócio real a tomar** (não presumir "não
+  precisa" só porque o legado tem esse gap — a obrigação fiscal da
+  Reforma Tributária provavelmente exige o cálculo de qualquer forma).
+- **Validações reais confirmadas** (aplicadas à lista inteira): bloqueia
+  se QUALQUER comanda da lista não estiver com `situacao='PG'`; avisa
+  (não bloqueia) se alguma comanda já tem NFC-e emitida ("gera
+  duplicidade de imposto", `Yes/No`); reemissão automática de DANFE só
+  funciona pra lista de exatamente 1 comanda (lista >1 exige cancelar
+  manualmente primeiro); mistura produto+serviço na mesma lista é
+  permitida sem trava (habilita os 2 botões conforme o que existir); sem
+  validação de forma de pagamento incompatível (nem chega a ser
+  processada, ver bug acima).
+- **`GeraNFe` não recebe lista de itens como parâmetro** — só
+  `Codigo_NF`; lê `n_fiscal_itens` do banco por conta própria depois que
+  `grava()` já persistiu os itens consolidados. Confirma mais uma vez
+  que a DLL é agnóstica a "veio de quantas comandas".
+- **Gambiarras confirmadas, não portar**: `App.EXEName`/`App.Minor`
+  condicionais dentro de `grava()` (cálculo de `p_unit` e gravação de
+  `numero_pedido` mudam por binário/linha de negócio — Livraria/Jamer);
+  `RegControle.Posto` como `If` de instalação específica dentro de uma
+  rotina que deveria ser genérica (a regra em si — nunca somar item de
+  Posto — é real, só o formato do código é gambiarra).
+- **Achados extras pro planejamento**: rastreabilidade granular
+  (quanto de cada item veio de qual comanda) simplesmente não existe
+  no legado — se a migração precisar de conciliação financeira fina por
+  comanda dentro de uma NF agrupada, é desenho novo, não um port;
+  também vale considerar EXPLICITAMENTE com o usuário se vale a pena
+  **melhorar** esse ponto na migração (um sistema com banco relacional
+  de verdade não precisa perder esse vínculo como o VB6 perdia ao somar
+  linhas num grid em memória) — ver Carlos (regra de negócio/valor
+  agregado) antes de decidir.
+- **Tabelas confirmadas** (nomes de coluna reais): `lista_nfe(LISTA)`,
+  `lista_comandas_nfe(comanda,cliente,lista)`, `comanda_nf(comanda,
+  nota_fisc,tipo)`, `n_fiscal`/`n_fiscal_itens` (colunas completas
+  listadas na sessão de pesquisa, granularidade fiscal completa —
+  ICMS/IPI/ISS/ICMS-ST/FCP), `comanda_impostos(id_movimentacao,frete,
+  outras)` (rateio de frete pro item "representante" de maior valor,
+  não proporcional por comanda), `movimentacao`, `pecas`/`servicos`,
+  `comanda_nfce`/`comanda_cupom` (checagem de duplicidade), `taxas`.
+
+**Pendências que seguem em aberto, precisam de decisão do usuário antes
+de implementar** (não presumir): (1) semântica real de "data de emissão"
+pra NF agrupada — hoje sempre "hoje", legado não oferece alternativa;
+(2) manter a perda de rastreabilidade granular ou melhorar (banco
+relacional permite manter o vínculo item↔comanda, o VB6 não); (3) se
+IBS/CBS deve ser calculado no caminho de lista (quase certamente sim,
+mas confirmar com Leandro/fonte oficial antes de fixar isso como regra);
+(4) escopo de NFSe agrupada — como não há referência funcional no
+legado, é decisão de design nova: implementar do zero, ou deixar de
+fora desta rodada e só cobrir NF-e (produto) agrupada.
+
+### Agrupar Comandas em NF-e (modelo 55) — IMPLEMENTADO 2026-08-19/20
+
+As 4 pendências acima foram todas decididas pelo usuário via
+`AskUserQuestion` e a feature foi implementada. Protocolo Gauntlet
+acionado (Leandro+Carlos+Thomé). **Status: código completo, testes
+unitários passando, NUNCA testado ao vivo contra SEFAZ real nem aberto
+no navegador** — mesma ressalva de todo o resto do pacote fiscal desta
+migração.
+
+**As 4 decisões**:
+1. Data de emissão = sempre hoje, fiel ao legado.
+2. Rastreabilidade item↔comanda = **replicar a perda do legado**
+   (decisão explícita do usuário — rejeitou a recomendação de melhorar
+   o vínculo granular). Só existe rastreio em nível de comanda via
+   `comanda_nf(comanda, nota_fisc, tipo=3, situacao)`.
+3. IBS/CBS = calculado sempre no caminho agrupado (mesmo o legado tendo
+   esse gap) — ver correção de ordem abaixo.
+4. NFS-e agrupada = fora de escopo (código morto no legado, sem
+   comportamento de referência) — só NF-e (produto) agrupada nesta
+   rodada.
+
+**Arquitetura implementada**:
+- `backend/services/nfe_emissao_service.py` ganhou o motor de emissão
+  NF-e **modelo 55** (a peça que faltava — agrupamento SEMPRE gera
+  modelo 55, nunca NFC-e): `_montar_xml_nfe` (layout NFe 4.00, sem QR
+  Code/CSC, destinatário sempre estruturado e completo — endereço
+  obrigatório) + `emitir_nfe_sync` (orquestrador espelhando
+  `emitir_nfce_sync`, resolve endpoint via `_ENDPOINTS_AUTORIZACAO["55"]`
+  já existente). Reaproveita `_resolver_tributacao_sync`/
+  `montar_chave_acesso`/`assinar_xml`/`_montar_envelope_autorizacao` sem
+  mudança — todos já eram genéricos o bastante pros 2 modelos.
+- `backend/services/nfe_agrupada_service.py` (novo) — `_list_comandas_
+  agrupaveis_sync` (lista comandas `situacao='PG'` do cliente, cruza
+  aviso de NFC-e já emitida e bloqueio de já-agrupada), `_resolver_
+  destinatario_sync` (validação bloqueante: CPF exige QUALQUER
+  `cliente_end`; CNPJ exige especificamente `cliente_end.tipo=0`
+  comercial — diferença real vs. NFC-e, confirmada em `frmtranfe.frm`),
+  `_emitir_nfe_agrupada_sync` (valida lista não vazia/mesmo cliente/
+  todas `PG`/nenhuma já agrupada, busca itens de produto de TODAS as
+  comandas, consolida em Python por `(codigo_int, p_unit)` — item com
+  `pecas.controla_num_serie=1` nunca soma —, resolve tributação por
+  item consolidado, emite via `emitir_nfe_sync`, grava `n_fiscal`/
+  `n_fiscal_itens`/`comanda_nf` em lote, atualiza `controle.numero_nf`).
+- Contador de numeração = `controle.numero_nf`/`serie_nf`/`modelo_nf`
+  (**não** `controle_nota_fiscal` — essa é uma tabela paralela de
+  "Outras Séries NFe" com `modelo_nf` hardcoded `'18'`, confirmado lendo
+  `controle_sistema_service.py` antes de escrever qualquer código;
+  corrigido ainda na fase de planejamento, sem retrabalho).
+- Rotas `POST /nfe-agrupada/comandas` e `POST /nfe-agrupada/emitir`
+  (`backend/routes/nfe_agrupada.py` + `backend/models/nfe_agrupada.py`),
+  registradas em `server.py`. Catálogo de permissões: tela
+  `NFE_AGRUPADA` (`ABRIR`/`GRAVAR`) no menu `TRANSACOES`.
+- Frontend `frontend/app/nfe-agrupada.tsx` (novo) — mesmo esqueleto do
+  Gestor NFCe: busca de cliente (`ClientSearchModal`), lista de comandas
+  com checkbox, badges de aviso (já tem NFC-e / já agrupada), barra de
+  ação em lote, Modo Didático. Card em `transacoes.tsx` gated por
+  `can("NFE_AGRUPADA.ABRIR")`.
+
+**Correção de ordem 2026-08-20, user-directed**: "para comandas
+agrupadas, o cálculo de ibs/cbs só é feito após a geração do registro
+na tabela n_fiscal" — diferente do caminho de comanda única
+(`comanda_service.py`, que calcula IBS/CBS ANTES de emitir/gravar). Sob
+pergunta de esclarecimento (`AskUserQuestion`, já que a mecânica não
+era óbvia — não gravar informação fiscal em cima de suposição), o
+usuário confirmou o mecanismo: **"Recalcula e reescreve o XML salvo"**
+— a NF-e é assinada/transmitida ao SEFAZ e gravada em `n_fiscal` SEM
+IBS/CBS embutido no XML; em seguida, já com `codigo_n_fiscal`
+disponível, o IBS/CBS é calculado por item consolidado e a coluna
+`xml` de `n_fiscal` é **reescrita** (recalculada, com os fragmentos
+IBS/CBS embutidos) — **sem reassinar nem retransmitir ao SEFAZ**, é só
+um registro mais completo pro banco, não um novo envio fiscal. Ver
+docstring de `_emitir_nfe_agrupada_sync` ("Correção de ordem") pro
+detalhe de implementação.
+
+**Testes**: `backend/tests/unit/test_nfe_emissao_service.py` ganhou
+`TestMontarXmlNfe`/`TestEmitirNfeSync` (12 testes — destinatário
+estruturado, `idDest` por UF, CPF vs CNPJ, contingência nunca chama
+SEFAZ). `backend/tests/unit/test_nfe_agrupada_service.py` (novo, 24
+testes) — listagem, validação de destinatário (CPF/CNPJ sem endereço
+bloqueiam, município desconhecido bloqueia), bloqueios (comanda não
+encontrada/não paga/já agrupada/clientes distintos/sem cliente/sem
+itens de produto/sem tributação), consolidação (soma normal, item com
+num_serie não soma), sucesso grava `n_fiscal`/`n_fiscal_itens`/
+`comanda_nf` em lote e atualiza `controle`, falha de emissão não grava
+nada. Suíte completa (`pytest tests/unit`): 2082 passando (1 falha
+pré-existente e não relacionada em `test_cnab_itau_service.py`, teste
+sensível à data corrente hardcoded — nada a ver com esta feature).
+`tsc --noEmit` no frontend: 0 erros novos (baseline de 12 erros
+pré-existentes não relacionados, inalterado).
+
+**Fora de escopo, não implementado nesta rodada** (ver "Escopo desta
+rodada" no plano aprovado): NF-e avulsa genérica sem comanda de origem
+(`frmtranfe.frm` completo); NFS-e agrupada; rastreabilidade granular
+item↔comanda (decisão consciente do usuário).
 
 ### Blueprint do futuro menu "Gestor Fiscal" — rastreio completo das 8 telas, 2026-08-06
 
@@ -1790,6 +2124,46 @@ tela.
      fornecedor`/`estoque_cliente` (entrada em consignação de/para
      terceiros); `ExigeContraPartida` — certos tipos de movimento exigem
      indicar a NF de origem, pra permitir cancelamento automático futuro.
+   - **Destinatário sempre obrigatório e validado — bloqueante, diferença
+     real vs. NFC-e** (rastreio completo 2026-08-19,
+     `TestaEnderecoNFE`): CPF (pessoa física) exige algum endereço
+     cadastrado (`cliente_end`/`fornecedor_end`, qualquer tipo); CNPJ
+     exige especificamente endereço tipo **comercial** (`tipo=0`) —
+     nenhum dos dois casos aceita cliente sem endereço, ao contrário de
+     NFC-e (onde destinatário costuma ser opcional). Endereço de
+     cobrança/entrega (quando configurado em `controle_aux.Inclui_
+     Endereco_Cobranca_Obs_Nfe`/`..._Entrega_Obs_Nfe`) é só texto anexado
+     nas observações da nota, não campo estruturado do XML.
+   - **Tributação (ICMS/IPI/PIS/COFINS) confirmada como a MESMA cascata
+     de NFC-e** (rastreio 2026-08-19): `SitTribut()`/`SitIPI()`, mesma
+     tabela `Taxas` (não `taxas_nfce`) e mesma cascata de 6 tentativas de
+     fallback já portada em `nfe_emissao_service._resolver_tributacao_
+     sync` — reaproveitável 1:1, não precisa de lógica nova.
+   - **IBS/CBS confirmado presente, mas só localizado no ramo de
+     reemissão** (`Call CalculaIBSCBS(0, Codigo_NF)`, mesma função
+     parametrizável já usada por NFC-e via `ibs_cbs_service.py`) — **não
+     confirmado ainda se/onde é chamado no caminho normal de 1ª
+     emissão** (pode estar em `.bas` compartilhado não rastreado). Não
+     assumir cobertura completa de IBS/CBS pra NF-e sem esse rastreio.
+   - **`GeraNFe` confirmado como função ÚNICA compartilhada entre modelo
+     55 (NF-e) e 65 (NFC-e)**, diferenciada só pelo parâmetro posicional
+     `ModeloNota As Byte` — não tem lógica por tipo de movimentação
+     (venda/devolução/transferência), essa resolução é toda feita antes,
+     no VB6 (`tipo_mov`/`cfops`/`Taxas`); `GeraNFe` só monta/assina/
+     transmite o que já foi resolvido e gravado. Diferenças internas
+     reais por modelo: persiste `chave_acesso` de volta em `n_fiscal` só
+     quando `ModeloNota="55"`; `idDest` (indicador interno/interestadual)
+     só tem lógica condicional (endereço de entrega/UF) pra modelo 55 —
+     modelo 65 sempre assume `idDest=1`.
+   - **`NFe2.vb` existe no disco mas está EXCLUÍDO do build**
+     (`BackOn.Controllers.vbproj` só compila `NFe.vb`) — é um rascunho
+     órfão com uma segunda `Public Class NFe`, quase idêntico a
+     `NFe.vb`, **incluindo funções de MDF-e** (`GeraMDFe`, `EncerraMDFe`,
+     `CancelaMDFe`, `ConsultaSituacaoMDFe`) que não existem em `NFe.vb`.
+     Não usar como fonte de verdade sem confirmar com a equipe VB.NET —
+     mas é pista relevante se/quando o MDF-e (item da lista de telas
+     fiscais pendentes) for retomado: pode já existir um rascunho de
+     referência nessa classe órfã.
    - **Gambiarras confirmadas**: `ImportaComplementar` insere um endereço
      **hardcoded** de uma instalação específica (`'RUA VITOR MEIRELES, Nº
      221'`, Riachuelo, Rio de Janeiro) em `cliente_end` quando o cliente da
@@ -1799,18 +2173,432 @@ tela.
      `tempREQ`, filtradas por `COMPUTADOR = NomeComputador`, com
      `DROP TABLE`+`CREATE TABLE` a cada uso) — workaround pré-multiusuário
      real, substituir por parâmetro de sessão/transação real, não portar
-     literalmente.
-   - **Tabelas**: rascunho `nf_aux`/`nf_aux_itens`/`nf_aux_vencimento`;
+     literalmente. `App.EXEName`/`App.Minor` condicionais (efeitos de
+     estoque de consignação só disparam pra binários/linhas de negócio
+     específicas — Livraria/Jamer) — sinal de que o mesmo `.frm` é
+     compilado em vários `.exe` com pequenas variações; não universalizar
+     sem confirmar se essa regra vale pra este cliente.
+   - **Tabelas**: rascunho `nf_aux`/`nf_aux_itens` (colunas confirmadas:
+     ~45 campos, cobrindo produto/qtd/preço/desconto + bloco fiscal
+     completo por item — ICMS/ICMS-ST/IPI/ISS/FCP normal+retido+ST/
+     desoneração/crédito Simples Nacional)/`nf_aux_vencimento`;
      definitivo `n_fiscal`/`n_fiscal_itens`/`n_fiscal_vinculada`/
-     `nf_vencimento` (a criação do registro definitivo em si não foi
-     encontrada neste `.frm` — deve estar num `.bas` compartilhado, não
-     rastreado ainda); `pecas`, `consignacao`/`consignacao_baixa`,
-     `pedido_venda`/`pedido_venda_prod`/`pedido_nf`, `devolucao_itens`/
-     `movimentacao`, `requisicao`/`tempREQ`, `tempdev`, `cliente_end`,
-     `cfops`, `tipo_mov`, `devolucao_config`, `controle`/`controle_aux`.
+     `nf_vencimento`/`nf_coligada` (a promoção rascunho→definitivo em si
+     não foi encontrada neste `.frm` — deve estar num `.bas` compartilhado
+     ou em `Seta_Dados_NFE`/`Dados_Tomador`/`Dados_Prestador` do lado
+     VB.NET, **ainda não rastreado**); `pecas`, `consignacao`/
+     `consignacao_baixa`, `pedido_venda`/`pedido_venda_prod`/`pedido_nf`,
+     `devolucao_itens`/`movimentacao`, `requisicao`/`tempREQ`, `tempdev`,
+     `cliente_end`/`fornecedor_end`, `cfops`, `tipo_mov`, `devolucao_
+     config`, `controle`/`controle_aux`.
    - **DLL**: `Backon_Controllers.Nfe.GeraNFe` (emissão real, contingência
      tratada) e `.ConsultaNFE` (status SEFAZ) — mesmo padrão já documentado
-     em [[project_nfse_dps_emissao]].
+     em [[project_nfse_dps_emissao]]. Classe `Nfe` (`NFe.vb`) também expõe
+     `AutorizacaoNFe`, `CancelaNFe`, `InutilizacaoNFE`,
+     `ConsultaNFEDestinatario`, `ConsultaCadastro`, `CartaDeCorrecao`,
+     `Transmitir_NFe`, `Assinar`, `ValidarXML` — todas compartilhadas
+     55/65 pelo mesmo padrão de parâmetro `ModeloNota`.
+   - **Confirmado 2026-08-19: `FrmSelComandas.frm` NÃO alimenta esta
+     tela** — ver item "Agrupamento de Comandas" acima, o destino real é
+     `FrmTraImpNFE.frm`. `frmtranfe.frm` não tem nenhuma referência viva
+     a `lista_comandas_nfe`.
+   - **3 itens em aberto, precisam de rastreio antes de implementar**:
+     ~~(1) onde `nf_aux`→`n_fiscal` é promovido de fato~~ **RESOLVIDO
+     2026-08-20**, ver seção "Rastreio completo de `frmtranfe.frm` —
+     promoção, IBS/CBS, 6 importações, layout" logo abaixo. ~~(2) se/onde
+     `CalculaIBSCBS` é chamado no caminho normal de 1ª emissão~~
+     **RESOLVIDO 2026-08-20** (idem, item 2 dessa seção — confirmado que
+     roda sim). (3) como `FrmTraImpNFE.ChamaListaComandas` consome
+     `lista_comandas_nfe` de fato — **já resolvido em 2026-08-19** (ver
+     "Agrupamento de Comandas — rastreio completo de FrmTraImpNFE.frm"
+     acima, feito na mesma sessão em que este item 3 foi escrito, só não
+     tinha sido riscado aqui ainda).
+   - **Bug/gambiarra encontrado em `FrmSelComandas.frm` (não portar)**:
+     `Command3_Click` (Gerar NFE) faz `DELETE FROM lista_comandas_nfe`
+     **sem WHERE**, apagando listas de TODOS os clientes antes de gravar
+     a seleção atual — só "funciona" porque o legado é mono-processo
+     local; não replicar essa falta de isolamento numa migração
+     multiempresa/multiusuário real.
+
+### Rastreio completo de `frmtranfe.frm` — promoção, IBS/CBS, 6 importações, layout, 2026-08-20
+
+Continuação do item 3 acima — resolve os 2 pontos que ainda estavam em
+aberto (promoção `nf_aux`→`n_fiscal`, IBS/CBS na 1ª emissão) e detalha
+campo-a-campo as 6 sub-rotinas de importação + o layout completo do
+cabeçalho, antes de propor qualquer plano de implementação (Leandro
+nunca implementa em cima de suposição). `.vbp` confirmado:
+`C:\Desenv\VB6\SQLSERVER\Kontacto\backon.vbp` (referencia `NFe\
+frmtranfe.frm` + `Module=ModNF; ..\Geral\ModNF.bas` — não `ModNFNfe.bas`
+nem `ModNF_ANT.bas`, que existem no disco mas não estão no `.vbp` real,
+são rascunhos/versões antigas).
+
+**1. Promoção `nf_aux`/`nf_aux_itens` → `n_fiscal`/`n_fiscal_itens`** —
+acontece em `Private Sub GravaNFE(MaxP As Integer, MinP As Integer)`
+(`Geral\ModNF.bas:7468-7847`), **não** é um `INSERT...SELECT` — é
+gravação campo-a-campo a partir de **arrays em memória** (populados por
+`ImprimeA`, não da tabela `nf_aux_itens` via SQL). Cadeia completa (1ª
+emissão): `CmdImprimir_Click` (`frmtranfe.frm:3778`, botão rotulado
+"Imprimir" mas é o gatilho de emissão) → se `nf_aux.num_nf = 0` (1ª vez)
+chama `ImprimeA()` (`4494-5299`, resolve destinatário + roda
+`SitTribut`/`Calcula` por item, mesma cascata de NFC-e, preenchendo ~40
+arrays paralelos) → `ImprimeNota` (`ModNF.bas:396-453`) despacha por
+`Case 18: Modelo18` (`ModNF.bas:6433-6594` — comentário do código diz
+"Nota Fiscal GUERENGASES" mas o dispatch é genérico via
+`controle.modelo_nf`, comentário desatualizado/enganoso, não restringir
+a esse cliente) → `Modelo18` chama `GravaNFE(UBound(CodProNF), 0)`
+(`6561`). **Dentro de `GravaNFE`**: abre recordset em `N_FISCAL`, grava
+cabeçalho a partir das variáveis globais já calculadas pela cascata de
+tributação (não cópia direta de `nf_aux`), reconsulta `N_FISCAL` por
+`FORNECEDOR+DATA_MOV` pra reobter `Codigo_NF` (padrão redundante do
+próprio legado), grava `n_fiscal_itens` por item com bloco fiscal
+completo recalculado (não 1:1 de `nf_aux_itens`), grava itens de
+**Serviço** num loop separado com CFOP fixo `5949`/tributação fixa
+`"0400"` hardcoded (`7762-7763`, achado novo), chama `CalculaIBSCBS`
+(ver item 2), e por fim `AjusteGeral(Codigo_NF)` (`ModNF.bas:4984-5008`)
+— **a única transformação real "no meio do caminho"**: zera bases com
+valor 0, e recalcula o CABEÇALHO de `n_fiscal` como `SUM()` dos itens
+recém-gravados em `n_fiscal_itens` (`UPDATE N_FISCAL SET valor_total=...,
+base_icms=..., valor_icms=..., base_sub=..., ...`) — o cabeçalho final
+não é o que veio de `nf_aux`, é a soma agregada dos itens já gravados.
+Depois, de volta em `CmdImprimir_Click` (rótulo `DIRETO_NFE`,
+`frmtranfe.frm:4299`), chama a DLL `Backon_NFe.GeraNFe(...)` (`4355`) —
+que no VB.NET usa `Seta_Dados_NFE`/`Dados_Tomador`/`Dados_Prestador`
+(`Backon.Data\DAO_NFE.vb`) só pra LER `n_fiscal`/`n_fiscal_itens` já
+promovidos e montar o XML — **não é a rotina de promoção**, é consumidor
+downstream (fecha a suspeita registrada no item 3 original).
+**Não confirmado**: onde (ou se) `nf_aux.num_nf` é persistido de volta
+com o `Codigo_NF` gerado — nenhum `UPDATE nf_aux SET num_nf` encontrado
+em `frmtranfe.frm` nem `ModNF.bas`; pode estar em `Coliga`
+(`ModNF.bas:1422`, não lido por completo) ou ser código raramente
+exercitado na prática.
+
+**2. `CalculaIBSCBS` no caminho normal de 1ª emissão — CONFIRMADO SIM.**
+Busca completa na árvore inteira achou 7 chamadores; o relevante aqui é
+`ModNF.bas:7737`, **dentro de `GravaNFE`** (mesma sub da promoção acima),
+disparado na 1ª emissão, não só na reemissão (`frmtranfe.frm:3902`, já
+documentada). Ou seja: a mesma sub que promove `nf_aux`→`n_fiscal`
+também dispara `CalculaIBSCBS` na 1ª emissão — cobertura de IBS/CBS na
+NF-e avulsa está completa (1ª emissão + reemissão), reaproveitável 1:1
+via `ibs_cbs_service.py` como já suposto. Resolve também o "gap real
+confirmado" registrado na seção "`CalculaIBSCBS` NUNCA foi portado pro
+motor de emissão" mais abaixo — aquele gap é só do lado Python (nunca
+portado pro backend desta migração), não do lado VB6 (que chama sim, em
+todos os caminhos relevantes: NFC-e, NF-e avulsa 1ª emissão+reemissão,
+NF-e Comanda/agrupada — só faltava confirmar NF-e avulsa 1ª emissão,
+agora fechado).
+
+**3. As 6 sub-rotinas de importação** (todas em `frmtranfe.frm`, padrão
+comum: setam `Cmb`/`Campo(2-5)`, criam cabeçalho via `CmDinclui_Click`
+se vazio, por item chamam `Camp(n)=valor`+`Camp_LostFocus(n)`+
+`CmdOk_Click`; **nenhuma tem checagem de "documento já importado antes"
+nem bloqueio de reimportação** — só `ImportaDevolucao`/`ImportaRequisicao`
+exigem que o vetor de seleção não esteja vazio):
+   - **`ImportaPedido(NumPed)`** (`7987-8125`) — lê `Pedido_Venda`+
+     `pedido_venda_prod`. Mapeia `pedido_venda.tipo`: `5`→mov `S09`
+     (venda c/ reposição), `2`→`S08` (consignada), `3`→`S07` (saída
+     consignação), demais→`S01` (venda normal); prefixo `5`/`6` conforme
+     UF do cliente = ou ≠ `UFNFeControle`. Qtd vem de `qtd_pedida` (ou
+     `qtd_atendida` se `App.EXEName="JAMER"` — gambiarra por binário,
+     não portar condicionada a cliente). Gera parcelas automaticamente a
+     partir de `forma_pagamento.prazo/prazo_rec/parcela_max`. Acumula em
+     `PedidosNotaFiscal` — o fechamento real (INSERT `pedido_nf`, UPDATE
+     `pecas.qtd/reservado`, `pedido_venda.situacao='PG'`) só ocorre na
+     emissão final (`CmdImprimir_Click:3962-3986`), não na importação.
+   - **`ImportaDevolucao()`** (`8407-8557`) — usa vetor `VetDevolucao()`
+     (pré-selecionado em outra tela). Valida endereço do cliente
+     (bloqueante). Resolve `tipo_mov`/CFOP via `devolucao_config` por UF
+     destino. Usa tabela temporária `tempdev` (gambiarra já conhecida).
+     Item vem de `movimentacao`+`devolucao_itens`+`devolucao_config`+
+     `pecas`. Também popula `Vinculadas` (chaves de acesso NFC-e/NF-e de
+     origem, de `comanda_nfce`/`comanda_nf`) → `n_fiscal_vinculada`.
+   - **`ImportaCompraPedido()`** (`8559-8595`) — só roda com `OD=True`
+     (fornecedor). Pede número via `InputBox` — **sem tela de seleção**,
+     digitação livre. Lê `pedido_itens` (compra, não `pedido_venda_prod`).
+     Desconto vem do cadastro do fornecedor (`fornecedor.desconto`),
+     aplicado uniformemente a todos os itens.
+   - **`ImportaRequisicao()`** (`8597-8692`) — usa vetor
+     `VetRequisicao()`. Valida endereço do cliente (bloqueante). Resolve
+     `tipo_mov`/CFOP via `requisicao_config_nfe` por UF destino. Usa
+     tabela temporária `tempreq` (mesma gambiarra, sem filtro por
+     `COMPUTADOR` aqui, diferente de `tempdev`). Item vem de `rec_prod`+
+     `requisicao_config_nfe`+`pecas`, sem desconto.
+   - **`ImportaNF(CodigoNota)`** (`8767-8808`) — só roda com `OD=True`.
+     Lê `N_FISCAL_ITENS` de outra NF já existente (nota complementar/
+     vinculada a NF anterior) — é a mais "cópia direta" das 6: copia
+     quase todos os campos fiscais 1:1 (qtd, p_unit, desconto, frete,
+     seguro, despesas, bases/valores IPI/ICMS/ICMS-ST/FCP-ST), sem
+     recálculo de CFOP/tributação (assume que a origem já está correta).
+   - **`ImportaComplementar(Codigo)`** (`8918-9008`) — parte de uma
+     Comanda, não de outro documento fiscal. `tipo_mov` fixo `S50`, CFOP
+     fixo `5102`. Endereço hardcoded já documentado (Rua Vitor Meireles
+     221, Riachuelo/RJ). **Achado novo**: filtra itens de
+     `COMANDA_NFCE_DETALHE` só com `COD_ICMS='6'`, grava a linha com
+     **quantidade zerada** e **preço zerado**, mas grava
+     `precoFCP`(base)/`precoFCP*2/100` — ou seja, essa nota complementar
+     existe especificamente pra cobrar a diferença de FCP não destacada
+     na NFC-e original, não o produto em si, com **alíquota de FCP
+     hardcoded em 2%** — gambiarra adicional a registrar, não confirmar
+     como regra geral sem checar se 2% é config ou fixo em toda
+     instalação.
+
+**4. Layout do cabeçalho** (`CmDinclui_Click`/`Apresenta` concordam
+100%): `Campo(2)`=fornecedor/destinatário (dispara toda a resolução de
+CFOP/tributação), `Campo(3)`=cfop, `Campo(4)`=data emissão (não pode ser
+futura), `Campo(5)`=data_mov/saída (≥ emissão), `Campo(6)`=desconto,
+`Campo(7)`=valor_total, `Campo(9-26)`=bases/valores ICMS/ICMS-ST/IPI/
+ISS/FCP normal+retido+ST, `Campo(13)`=frete, `Campo(18)`=seguro,
+`Campo(19)`=despesas, `Campo(20)`+grid `Flex1`=vencimentos
+(`nf_aux_vencimento`), `Cmb`=tipo_mov (união `situacao='A'` S+E,
+confirma "todo tipo ativo, entrada e saída"), `Series`=série de NF-e
+(pré-selecionada se só 1 ativa), `Coligadas`=`nf_coligada.nf_origem`
+(contrapartida/`ExigeContraPartida`), `Vinculadas`=
+`n_fiscal_vinculada.chave_acesso`, `TxtObs`=observações (concatenado com
+endereço de cobrança/entrega quando configurado, já documentado).
+**Transporte** (`CampoTransp(0-13)`): nome/placa/UF veículo/documento/
+endereço/município/UF/IE do transportador, volumes, espécie, marca,
+número, peso bruto/líquido; tipo de frete `opFrete(0..5)`→códigos
+`"1".."6"` — **rótulos exatos das 6 opções não confirmados** nesta
+leitura, só os códigos numéricos gravados.
+
+**Pendências explícitas pra resolver antes/durante implementação**:
+(1) mecanismo de "nf_aux já promovida" (`nf_aux.num_nf`) não localizado
+— não presumir onde fica sem achar `Coliga` primeiro; (2) alíquota FCP
+2% hardcoded em `ImportaComplementar` — confirmar se é config ou fixa
+antes de portar; (3) rótulos das 6 opções de `opFrete` — ler o `.frm`
+de novo focando nos `Caption` dos radio/combo quando for implementar
+essa parte.
+
+### NF-e Avulsa ("Gerar NFe") — IMPLEMENTADO 2026-08-20
+
+Fase A do rastreio de `frmtranfe.frm` acima — cabeçalho completo + itens
+digitados na mão, SEM as 6 sub-rotinas de importação automática (ficam
+pra fase futura). Protocolo Gauntlet acionado (Leandro+Carlos+Apoio
+Fisco+Thomé). **Status: código completo, 31 testes unitários novos
+passando (2113 no total, 1 falha pré-existente não relacionada), `tsc`
+limpo — NUNCA testado ao vivo contra SEFAZ real nem aberto no
+navegador.**
+
+**Correção de rota feita ao vivo, durante a implementação**: a 1ª versão
+do plano propunha estender a tela **"Notas Fiscais"**
+(`notas_fiscais_service.py`/`notas-fiscais.tsx`, "Manutenção de Notas
+Fiscais", migrada de `FrmManRec.frm`). **Confirmado pelo usuário que
+isso estava errado** — aquela tela é só consulta detalhada + ações
+pós-emissão (gerar DANFE, cancelar, carta de correção, gerar XML), não
+tem nada a ver com digitar/criar uma nota nova; **não foi tocada**.
+Estrutura real de menu confirmada: "Transações > Notas Fiscais > Gerar
+NFe Comanda" (= [[project_nfe_agrupada]], já implementado) e "> Gerar
+NFe" (= esta feature, tela nova e dedicada).
+
+**3 decisões de negócio confirmadas com o usuário** (mensagens diretas,
+domínio real):
+1. ICMS/IPI/ISS por item são **sugeridos** via cascata de tributação
+   (`_resolver_tributacao_sync`, mesma de NFC-e/NF-e agrupada) mas
+   **livremente editáveis** antes de gravar o rascunho.
+2. **PIS/COFINS nunca é digitável** — calculado só no momento de Emitir,
+   gravado direto em `n_fiscal`/`n_fiscal_itens` (não existe coluna pra
+   isso em `nf_aux_itens`, confirmado no schema real).
+3. Arquitetura real é rascunho→definitivo: durante a digitação, tudo
+   fica em `nf_aux`/`nf_aux_itens`/`nf_aux_vencimento` (tabelas espelho);
+   só ao Emitir promove pra `n_fiscal`/`n_fiscal_itens`/`nf_vencimento`,
+   e é nesse momento que PIS/COFINS e IBS/CBS são calculados.
+
+**Achado de schema real, 2026-08-20** (`INFORMATION_SCHEMA.COLUMNS`,
+GERDELL/BARESTELA — não presumido): `n_fiscal_itens`/`n_fiscal` já têm
+colunas ESTRUTURADAS dedicadas pra IBS/CBS por item (`CST_IBS_UF`/
+`VALOR_IBS_UF`/`CST_CBS`/`VALOR_CBS`/etc., mesmo conjunto que
+`ibs_cbs_service.calcular_item_ibs_cbs` já devolve pronto) + totais no
+cabeçalho (`n_fiscal.XML_TOT_IBS_CBS`) — **esta feature grava IBS/CBS
+direto nessas colunas**, não reescreve o XML inteiro (diferente do
+mecanismo usado em [[project_nfe_agrupada]], que nasceu antes desse
+achado). **Decisão explícita do usuário: não retrofitar
+`nfe_agrupada_service.py`** pra usar o mesmo mecanismo agora ("não tem
+porque ficar comparando com agrupar comandas") — registrado como
+melhoria pendente pra rodada futura, não implementada.
+
+**Arquivos**: `backend/services/nfe_avulsa_service.py` (novo — rascunho
+`nf_aux`/`nf_aux_itens`/`nf_aux_vencimento`, `_sugerir_tributacao_sync`,
+`_emitir_nfe_avulsa_sync`), `backend/services/nfe_fiscal_common.py`
+ganhou `resolver_destinatario_cliente_sync`/`resolver_destinatario_
+fornecedor_sync` (o de cliente foi MOVIDO de `nfe_agrupada_service.py`,
+que mantém `_resolver_destinatario_sync` como alias — não quebra os
+testes existentes), `backend/routes/nfe_avulsa.py` + `backend/models/
+nfe_avulsa.py`, catálogo de permissões `NFE_AVULSA` (`ABRIR`/`GRAVAR`,
+menu `TRANSACOES`), `frontend/app/nfe-avulsa.tsx` (novo — cabeçalho +
+itens + Modo Didático) + card "Gerar NFe" em `transacoes.tsx`.
+
+**Simplificações desta fase, documentadas** (não presumidas — decisões
+conscientes de escopo): CFOP é só de cabeçalho, não por item (`nf_aux`
+não tem CFOP por item neste desenho, diferente do legado que resolve via
+cascata por item); fórmula de PIS/COFINS na emissão (`_calcular_pis_
+cofins_item`) é **best-effort a partir das colunas confirmadas de
+`taxas`** (`CST_TRIB_PIS`/`ALQT_TRIB_PIS`/`CST_TRIB_COFINS`/`ALQT_TRIB_
+COFINS`) — **não foi cruzada linha-a-linha contra `SitTribut`/`Calcula`
+do VB6 nesta rodada**, precisa validação antes de confiar em produção
+real (mesma ressalva de "nunca inventar regra fiscal" — aqui é uma
+aproximação documentada, não uma regra confirmada); sem as 6
+sub-rotinas de importação automática; sem reemissão de rascunho já
+promovido (bloqueada com mensagem clara); sem `nf_coligada`/
+`n_fiscal_vinculada`; sem bloco de transporte na tela (colunas existem
+em `nf_aux`, campos não expostos na UI nesta fase).
+
+**Testes**: `backend/tests/unit/test_nfe_avulsa_service.py` (novo, 22
+testes — rascunho CRUD incl. bloqueio de edição pós-emissão, sugestão de
+tributação, todos os bloqueios de emissão, sucesso grava `n_fiscal`/
+`n_fiscal_itens`/`nf_vencimento` + marca `nf_aux.num_nf` + PIS/COFINS
+calculado só na emissão + IBS/CBS gravado nas colunas estruturadas,
+falha de emissão não grava nada); `backend/tests/unit/test_nfe_fiscal_
+common.py` (novo, 6 testes — `resolver_destinatario_fornecedor_sync`,
+mesmos casos já cobertos pro cliente). Suíte completa: 2113 passando (1
+falha pré-existente não relacionada, data hardcoded em
+`test_cnab_itau_service.py`).
+
+**Fora de escopo desta rodada** (ver "Escopo desta rodada" no plano
+aprovado): as 6 sub-rotinas de importação automática (Pedido/Devolução/
+Compra/Requisição/NF/Complementar); reemissão de rascunho já promovido;
+`nf_coligada`/`n_fiscal_vinculada`; CFOP por item; reorganização do menu
+"Gestor Fiscal" e do grupo "Fiscal" em Configurações > Módulos (pedido
+explícito do usuário, mas pra rodada futura separada); retrofit de
+`nfe_agrupada_service.py` pras colunas estruturadas de IBS/CBS.
+
+### Módulos NFCe/NFe/NFSe — implementado, com correção real no meio do caminho, 2026-08-20
+
+Pedido do usuário: criar 3 módulos em Configurações > Módulos e Recursos
+pra controlar o uso das telas/emissão do ecossistema fiscal (NFCe/NFe/
+NFSe), incluir "Alterdata" no grupo "Fiscal", e reaproveitar a coluna
+"DMC" (dita extinta) pra um dos 3.
+
+**1ª tentativa (ERRADA, revertida no mesmo dia)**: sem rastrear a fonte
+VB6 primeiro, foram criadas colunas novas (`controle_configuracao.NFE`/
+`NFSE`, via migração idempotente) e a coluna `DMC` foi reaproveitada como
+módulo "NFCe" (rótulo trocado, `MODULE_TELAS["DMC"] = ["GESTOR_NFCE"]`,
+`nfe_fiscal_common.modulo_nfce_ativo_sync` lendo `controle_configuracao.
+DMC`). O usuário colou o screenshot real da tela VB6 "Módulos do Cliente"
+e apontou que os campos JÁ EXISTIAM no legado — rastreio confirmou.
+
+**Fonte real** (`Geral\FrmGerKon.frm`, "Módulos do Cliente", confirmado
+contra `backon.vbp:392`): o mesmo formulário grava a maioria dos
+checkboxes em `controle_configuracao` (`tbconfig`), mas os 3 campos
+fiscais + os rádios "Ambiente NFe"/"Danfe" gravam numa tabela IRMÃ,
+**`controle_aux`** (`tbconfig2`):
+
+| Checkbox real | Coluna real | Controle no `.frm` |
+|---|---|---|
+| "NFCE" | `controle_aux.emite_nfce` | `Check32`, `FrmGerKon.frm:583-587,856` |
+| "NFe via Webservice" | `controle_aux.nfe_ws` (também liga `imprime_nfe` junto, não replicado) | `Check12`, `FrmGerKon.frm:588-594,855` |
+| "Emite NFSe via PC-RJ" | `controle_aux.emite_nfse` | `Check30`, `FrmGerKon.frm:534-538,582,852` |
+| "DMC (Posto)" | `controle_configuracao.DMC` | `Configuracao(4)`, `FrmGerKon.frm:130-138,543,793` |
+
+**`DMC` nunca foi campo fiscal** — é "Exportação do DMC Combustíveis"
+(ligado a Posto). Não há mais leitura condicional ativa dela no VB6 (só
+código morto comentado, `mdl_proc.bas:19372-19374`), **mas a tela
+`FrmGerKon.frm` continua viva**, gravando/exibindo "DMC (Posto)" e
+disparando e-mail de auditoria pra `adm@kontacto.com.br`/
+`comercial@kontacto.com.br` toda vez que o valor muda (texto literal
+"Exportação do DMC Combustíveis", `FrmGerKon.frm:621,655,688,752-753`).
+Reaproveitá-la geraria cross-talk visível/confuso entre o app novo e o
+legado rodando em paralelo sobre o mesmo banco — corrigido antes de
+qualquer instalação real ser afetada (achado e revertido no mesmo dia).
+**`emite_nfse` (legado, "PC-RJ", municipal) não corresponde ao caminho
+de emissão implementado nesta migração** (`comanda_service._emitir_
+nfse_comanda_sync`, Sefin Nacional/DPS — a via antiga por RPS municipal
+nunca foi portada) — por isso `emite_nfse` só é exposto em Módulos e
+Recursos pra visibilidade/paridade com o legado, mas **não gateia**
+nenhuma função Python; o gate correto da emissão continua sendo só
+`sefin_nacional`, inalterado desde antes desta rodada.
+
+**Estado final, correto**:
+- `backend/services/controle_config_service.py`: `DMC` de volta ao
+  rótulo real ("DMC (Posto)"); `CAMPOS_CONTROLE_AUX` novo (`emite_nfce`/
+  `nfe_ws`/`emite_nfse`, tabela `controle_aux`); `_read_config_sync`/
+  `_save_config_sync` agora leem/gravam nas DUAS tabelas, mesclando na
+  mesma resposta pro frontend (tabela de origem é transparente pra UI);
+  `MODULE_TELAS["emite_nfce"] = ["GESTOR_NFCE"]`, `MODULE_TELAS["nfe_ws"]
+  = ["NFE_AGRUPADA", "NFE_AVULSA"]`. Nenhuma coluna nova foi criada
+  (`_ensure_fiscal_module_cols` removida por completo) — os 3 campos já
+  existiam de verdade.
+- `backend/services/nfe_fiscal_common.py`: `modulo_nfce_ativo_sync`/
+  `modulo_nfe_ativo_sync` leem `controle_aux.emite_nfce`/`nfe_ws`; não
+  existe `modulo_nfse_ativo_sync` (ver acima, `sefin_nacional` já cobre).
+  Checados em runtime (defesa em profundidade, vale até pra master) em
+  `gestor_nfce_service.py` (8 pontos), `contingencia_nfce_service.py` (2),
+  `comanda_service._emitir_nfce_comanda_sync`, `nfe_agrupada_service.py`
+  (2), `nfe_avulsa_service.py` (2).
+- `frontend/app/modulos-recursos.tsx`: grupo "Fiscal" =
+  `sped`/`emite_mdfe`/`sefin_nacional`/`Alterdata`/`emite_nfce`/`nfe_ws`/
+  `emite_nfse`. `frontend/app/(tabs)/transacoes.tsx`: cards Gestor NFCe/
+  Agrupar em NF-e/Gerar NFe gated por `moduleOn("emite_nfce")`/
+  `moduleOn("nfe_ws")`.
+- **Artefato conhecido, inofensivo**: as colunas `NFE`/`NFSE` criadas por
+  engano em `controle_configuracao` durante a 1ª tentativa **continuam
+  existindo** no(s) banco(s) que já rodaram a migração idempotente antes
+  da correção (nenhuma migração de `DROP COLUMN` foi escrita — fora do
+  padrão só-aditivo deste projeto) — órfãs, sem nenhum código lendo/
+  gravando nelas, sem efeito prático.
+- **Nova regra `[GLOBAL]` registrada em CLAUDE.md** por causa deste
+  episódio: "Sempre checar regras reais de controle/controle_aux/
+  controle_configuracao antes de criar/alterar campo nessas tabelas" —
+  ler antes de mexer de novo nessas 3 tabelas.
+- **Testes**: fixtures `autouse` adicionadas em `test_comanda_service.py`/
+  `test_contingencia_nfce_service.py`/`test_gestor_nfce_service.py`/
+  `test_nfe_agrupada_service.py`/`test_nfe_avulsa_service.py` (mockam os
+  módulos como sempre ligados, já que nenhum teste pré-existente testava
+  o caminho desligado) + 1 teste novo dedicado ao bloqueio por módulo
+  desligado (`test_nfe_agrupada_service.py`). Suíte completa: 2114
+  passando (1 falha pré-existente não relacionada).
+- **Pendência real, não implementada nesta rodada**: os rádios "Ambiente
+  NFe" (Homologação/Produção, `controle_aux.ambiente_nfe`) e "Danfe"
+  (Retrato, `controle_aux.modelo_danfe`) também vivem em `FrmGerKon.frm`
+  e não foram portados — `nfe_emissao_service.py` hoje hardcoda
+  `tp_amb="1"` (produção) em todo lugar. Achado de passagem durante o
+  rastreio desta correção, fora do pedido original — registrar aqui pra
+  não esquecer, não implementar sem pedido explícito.
+
+### Hub "Gestor Fiscal" (frontend) — IMPLEMENTADO 2026-08-20
+
+Reorganização de menu pedida pelo usuário: reunir as telas fiscais de
+emissão/consulta num hub próprio em Transações, em vez de cards soltos.
+Usuário colou o menu real do VB6 (Transações > Notas Fiscais): **Gerar
+Nfe Comanda, Recebimento, Gerar Nfe, Gestor NFSe, Gestor NFCe,
+Contingência NFe, Contingência NFCe, Inutilização de Faixa NFe/NFCe** —
+"Despacho de NF's" NÃO está nessa lista (confirma o achado já registrado
+acima: equipe VB6 disse que nunca foi colocada em uso real).
+
+- `frontend/app/gestor-fiscal.tsx` (novo, mesmo padrão de
+  `movimentacoes.tsx`) — só as 3 telas JÁ CONSTRUÍDAS ganham card (nunca
+  placeholder pra tela que não existe, mesmo princípio já usado em
+  Movimentações): **Gerar Nfe Comanda** (`/nfe-agrupada`), **Gerar Nfe**
+  (`/nfe-avulsa`), **Gestor NFCe** (`/gestor-nfce`, já inclui
+  Contingência NFCe embutida). Ordenação alfabética (regra `[GLOBAL]`
+  "Card List Ordering"), não a ordem do menu VB6.
+- `frontend/app/(tabs)/transacoes.tsx`: os 3 cards soltos (Gestor NFCe/
+  Agrupar em NF-e/Gerar NFe) viraram 1 card "Gestor Fiscal" →
+  `/gestor-fiscal`, visível se qualquer uma das 3 sub-telas estiver
+  liberada (módulo + permissão, mesmo padrão OR já usado por
+  "Movimentações"). Sem tela/permissão própria pro hub em si — mesmo
+  princípio de "Movimentações", que também não tem `MOVIMENTACOES.ABRIR`.
+- **Rótulo renomeado pra bater com o menu real**: "Agrupar em NF-e" →
+  **"Gerar Nfe Comanda"** em todo texto voltado ao usuário
+  (`nfe-agrupada.tsx`: header, LockedViews, título do Modo Didático) —
+  rota/arquivo/permissão (`/nfe-agrupada`, `NFE_AGRUPADA`) continuam
+  iguais, só o texto que o usuário lê mudou.
+- **Ainda faltam** (sem tela, não implementadas nesta rodada — ver itens
+  do blueprint mais abaixo neste documento): Recebimento (`FrmtraRec.frm`,
+  módulo grande), Gestor NFSe (RPS municipal, distinto do Sefin Nacional/
+  DPS já implementado), Contingência NFe (própria, não confundir com
+  Contingência NFCe já embutida em Gestor NFCe), Inutilização de Faixa
+  NFe (a parte NFCe já existe como ação dentro de Gestor NFCe).
+- `tsc --noEmit`: 0 erros novos (baseline de 12 inalterada).
+
+**Atualização, mesmo dia**: "Notas Fiscais" (Manutenção — `notas-
+fiscais.tsx`, `FrmManRec.frm`) foi **transferida de Cadastros pra dentro
+do hub Gestor Fiscal** ("TRANSFERIR NOTAS FISCAIS DE CADASTRO PARA A
+GESTÃO FISCAL", user-directed) — continua sendo a mesma tela (consulta/
+DANFE/cancelar/carta de correção/XML, sem emissão), não confundir com
+Gerar Nfe/Gerar Nfe Comanda (digitação de nota nova, já eram telas
+separadas antes disso). Sem `moduleOn` — o legado não liga essa tela a
+nenhum módulo fiscal específico. `cadastros.tsx` perdeu o card; card do
+hub "Gestor Fiscal" em `transacoes.tsx` ganhou `can("NOTAS_FISCAIS.ABRIR")`
+na condição OR de visibilidade.
 
 4. **Despacho de NF's** (item extra do menu real, não fazia parte da
    lista original de 8 que o usuário tinha citado de memória — mas existe
@@ -1911,6 +2699,68 @@ tela.
    propósito (só Off-Line usado na prática hoje) ou só um gap de UI; não
    assumir nenhuma das duas sem perguntar quando esta tela for retomada.
 
+### Contingência NFe — IMPLEMENTADO 2026-08-20 (+ bug real corrigido em Contingência NFCe)
+
+Item 7 acima, escolhido pelo usuário como próxima frente pequena/bem
+rastreada. Protocolo Gauntlet acionado (Carlos+Kelvin+Thomé).
+
+**Achado importante ao rastrear o schema real antes de codar** (mesmo
+princípio da regra `[GLOBAL]` de controle/controle_aux — aplicado aqui
+por precaução, mesma família de tabela fiscal de configuração):
+`contingencia_nfe` **já existe no legado** — confirmado via
+`INFORMATION_SCHEMA`/`sys.indexes` ao vivo (GERDELL/BARESTELA), não
+presumido. Schema real: `Data_Inicio, Hora_Inicio, Data_Fim, Hora_Fim,
+Motivo, tipo_contingencia`, **chave primária composta `(Data_Inicio,
+Hora_Inicio)`, SEM coluna `id`**.
+
+**Isso revelou um bug real em `contingencia_nfce_service.py`** (já
+implementado numa rodada anterior, "Gestor NFCe"): a 1ª versão daquele
+service assumia `id INT IDENTITY(1,1) PRIMARY KEY` — coluna que **não
+existe** na tabela real (mesma estrutura composta, confirmada igual pra
+`contingencia_nfce`). O `CREATE TABLE IF NOT EXISTS` nunca disparava
+contra um banco real (a tabela já existia com outra estrutura), e como
+nada foi testado ao vivo ainda, o bug nunca foi pego — toda chamada a
+`_fechar_contingencia_sync` teria falhado com "Invalid column name 'id'"
+contra um banco de verdade. **Corrigido no mesmo dia**: DDL alinhada à
+PK composta real, `_fechar_contingencia_sync` usa `WHERE data_fim IS
+NULL` direto (a regra "só uma aberta por vez" já garante que identifica
+a linha certa, sem precisar de `id`). Testes ajustados, 145 testes de
+`contingencia_nfce`+`gestor_nfce`+`comanda` continuam passando.
+
+**Diferença real confirmada contra `FrmConNFe.frm`** (lido por completo,
+444 linhas): diferente de NFCe (só um tipo selecionável, `tipo_
+contingencia=9` fixo), aqui os **dois tipos são igualmente
+selecionáveis** ao abrir uma contingência nova — `Option1`/`Option2`
+ambos visíveis e obrigatórios (`FrmConNFe.frm:276-279`): **FS-IA (2)**
+"Formulário de Segurança - Impressor Autônomo" ou **FS-DA (5)**
+"Formulário de Segurança - Documento Auxiliar" (`IIf(Option1.Value, 2,
+5)`, linha 301).
+
+**Arquivos**: `backend/services/contingencia_nfe_service.py` (novo —
+abrir/fechar/status, mesma "infraestrutura mínima" de Contingência
+NFCe), `backend/routes/contingencia_nfe.py` + `backend/models/
+contingencia_nfe.py` (rotas/models próprios — diferente de NFCe, não há
+um "Gestor NFe" único pra embutir), catálogo de permissões `CONT_NFE`
+(`ABRIR`/`GRAVAR` — nome curto por causa do limite `nvarchar(15)` de
+`permissoes.tela`), `frontend/app/contingencia-nfe.tsx` (novo, tela
+própria compacta) + card no hub Gestor Fiscal, gateado por
+`moduleOn("nfe_ws")` (mesmo módulo "NFe" que já gateia Gerar NFe/Gerar
+NFe Comanda).
+
+**Gap registrado, fora do escopo desta rodada**: diferente de
+Contingência NFCe (já consultada por `comanda_service._emitir_nfce_
+comanda_sync` na emissão real), `nfe_agrupada_service.py`/`nfe_avulsa_
+service.py` **ainda não chamam** `contingencia_nfe_service.
+contingencia_aberta_sync` nem passam `contingencia=` pro `emitir_nfe_
+sync` — a tela fica só como registro/CRUD por enquanto, sem "Validar
+Contingência" equivalente ainda (não existe essa ação nas telas de NF-e
+hoje). Registrar quando/se for pedido.
+
+**Testes**: `backend/tests/unit/test_contingencia_nfe_service.py` (novo,
+14 testes — abrir com os dois tipos, bloqueios de módulo/permissão/
+motivo/dupla abertura, fechar, status). Suíte completa: 2128 passando (1
+falha pré-existente não relacionada). `tsc --noEmit`: 0 erros novos.
+
 9. **Inutilização de Faixa NFe/NFCe** = `Geral\FrmTraINF.frm` (513 linhas,
    confirmado canônico). A mais complexa das telas pequenas — inutiliza
    formalmente junto à SEFAZ uma faixa de numeração não emitida. Escolhe
@@ -1937,6 +2787,18 @@ tela.
      antes de portar.
 
 ### Gap real confirmado 2026-08-19 — `CalculaIBSCBS` NUNCA foi portado pro motor de emissão
+
+**Atualização 2026-08-20**: ver "Rastreio completo de `frmtranfe.frm`"
+acima, item 2 — confirmado que `CalculaIBSCBS` roda no VB6 em TODOS os
+caminhos relevantes de emissão (NFC-e, NF-e avulsa 1ª emissão+reemissão,
+NF-e Comanda/agrupada). O gap descrito nesta seção é só do lado Python
+(nunca portado — resolvido parcialmente pra NFC-e/NF-e agrupada via
+`ibs_cbs_service.py`, ver [[project_ecossistema_fiscal_rodada1]] e
+[[project_nfe_agrupada]]); ao implementar NF-e avulsa, reaproveitar o
+mesmo `ibs_cbs_service.py`, seguindo a mesma decisão de ordem já tomada
+em `nfe_agrupada_service.py` (calcular IBS/CBS só depois do registro em
+`n_fiscal` existir e reescrever o XML — confirmar com o usuário se essa
+mesma ordem vale aqui, não presumir que se aplica automaticamente).
 
 Usuário perguntou se a tela de Taxas (`taxas.tsx`, "Manutenção de Taxas")
 precisava ser atualizada. **Resposta: não a tela — o cadastro já está

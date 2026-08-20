@@ -44,6 +44,20 @@ const GRUPOS: Grupo[] = [
     titulo: "Automação Comercial",
     campos: ["balanca_toledo", "balanca_pre_pesagem"],
   },
+  // Grupo "Fiscal" (2026-08-20, user-directed). SPED/Emite MDF-e/SEFIN
+  // Nacional + "Alterdata" (integração contábil, incluída a pedido
+  // explícito do usuário) + os 3 campos fiscais reais do legado
+  // ("Módulos do Cliente" > NFCE/NFe via Webservice/Emite NFSe via PC-RJ
+  // — tabela `controle_aux`, expostos aqui pela 1ª vez nesta migração,
+  // achado 2026-08-20 depois de uma tentativa anterior errada ter criado
+  // colunas novas por engano; ver CLAUDE.md). "DMC" NÃO entra aqui — não é
+  // campo fiscal, é "Exportação do DMC Combustíveis" (Posto). TSO ficou de
+  // fora — nome ambíguo, não confirmado como fiscal.
+  {
+    chave: "fiscal",
+    titulo: "Fiscal",
+    campos: ["sped", "emite_mdfe", "sefin_nacional", "Alterdata", "emite_nfce", "nfe_ws", "emite_nfse"],
+  },
 ];
 
 export default function ModulosRecursosScreen() {

@@ -382,7 +382,7 @@ const styles = StyleSheet.create({
   rowFields: { flexDirection: "row", gap: spacing.sm },
   colHalf: { flex: 1 },
   switchRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.sm },
-  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 14, alignItems: "center", marginTop: spacing.lg, marginBottom: spacing.sm },
+  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 12, paddingHorizontal: spacing.xl, minWidth: 160, alignSelf: "flex-end", alignItems: "center", marginTop: spacing.lg, marginBottom: spacing.sm },
   primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   toast: { position: "absolute", bottom: 40, alignSelf: "center", backgroundColor: colors.onSurface, paddingHorizontal: spacing.lg, paddingVertical: 10, borderRadius: radius.pill },
   toastText: { color: colors.surface, fontSize: 13 },

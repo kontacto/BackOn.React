@@ -157,14 +157,26 @@ export default function PostoCustoScreen() {
         <Pressable style={styles.modalBg} onPress={() => setFormOpen(false)}>
           <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
             <Text style={styles.modalTitle}>Custo #{editItem?.cod_cus}</Text>
-            <Text style={styles.label}>Data *</Text>
-            <WebDateField value={data} onChange={(v) => setData(v || "")} type="date" testID="posto-custo-data" />
-            <Text style={styles.label}>Entrada</Text>
-            <TextInput value={entrada} onChangeText={(v) => setEntrada(v.replace(/[^0-9.,]/g, ""))} placeholder="0,00" placeholderTextColor={colors.muted} style={styles.input} keyboardType="decimal-pad" testID="posto-custo-entrada" />
-            <Text style={styles.label}>Saída</Text>
-            <TextInput value={saida} onChangeText={(v) => setSaida(v.replace(/[^0-9.,]/g, ""))} placeholder="0,00" placeholderTextColor={colors.muted} style={styles.input} keyboardType="decimal-pad" testID="posto-custo-saida" />
-            <Text style={styles.label}>Custo</Text>
-            <TextInput value={custo} onChangeText={(v) => setCusto(v.replace(/[^0-9.,]/g, ""))} placeholder="0,00" placeholderTextColor={colors.muted} style={styles.input} keyboardType="decimal-pad" testID="posto-custo-custo" />
+            <View style={styles.rowFields}>
+              <View style={styles.colHalf}>
+                <Text style={styles.label}>Data *</Text>
+                <WebDateField value={data} onChange={(v) => setData(v || "")} type="date" testID="posto-custo-data" />
+              </View>
+              <View style={styles.colHalf}>
+                <Text style={styles.label}>Entrada</Text>
+                <TextInput value={entrada} onChangeText={(v) => setEntrada(v.replace(/[^0-9.,]/g, ""))} placeholder="0,00" placeholderTextColor={colors.muted} style={styles.input} keyboardType="decimal-pad" testID="posto-custo-entrada" />
+              </View>
+            </View>
+            <View style={styles.rowFields}>
+              <View style={styles.colHalf}>
+                <Text style={styles.label}>Saída</Text>
+                <TextInput value={saida} onChangeText={(v) => setSaida(v.replace(/[^0-9.,]/g, ""))} placeholder="0,00" placeholderTextColor={colors.muted} style={styles.input} keyboardType="decimal-pad" testID="posto-custo-saida" />
+              </View>
+              <View style={styles.colHalf}>
+                <Text style={styles.label}>Custo</Text>
+                <TextInput value={custo} onChangeText={(v) => setCusto(v.replace(/[^0-9.,]/g, ""))} placeholder="0,00" placeholderTextColor={colors.muted} style={styles.input} keyboardType="decimal-pad" testID="posto-custo-custo" />
+              </View>
+            </View>
 
             <Pressable onPress={save} disabled={saving} style={[styles.primaryBtn, saving && { opacity: 0.6 }]} testID="posto-custo-salvar">
               {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Gravar</Text>}
@@ -216,7 +228,9 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 16, fontWeight: "700", color: colors.onSurface, marginBottom: spacing.sm },
   label: { fontSize: 12, color: colors.muted, fontWeight: "500" },
   input: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: 11, fontSize: 14, color: colors.onSurface },
-  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 14, alignItems: "center", marginTop: spacing.md },
+  rowFields: { flexDirection: "row", gap: spacing.sm },
+  colHalf: { flex: 1, gap: 4 },
+  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 12, paddingHorizontal: spacing.xl, minWidth: 160, alignSelf: "flex-end", alignItems: "center", marginTop: spacing.md },
   primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   toast: { position: "absolute", bottom: 40, alignSelf: "center", backgroundColor: colors.onSurface, paddingHorizontal: spacing.lg, paddingVertical: 10, borderRadius: radius.pill },
   toastText: { color: colors.surface, fontSize: 13 },

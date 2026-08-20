@@ -50,6 +50,201 @@ UFS_SVRS = {"12", "27", "16", "53", "32", "15", "25", "22", "33", "24", "11", "1
 NFE_NS = "http://www.portalfiscal.inf.br/nfe"
 SOAP_NS = "http://www.w3.org/2003/05/soap-envelope"
 
+# Tabela-semente de código de município (IBGE, 7 dígitos) por cidade+UF —
+# **não é uma tabela completa de municípios brasileiros** (são ~5570), só os
+# já confirmados nas empresas testadas nesta migração. Sem tabela de
+# município dedicada no schema (`controle`/`cliente_end` só guardam
+# `cidade` como texto livre + `uf` — confirmado ao vivo, sem coluna de
+# código IBGE), qualquer empresa/cliente fora desta lista bloqueia com
+# mensagem clara em vez de adivinhar um código errado. Movida de
+# `comanda_service.py` (onde nasceu, pra emissão de NFS-e/DPS) pra cá
+# 2026-08-19 ao virar necessária também pro destinatário de NF-e modelo 55
+# (`nfe_agrupada_service.py`) — mesmo helper, dois consumidores. Ver
+# PENDENCIAS.md > "Emissão Fiscal Real" — resolver de verdade exige uma
+# tabela de municípios (IBGE) própria ou um novo campo dedicado, fora do
+# escopo desta fase.
+_MUNICIPIOS_IBGE_CONHECIDOS = {
+    ("RIO DE JANEIRO", "RJ"): "3304557",
+}
+
+
+def resolver_cod_municipio_ibge(cidade: Optional[str], uf: Optional[str]) -> Optional[str]:
+    chave = ((cidade or "").strip().upper(), (uf or "").strip().upper())
+    return _MUNICIPIOS_IBGE_CONHECIDOS.get(chave)
+
+
+# ---------------------------------------------------------------------------
+# Destinatário (cliente OU fornecedor) — validação obrigatória (bloqueante)
+# pra NF-e modelo 55, diferença real vs. NFC-e (`TestaEnderecoNFE`,
+# rastreio 2026-08-19/20, `frmtranfe.frm`): CPF (pessoa física) exige algum
+# endereço cadastrado (qualquer tipo); CNPJ exige especificamente endereço
+# tipo comercial (`tipo=0`/`tipo_endereco=0`). Movido de
+# `nfe_agrupada_service.py` (onde nasceu, só pra cliente) pra cá 2026-08-20
+# ao virar necessário também pra fornecedor (NF-e Avulsa, `tipo_mov.
+# origem_destino='F'`) — mesmo formato de retorno pros dois, dois
+# consumidores. `nfe_agrupada_service._resolver_destinatario_sync` continua
+# existindo como alias, não duplicado.
+# ---------------------------------------------------------------------------
+
+def resolver_destinatario_cliente_sync(cur, cliente_codigo: int) -> dict:
+    """Resolve e valida o destinatário CLIENTE — devolve `{"success": True,
+    "destinatario": {...}, "consumidor_final": bool, "simples_nacional_
+    cliente": bool}` ou `{"success": False, "message": ...}`."""
+    cur.execute(
+        "SELECT cgc_cpf, nome, fantasia, ISNULL(inscr_est, '') AS inscr_est, consumidor_final, credita_icms "
+        "FROM cliente WHERE codigo = %s",
+        (cliente_codigo,),
+    )
+    cli = cur.fetchone()
+    cgc_cpf = (cli.get("cgc_cpf") or "").strip() if cli else ""
+    if not cli or len(cgc_cpf) < 11:
+        return {"success": False, "message": "Cliente sem CPF/CNPJ cadastrado — obrigatório para emitir NF-e."}
+
+    is_cnpj = len(cgc_cpf) > 11
+    if is_cnpj:
+        cur.execute(
+            "SELECT TOP 1 endereco, numero, bairro, cidade, uf, cep FROM cliente_end "
+            "WHERE codigo = %s AND tipo = 0",
+            (cliente_codigo,),
+        )
+    else:
+        cur.execute(
+            "SELECT TOP 1 endereco, numero, bairro, cidade, uf, cep FROM cliente_end "
+            "WHERE codigo = %s ORDER BY tipo",
+            (cliente_codigo,),
+        )
+    end = cur.fetchone()
+    if not end:
+        tipo_msg = "endereço comercial" if is_cnpj else "endereço"
+        return {"success": False, "message": f"Cliente sem {tipo_msg} cadastrado — obrigatório para emitir NF-e."}
+
+    cod_municipio = resolver_cod_municipio_ibge(end.get("cidade"), end.get("uf"))
+    if not cod_municipio:
+        return {
+            "success": False,
+            "message": f"Município '{end.get('cidade')}/{end.get('uf')}' do cliente não está na lista de códigos IBGE conhecidos — cadastre-o antes de emitir.",
+        }
+
+    contribuinte = bool((cli.get("inscr_est") or "").strip()) and is_cnpj
+    return {
+        "success": True,
+        "destinatario": {
+            "cgc_cpf": cgc_cpf, "nome": (cli.get("fantasia") or cli.get("nome") or "").strip(),
+            "endereco": (end.get("endereco") or "").strip(), "numero": (end.get("numero") or "S/N"),
+            "bairro": (end.get("bairro") or "").strip(), "cidade": (end.get("cidade") or "").strip(),
+            "uf": (end.get("uf") or "").strip().upper(), "cep": (end.get("cep") or "").strip(),
+            "cod_municipio_ibge": cod_municipio,
+            "ie": (cli.get("inscr_est") or "").strip() if contribuinte else None,
+            "indIEDest": "1" if contribuinte else "9",
+        },
+        "consumidor_final": bool(cli.get("consumidor_final")),
+        "simples_nacional_cliente": bool(cli.get("credita_icms")),
+    }
+
+
+def resolver_destinatario_fornecedor_sync(cur, fornecedor_codigo_int: int) -> dict:
+    """Mesma regra de `resolver_destinatario_cliente_sync`, pro lado
+    FORNECEDOR — usado quando `tipo_mov.origem_destino='F'` (NF-e Avulsa
+    de compra/devolução/etc.). `fornecedor.codigo` é o documento (CPF/CNPJ,
+    mesma convenção de `cliente.cgc_cpf` — não confundir com `codigo_int`,
+    a PK interna). `fornecedor_end.tipo_endereco=0` = comercial, mesmo
+    código do cliente. Fornecedor não tem `consumidor_final`/`credita_icms`
+    — `consumidor_final` sempre `False` aqui (destinatário de compra/
+    devolução, nunca venda a consumidor final)."""
+    cur.execute(
+        "SELECT codigo AS cgc_cpf, nome, fantasia, ISNULL(inscr_est, '') AS inscr_est "
+        "FROM fornecedor WHERE codigo_int = %s",
+        (fornecedor_codigo_int,),
+    )
+    forn = cur.fetchone()
+    cgc_cpf = (forn.get("cgc_cpf") or "").strip() if forn else ""
+    if not forn or len(cgc_cpf) < 11:
+        return {"success": False, "message": "Fornecedor sem CPF/CNPJ cadastrado — obrigatório para emitir NF-e."}
+
+    is_cnpj = len(cgc_cpf) > 11
+    if is_cnpj:
+        cur.execute(
+            "SELECT TOP 1 endereco, numero, bairro, cidade, uf, cep FROM fornecedor_end "
+            "WHERE codigo = %s AND tipo_endereco = 0",
+            (fornecedor_codigo_int,),
+        )
+    else:
+        cur.execute(
+            "SELECT TOP 1 endereco, numero, bairro, cidade, uf, cep FROM fornecedor_end "
+            "WHERE codigo = %s ORDER BY tipo_endereco",
+            (fornecedor_codigo_int,),
+        )
+    end = cur.fetchone()
+    if not end:
+        tipo_msg = "endereço comercial" if is_cnpj else "endereço"
+        return {"success": False, "message": f"Fornecedor sem {tipo_msg} cadastrado — obrigatório para emitir NF-e."}
+
+    cod_municipio = resolver_cod_municipio_ibge(end.get("cidade"), end.get("uf"))
+    if not cod_municipio:
+        return {
+            "success": False,
+            "message": f"Município '{end.get('cidade')}/{end.get('uf')}' do fornecedor não está na lista de códigos IBGE conhecidos — cadastre-o antes de emitir.",
+        }
+
+    contribuinte = bool((forn.get("inscr_est") or "").strip()) and is_cnpj
+    return {
+        "success": True,
+        "destinatario": {
+            "cgc_cpf": cgc_cpf, "nome": (forn.get("fantasia") or forn.get("nome") or "").strip(),
+            "endereco": (end.get("endereco") or "").strip(), "numero": (end.get("numero") or "S/N"),
+            "bairro": (end.get("bairro") or "").strip(), "cidade": (end.get("cidade") or "").strip(),
+            "uf": (end.get("uf") or "").strip().upper(), "cep": (end.get("cep") or "").strip(),
+            "cod_municipio_ibge": cod_municipio,
+            "ie": (forn.get("inscr_est") or "").strip() if contribuinte else None,
+            "indIEDest": "1" if contribuinte else "9",
+        },
+        "consumidor_final": False,
+        "simples_nacional_cliente": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Módulos do ecossistema fiscal (2026-08-20, user-directed) — "Regra de
+# Módulo Ativo" (CLAUDE.md), mesmo padrão de `pedido_common._modulo_
+# servicos_ativo`: cada módulo é verificado em runtime (defesa em
+# profundidade — vale até pra master, que bypassa `can()` mas NÃO
+# `moduleOn()`/checagem de módulo).
+#
+# **Correção 2026-08-20, mesmo dia**: a 1ª versão gerou colunas novas
+# (`controle_configuracao.NFE`/`NFSE`) e reaproveitou `DMC` — errado. O
+# usuário mostrou a tela real "Módulos do Cliente" (`Geral\FrmGerKon.frm`)
+# e os campos fiscais JÁ EXISTIAM no legado, só numa tabela irmã
+# (`controle_aux`, não `controle_configuracao`): `emite_nfce`/`nfe_ws`/
+# `emite_nfse`. `DMC` nunca foi campo fiscal (é "Exportação do DMC
+# Combustíveis", ligado a Posto) — revertido em `controle_config_
+# service.py`. Ver CLAUDE.md > "Sempre checar regras reais de controle/
+# controle_aux/controle_configuracao" pro racional completo. `emite_nfse`
+# (legado, "Emite NFSe via PC-RJ" — municipal) **não** corresponde ao
+# caminho de emissão implementado nesta migração (`_emitir_nfse_comanda_
+# sync`, Sefin Nacional/DPS) — por isso não existe um `modulo_nfse_ativo_
+# sync` aqui; o gate correto pra essa função continua sendo só
+# `_modulo_sefin_nacional_ativo` (`comanda_service.py`), inalterado.
+# ---------------------------------------------------------------------------
+
+def modulo_nfce_ativo_sync(cur) -> bool:
+    """True se o módulo "NFCe" está ligado (`controle_aux.emite_nfce`,
+    campo real do legado — "Módulos do Cliente" > "NFCE"). Gateia Gestor
+    NFCe + emissão de NFC-e via comanda."""
+    cur.execute("SELECT TOP 1 emite_nfce FROM controle_aux")
+    row = cur.fetchone()
+    val = row.get("emite_nfce") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
+
+
+def modulo_nfe_ativo_sync(cur) -> bool:
+    """True se o módulo "NFe" está ligado (`controle_aux.nfe_ws`, campo
+    real do legado — "Módulos do Cliente" > "NFe via Webservice"). Gateia
+    Gerar NFe Comanda (agrupada) + Gerar NFe (avulsa), modelo 55."""
+    cur.execute("SELECT TOP 1 nfe_ws FROM controle_aux")
+    row = cur.fetchone()
+    val = row.get("nfe_ws") if isinstance(row, dict) else (row[0] if row else None)
+    return bool(val)
+
 
 def resolver_endpoint(cod_ibge: str, modelo: str, tp_amb: str, endpoints: dict) -> Optional[str]:
     """Resolve a URL de um webservice SEFAZ dado o dict `{modelo: {tp_amb: url}}`

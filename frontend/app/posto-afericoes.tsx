@@ -267,7 +267,7 @@ const styles = StyleSheet.create({
   checkRow: { marginTop: spacing.md },
   checkTouch: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   checkLabel: { fontSize: 14, color: colors.onSurface },
-  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 14, alignItems: "center", marginTop: spacing.md },
+  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 12, paddingHorizontal: spacing.xl, minWidth: 220, alignSelf: "flex-start", alignItems: "center", marginTop: spacing.md },
   primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   toast: { position: "absolute", bottom: 40, alignSelf: "center", backgroundColor: colors.onSurface, paddingHorizontal: spacing.lg, paddingVertical: 10, borderRadius: radius.pill },
   toastText: { color: colors.surface, fontSize: 13 },

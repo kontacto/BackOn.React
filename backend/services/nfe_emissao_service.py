@@ -296,6 +296,124 @@ def _montar_xml_nfce(
     return xml, id_nfe
 
 
+# ---------------------------------------------------------------------------
+# XML da NF-e (modelo 55) — layout NFe 4.00, mesmo princípio de
+# `_montar_xml_nfce` (não extraído de DLL, validar contra o XSD oficial
+# antes de qualquer transmissão real — ver docstring do módulo). Diferenças
+# reais confirmadas contra a fonte VB6 (`frmtranfe.frm`/`FrmTraImpNFE.frm`,
+# rastreio 2026-08-19 — ver PENDENCIAS.md > "Agrupar Comandas em NF-e"):
+# destinatário sempre estruturado e completo (endereço obrigatório — NF-e
+# nunca tem consumidor não identificado como NFC-e às vezes tem), sem QR
+# Code/CSC (exclusividade de NFC-e), `tpImp` retrato (1) em vez do "sem
+# geração de DANFE automática" (4) que NFC-e usa.
+# ---------------------------------------------------------------------------
+
+def _montar_xml_nfe(
+    *, chave_acesso: str, cod_ibge: str, cnpj_emit: str, nome_emit: str, uf_emit_sigla: str,
+    destinatario: dict, itens: list[dict], valor_total: float, tp_amb: str, numero: int, serie: str,
+    data_emissao: datetime, natureza_operacao: str, indFinal: str = "1",
+    ibs_cbs_totais_xml: str = "", tp_emis: str = "1", dh_cont: Optional[str] = None, x_just: Optional[str] = None,
+) -> tuple[bytes, str]:
+    """Monta `<NFe><infNFe Id="NFe...">` conforme layout NF-e 4.00 (modelo
+    55). `destinatario` já vem resolvido pelo chamador (cgc_cpf, nome,
+    endereco, numero, bairro, cidade, uf, cep, cod_municipio_ibge, ie,
+    indIEDest) — esta função só serializa, não resolve endereço/IE sozinha
+    (mesma separação de responsabilidade de `_montar_xml_nfce`)."""
+    id_nfe = f"NFe{chave_acesso}"
+    dh_emi = data_emissao.astimezone().isoformat(timespec="seconds")
+    uf_dest = (destinatario.get("uf") or "").strip().upper()
+    id_dest = "1" if uf_dest == (uf_emit_sigla or "").strip().upper() else "2"
+
+    det_xml = ""
+    for i, item in enumerate(itens, start=1):
+        det_xml += (
+            f'<det nItem="{i}">'
+            f'<prod>'
+            f'<cProd>{nfe_fiscal_common.escapar_xml(item["codigo_int"])}</cProd>'
+            f'<cEAN>SEM GTIN</cEAN>'
+            f'<xProd>{nfe_fiscal_common.escapar_xml(item["descricao"])}</xProd>'
+            f'<NCM>{item.get("ncm") or "00000000"}</NCM>'
+            f'<CFOP>{item["cfop"]}</CFOP>'
+            f'<uCom>{nfe_fiscal_common.escapar_xml(item.get("unidade") or "UN")}</uCom>'
+            f'<qCom>{item["qtd"]:.4f}</qCom>'
+            f'<vUnCom>{item["valor_unitario"]:.10f}</vUnCom>'
+            f'<vProd>{item["valor_total"]:.2f}</vProd>'
+            f'<cEANTrib>SEM GTIN</cEANTrib>'
+            f'<uTrib>{nfe_fiscal_common.escapar_xml(item.get("unidade") or "UN")}</uTrib>'
+            f'<qTrib>{item["qtd"]:.4f}</qTrib>'
+            f'<vUnTrib>{item["valor_unitario"]:.10f}</vUnTrib>'
+            f'<indTot>1</indTot>'
+            f'</prod>'
+            f'<imposto>'
+            f'<ICMS><ICMSSN102><orig>{item.get("origem", 0)}</orig><CSOSN>{item.get("csosn", "102")}</CSOSN></ICMSSN102></ICMS>'
+            f'<PIS><PISNT><CST>{item.get("cst_pis", "07")}</CST></PISNT></PIS>'
+            f'<COFINS><COFINSNT><CST>{item.get("cst_cofins", "07")}</CST></COFINSNT></COFINS>'
+            f'{item.get("ibs_cbs_xml") or ""}'
+            f'</imposto>'
+            f'</det>'
+        )
+
+    doc_tag = "CNPJ" if len(destinatario.get("cgc_cpf") or "") > 11 else "CPF"
+    ie_xml = f'<IE>{nfe_fiscal_common.escapar_xml(destinatario.get("ie") or "")}</IE>' if destinatario.get("ie") else ""
+    dest_xml = (
+        f'<dest>'
+        f'<{doc_tag}>{destinatario.get("cgc_cpf") or ""}</{doc_tag}>'
+        f'<xNome>{nfe_fiscal_common.escapar_xml(destinatario.get("nome") or "")}</xNome>'
+        f'<enderDest>'
+        f'<xLgr>{nfe_fiscal_common.escapar_xml(destinatario.get("endereco") or "")}</xLgr>'
+        f'<nro>{nfe_fiscal_common.escapar_xml(str(destinatario.get("numero") or "S/N"))}</nro>'
+        f'<xBairro>{nfe_fiscal_common.escapar_xml(destinatario.get("bairro") or "")}</xBairro>'
+        f'<cMun>{destinatario.get("cod_municipio_ibge") or (cod_ibge + "00000")}</cMun>'
+        f'<xMun>{nfe_fiscal_common.escapar_xml(destinatario.get("cidade") or "")}</xMun>'
+        f'<UF>{uf_dest}</UF>'
+        f'<CEP>{(destinatario.get("cep") or "").replace("-", "").strip()}</CEP>'
+        f'<cPais>1058</cPais><xPais>BRASIL</xPais>'
+        f'</enderDest>'
+        f'<indIEDest>{destinatario.get("indIEDest") or "9"}</indIEDest>'
+        f'{ie_xml}'
+        f'</dest>'
+    )
+
+    xml = (
+        f'<NFe xmlns="{_NFE_NS}">'
+        f'<infNFe Id="{id_nfe}" versao="4.00">'
+        f'<ide>'
+        f'<cUF>{cod_ibge}</cUF>'
+        f'<natOp>{nfe_fiscal_common.escapar_xml(natureza_operacao)}</natOp>'
+        f'<mod>55</mod>'
+        f'<serie>{serie}</serie>'
+        f'<nNF>{numero}</nNF>'
+        f'<dhEmi>{dh_emi}</dhEmi>'
+        f'<tpNF>1</tpNF>'
+        f'<idDest>{id_dest}</idDest>'
+        f'<cMunFG>{cod_ibge}00000</cMunFG>'
+        f'<tpImp>1</tpImp>'
+        f'<tpEmis>{tp_emis}</tpEmis>'
+        f'<cDV>{chave_acesso[-1]}</cDV>'
+        f'<tpAmb>{tp_amb}</tpAmb>'
+        f'<finNFe>1</finNFe>'
+        f'<indFinal>{indFinal}</indFinal>'
+        f'<indPres>1</indPres>'
+        f'<procEmi>0</procEmi>'
+        f'<verProc>1.0</verProc>'
+        f'{f"<dhCont>{dh_cont}</dhCont><xJust>{nfe_fiscal_common.escapar_xml(x_just or "")}</xJust>" if tp_emis != "1" else ""}'
+        f'</ide>'
+        f'<emit>'
+        f'<CNPJ>{re.sub(r"[^0-9]", "", cnpj_emit)}</CNPJ>'
+        f'<xNome>{nfe_fiscal_common.escapar_xml(nome_emit)}</xNome>'
+        f'<CRT>1</CRT>'
+        f'</emit>'
+        f'{dest_xml}'
+        f'{det_xml}'
+        f'<total><ICMSTot><vNF>{valor_total:.2f}</vNF></ICMSTot>{ibs_cbs_totais_xml}</total>'
+        f'<transp><modFrete>9</modFrete></transp>'
+        f'<pag><detPag><tPag>90</tPag><vPag>0.00</vPag></detPag></pag>'
+        f'</infNFe>'
+        f'</NFe>'
+    ).encode("utf-8")
+    return xml, id_nfe
+
+
 def parse_nfce_xml_para_exibicao(xml_texto: str) -> Optional[dict]:
     """Extrai do XML assinado da NFC-e (já gravado em `comanda_nfce.xml`
     no momento da emissão — ver `comanda_service._emitir_nfce_comanda_
@@ -480,6 +598,112 @@ def emitir_nfce_sync(
         "numero": proximo_numero,
         "serie": serie,
         "url_qrcode": url_qrcode,
+        "situacao": "A",
+        "cstat": c_stat,
+    }
+
+
+def emitir_nfe_sync(
+    cur, *, cnpj_emit: str, nome_emit: str, uf_sigla: str, proximo_numero: int, serie: str,
+    destinatario: dict, itens_resolvidos: list[dict], valor_total: float, tp_amb: str,
+    natureza_operacao: str, indFinal: str = "1", ibs_cbs_totais_xml: str = "", contingencia: Optional[dict] = None,
+) -> dict:
+    """Orquestra a emissão de uma NF-e modelo 55 — mesmo padrão de
+    `emitir_nfce_sync`, mas sem CSC/QR Code (exclusividade de NFC-e) e com
+    destinatário sempre estruturado (`_montar_xml_nfe`). `cur` é o cursor já
+    aberto (mesma transação de quem chama, pra ler o certificado).
+    `itens_resolvidos`/`ibs_cbs_totais_xml` já vêm calculados por quem
+    chama (tributação + IBS/CBS) — este orquestrador só monta/assina/
+    transmite, mesma separação de responsabilidade do resto do pacote.
+
+    `contingencia` — mesmo mecanismo de `emitir_nfce_sync` (ver docstring
+    lá): quando presente, grava `tpEmis`/`<dhCont>`/`<xJust>` mas pula a
+    transmissão ao SEFAZ, devolvendo a nota assinada com `situacao="G"`."""
+    if not itens_resolvidos:
+        return {"success": False, "message": "Nenhum item pra emitir — comanda(s) sem itens de produto."}
+
+    cod_ibge = nfe_fiscal_common.IBGE_POR_UF.get((uf_sigla or "").strip().upper())
+    if not cod_ibge:
+        return {"success": False, "message": f"UF '{uf_sigla}' não reconhecida."}
+
+    em_contingencia = contingencia is not None
+    url = None
+    if not em_contingencia:
+        url = _resolver_url_autorizacao(cod_ibge, "55", tp_amb)
+        if not url:
+            return {
+                "success": False,
+                "message": (
+                    f"Emissão automática de NF-e ainda não está disponível pra UF '{uf_sigla}' — "
+                    "emita pelo sistema legado (VB6) por enquanto."
+                ),
+            }
+
+    cert = nfe_fiscal_common.carregar_certificado_sync(cur)
+    if not cert:
+        return {"success": False, "message": "Nenhum certificado digital válido cadastrado (Controle do Sistema > aba Fiscal)."}
+    key_pem, cert_pem = cert
+
+    try:
+        tp_emis = str(contingencia["tipo_contingencia"]) if em_contingencia else "1"
+        dh_cont = None
+        x_just = None
+        if em_contingencia:
+            hora_partes = [int(p) for p in str(contingencia["hora_inicio"]).split(":")]
+            while len(hora_partes) < 3:
+                hora_partes.append(0)
+            inicio_dt = datetime.combine(contingencia["data_inicio"], time(*hora_partes[:3]))
+            dh_cont = inicio_dt.astimezone().isoformat(timespec="seconds")
+            x_just = contingencia["motivo"]
+
+        chave_acesso = montar_chave_acesso(
+            uf_ibge=cod_ibge, data_emissao=date.today(), cnpj=cnpj_emit, modelo="55",
+            serie=serie, numero=proximo_numero, tp_emis=tp_emis, codigo_numerico=str(proximo_numero),
+        )
+        xml_nfe, id_nfe = _montar_xml_nfe(
+            chave_acesso=chave_acesso, cod_ibge=cod_ibge, cnpj_emit=cnpj_emit, nome_emit=nome_emit,
+            uf_emit_sigla=uf_sigla, destinatario=destinatario, itens=itens_resolvidos,
+            valor_total=valor_total, tp_amb=tp_amb, numero=proximo_numero, serie=serie,
+            data_emissao=datetime.now(timezone.utc), natureza_operacao=natureza_operacao,
+            indFinal=indFinal, ibs_cbs_totais_xml=ibs_cbs_totais_xml, tp_emis=tp_emis, dh_cont=dh_cont, x_just=x_just,
+        )
+        xml_assinado = nfe_fiscal_common.assinar_xml(xml_nfe, id_nfe, key_pem, cert_pem)
+
+        if em_contingencia:
+            return {
+                "success": True,
+                "message": (
+                    "NF-e emitida em contingência — ficará aguardando até a contingência ser "
+                    "encerrada e ser retransmitida pra o SEFAZ."
+                ),
+                "chave_acesso": chave_acesso, "protocolo_sefaz": None, "dh_recbto": None,
+                "xml": xml_assinado.decode("utf-8"), "numero": proximo_numero, "serie": serie,
+                "situacao": "G", "cstat": None,
+            }
+
+        envelope = _montar_envelope_autorizacao(xml_assinado, tp_amb)
+        resposta = nfe_fiscal_common.transmitir(envelope, url, key_pem, cert_pem)
+    except Exception as e:
+        return {"success": False, "message": f"Falha ao comunicar com o SEFAZ: {e}"}
+
+    c_stat = nfe_fiscal_common.extrair_tag(resposta, "cStat")
+    x_motivo = nfe_fiscal_common.extrair_tag(resposta, "xMotivo")
+    n_prot = nfe_fiscal_common.extrair_tag(resposta, "nProt")
+    dh_recbto = nfe_fiscal_common.extrair_tag(resposta, "dhRecbto")
+    if c_stat != "100":
+        return {
+            "success": False,
+            "message": f"SEFAZ recusou a emissão (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}.",
+        }
+    return {
+        "success": True,
+        "message": f"NF-e autorizada pelo SEFAZ — protocolo {n_prot or '?'}.",
+        "chave_acesso": chave_acesso,
+        "protocolo_sefaz": n_prot,
+        "dh_recbto": dh_recbto,
+        "xml": xml_assinado.decode("utf-8"),
+        "numero": proximo_numero,
+        "serie": serie,
         "situacao": "A",
         "cstat": c_stat,
     }

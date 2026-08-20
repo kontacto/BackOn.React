@@ -133,12 +133,23 @@ export default function TransacoesScreen() {
         visible: can("COMANDA.ABRIR"),
       },
       {
-        key: "gestor-nfce",
-        label: "Gestor NFCe",
-        hint: "Consulta situação no SEFAZ, cancela, inutiliza numeração e valida contingência de NFC-e",
+        key: "gestor-fiscal",
+        label: "Gestor Fiscal",
+        hint: "Emissão e consulta de documentos fiscais — Gerar NFe Comanda, Gerar NFe, Gestor NFCe, Notas Fiscais",
         icon: "receipt-outline",
-        route: "/gestor-nfce",
-        visible: can("GESTOR_NFCE.ABRIR"),
+        route: "/gestor-fiscal",
+        // Hub (2026-08-20, user-directed) reunindo as telas fiscais de
+        // emissão/consulta, mesmo agrupamento do menu real "Transações >
+        // Notas Fiscais" do VB6 — ver gestor-fiscal.tsx. "Notas Fiscais"
+        // (Manutenção) transferida de Cadastros pra dentro deste hub no
+        // mesmo dia — sem `moduleOn`, mesmo racional do card interno.
+        // Visível se QUALQUER uma das telas internas estiver liberada
+        // (mesmo padrão de "Movimentações" acima — OR entre as
+        // sub-permissões/módulos).
+        visible:
+          (moduleOn("nfe_ws") && (can("NFE_AGRUPADA.ABRIR") || can("NFE_AVULSA.ABRIR") || can("CONT_NFE.ABRIR"))) ||
+          (moduleOn("emite_nfce") && can("GESTOR_NFCE.ABRIR")) ||
+          can("NOTAS_FISCAIS.ABRIR"),
       },
       {
         key: "agenda",

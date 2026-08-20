@@ -345,3 +345,183 @@ class TestEmitirNfceSync:
         )
         assert r["success"] is False
         assert "sefaz" in r["message"].lower()
+
+
+# ---------------------------------------------------------------------------
+# NF-e modelo 55 (Agrupar Comandas em NF-e, 2026-08-19) — mesmo compromisso
+# de nunca testar contra o SEFAZ real: certificado autoassinado + `transmitir`
+# sempre mockada.
+# ---------------------------------------------------------------------------
+
+def _destinatario_teste(**overrides):
+    base = {
+        "cgc_cpf": "12345678000199", "nome": "CLIENTE TESTE", "endereco": "RUA TESTE",
+        "numero": "100", "bairro": "CENTRO", "cidade": "RIO DE JANEIRO", "uf": "RJ",
+        "cep": "20000000", "cod_municipio_ibge": "3304557", "ie": None, "indIEDest": "9",
+    }
+    base.update(overrides)
+    return base
+
+
+class TestMontarXmlNfe:
+    def _item(self):
+        return {
+            "codigo_int": "P001", "descricao": "Produto Teste", "ncm": "12345678", "cfop": "5102",
+            "unidade": "UN", "qtd": 1.0, "valor_unitario": 50.0, "valor_total": 50.0,
+            "origem": 0, "csosn": "400", "cst_pis": "07", "cst_cofins": "07",
+        }
+
+    def test_monta_xml_com_destinatario_estruturado_e_sem_qrcode(self):
+        xml_bytes, id_nfe = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="12345678000199", nome_emit="EMPRESA TESTE",
+            uf_emit_sigla="RJ", destinatario=_destinatario_teste(), itens=[self._item()], valor_total=50.0,
+            tp_amb="2", numero=100, serie="1", data_emissao=datetime.datetime.now(datetime.timezone.utc),
+            natureza_operacao="Venda",
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert id_nfe == f"NFe{'3' * 44}"
+        assert '<mod>55</mod>' in xml
+        assert "<CNPJ>12345678000199</CNPJ>" in xml  # destinatário
+        assert "<xLgr>RUA TESTE</xLgr>" in xml
+        assert "<cMun>3304557</cMun>" in xml
+        assert "qrCode" not in xml  # exclusividade de NFC-e
+        assert "<natOp>Venda</natOp>" in xml
+        etree.fromstring(xml_bytes)
+
+    def test_id_dest_interno_quando_mesma_uf(self):
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(uf="RJ"), itens=[self._item()], valor_total=50.0, tp_amb="2",
+            numero=1, serie="1", data_emissao=datetime.datetime.now(datetime.timezone.utc), natureza_operacao="Venda",
+        )
+        assert "<idDest>1</idDest>" in xml_bytes.decode("utf-8")
+
+    def test_id_dest_interestadual_quando_uf_diferente(self):
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(uf="SP"), itens=[self._item()], valor_total=50.0, tp_amb="2",
+            numero=1, serie="1", data_emissao=datetime.datetime.now(datetime.timezone.utc), natureza_operacao="Venda",
+        )
+        assert "<idDest>2</idDest>" in xml_bytes.decode("utf-8")
+
+    def test_ie_so_aparece_quando_contribuinte(self):
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(ie="1234567", indIEDest="1"), itens=[self._item()], valor_total=50.0,
+            tp_amb="2", numero=1, serie="1", data_emissao=datetime.datetime.now(datetime.timezone.utc),
+            natureza_operacao="Venda",
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert "<IE>1234567</IE>" in xml
+        assert "<indIEDest>1</indIEDest>" in xml
+
+    def test_cpf_usa_tag_cpf_nao_cnpj(self):
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="4" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(cgc_cpf="98765432100"), itens=[self._item()], valor_total=50.0,
+            tp_amb="2", numero=1, serie="1", data_emissao=datetime.datetime.now(datetime.timezone.utc),
+            natureza_operacao="Venda",
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert "<CPF>98765432100</CPF>" in xml
+        assert "<CNPJ>" not in xml.split("<dest>")[1].split("</dest>")[0]
+
+    def test_inclui_ibscbs_quando_presente(self):
+        item = self._item()
+        item["ibs_cbs_xml"] = "<IBSCBS><CST>000</CST></IBSCBS>"
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(), itens=[item], valor_total=50.0, tp_amb="2", numero=1, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), natureza_operacao="Venda",
+            ibs_cbs_totais_xml="<IBSCBSTot><vBCIBSCBS>50.00</vBCIBSCBS></IBSCBSTot>",
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert "<IBSCBS><CST>000</CST></IBSCBS>" in xml
+        assert "<IBSCBSTot><vBCIBSCBS>50.00</vBCIBSCBS></IBSCBSTot>" in xml
+        etree.fromstring(xml_bytes)
+
+
+class TestEmitirNfeSync:
+    def _item(self):
+        return {
+            "codigo_int": "P001", "descricao": "Produto Teste", "ncm": "12345678", "cfop": "5102",
+            "unidade": "UN", "qtd": 1.0, "valor_unitario": 50.0, "valor_total": 50.0,
+            "origem": 0, "csosn": "400", "cst_pis": "07", "cst_cofins": "07",
+        }
+
+    def test_bloqueia_sem_itens(self):
+        r = svc.emitir_nfe_sync(
+            None, cnpj_emit="1", nome_emit="X", uf_sigla="RJ", proximo_numero=1, serie="1",
+            destinatario=_destinatario_teste(), itens_resolvidos=[], valor_total=0, tp_amb="2",
+            natureza_operacao="Venda",
+        )
+        assert r["success"] is False
+        assert "item" in r["message"].lower()
+
+    def test_bloqueia_uf_nao_reconhecida(self):
+        r = svc.emitir_nfe_sync(
+            None, cnpj_emit="1", nome_emit="X", uf_sigla="ZZ", proximo_numero=1, serie="1",
+            destinatario=_destinatario_teste(), itens_resolvidos=[self._item()], valor_total=50, tp_amb="2",
+            natureza_operacao="Venda",
+        )
+        assert r["success"] is False
+        assert "não reconhecida" in r["message"]
+
+    def test_bloqueia_sem_certificado(self, monkeypatch):
+        monkeypatch.setattr(svc.nfe_fiscal_common, "carregar_certificado_sync", lambda cur: None)
+        r = svc.emitir_nfe_sync(
+            None, cnpj_emit="1", nome_emit="X", uf_sigla="RJ", proximo_numero=1, serie="1",
+            destinatario=_destinatario_teste(), itens_resolvidos=[self._item()], valor_total=50, tp_amb="2",
+            natureza_operacao="Venda",
+        )
+        assert r["success"] is False
+        assert "certificado" in r["message"].lower()
+
+    def test_sucesso_com_sefaz_mockado(self, monkeypatch):
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = (
+            "<retEnviNFe><infProt><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo>"
+            "<nProt>135260000012345</nProt><dhRecbto>2026-08-19T10:00:00-03:00</dhRecbto></infProt></retEnviNFe>"
+        )
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        r = svc.emitir_nfe_sync(
+            None, cnpj_emit="12345678000199", nome_emit="EMPRESA TESTE", uf_sigla="RJ", proximo_numero=100,
+            serie="1", destinatario=_destinatario_teste(), itens_resolvidos=[self._item()], valor_total=50,
+            tp_amb="2", natureza_operacao="Venda",
+        )
+        assert r["success"] is True
+        assert r["protocolo_sefaz"] == "135260000012345"
+        assert len(r["chave_acesso"]) == 44
+        assert "<Signature" in r["xml"] or "Signature>" in r["xml"]
+
+    def test_sefaz_recusa_emissao(self, monkeypatch):
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = "<retEnviNFe><infProt><cStat>539</cStat><xMotivo>Duplicidade</xMotivo></infProt></retEnviNFe>"
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        r = svc.emitir_nfe_sync(
+            None, cnpj_emit="1", nome_emit="X", uf_sigla="RJ", proximo_numero=1, serie="1",
+            destinatario=_destinatario_teste(), itens_resolvidos=[self._item()], valor_total=50, tp_amb="2",
+            natureza_operacao="Venda",
+        )
+        assert r["success"] is False
+        assert "539" in r["message"]
+
+    def test_contingencia_nao_transmite(self, monkeypatch):
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+
+        def _falha_se_chamado(*a, **k):
+            raise AssertionError("não deveria transmitir em contingência")
+
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", _falha_se_chamado)
+        contingencia = {"tipo_contingencia": 9, "data_inicio": datetime.date(2026, 8, 19), "hora_inicio": "10:00:00", "motivo": "x" * 20}
+        r = svc.emitir_nfe_sync(
+            None, cnpj_emit="1", nome_emit="X", uf_sigla="RJ", proximo_numero=1, serie="1",
+            destinatario=_destinatario_teste(), itens_resolvidos=[self._item()], valor_total=50, tp_amb="2",
+            natureza_operacao="Venda", contingencia=contingencia,
+        )
+        assert r["success"] is True
+        assert r["situacao"] == "G"
+        assert r["cstat"] is None

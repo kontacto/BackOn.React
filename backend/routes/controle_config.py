@@ -38,7 +38,7 @@ async def campos():
     # fica na ordem que for mais conveniente de editar/ler (mesmo padrão já
     # usado no catálogo de Permissões, `permissoes_service.sort_catalogo`).
     itens = sorted(
-        ({"campo": c, "label": lbl} for c, lbl in svc.CAMPOS),
+        ({"campo": c, "label": lbl} for c, lbl in (svc.CAMPOS + svc.CAMPOS_CONTROLE_AUX)),
         key=lambda x: _sort_key(x["label"]),
     )
     return {"success": True, "campos": itens}
@@ -54,7 +54,7 @@ async def salvar(payload: SalvarControleRequest, request: Request):
     antes = await svc.read_config(payload.servidor, payload.banco)
     result = await svc.save_config(payload.servidor, payload.banco, payload.valores)
     if result.get("success"):
-        campos_validos = {c for c, _ in svc.CAMPOS}
+        campos_validos = {c for c, _ in (svc.CAMPOS + svc.CAMPOS_CONTROLE_AUX)}
         campos_alvo = [c for c in payload.valores if c in campos_validos]
         campos = log_auditoria_service.diff_campos(
             antes.get("valores") if antes.get("success") else None,

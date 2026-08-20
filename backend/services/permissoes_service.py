@@ -330,6 +330,31 @@ ACOES_GESTOR_NFCE = [
     ("CONTINGENCIA", "Abrir/fechar contingência"),
 ]
 
+# Agrupar Comandas em NF-e (migração de FrmSelComandas.frm + o caminho de
+# agrupamento de FrmTraImpNFE.frm, 2026-08-19) — ver
+# services/nfe_agrupada_service.py.
+ACOES_NFE_AGRUPADA = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Emitir NF-e agrupada"),
+]
+
+# NF-e Avulsa / "Gerar NFe" (migração de NFe\frmtranfe.frm, 2026-08-20) —
+# ver services/nfe_avulsa_service.py. Tela distinta de NOTAS_FISCAIS
+# ("Manutenção de Notas Fiscais" — consulta/pós-emissão) e de
+# NFE_AGRUPADA ("Gerar NFe Comanda").
+ACOES_NFE_AVULSA = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Emitir NF-e avulsa"),
+]
+
+# Contingência NFe (migração de Geral\FrmConNFe.frm, 2026-08-20) — ver
+# services/contingencia_nfe_service.py. Tela própria, distinta de
+# Contingência NFCe (já embutida na tela GESTOR_NFCE).
+ACOES_CONTINGENCIA_NFE = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Abrir/fechar contingência"),
+]
+
 # Ações da tela de cadastro de Bancos (Financeiro > Cobranças, FrmManBan.frm).
 ACOES_BANCOS = [
     ("ABRIR", "Abrir tela"),
@@ -889,6 +914,16 @@ CATALOGO = [
         # mínimo de Contingência NFCe embutido. Ver PENDENCIAS.md >
         # "Gestor NFCe" pro rastreio completo.
         _tela("GESTOR_NFCE", "Gestor NFCe", ACOES_GESTOR_NFCE),
+        # "Agrupar Comandas em NF-e" (2026-08-19, user-directed) — migração
+        # de FrmSelComandas.frm + o caminho de agrupamento de
+        # FrmTraImpNFE.frm. Ver PENDENCIAS.md > "Agrupar Comandas em NF-e".
+        _tela("NFE_AGRUPADA", "Agrupar em NF-e", ACOES_NFE_AGRUPADA),
+        # "Gerar NFe" / NF-e Avulsa (2026-08-20, user-directed) — migração
+        # de NFe\frmtranfe.frm. Ver PENDENCIAS.md > "NF-e Avulsa".
+        _tela("NFE_AVULSA", "Gerar NFe", ACOES_NFE_AVULSA),
+        # "Contingência NFe" (2026-08-20, user-directed) — migração de
+        # Geral\FrmConNFe.frm. Ver PENDENCIAS.md > blueprint item 7.
+        _tela("CONT_NFE", "Contingência NFe", ACOES_CONTINGENCIA_NFE),
         # "Movimentações" (2026-07-18, user-directed) — Card novo em
         # Transações que abre um hub com estas duas telas. Só scaffolding
         # de navegação por enquanto (telas reais mostram "Em construção") —

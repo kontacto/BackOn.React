@@ -2,7 +2,17 @@
 mínima de Contingência NFCe (migração de `Geral\\FrmConNFC.frm`, só
 abrir/fechar/consultar estado atual, não a grade histórica completa) —
 ver PENDENCIAS.md > "Gestor NFCe" pro racional completo."""
+import pytest
+
 import services.contingencia_nfce_service as svc
+
+
+@pytest.fixture(autouse=True)
+def _modulo_nfce_ativo(monkeypatch):
+    # Módulo "NFCe" (controle_aux.emite_nfce, 2026-08-20) — checado em
+    # runtime; mockado True por padrão pra não exigir mais uma linha no
+    # FakeCursor de todo teste já existente (nenhum testa módulo desligado).
+    monkeypatch.setattr(svc.nfe_fiscal_common, "modulo_nfce_ativo_sync", lambda cur: True)
 
 
 class FakeCursor:
@@ -51,7 +61,7 @@ class TestContingenciaAbertaSync:
         assert svc.contingencia_aberta_sync(cur) is None
 
     def test_com_linha_aberta_devolve_a_linha(self):
-        linha = {"id": 1, "data_inicio": "2026-08-19", "hora_inicio": "10:00:00", "motivo": "x" * 20, "tipo_contingencia": 9}
+        linha = {"data_inicio": "2026-08-19", "hora_inicio": "10:00:00", "motivo": "x" * 20, "tipo_contingencia": 9}
         cur = FakeCursor(one=[linha])
         assert svc.contingencia_aberta_sync(cur) == linha
 
@@ -80,7 +90,7 @@ class TestAbrirContingenciaSync:
         assert r["success"] is False
 
     def test_bloqueia_dupla_abertura(self, monkeypatch):
-        cur = FakeCursor(one=[{"id": 1, "data_inicio": "2026-08-19", "hora_inicio": "10:00:00", "motivo": "x" * 20, "tipo_contingencia": 9}])
+        cur = FakeCursor(one=[{"data_inicio": "2026-08-19", "hora_inicio": "10:00:00", "motivo": "x" * 20, "tipo_contingencia": 9}])
         _patch(monkeypatch, cur)
         r = svc._abrir_contingencia_sync("srv", "bd", motivo="Falha de conexão com o SEFAZ", master=True)
         assert r["success"] is False
@@ -113,7 +123,7 @@ class TestFecharContingenciaSync:
         assert "não há contingência" in r["message"].lower()
 
     def test_sucesso_grava_data_fim(self, monkeypatch):
-        cur = FakeCursor(one=[{"id": 5, "data_inicio": "2026-08-19", "hora_inicio": "10:00:00", "motivo": "x" * 20, "tipo_contingencia": 9}])
+        cur = FakeCursor(one=[{"data_inicio": "2026-08-19", "hora_inicio": "10:00:00", "motivo": "x" * 20, "tipo_contingencia": 9}])
         conn = _patch(monkeypatch, cur)
         r = svc._fechar_contingencia_sync("srv", "bd", master=True)
         assert r["success"] is True
@@ -129,7 +139,7 @@ class TestStatusContingenciaSync:
         assert r == {"success": True, "aberta": False}
 
     def test_com_contingencia(self, monkeypatch):
-        cur = FakeCursor(one=[{"id": 1, "data_inicio": "2026-08-19", "hora_inicio": "10:00:00", "motivo": "x" * 20, "tipo_contingencia": 9}])
+        cur = FakeCursor(one=[{"data_inicio": "2026-08-19", "hora_inicio": "10:00:00", "motivo": "x" * 20, "tipo_contingencia": 9}])
         _patch(monkeypatch, cur)
         r = svc._status_contingencia_sync("srv", "bd")
         assert r["success"] is True

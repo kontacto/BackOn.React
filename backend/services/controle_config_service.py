@@ -49,7 +49,17 @@ CAMPOS = [
     ("emite_mdfe", "Emite MDF-e"),
     ("sefin_nacional", "SEFIN Nacional"),
     ("TSO", "TSO"),
-    ("DMC", "DMC"),
+    # **Correção 2026-08-20, user-directed**: uma tentativa anterior, no
+    # mesmo dia, reaproveitou esta coluna como módulo "NFCe" — ERRADO,
+    # revertido. Rastreio da fonte real (`Geral\FrmGerKon.frm`, "Módulos do
+    # Cliente", confirmado contra `backon.vbp`) mostrou que `DMC` nunca foi
+    # campo fiscal: é "Exportação do DMC Combustíveis" (ligado a Posto),
+    # ainda gravado/exibido/reportado por e-mail de auditoria pela tela VB6
+    # viva — reaproveitar geraria cross-talk visível com o legado rodando
+    # em paralelo sobre o mesmo banco. Ver CLAUDE.md > "Sempre checar regras
+    # reais de controle/controle_aux/controle_configuracao" pro racional
+    # completo. Rótulo alinhado à caption real do legado ("DMC (Posto)").
+    ("DMC", "DMC (Posto)"),
     ("Alterdata", "Alterdata"),
     # Grupo "Automação Comercial" (2026-08-10, user-directed) — balança
     # conectada ao caixa (leitura ao vivo, protocolo compatível Toledo) e
@@ -61,6 +71,26 @@ CAMPOS = [
 ]
 
 _CAMPOS_SET = {c for c, _ in CAMPOS}
+
+# Campos fiscais que JÁ EXISTIAM no legado, mas numa tabela IRMÃ
+# (`controle_aux`, não `controle_configuracao`) — achado 2026-08-20,
+# user-directed, rastreando `Geral\FrmGerKon.frm` ("Módulos do Cliente")
+# depois que uma tentativa anterior tinha criado colunas novas por engano
+# (ver CLAUDE.md > "Sempre checar regras reais de controle/controle_aux/
+# controle_configuracao"). Mesmo formulário VB6 grava a maioria dos
+# checkboxes em `controle_configuracao` (`tbconfig`) mas estes 3
+# especificamente em `controle_aux` (`tbconfig2`) — por isso vivem numa
+# lista separada aqui, mas aparecem pro frontend misturados com `CAMPOS`
+# (mesma UX, tabela de origem é um detalhe de implementação).
+CAMPOS_CONTROLE_AUX = [
+    ("emite_nfce", "NFCe"),
+    # "NFe via Webservice" no legado — também liga `imprime_nfe` junto
+    # (`FrmGerKon.frm`), não replicado aqui (fora do escopo desta correção,
+    # sem consumidor Python ainda).
+    ("nfe_ws", "NFe (Webservice)"),
+    ("emite_nfse", "NFSe (via PC-RJ)"),
+]
+_CAMPOS_CONTROLE_AUX_SET = {c for c, _ in CAMPOS_CONTROLE_AUX}
 
 # "Bar", "Cilindro", "Pedido de Venda", "Metro Quadrado" e "Clínica" são 5
 # versões/segmentos diferentes da mesma tela de Pedido de Venda — mutuamente
@@ -128,6 +158,14 @@ MODULE_TELAS = {
     # não gateia nenhuma tela do catálogo, só muda comportamento em runtime
     # no KPDV (leitura ao vivo de peso).
     "balanca_pre_pesagem": ["BALANCA"],
+    # "emite_nfce"/"nfe_ws" (`controle_aux`, campos reais do legado — ver
+    # CAMPOS_CONTROLE_AUX acima) — gateiam Gestor NFCe e as 2 telas de
+    # emissão de NF-e modelo 55, respectivamente. Emissão de NFC-e/NFS-e
+    # via comanda (BOTAO dentro da tela COMANDA, não tela própria) é
+    # gateada em runtime (`nfe_fiscal_common.modulo_nfce_ativo_sync`/
+    # `modulo_nfe_ativo_sync`), não por MODULE_TELAS.
+    "emite_nfce": ["GESTOR_NFCE"],
+    "nfe_ws": ["NFE_AGRUPADA", "NFE_AVULSA"],
 }
 
 
@@ -157,6 +195,13 @@ def _read_config_sync(servidor: str, banco: str) -> dict:
         cur.execute("SELECT TOP 1 * FROM controle_configuracao")
         row = cur.fetchone() or {}
         valores = {c: bool(row.get(c)) for c, _ in CAMPOS}
+        # Campos fiscais reais do legado, tabela irmã `controle_aux` (ver
+        # CAMPOS_CONTROLE_AUX) — mesclados na mesma resposta, tabela de
+        # origem é transparente pro frontend.
+        cur.execute("SELECT TOP 1 emite_nfce, nfe_ws, emite_nfse FROM controle_aux")
+        row_aux = cur.fetchone() or {}
+        for c, _ in CAMPOS_CONTROLE_AUX:
+            valores[c] = bool(row_aux.get(c))
         cur.close()
         conn.close()
         return {"success": True, "valores": valores}
@@ -170,7 +215,8 @@ def _read_config_sync(servidor: str, banco: str) -> dict:
 
 def _save_config_sync(servidor: str, banco: str, valores: dict) -> dict:
     campos = [(c, valores[c]) for c in valores if c in _CAMPOS_SET]
-    if not campos:
+    campos_aux = [(c, valores[c]) for c in valores if c in _CAMPOS_CONTROLE_AUX_SET]
+    if not campos and not campos_aux:
         return {"success": False, "message": "Nenhum campo válido para salvar."}
     ligados = [c for c, v in campos if v and c in SEGMENTOS_PEDIDO_EXCLUSIVOS]
     if len(ligados) > 1:
@@ -187,9 +233,14 @@ def _save_config_sync(servidor: str, banco: str, valores: dict) -> dict:
         cur = conn.cursor()
         _ensure_balanca_cols(cur)
         conn.commit()
-        sets = ", ".join(f"[{c}] = %s" for c, _ in campos)
-        params = [1 if v else 0 for _, v in campos]
-        cur.execute(f"UPDATE controle_configuracao SET {sets}", tuple(params))
+        if campos:
+            sets = ", ".join(f"[{c}] = %s" for c, _ in campos)
+            params = [1 if v else 0 for _, v in campos]
+            cur.execute(f"UPDATE controle_configuracao SET {sets}", tuple(params))
+        if campos_aux:
+            sets_aux = ", ".join(f"[{c}] = %s" for c, _ in campos_aux)
+            params_aux = [1 if v else 0 for _, v in campos_aux]
+            cur.execute(f"UPDATE controle_aux SET {sets_aux}", tuple(params_aux))
         conn.commit()
         cur.close()
         conn.close()

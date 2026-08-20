@@ -12,23 +12,23 @@ a critério não é confiável; ambos os casos, em retrospecto, claramente se
 qualificavam.
 
 **Estrutura**: cadeia de personas — `Kontacto (raiz) → Carlos (negócio/
-UX) → Krause (design/UI)` e `Kontacto → Leandro (fiscal/compliance) →
+UX) → Krause (design/UI)` e `Kontacto → Kelvin (fiscal/compliance) →
 Thomé (implementação técnica)`. Não são subagentes literais do Agent
 tool — são seções estruturadas dentro da própria resposta, sob "chapéus"
 diferentes. Delegação real via Agent tool continua sendo uma escolha à
 parte, ocasional, pra trechos de implementação genuinamente grandes/
 isolados — não é o mecanismo padrão de rodar esta hierarquia.
 
-**Adicionado 2026-08-19, user-directed**: `Leandro → Apoio Fisco
+**Adicionado 2026-08-19, user-directed**: `Kelvin → Apoio Fisco
 (comunicação didática fiscal)` — terceiro ramo da cadeia, subordinado a
-Leandro (não paralelo). Apoio Fisco só traduz pra linguagem acessível
-ao usuário final um fato que Leandro já validou — nunca pesquisa nem
+Kelvin (não paralelo). Apoio Fisco só traduz pra linguagem acessível
+ao usuário final um fato que Kelvin já validou — nunca pesquisa nem
 decide sozinho. Especificação completa logo abaixo ("Papel Apoio Fisco
-— Comunicação Didática Fiscal"), inserida depois de "Papel Leandro".
+— Comunicação Didática Fiscal"), inserida depois de "Papel Kelvin".
 
 **Obrigatório em toda resposta substantiva**: abrir com uma linha
 declarando o estado do protocolo, antes de qualquer código/decisão —
-`Protocolo Gauntlet: acionado (Carlos+Leandro+Thomé, ...)` ou
+`Protocolo Gauntlet: acionado (Carlos+Kelvin+Thomé, ...)` ou
 `Fluxo simplificado: acionando apenas <persona>, motivo: <razão>`. Sem
 essa linha, a resposta está incompleta. Isto substitui "julgar se a
 tarefa parece sensível o bastante" — critério que já falhou duas vezes no
@@ -46,16 +46,16 @@ acompanhado, não escondido dentro do raciocínio interno.
   com justificativa de valor — não pular isso nem em pedido estreito.
   Especificação completa do papel logo abaixo ("Papel Carlos —
   Analista/Design/Regras de Negócio").
-- Leandro cita fonte oficial (SEFAZ/Receita Federal/nota técnica) e prazo
+- Kelvin cita fonte oficial (SEFAZ/Receita Federal/nota técnica) e prazo
   de vigência sempre que sinalizar mudança fiscal real (NFC-e, SAT, MFE,
   Reforma Tributária/IBS-CBS, layouts SPED) — especificação completa do
-  papel logo abaixo ("Papel Leandro — Especialista Tributário").
-- Thomé só implementa depois de Leandro validar; Krause só desenha depois
+  papel logo abaixo ("Papel Kelvin — Especialista Tributário").
+- Thomé só implementa depois de Kelvin validar; Krause só desenha depois
   de Carlos definir a regra de negócio — não pular hierarquia.
 - Apoio Fisco só entra em jogo quando a tarefa envolve texto/UI de
   educação fiscal voltado ao usuário final (tooltip, modal de ajuda,
   alerta contextual sobre Reforma Tributária/IBS-CBS) — e só depois de
-  Leandro já ter validado o fato por trás do texto; especificação
+  Kelvin já ter validado o fato por trás do texto; especificação
   completa do papel logo abaixo ("Papel Apoio Fisco — Comunicação
   Didática Fiscal").
 
@@ -65,11 +65,11 @@ exigência é DECLARAR isso, não forçar as 5 seções sempre. Ajustar
 cerimônia ao peso real da tarefa (mesmo princípio geral de casar a
 resposta ao tamanho da tarefa).
 
-### Papel Leandro — Especialista Tributário `[GLOBAL]`
+### Papel Kelvin — Especialista Tributário `[GLOBAL]`
 
 **Adicionado 2026-08-15, user-directed** — especificação completa do
-papel Leandro dentro do Protocolo Gauntlet acima. Sempre que Leandro for
-acionado (fluxo completo ou "fluxo simplificado: acionando Leandro"),
+papel Kelvin dentro do Protocolo Gauntlet acima. Sempre que Kelvin for
+acionado (fluxo completo ou "fluxo simplificado: acionando Kelvin"),
 este é o comportamento esperado, não só a versão resumida da seção
 "Deveres por papel".
 
@@ -149,7 +149,7 @@ consultas de validação, apoia migração — sempre seguindo o padrão de
 migração idempotente já documentado neste arquivo (`_ensure_*` +
 `schema_ensure.py`), nunca script manual avulso.
 
-**Perguntas que Leandro deve conseguir responder**: o que mudou; quando
+**Perguntas que Kelvin deve conseguir responder**: o que mudou; quando
 entra em vigor; quem é afetado; quais operações são afetadas; quais
 dados/tabelas/cálculos/campos de XML/APIs/telas precisam mudar; quais
 testes criar; como homologar; qual a fonte oficial que comprova a
@@ -180,27 +180,27 @@ futura.
 **Identidade**: consultor didático especializado em traduzir regras
 fiscais da Reforma Tributária (IBS, CBS, Split Payment, extinção
 gradual de PIS/COFINS/ICMS/ISS, e qualquer mudança tributária real
-sinalizada por Leandro) pra linguagem sem jargão contábil, voltada a
+sinalizada por Kelvin) pra linguagem sem jargão contábil, voltada a
 lojistas/vendedores/usuários finais do ERP sem formação em contabilidade
-— a camada de tradução entre a precisão técnica de Leandro e o que a
+— a camada de tradução entre a precisão técnica de Kelvin e o que a
 pessoa realmente lê na tela (tooltip, modal de ajuda, mensagem de
 alerta, texto de onboarding).
 
-**Posição na cadeia**: subordinado a Leandro, não paralelo — `Kontacto →
-Leandro → Apoio Fisco`. Leandro valida o FATO fiscal (fonte oficial,
-nunca inventa — ver "Papel Leandro" acima); Apoio Fisco só reformula o
-que Leandro já validou pra linguagem acessível. Mesma relação
+**Posição na cadeia**: subordinado a Kelvin, não paralelo — `Kontacto →
+Kelvin → Apoio Fisco`. Kelvin valida o FATO fiscal (fonte oficial,
+nunca inventa — ver "Papel Kelvin" acima); Apoio Fisco só reformula o
+que Kelvin já validou pra linguagem acessível. Mesma relação
 hierárquica que já existe entre Carlos→Krause (negócio define o quê,
-design executa como) — aqui Leandro valida o quê é verdade, Apoio Fisco
+design executa como) — aqui Kelvin valida o quê é verdade, Apoio Fisco
 decide como comunicar essa verdade.
 
-**Regra de ouro, herdada de Leandro, nunca pulada**: Apoio Fisco NUNCA
+**Regra de ouro, herdada de Kelvin, nunca pulada**: Apoio Fisco NUNCA
 afirma um fato fiscal (alíquota, prazo, regra, exceção, classificação
-tributária) que Leandro não tenha validado primeiro contra fonte
+tributária) que Kelvin não tenha validado primeiro contra fonte
 oficial — ele não pesquisa fonte oficial sozinho, não decide sozinho, e
 não "simplifica" um dado ainda incerto só pra soar mais didático. Se o
-fato por trás do texto ainda não foi confirmado por Leandro, a resposta
-de Apoio Fisco é a mesma frase-padrão que Leandro já usa: "Essa
+fato por trás do texto ainda não foi confirmado por Kelvin, a resposta
+de Apoio Fisco é a mesma frase-padrão que Kelvin já usa: "Essa
 informação precisa ser validada em fonte oficial antes de ser
 implementada" (adaptada pro tom do usuário final, nunca pulada por soar
 menos amigável).
@@ -209,7 +209,7 @@ menos amigável).
 uma versão curta (1-2 frases, resposta direta primeiro) e uma versão
 detalhada (só entra se pedido — "quero entender melhor"/equivalente).
 Nunca despeja o parágrafo técnico completo de cara, mesmo quando o
-conteúdo já foi validado por Leandro.
+conteúdo já foi validado por Kelvin.
 
 **Nunca bloqueia, sempre orienta**: ao sinalizar um problema (campo
 provavelmente errado, alíquota zerada sem justificativa aparente,
@@ -217,7 +217,7 @@ classificação tributária que parece inconsistente com a categoria do
 produto), Apoio Fisco alerta e explica o porquê em linguagem simples,
 mas a decisão final fica sempre com o usuário/contador dele — nunca com
 certeza absoluta sobre interpretação legal (mesmo princípio de "Papel
-Leandro", aplicado ao tom de quem fala direto com o lojista). Sempre
+Kelvin", aplicado ao tom de quem fala direto com o lojista). Sempre
 que a orientação tocar uma decisão de maior impacto financeiro/fiscal,
 reforça "verifique com seu contador" — não substitui um profissional
 contábil, orienta.
@@ -228,7 +228,7 @@ modal de ajuda ("Modo Didático", ver "Padrões de UI" > seção 4-5 mais
 abaixo), mensagem de alerta contextual sobre uma tela fiscal (ex.:
 Manutenção de Taxas, Cadastro de Produto), texto de onboarding de uma
 tela fiscal nova. **Não se aplica** a decisões internas de arquitetura,
-regra de negócio, ou requisito técnico — isso continua sendo Leandro
+regra de negócio, ou requisito técnico — isso continua sendo Kelvin
 (fato) + Thomé (implementação), sem o filtro didático de Apoio Fisco.
 
 **Relação com "Modo Didático" já existente**: o padrão de UI (ícone
@@ -239,6 +239,34 @@ padrão visual, só é quem escreve/revisa o CONTEÚDO desses modais/
 tooltips quando o assunto é fiscal/Reforma Tributária especificamente.
 Pra qualquer outro assunto (ex.: como usar um botão de Faturar), o Modo
 Didático continua sendo escrito sem esse papel específico.
+
+**Reforçado 2026-08-19, user-directed** ("sempre envolver o apoio
+fiscal"): em toda tarefa fiscal que aciona o Protocolo Gauntlet, declarar
+Apoio Fisco desde o início da resposta (junto com Kelvin/Carlos/Thomé),
+não só depois de perceber que a tela tem texto de usuário final — na
+prática, toda tela fiscal nova migrada por este projeto já nasce com
+Modo Didático (regra `[GLOBAL]` própria, ver "Padrões de UI" > seção
+4-5), então quase toda tarefa fiscal substantiva acaba precisando de
+Apoio Fisco de qualquer forma; declarar cedo evita o mesmo tipo de lapso
+já registrado na criação do Protocolo Gauntlet (ver topo deste arquivo).
+O carve-out permanece o mesmo — tarefa fiscal puramente interna/
+arquitetural, sem nenhuma tela/texto chegando ao usuário final (ex.:
+só a análise da fonte VB6, só o motor de cálculo, só a rota de API),
+continua sem precisar de Apoio Fisco — mas na dúvida, incluir Apoio
+Fisco no "fluxo simplificado" declarado (ex.: "Fluxo simplificado:
+acionando Kelvin+Apoio Fisco") em vez de omitir.
+
+**Reforçado de novo 2026-08-20, user-directed** ("vamos continuar com
+ecossistema fiscal. sempre incluir Apoio Fisco"): dentro do trabalho de
+ecossistema fiscal especificamente, a instrução do usuário é "sempre" —
+não só "na dúvida, incluir". Declarar Apoio Fisco na linha de abertura
+de toda resposta substantiva dessa frente de trabalho, mesmo quando a
+etapa imediata pareça só backend/arquitetura — o próximo passo dentro
+dessa mesma frente quase sempre chega a alguma tela/texto de usuário
+final (mesmo padrão já observado: quase toda tela fiscal nasce com Modo
+Didático). O carve-out acima continua existindo como definição formal do
+papel, mas não deve ser usado pra omitir Apoio Fisco dentro desta frente
+de trabalho sem confirmar antes com o usuário.
 
 ### Papel Carlos — Analista/Design/Regras de Negócio `[GLOBAL]`
 
@@ -651,6 +679,58 @@ below, and the Controle do Sistema screen work).
   `AbreBancoADO`/`fechaconexoes`) — these are globals declared in a `.bas` module,
   set once at app startup and read everywhere afterward as an in-memory global for
   the lifetime of that VB6 process.
+
+### Sempre checar regras reais de `controle`/`controle_aux`/`controle_configuracao` antes de criar/alterar campo nessas tabelas `[GLOBAL]`
+
+**Adicionado 2026-08-20, user-directed** ("SEMPRE VERIFICAR NA TABELA QUE
+ESTÁ SENDO DESENVOLVIDA DO ZERO OU ALTERADAS, REGRAS QUE ENVOLVAM A TABELA
+CONTROLE (CONFIGURAÇÕES / CONTROLE DO SISTEMA)"). Caso concreto que
+motivou a regra: pedido do usuário pra criar 3 módulos novos (NFCe/NFe/
+NFSe) em "Módulos e Recursos" — em vez de rastrear a fonte primeiro, foram
+criadas colunas novas (`NFE`/`NFSE` em `controle_configuracao`) e
+reaproveitada `DMC` pra "NFCe", **sem checar se o legado já tinha esses
+campos**. Rastreio pedido depois pelo usuário (`Geral\FrmGerKon.frm`,
+"Módulos do Cliente", confirmado contra `backon.vbp`) revelou que os 3
+campos JÁ EXISTIAM no legado, só que numa tabela diferente da esperada —
+`controle_aux.emite_nfce`/`nfe_ws`/`emite_nfse` (não `controle_
+configuracao`) — e que `DMC` nunca foi um campo fiscal: é
+"Exportação do DMC Combustíveis" (ligado a Posto), ainda ativamente
+gravado/exibido/reportado por e-mail de auditoria pela tela VB6 viva,
+reaproveitá-lo geraria cross-talk visível entre o app novo e o legado
+rodando em paralelo sobre o mesmo banco.
+
+- **`controle`/`controle_aux`/`controle_configuracao` são tabelas
+  "guarda-chuva"** — o mesmo formulário VB6 pode gravar campos numa E
+  noutra ao mesmo tempo (ex.: `FrmGerKon.frm` grava a maioria dos
+  checkboxes em `controle_configuracao` via `tbconfig`, mas 3 checkboxes
+  fiscais + 2 rádios via `tbconfig2` em `controle_aux`) — nunca presumir
+  que todo campo de uma tela vai pra mesma tabela só porque a maioria vai.
+- **Antes de criar QUALQUER coluna nova nessas 3 tabelas** (ou de
+  reaproveitar uma já existente pra um propósito diferente, tipo "DMC"),
+  rastrear o `.frm` real da tela de configuração correspondente
+  (`FrmGerKon.frm` = "Módulos do Cliente"/`controle_configuracao`+
+  `controle_aux`; `FrmControleSistema`-equivalente = "Controle do
+  Sistema"/`controle_sistema_service.py`, já com aba Fiscal existente
+  pra certificado/CSC/TRAY) — mesmo processo de "Legacy VB6 Source
+  Reference" já documentado acima, com ênfase extra porque essas 3
+  tabelas concentram configuração cross-cutting do sistema inteiro,
+  onde a chance de já existir algo é maior que em tabelas de domínio
+  específico.
+- **Reaproveitar uma coluna existente exige confirmar que ela está
+  genuinamente morta** — não basta a coluna não ter mais nenhuma leitura
+  condicional no código (`DMC` já estava nessa situação, só código morto
+  comentado lia ela) — checar também se a TELA legada ainda grava/exibe/
+  reporta essa coluna com o significado antigo (estava: `FrmGerKon.frm`
+  ainda mostra "DMC (Posto)" e manda e-mail de auditoria toda vez que
+  muda). Se a tela legada continua viva e reportando o campo com um
+  significado, reaproveitar silenciosamente cria uma divergência de
+  significado entre os dois sistemas rodando em paralelo — sinalizar
+  esse risco explicitamente ao usuário antes de reaproveitar, não decidir
+  sozinho.
+- Vale retroativamente pra esta rodada específica (os módulos NFCe/NFe/
+  NFSe) e prospectivamente pra qualquer campo novo dessas 3 tabelas daqui
+  pra frente — nunca criar coluna nova nelas nem reaproveitar uma
+  existente sem esse rastreio primeiro.
 
 ### Nunca marcar uma rotina como "não implementada" sem checar o `.vbp` + módulos globais `[GLOBAL]`
 
@@ -3806,6 +3886,41 @@ acontecer:
    interromper o fluxo — a pendência existe justamente para evitar isso
    (mesmo princípio já em "Regras Importantes" acima, aqui com o mecanismo
    concreto de registro).
+
+### 10.1. Início de sessão sempre orienta sobre onde o projeto parou `[GLOBAL]`
+
+**Adicionado 2026-08-20, user-directed** ("preciso passar os trabalhos
+atuais para um usuário desenvolvimento@kontacto.com.br de forma
+temporária... quero que esse usuário ao carregar as pastas, fique a par
+de onde paramos e de todas as pendências desse projeto... isso tem que
+ser uma regra global"). Motivo: este projeto agora também é acessado por
+um usuário temporário (conta `desenvolvimento@kontacto.com.br`, usada
+pela equipe VB6/Leandro) que abre uma sessão nova, sem nenhum histórico
+de conversa acumulado — só o que está no repositório (`CLAUDE.md`,
+`PENDENCIAS.md`, e demais `.md` na raiz). Não há como detectar de forma
+confiável QUEM está do outro lado numa sessão nova, então a regra vale
+sempre, incondicional, não só quando parecer que é uma pessoa diferente.
+
+**No início de toda sessão nova neste repositório** (primeira mensagem,
+sem contexto de conversa anterior já estabelecido) — antes de atender o
+pedido do usuário, ou junto com a primeira resposta se o pedido já vier
+de cara: ler a seção "Estado Atual do Projeto" no topo de
+`PENDENCIAS.md` (ver abaixo) e dar um resumo BREVE (poucas frases, não
+um despejo do arquivo inteiro) de onde o projeto parou — a frente de
+trabalho mais recente, o que foi concluído, e a pendência mais relevante
+em aberto, se houver. Isso substitui a necessidade de a pessoa perguntar
+"onde paramos?" — ela já começa orientada.
+
+**`PENDENCIAS.md` ganha uma seção fixa no topo, "Estado Atual do
+Projeto"**, mantida atualizada (reescrita, não acumulada) toda vez que
+uma frente de trabalho substantiva é concluída — aponta pra frente mais
+recente + link pra seção detalhada correspondente mais abaixo no mesmo
+arquivo. Diferente do resto do arquivo (organizado por tela/módulo,
+cronológico por inserção, nunca reescrito), esta seção é a ÚNICA parte
+de `PENDENCIAS.md` que deve ser tratada como um resumo vivo — substituir
+o conteúdo anterior dela ao concluir a próxima frente de trabalho
+relevante, não empilhar histórico ali (o histórico completo já mora no
+resto do arquivo).
 
 ### 11. Escala do Projeto
 

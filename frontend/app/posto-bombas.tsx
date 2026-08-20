@@ -340,7 +340,7 @@ const styles = StyleSheet.create({
   rowFields: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-start" },
   colNarrow: { width: 74 },
   colFlex: { flex: 1 },
-  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 14, alignItems: "center", marginTop: spacing.md },
+  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 12, paddingHorizontal: spacing.xl, minWidth: 160, alignSelf: "flex-end", alignItems: "center", marginTop: spacing.md },
   primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   toast: { position: "absolute", bottom: 40, alignSelf: "center", backgroundColor: colors.onSurface, paddingHorizontal: spacing.lg, paddingVertical: 10, borderRadius: radius.pill },
   toastText: { color: colors.surface, fontSize: 13 },

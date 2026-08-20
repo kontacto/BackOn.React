@@ -279,30 +279,35 @@ export default function CfopScreen() {
             <ScrollView showsVerticalScrollIndicator={false}>
               <Text style={styles.modalTitle}>{editCod ? `CFOP ${editCod}` : "Novo CFOP"}</Text>
 
-              <Text style={styles.label}>Código *</Text>
-              <TextInput
-                value={codigo}
-                onChangeText={(v) => setCodigo(v.replace(/[^0-9]/g, ""))}
-                placeholder="Ex.: 1102, 5102"
-                placeholderTextColor={colors.muted}
-                style={[styles.input, editCod != null && styles.inputDisabled]}
-                editable={editCod == null}
-                keyboardType="number-pad"
-                maxLength={4}
-                testID="cfop-codigo"
-              />
-
-              <Text style={styles.label}>Código Contábil</Text>
-              <SelectField
-                value={codContabil}
-                onChange={(v) => setCodContabil(v == null ? null : String(v))}
-                options={codigosContabilOpts}
-                placeholder="Selecione…"
-                allowClear
-                compactWeb
-                testID="cfop-cod-contabil"
-                modalTitle="Código Contábil"
-              />
+              <View style={styles.rowFields}>
+                <View style={styles.colNarrow}>
+                  <Text style={styles.label}>Código *</Text>
+                  <TextInput
+                    value={codigo}
+                    onChangeText={(v) => setCodigo(v.replace(/[^0-9]/g, ""))}
+                    placeholder="Ex.: 1102, 5102"
+                    placeholderTextColor={colors.muted}
+                    style={[styles.input, editCod != null && styles.inputDisabled]}
+                    editable={editCod == null}
+                    keyboardType="number-pad"
+                    maxLength={4}
+                    testID="cfop-codigo"
+                  />
+                </View>
+                <View style={styles.colHalf}>
+                  <Text style={styles.label}>Código Contábil</Text>
+                  <SelectField
+                    value={codContabil}
+                    onChange={(v) => setCodContabil(v == null ? null : String(v))}
+                    options={codigosContabilOpts}
+                    placeholder="Selecione…"
+                    allowClear
+                    compactWeb
+                    testID="cfop-cod-contabil"
+                    modalTitle="Código Contábil"
+                  />
+                </View>
+              </View>
 
               <Text style={styles.label}>Descrição N.F.</Text>
               <TextInput
@@ -453,9 +458,10 @@ const styles = StyleSheet.create({
   textArea: { minHeight: 80, textAlignVertical: "top" },
   rowFields: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
   colHalf: { flex: 1 },
+  colNarrow: { width: 140 },
   secondaryBtn: { borderWidth: 1, borderColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 10, alignItems: "center", marginTop: spacing.sm },
   secondaryBtnText: { color: colors.brandPrimary, fontWeight: "600", fontSize: 13 },
-  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 14, alignItems: "center", marginTop: spacing.lg, marginBottom: spacing.sm },
+  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 12, paddingHorizontal: spacing.xl, minWidth: 160, alignSelf: "flex-end", alignItems: "center", marginTop: spacing.lg, marginBottom: spacing.sm },
   primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   toast: { position: "absolute", bottom: 40, alignSelf: "center", backgroundColor: colors.onSurface, paddingHorizontal: spacing.lg, paddingVertical: 10, borderRadius: radius.pill },
   toastText: { color: colors.surface, fontSize: 13 },

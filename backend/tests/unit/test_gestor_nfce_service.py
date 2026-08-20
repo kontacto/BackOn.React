@@ -18,9 +18,18 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from lxml import etree
+import pytest
 
 import services.gestor_nfce_service as svc
 from services.nfe_fiscal_common import NFE_NS
+
+
+@pytest.fixture(autouse=True)
+def _modulo_nfce_ativo(monkeypatch):
+    # Módulo "NFCe" (controle_aux.emite_nfce, 2026-08-20) — checado em
+    # runtime; mockado True por padrão pra não exigir mais uma linha no
+    # FakeCursor de todo teste já existente (nenhum testa módulo desligado).
+    monkeypatch.setattr(svc.nfe_fiscal_common, "modulo_nfce_ativo_sync", lambda cur: True)
 
 
 def _gerar_certificado_teste():

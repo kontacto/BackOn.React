@@ -21,7 +21,7 @@ from models.comanda import (
     ComandaAddNumSerieRequest, ComandaAlterarFormaPagamentoRequest, ComandaAlterarVendedorItemRequest,
     ComandaCancelarRequest, ComandaGravarRequest, EmitirNfceRequest, EmitirNfseRequest, ListarComandasRequest,
 )
-from services import contingencia_nfce_service, fechamento_caixa_service, ibs_cbs_service, nfe_cancelamento_service, nfe_emissao_service, nfse_emissao_service
+from services import contingencia_nfce_service, fechamento_caixa_service, ibs_cbs_service, nfe_cancelamento_service, nfe_emissao_service, nfe_fiscal_common, nfse_emissao_service
 from services.constants import SITUACAO_LABEL
 from services.permissoes_service import tem_permissao
 
@@ -1059,6 +1059,9 @@ def _emitir_nfce_comanda_sync(req: EmitirNfceRequest, comanda: int) -> dict:
         if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, "ALTERAR_COMANDA", "EMITIR_NF"):
             conn.close()
             return {"success": False, "message": "Sem permissão para emitir nota fiscal."}
+        if not nfe_fiscal_common.modulo_nfce_ativo_sync(cur):
+            conn.close()
+            return {"success": False, "message": "Módulo NFCe está desativado — fale com o administrador do sistema."}
 
         cur.execute("SELECT comanda, situacao, cliente, valor_venda FROM comanda WHERE comanda = %s", (comanda,))
         cab = cur.fetchone()
@@ -1218,23 +1221,12 @@ def _modulo_sefin_nacional_ativo(cur) -> bool:
     return bool(val)
 
 
-# Tabela-semente de código de município (IBGE, 7 dígitos) por cidade+UF —
-# **não é uma tabela completa de municípios brasileiros** (são ~5570), só os
-# já confirmados nas empresas testadas nesta migração. Sem tabela de
-# município dedicada no schema (`controle` só guarda `cidade` como texto
-# livre + `uf` — confirmado ao vivo, sem coluna de código IBGE), qualquer
-# empresa fora desta lista bloqueia com mensagem clara em vez de adivinhar
-# um código errado. Ver PENDENCIAS.md > "Emissão Fiscal Real" — resolver de
-# verdade exige uma tabela de municípios (IBGE) própria ou um novo campo em
-# `controle_aux`, fora do escopo desta fase.
-_MUNICIPIOS_IBGE_CONHECIDOS = {
-    ("RIO DE JANEIRO", "RJ"): "3304557",
-}
-
-
-def _resolver_cod_municipio_ibge(cidade: Optional[str], uf: Optional[str]) -> Optional[str]:
-    chave = ((cidade or "").strip().upper(), (uf or "").strip().upper())
-    return _MUNICIPIOS_IBGE_CONHECIDOS.get(chave)
+# `_resolver_cod_municipio_ibge` foi movida pra `nfe_fiscal_common.
+# resolver_cod_municipio_ibge` 2026-08-19 (virou necessária também pro
+# destinatário de NF-e modelo 55 em `nfe_agrupada_service.py`) — mantido
+# aqui só o alias pra não precisar tocar em todo call site já existente
+# neste arquivo.
+_resolver_cod_municipio_ibge = nfe_fiscal_common.resolver_cod_municipio_ibge
 
 
 def _emitir_nfse_comanda_sync(req: EmitirNfseRequest, comanda: int) -> dict:

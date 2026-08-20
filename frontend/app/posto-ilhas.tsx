@@ -163,10 +163,16 @@ export default function PostoIlhasScreen() {
         <View style={isWeb ? styles.webShell : undefined}>
           <View style={[styles.card, isWeb && styles.cardWeb]}>
             <Text style={styles.sectionTitle}>Nova Atribuição</Text>
-            <Text style={styles.label}>Data *</Text>
-            <WebDateField value={data} onChange={(v) => setData(v || todayIso())} type="date" testID="posto-ilhas-data" />
-            <Text style={styles.label}>Ilha (Bomba) *</Text>
-            <SelectField value={ilha} onChange={(v) => setIlha(v == null ? null : Number(v))} options={ilhaOptions} placeholder="Selecione a ilha…" compactWeb testID="posto-ilhas-ilha" />
+            <View style={styles.rowFields}>
+              <View style={styles.colNarrow}>
+                <Text style={styles.label}>Data *</Text>
+                <WebDateField value={data} onChange={(v) => setData(v || todayIso())} type="date" testID="posto-ilhas-data" />
+              </View>
+              <View style={styles.colFlex}>
+                <Text style={styles.label}>Ilha (Bomba) *</Text>
+                <SelectField value={ilha} onChange={(v) => setIlha(v == null ? null : Number(v))} options={ilhaOptions} placeholder="Selecione a ilha…" compactWeb testID="posto-ilhas-ilha" />
+              </View>
+            </View>
             <View style={styles.rowFields}>
               <View style={styles.colNarrow}>
                 <Text style={styles.label}>Turno *</Text>

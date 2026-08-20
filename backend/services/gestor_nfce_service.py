@@ -121,6 +121,9 @@ def _list_nfce_sync(
         if _sem_permissao(cur, classe=classe, master=master, comando="ABRIR"):
             conn.close()
             return {"success": False, "message": "Sem permissão para abrir o Gestor NFCe."}
+        if not nfe_fiscal_common.modulo_nfce_ativo_sync(cur):
+            conn.close()
+            return {"success": False, "message": "Módulo NFCe está desativado — fale com o administrador do sistema."}
         where = []
         params: list = []
         if data_venda_de:
@@ -257,6 +260,9 @@ def _cancelar_nfce_sync(
         if _sem_permissao(cur, classe=classe, master=master, comando="CANCELAR"):
             conn.close()
             return {"success": False, "message": "Sem permissão para cancelar NFC-e."}
+        if not nfe_fiscal_common.modulo_nfce_ativo_sync(cur):
+            conn.close()
+            return {"success": False, "message": "Módulo NFCe está desativado — fale com o administrador do sistema."}
         if contingencia_nfce_service.contingencia_aberta_sync(cur):
             conn.close()
             return {"success": False, "message": "Não é possível cancelar NFC-e com uma contingência aberta."}
@@ -365,6 +371,9 @@ def _consultar_situacao_sync(
         if _sem_permissao(cur, classe=classe, master=master, comando="CONSULTAR"):
             conn.close()
             return {"success": False, "message": "Sem permissão para consultar situação de NFC-e."}
+        if not nfe_fiscal_common.modulo_nfce_ativo_sync(cur):
+            conn.close()
+            return {"success": False, "message": "Módulo NFCe está desativado — fale com o administrador do sistema."}
         if contingencia_nfce_service.contingencia_aberta_sync(cur):
             conn.close()
             return {"success": False, "message": "Não é possível consultar situação com uma contingência aberta."}
@@ -447,6 +456,9 @@ def _inutilizar_faixa_sync(
         if _sem_permissao(cur, classe=classe, master=master, comando="INUTILIZAR"):
             conn.close()
             return {"success": False, "message": "Sem permissão para inutilizar numeração de NFC-e."}
+        if not nfe_fiscal_common.modulo_nfce_ativo_sync(cur):
+            conn.close()
+            return {"success": False, "message": "Módulo NFCe está desativado — fale com o administrador do sistema."}
         if contingencia_nfce_service.contingencia_aberta_sync(cur):
             conn.close()
             return {"success": False, "message": "Não é possível inutilizar numeração com uma contingência aberta."}
@@ -558,6 +570,9 @@ def _retransmitir_sync(
         if _sem_permissao(cur, classe=classe, master=master, comando="RETRANSMITIR"):
             conn.close()
             return {"success": False, "message": "Sem permissão para retransmitir NFC-e."}
+        if not nfe_fiscal_common.modulo_nfce_ativo_sync(cur):
+            conn.close()
+            return {"success": False, "message": "Módulo NFCe está desativado — fale com o administrador do sistema."}
         for comanda in comandas:
             cur.execute("SELECT TOP 1 1 AS ok FROM comanda_nfce WHERE comanda = %s AND situacao <> 'C'", (comanda,))
             if cur.fetchone():
@@ -604,6 +619,9 @@ def _validar_contingencia_sync(
         if _sem_permissao(cur, classe=classe, master=master, comando="VALIDAR_CONT"):
             conn.close()
             return {"success": False, "message": "Sem permissão para validar contingência."}
+        if not nfe_fiscal_common.modulo_nfce_ativo_sync(cur):
+            conn.close()
+            return {"success": False, "message": "Módulo NFCe está desativado — fale com o administrador do sistema."}
         linhas = {}
         for comanda in comandas:
             cur.execute(
@@ -702,6 +720,9 @@ def _gerar_xml_sync(
         if _sem_permissao(cur, classe=classe, master=master, comando="ABRIR"):
             conn.close()
             return {"success": False, "message": "Sem permissão para abrir o Gestor NFCe."}
+        if not nfe_fiscal_common.modulo_nfce_ativo_sync(cur):
+            conn.close()
+            return {"success": False, "message": "Módulo NFCe está desativado — fale com o administrador do sistema."}
         cur.execute("SELECT xml, chave_acesso FROM comanda_nfce WHERE comanda = %s ORDER BY autonum DESC", (comanda,))
         linha = cur.fetchone()
         cur.close()

@@ -170,10 +170,16 @@ export default function PostoTanqueNfScreen() {
             <>
               <View style={[styles.card, isWeb && styles.cardWeb]}>
                 <Text style={styles.sectionTitle}>Vincular Tanque</Text>
-                <Text style={styles.label}>Tanque *</Text>
-                <SelectField value={tanque} onChange={(v) => setTanque(v == null ? null : Number(v))} options={tanqueOptions} placeholder="Selecione…" compactWeb searchable testID="posto-tanque-nf-tanque" />
-                <Text style={styles.label}>Quantidade *</Text>
-                <TextInput value={qtd} onChangeText={(v) => setQtd(v.replace(/[^0-9]/g, ""))} placeholder="Litros" placeholderTextColor={colors.muted} style={styles.input} keyboardType="number-pad" testID="posto-tanque-nf-qtd" />
+                <View style={styles.rowFields}>
+                  <View style={styles.colFlex}>
+                    <Text style={styles.label}>Tanque *</Text>
+                    <SelectField value={tanque} onChange={(v) => setTanque(v == null ? null : Number(v))} options={tanqueOptions} placeholder="Selecione…" compactWeb searchable testID="posto-tanque-nf-tanque" />
+                  </View>
+                  <View style={styles.colNarrow}>
+                    <Text style={styles.label}>Quantidade *</Text>
+                    <TextInput value={qtd} onChangeText={(v) => setQtd(v.replace(/[^0-9]/g, ""))} placeholder="Litros" placeholderTextColor={colors.muted} style={styles.input} keyboardType="number-pad" testID="posto-tanque-nf-qtd" />
+                  </View>
+                </View>
                 {canSave ? (
                   <Pressable onPress={gravar} disabled={saving} style={[styles.primaryBtn, saving && { opacity: 0.6 }]} testID="posto-tanque-nf-gravar">
                     {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Gravar</Text>}
@@ -218,12 +224,13 @@ const styles = StyleSheet.create({
   scrollWeb: WEB_SCROLL_CENTER,
   webShell: WEB_CONTENT_SHELL,
   card: { ...WEB_FILTER_CARD, marginBottom: spacing.md, gap: spacing.sm },
-  cardWeb: {},
+  cardWeb: { maxWidth: 720 },
   sectionTitle: { fontSize: 15, fontWeight: "700", color: colors.onSurface, marginBottom: spacing.xs },
   label: { fontSize: 12, color: colors.muted, fontWeight: "500", marginTop: spacing.xs },
   input: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: 11, fontSize: 14, color: colors.onSurface },
   rowFields: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-end" },
   colFlex: { flex: 1 },
+  colNarrow: { width: 160 },
   searchBtn: { width: 44, height: 44, borderRadius: radius.sm, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center" },
   notaInfo: { fontSize: 13, color: colors.onSurface, marginTop: spacing.sm, fontWeight: "600" },
   row: {
@@ -234,7 +241,7 @@ const styles = StyleSheet.create({
   rowTitle: { fontSize: 14, fontWeight: "600", color: colors.onSurface },
   rowSub: { fontSize: 12, color: colors.muted, marginTop: 2 },
   empty: { textAlign: "center", color: colors.muted, marginTop: 16 },
-  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 14, alignItems: "center", marginTop: spacing.md },
+  primaryBtn: { backgroundColor: colors.brandPrimary, borderRadius: radius.pill, paddingVertical: 12, paddingHorizontal: spacing.xl, minWidth: 160, alignSelf: "flex-start", alignItems: "center", marginTop: spacing.md },
   primaryBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   toast: { position: "absolute", bottom: 40, alignSelf: "center", backgroundColor: colors.onSurface, paddingHorizontal: spacing.lg, paddingVertical: 10, borderRadius: radius.pill },
   toastText: { color: colors.surface, fontSize: 13 },
