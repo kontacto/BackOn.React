@@ -1,12 +1,9 @@
 """Geração de Boletos (Financeiro > Cobranças) — baseada em `frmrelbol4.frm`
-(`Kontacto`). Fase 1 desta tela: filtros + grade de títulos + "Gerar
-Remessa" (reaproveita os motores CNAB já implementados) + "Gerar Planilha"
-(exportação Excel, feita no frontend). Emissão do PDF do boleto (com
-código de barras) e envio por e-mail ficam de fora desta fase — dependem
-de um motor de desenho visual do boleto que não existe neste projeto (o
-legado usa o objeto `Printer` do VB6 + uma impressora PDF virtual,
-`biopdf`, sem equivalente direto num backend web). Ver PENDENCIAS.md >
-"Geração de Boletos" pro mapeamento completo.
+(`Kontacto`). Filtros + grade de títulos + "Gerar Remessa" (reaproveita os
+motores CNAB já implementados) + "Gerar Planilha" (exportação Excel, feita
+no frontend) + (2026-08-26) "Baixar PDF"/"Enviar por Email" (código de
+barras real, ver `boleto_pdf_service.py`). Ver PENDENCIAS.md > "Boleto em
+PDF" pro mapeamento completo.
 
 Query de títulos elegíveis replica `Command1_Click` (`frmrelbol4.frm:750`)
 — join `duplicata_receber`+`cliente`+`duplicata_rec_venc`, `situacao='A'`.
@@ -33,6 +30,7 @@ import asyncio
 from typing import Optional
 
 from db.connection import _open_conn
+from services import boleto_pdf_service, email_cobranca_service
 
 
 def _listar_titulos_sync(servidor: str, banco: str, cod_banco: int, filtros: dict) -> dict:
@@ -122,3 +120,81 @@ def _listar_titulos_sync(servidor: str, banco: str, cod_banco: int, filtros: dic
 
 async def listar_titulos(servidor: str, banco: str, cod_banco: int, filtros: dict) -> dict:
     return await asyncio.to_thread(_listar_titulos_sync, servidor, banco, cod_banco, filtros)
+
+
+# ============ PDF / E-mail (2026-08-26) ============
+def _baixar_pdf_sync(servidor: str, banco: str, cod_banco: int, titulos: list) -> dict:
+    return boleto_pdf_service.gerar_pdf_titulos_sync(servidor, banco, cod_banco, titulos)
+
+
+async def baixar_pdf(servidor: str, banco: str, cod_banco: int, titulos: list) -> dict:
+    return await asyncio.to_thread(_baixar_pdf_sync, servidor, banco, cod_banco, titulos)
+
+
+def _enviar_email_sync(servidor: str, banco: str, cod_banco: int, titulos: list) -> dict:
+    """Por título: registra o título no banco escolhido (mesma gravação
+    de `Baixar PDF` — idempotente), resolve o e-mail do cliente (mesma
+    cascata já usada em `contratos_service._enviar_cobrancas_sync`),
+    gera o PDF de 1 título e chama `email_cobranca_service`. Sem e-mail
+    cadastrado nunca tenta enviar. Cada item roda isolado (lote
+    best-effort, mesmo padrão de `contratos_service._enviar_cobrancas_
+    sync`)."""
+    if not titulos:
+        return {"success": False, "message": "Selecione ao menos um título."}
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        resultados = []
+        for drv_codigo in titulos:
+            try:
+                erro = boleto_pdf_service._registrar_banco_no_titulo_sync(cur, drv_codigo, cod_banco)
+                if erro:
+                    resultados.append({"codigo": drv_codigo, "success": False, "message": erro["message"]})
+                    continue
+                conn.commit()
+
+                cur.execute(
+                    "SELECT ISNULL(NULLIF(c.email_cobranca,''), ISNULL(NULLIF(c.email_NFE,''), c.e_mail)) AS email_destino, "
+                    "c.nome, c.fantasia, drv.dt_vencimento, drv.valor "
+                    "FROM duplicata_rec_venc drv JOIN duplicata_receber dr ON dr.codigo = drv.duplicata "
+                    "JOIN cliente c ON c.codigo = dr.cliente WHERE drv.codigo=%s",
+                    (drv_codigo,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    resultados.append({"codigo": drv_codigo, "success": False, "message": "Título não encontrado."})
+                    continue
+                email_destino = (row.get("email_destino") or "").strip()
+                if not email_destino:
+                    resultados.append({"codigo": drv_codigo, "success": False, "message": "Sem e-mail cadastrado."})
+                    continue
+
+                pdf_bytes = boleto_pdf_service.gerar_pdf_um_titulo_sync(cur, drv_codigo)
+                if not pdf_bytes:
+                    resultados.append({"codigo": drv_codigo, "success": False, "message": "Não foi possível gerar o PDF do boleto."})
+                    continue
+
+                nome_cliente = (row.get("fantasia") or row.get("nome") or "").strip()
+                vencimento = row["dt_vencimento"].strftime("%d/%m/%Y") if row.get("dt_vencimento") else ""
+                assunto = f"Boleto para pagamento — vencimento {vencimento}"
+                corpo = (
+                    f'<font face="Arial" size="2">Prezado(a) {nome_cliente},<br><br>'
+                    f"Segue em anexo o boleto para pagamento, vencimento {vencimento}.<br><br>"
+                    "Atenciosamente,<br></font>"
+                )
+                anexos = [{"conteudo": pdf_bytes, "nome_arquivo": f"boleto_{drv_codigo}.pdf"}]
+                envio = email_cobranca_service._enviar_email_sync(servidor, banco, email_destino, assunto, corpo, anexos)
+                resultados.append({"codigo": drv_codigo, "success": bool(envio.get("success")), "message": envio.get("message")})
+            except Exception as e:
+                resultados.append({"codigo": drv_codigo, "success": False, "message": f"Erro: {e}"})
+        cur.close()
+        return {"success": True, "resultados": resultados}
+    finally:
+        conn.close()
+
+
+async def enviar_email(servidor: str, banco: str, cod_banco: int, titulos: list) -> dict:
+    return await asyncio.to_thread(_enviar_email_sync, servidor, banco, cod_banco, titulos)

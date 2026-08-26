@@ -86,3 +86,32 @@ class TestListProdutosServicosBuscaPeca:
         assert len(r["items"]) == 1
         item = r["items"][0]
         assert item["codigo"] == "P6393" and item["cod_fab"] == "WR-245"
+        # produto ainda sem foto migrada pra produto_imagem (ver "Fotos de
+        # Produto") — imagem_codigo ausente na row não pode quebrar o mapeamento.
+        assert item["imagem_codigo"] is None
+
+
+class TestListProdutosServicosImagemPrincipal:
+    """LEFT JOIN produto_imagem (foto principal) — ver PENDENCIAS.md >
+    "Fotos de Produto". Devolve o `codigo` da foto principal por item pra
+    `produtos.tsx` montar a URL da thumbnail sem precisar de uma chamada
+    extra por produto na lista de busca."""
+
+    def test_query_faz_left_join_produto_imagem_principal_ativa(self, monkeypatch):
+        cur = FakeCursor(rows=[])
+        _patch(monkeypatch, cur)
+        svc._list_produtos_servicos_sync("srv", "bd", "", 1, 40, "P")
+        q, _ = cur.queries[0]
+        assert "LEFT JOIN produto_imagem pi ON pi.codigo_int = p.codigo_int" in q
+        assert "pi.principal = 1 AND pi.situacao = 'A'" in q
+        assert "pi.codigo AS imagem_codigo" in q
+
+    def test_mapeia_imagem_codigo_quando_produto_tem_foto_principal(self, monkeypatch):
+        cur = FakeCursor(rows=[{
+            "tipo": "P", "codigo": "P6393", "descricao": "FILTRO DE AR",
+            "valor": 45.0, "qtd": 10.0, "reservado": 0.0, "reservado_os": 0.0,
+            "codigo_fab": "WR-245", "uni": "UN", "imagem_codigo": 77,
+        }])
+        _patch(monkeypatch, cur)
+        r = svc._list_produtos_servicos_sync("srv", "bd", "245", 1, 40, "P")
+        assert r["items"][0]["imagem_codigo"] == 77

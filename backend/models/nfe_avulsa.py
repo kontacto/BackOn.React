@@ -51,3 +51,24 @@ class EmitirNfeAvulsaRequest(AuditFields):
     banco: str
     codigo: int
     master: Optional[bool] = False
+
+
+class ImportarDocumentoRequest(BaseModel):
+    """Corpo comum das 5 sub-rotinas de importação automática de 1
+    documento por vez — ver `services/nfe_avulsa_service.py` >
+    "Importação automática". Devolução usa `ImportarDevolucaoRequest`
+    (lista, não 1 documento — ver docstring de `_importar_devolucao_sync`)."""
+    servidor: str
+    banco: str
+    documento: int
+
+
+class ImportarDevolucaoRequest(BaseModel):
+    """Devolução, diferente dos outros 5 tipos de importação: a fonte
+    real (`Command14_Click`, `FrmManDev.frm`) sempre importa um ARRAY de
+    `id_devolucao` (`VetDevolucao`), consolidando 1+ devoluções — mesmo
+    do cliente ou de comandas diferentes — numa única NF-e. Ver
+    `nfe_avulsa_service._importar_devolucao_sync`."""
+    servidor: str
+    banco: str
+    ids_devolucao: list[int]

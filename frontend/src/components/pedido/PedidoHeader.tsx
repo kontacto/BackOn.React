@@ -46,6 +46,17 @@ type Props = {
   // botões/campos num só lugar, em vez de tooltip por botão — pedido
   // explícito do usuário, 2026-07-20). Ícone só aparece se informado.
   onHelp?: () => void;
+  // "Imprimir O.S. Completa (A4)"/"Enviar por Email" — documento A4
+  // completo em PDF (motor `os_completa_pdf_service.py`), distinto do
+  // recibo térmico "não-fiscal" já existente na barra de pills do
+  // `ItemList` (`onImprimir`). Ação de tela (não depende de `situacao`),
+  // por isso mora aqui junto de Anexos/Ajuda. Ícones só aparecem se
+  // informados — hoje só usado por `os-geral.tsx` (2026-08-26), nomes
+  // genéricos pra o Pedido poder adotar depois sem precisar renomear.
+  onImprimirCompleto?: () => void;
+  imprimindoCompleto?: boolean;
+  onEnviarEmail?: () => void;
+  enviandoEmail?: boolean;
   // Chip "Projeto #N" — Gestor de Projetos Fase 4 (recurso extra, sem
   // equivalente no legado): mostra que este documento já está vinculado a
   // um Projeto, sem precisar abrir o Gestor de Projetos pra descobrir.
@@ -57,20 +68,25 @@ type Props = {
 // pra não duplicar o mesmo onHoverIn/onHoverOut cru pra cada ícone novo
 // (Anexos, Ajuda, e o que vier depois seguindo a mesma regra `[GLOBAL]`).
 function HeaderIconButton({
-  icon, label, onPress, testID,
-}: { icon: React.ComponentProps<typeof Ionicons>["name"]; label: string; onPress: () => void; testID?: string }) {
+  icon, label, onPress, testID, busy,
+}: { icon: React.ComponentProps<typeof Ionicons>["name"]; label: string; onPress: () => void; testID?: string; busy?: boolean }) {
   const [hover, setHover] = useState(false);
   return (
     <View style={{ position: "relative" }}>
       <Pressable
         onPress={onPress}
+        disabled={busy}
         onHoverIn={isWeb ? () => setHover(true) : undefined}
         onHoverOut={isWeb ? () => setHover(false) : undefined}
-        style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]}
+        style={({ pressed }) => [styles.iconBtn, (pressed || busy) && { opacity: 0.7 }]}
         hitSlop={12}
         testID={testID}
       >
-        <Ionicons name={icon} size={22} color={colors.onBrandPrimary} />
+        {busy ? (
+          <ActivityIndicator size="small" color={colors.onBrandPrimary} />
+        ) : (
+          <Ionicons name={icon} size={22} color={colors.onBrandPrimary} />
+        )}
       </Pressable>
       {hover ? (
         <View
@@ -89,7 +105,8 @@ function HeaderIconButton({
 }
 
 export default function PedidoHeader({
-  title, saving, onBack, onSave, canSave = true, titleExtra, onAnexos, onFormularios, onPrintConfig, onHelp, vinculoProjeto,
+  title, saving, onBack, onSave, canSave = true, titleExtra, onAnexos, onFormularios, onPrintConfig, onHelp,
+  onImprimirCompleto, imprimindoCompleto, onEnviarEmail, enviandoEmail, vinculoProjeto,
 }: Props) {
   return (
     <View style={styles.header}>
@@ -120,6 +137,18 @@ export default function PedidoHeader({
       ) : null}
       {onPrintConfig ? (
         <HeaderIconButton icon="settings-outline" label="Configurar Impressão" onPress={onPrintConfig} testID="pedido-form-print-config-btn" />
+      ) : null}
+      {onImprimirCompleto ? (
+        <HeaderIconButton
+          icon="print-outline" label="Imprimir O.S. Completa (A4)" onPress={onImprimirCompleto}
+          busy={imprimindoCompleto} testID="pedido-form-imprimir-completo-btn"
+        />
+      ) : null}
+      {onEnviarEmail ? (
+        <HeaderIconButton
+          icon="mail-outline" label="Enviar por Email" onPress={onEnviarEmail}
+          busy={enviandoEmail} testID="pedido-form-enviar-email-btn"
+        />
       ) : null}
       {onHelp ? (
         <HeaderIconButton icon="information-circle-outline" label="Ajuda" onPress={onHelp} testID="pedido-form-ajuda-btn" />

@@ -212,6 +212,11 @@ async def get(codigo: int, servidor: str, banco: str):
     return await notas_fiscais_service.get(servidor, banco, codigo)
 
 
+@router.get("/notas-fiscais/{codigo}/danfe")
+async def get_danfe(codigo: int, servidor: str, banco: str):
+    return await notas_fiscais_service.get_danfe(servidor, banco, codigo)
+
+
 @router.post("/notas-fiscais/cabecalho")
 async def save_cabecalho(req: CabecalhoRequest, request: Request):
     result = await notas_fiscais_service.save_cabecalho(req.servidor, req.banco, req.codigo, _cabecalho_dados(req))
@@ -286,3 +291,32 @@ async def excluir(codigo: int, req: AcaoRequest, request: Request):
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result
+
+
+class CartaCorrecaoRequest(AuditFields):
+    servidor: str
+    banco: str
+    motivo: str
+
+
+@router.post("/notas-fiscais/{codigo}/carta-correcao")
+async def carta_correcao(codigo: int, req: CartaCorrecaoRequest, request: Request):
+    result = await notas_fiscais_service.carta_correcao(req.servidor, req.banco, codigo, req.motivo, req.usuario_alteracao)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="NOTAS_FISCAIS", comando="CARTA_CORRECAO",
+            usuario=req.usuario_alteracao, classe=req.classe, referencia=str(codigo),
+            descricao=f"Nota Fiscal #{codigo} — Carta de Correção emitida (protocolo {result.get('protocolo') or '?'})",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.get("/notas-fiscais/{codigo}/cartas-correcao")
+async def cartas_correcao(codigo: int, servidor: str, banco: str):
+    return await notas_fiscais_service.list_cartas_correcao(servidor, banco, codigo)
+
+
+@router.get("/notas-fiscais/{codigo}/carta-correcao/{n_seq_evento}/dacce")
+async def carta_correcao_dacce(codigo: int, n_seq_evento: int, servidor: str, banco: str):
+    return await notas_fiscais_service.get_carta_correcao_dacce(servidor, banco, codigo, n_seq_evento)

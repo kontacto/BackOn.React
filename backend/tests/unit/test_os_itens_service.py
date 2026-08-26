@@ -54,6 +54,12 @@ class FakeConn:
 def _patch(monkeypatch, cursor):
     conn = FakeConn(cursor)
     monkeypatch.setattr(svc, "_open_conn", lambda *a, **k: conn)
+    # Bypass do gate de Checklist de Entrada de Veículo obrigatório
+    # (`_checklist_veiculo_pendente_bloqueia`, pedido_common.py,
+    # 2026-08-26) — orthogonal à maioria destes testes, que não simulam a
+    # query extra que essa checagem faz. Testado à parte em
+    # TestChecklistObrigatorioBloqueiaAddItem, sem este bypass.
+    monkeypatch.setattr(svc, "_checklist_veiculo_pendente_bloqueia", lambda *a, **k: None)
     return conn
 
 
@@ -695,4 +701,52 @@ class TestAlterarExecutorPosFechamento:
         cur = FakeCursor(one=[{"situacao": "F"}, {"vendedor": 20, "executor": 21}])
         _patch(monkeypatch, cur)
         r = asyncio.run(svc.alterar_executor(_alt_exec_req(executor=99), 1, 900))
+        assert r["success"] is True
+
+
+class TestChecklistObrigatorioBloqueiaAddItem:
+    """Checklist de Entrada de Veículo obrigatório por permissão de grupo
+    (`OS_COMP.CHECKLIST_OBRIG`, 2026-08-26 user-directed) — cobre o gate
+    REAL (`_checklist_veiculo_pendente_bloqueia`, pedido_common.py), sem
+    o bypass que o resto deste arquivo usa via `_patch`. Não mocka
+    `_checklist_veiculo_pendente_bloqueia` em si — monta a sequência real
+    de queries que `tem_permissao`/a checagem de placa/a checagem de
+    `os_checklist` fazem, pra também cobrir a integração entre os dois
+    módulos, não só a função isolada (já coberta em
+    test_pedido_common.py)."""
+
+    def _patch_sem_bypass(self, monkeypatch, cursor):
+        conn = FakeConn(cursor)
+        monkeypatch.setattr(svc, "_open_conn", lambda *a, **k: conn)
+        return conn
+
+    def test_sem_permissao_obrigatoria_prossegue_normalmente(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "A"}, None, {"cod_os_prod": 900}])
+        self._patch_sem_bypass(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_resolve_produto", lambda cur_, cod: dict(PECA))
+        r = svc._add_item_sync(_item_req(classe=1), 1)
+        assert r["success"] is True
+
+    def test_permissao_obrigatoria_mas_os_nao_e_oficina_prossegue(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "A"}, {"ok": 1}, {"placa": ""}, {"cod_os_prod": 900}])
+        self._patch_sem_bypass(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_resolve_produto", lambda cur_, cod: dict(PECA))
+        r = svc._add_item_sync(_item_req(classe=5), 1)
+        assert r["success"] is True
+
+    def test_permissao_obrigatoria_oficina_checklist_nao_concluido_bloqueia(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "A"}, {"ok": 1}, {"placa": "ABC1234"}, None])
+        self._patch_sem_bypass(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_resolve_produto", lambda cur_, cod: dict(PECA))
+        r = svc._add_item_sync(_item_req(classe=5), 1)
+        assert r["success"] is False
+        assert "Checklist de Entrada" in r["message"]
+        assert not any(q.strip().startswith("INSERT INTO os_produto") for q, _ in cur.queries)
+
+    def test_permissao_obrigatoria_oficina_checklist_concluido_prossegue(self, monkeypatch):
+        cur = FakeCursor(one=[{"situacao": "A"}, {"ok": 1}, {"placa": "ABC1234"}, {"ok": 1}, {"cod_os_prod": 900}])
+        self._patch_sem_bypass(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_resolve_produto", lambda cur_, cod: dict(PECA))
+        r = svc._add_item_sync(_item_req(classe=5), 1)
+        assert r["success"] is True
         assert r["success"] is True

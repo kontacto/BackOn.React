@@ -29,13 +29,13 @@ from starlette.middleware.cors import CORSMiddleware  # noqa: E402
 
 from db import mongo  # noqa: E402
 from routes import (  # noqa: E402
-    abertura_dia, afericao_abastecimento, agenda, auth, balanca, bancos, bomba, bordero, checkout, cilindro, clientes, combustivel, combustivel_meta, comanda, conta_func, contas, contatos,
+    abertura_dia, afericao_abastecimento, agenda, apuracao_fiscal, auth, balanca, bancos, bomba, bordero, checkout, cilindro, clientes, combustivel, combustivel_meta, comanda, conta_func, contas, contatos,
     contingencia_nfe, contratos, controle, controle_config, controle_sistema, cotacao_compra, curva_abc, custo_combustivel, descontos, devolucao,
     entrada_saida_caixa, envio_massa, equipamentos, estoque_combustivel, etiqueta_produto, fechamento_turno, financeiro, fornecedores, funcionarios,
-    geracao_boletos, gestao_compras, gestor_documentos, gestor_nfce, ia_config, ilha, impressao, inventario, layout, log_auditoria, lookups, margem_lucro, misc, modificadores, movimentacao_produtos,
-    mov_encerrante, nfe_agrupada, nfe_avulsa, notas_fiscais, os, os_completo, pedido_completo, pedido_compra, pedidos, permissoes, produto_completo, produtos,
-    produtos_compostos, produtos_niveis, projetos, reabertura_turno, relatorio_clientes, relatorios, requisicao, retifica, servicos, tabelas_aux, tanque,
-    tanque_estoque, tanque_nf, telemarketing, usuarios, veiculos, viagem, whatsapp,
+    geracao_boletos, gestao_compras, gestor_documentos, gestor_nfce, gestor_nfse, ia_config, ilha, impressao, inutilizacao_nfe, inventario, layout, log_auditoria, lookups, margem_lucro, mdfe, misc, modificadores, movimentacao_produtos,
+    mov_encerrante, ncm_cest, nfe_agrupada, nfe_avulsa, notas_fiscais, os, os_completo, pedido_completo, pedido_compra, pedidos, permissoes, produto_completo, produto_imagem, produtos,
+    produtos_compostos, produtos_niveis, projetos, reabertura_turno, recebimento, relatorio_clientes, relatorios, requisicao, retifica, servicos, tabelas_aux, tanque,
+    tanque_estoque, tanque_nf, taxas_ia, telemarketing, usuarios, veiculos, viagem, whatsapp,
 )
 
 app = FastAPI()
@@ -48,6 +48,7 @@ api_router.include_router(auth.router)
 api_router.include_router(clientes.router)
 api_router.include_router(produtos.router)
 api_router.include_router(produto_completo.router)
+api_router.include_router(produto_imagem.router)
 api_router.include_router(produtos_niveis.router)
 api_router.include_router(log_auditoria.router)
 api_router.include_router(pedidos.router)
@@ -75,6 +76,10 @@ api_router.include_router(controle_sistema.router)
 api_router.include_router(impressao.router)
 api_router.include_router(gestor_documentos.router)
 api_router.include_router(tabelas_aux.router)
+api_router.include_router(ncm_cest.router)
+api_router.include_router(apuracao_fiscal.router)
+api_router.include_router(taxas_ia.router)
+api_router.include_router(mdfe.router)
 api_router.include_router(financeiro.router)
 api_router.include_router(entrada_saida_caixa.router)
 api_router.include_router(contatos.router)
@@ -83,9 +88,12 @@ api_router.include_router(cilindro.router)
 api_router.include_router(balanca.router)
 api_router.include_router(comanda.router)
 api_router.include_router(gestor_nfce.router)
+api_router.include_router(gestor_nfse.router)
 api_router.include_router(contingencia_nfe.router)
+api_router.include_router(inutilizacao_nfe.router)
 api_router.include_router(nfe_agrupada.router)
 api_router.include_router(nfe_avulsa.router)
+api_router.include_router(recebimento.router)
 api_router.include_router(checkout.router)
 api_router.include_router(devolucao.router)
 api_router.include_router(movimentacao_produtos.router)

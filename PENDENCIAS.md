@@ -6,50 +6,3742 @@ inteira antes de continuar — não reanalisar do zero.
 
 ## Estado Atual do Projeto
 
-**Última atualização: 2026-08-20.** Esta seção é um RESUMO VIVO — sempre
-reescrita ao concluir a próxima frente de trabalho relevante, nunca
-empilhada (o histórico completo mora no resto do arquivo, abaixo). Ver
-CLAUDE.md > "Início de sessão sempre orienta sobre onde o projeto parou"
-pra regra que exige ler isto no começo de toda sessão nova.
+**Última atualização: 2026-08-26 — frente de trabalho: Arquitetura de
+Fotos de Produto (Fases 2-6 implementadas).** Pedido do usuário: analisar
+e propor uma arquitetura de armazenamento pras fotos de produto, hoje
+espalhadas em 2 sistemas desconectados (Gestor de Documentos "oficial",
+nunca lido pela tela de busca; convenção `imagensUrl` local-por-
+dispositivo que a busca de fato usa). Documento de diagnóstico produzido
+primeiro (sem código), publicado como Artifact, revisado com 2 correções
+do usuário (Gestor de Documentos MANTIDO pra documento de produto; storage
+plugável, não fixo em Azure) e aprovado ("aprovado") antes de qualquer
+implementação — ver PENDENCIAS.md > **"Fotos de Produto"** (nova seção,
+mais abaixo) pro detalhe técnico completo.
 
-**Frente de trabalho ativa: Ecossistema Fiscal.** Nesta rodada (mesmo
+Resumo do que foi entregue: sistema NOVO e ISOLADO (`produto_imagem`,
+tabela + service + rotas), storage plugável (`services/imagem_storage.py`
+— `LocalDiskDriver`/`BlobStorageDriver`, config em `controle_aux.
+path_produto_imagem`, aba Kontacto de Controle do Sistema), upload gera 3
+variantes WebP (thumb/medium/web) via Pillow + preserva original sem
+recompressão, EXIF removido das variantes por efeito colateral do
+`exif_transpose`. Frontend: `ProdutoImagensSection.tsx` (grid + estrela de
+"Principal" + cor da Grade) substitui `GestorDocumentosSection` só no
+modal "Fotografia" — o modal "Anexos" continua exatamente igual, servindo
+documento do produto. `produtos.tsx` (busca de item) ganhou a foto
+principal como 1ª tentativa de URL (via novo `LEFT JOIN produto_imagem`
+em `produtos_service.py`), mantendo a cadeia antiga (`imagensUrl`) como
+fallback pra produto ainda não migrado. Script `migrar_fotos_produto.py`
+(CLI, nunca automático) copia o que já foi anexado no Gestor de
+Documentos — idempotente por hash, não apaga nada do sistema antigo.
+
+**Escopo explícito, não omissão**: só 2 drivers reais (Local + Azure Blob,
+o mesmo SDK já validado pelo Gestor de Documentos) — um driver S3-
+compatível (AWS S3/MinIO/GCS) fica pra quando houver credencial real pra
+testar, a interface já foi desenhada pra aceitar um 3º driver sem tocar
+em service/rotas/frontend. CDN, reordenação manual de fotos e limpeza
+física de foto soft-deletada também ficam de fora desta rodada (mesmo
+raciocínio — não implementar o que não dá pra validar/não foi pedido).
+
+**Verificação**: `pytest tests/unit -q` → 2677 passed (2634 baseline + 47
+novos/atualizados — `test_imagem_storage.py`, `test_produto_imagem_
+service.py`, `test_migrar_fotos_produto.py`, extensão de `test_produtos_
+service.py`), mesmas 4 falhas pré-existentes e não relacionadas
+(`test_cnab_itau_service`/`test_os_equipamento_service`, já falhando
+antes desta rodada). `tsc --noEmit` → mesmos 14 erros pré-existentes,
+nenhum nos arquivos tocados. Ambos os venvs do projeto (`.venv`/`.venv -
+Copia`) estavam incompletos pra rodar o backend de verdade (faltava
+`python-multipart`/`reportlab`/`azure-storage-blob` dependendo do venv,
+já pinados em `requirements.txt`) — completados no `.venv` principal
+durante esta rodada.
+
+**TESTADO AO VIVO no mesmo dia, contra ARGEN-TESTE** (`minimachine`/
+`ARGEN-TESTE`, backend local): 2 supervisores `start-backend.ps1`
+duplicados detectados e limpos primeiro (mesmo padrão já documentado em
+[[feedback_backend_supervisor_duplicado]] — só um dos dois de fato tinha
+a porta 8081, matados os dois pares e subida uma instância só). `controle_
+aux.path_produto_imagem` configurado via GET-then-mutate-1-campo (nunca
+POST parcial — `_save_controle_sistema_sync` faz UPDATE às cegas de TODOS
+os campos, achado real documentado no próprio `routes/controle_sistema.py`
+desde 2026-08-17). Ciclo completo confirmado contra o produto real `P10`
+("BROCA AÇO RAPIDO 9/64"): upload real gerou os 4 arquivos físicos (`
+original.jpg` + `thumb/medium/web.webp`) no path configurado, download de
+cada variante confirmado byte-a-byte (Pillow reabriu cada uma: thumb
+150x100 corretamente reduzido, original 300x200 preservado), a busca de
+produto (`/api/produtos-servicos`) passou a devolver `imagem_codigo` pro
+P10 e `null` pros demais — **a correção do achado central da análise
+(dois sistemas de foto desconectados) está confirmada funcionando de
+verdade**. Marcar principal e excluir (soft-delete) também testados ao
+vivo: exclusão limpou a listagem mas manteve os 4 arquivos físicos
+intactos, exatamente como desenhado. Upload de um arquivo não-imagem
+(`PENDENCIAS.md` disfarçado de `.jpg`) rejeitado corretamente pela
+validação de conteúdo real (Pillow), não pela extensão declarada. Script
+de migração rodado em `--dry-run` contra ARGEN-TESTE: achou 2 documentos
+reais em `gestor_documentos` (grupo Produtos) de outro produto, pulou os
+2 com aviso claro (arquivo não encontrado no path local — provavelmente
+apontam pro caminho de rede `\\servidor\Compartilhamento\...` configurado
+no Gestor de Documentos, não acessível desta máquina) — comportamento
+correto, não travou nem gravou nada errado.
+
+Esta seção é um RESUMO VIVO — sempre reescrita ao concluir a próxima
+frente de trabalho relevante, nunca empilhada (o histórico completo mora
+no resto do arquivo, abaixo, organizado por tela/módulo). Ver CLAUDE.md
+> "Início de sessão sempre orienta sobre onde o projeto parou" pra regra
+que exige ler isto no começo de toda sessão nova.
+
+## 🟡 2026-08-26 — Fotos de Produto
+
+**Status: implementado (Fases 2-6 do documento de arquitetura), sem teste
+ao vivo contra banco real.** Ver [[project_produto_imagem]] (memória) pro
+resumo rápido; aqui o mapa de arquivos completo.
+
+**Contexto**: pedido do usuário pra analisar arquitetura de armazenamento
+de fotos de produto (Cadastro de Produtos, dentro do ecossistema de
+Estoque). Diagnóstico revelou que o sistema tem **dois mecanismos de foto
+de produto desconectados**: o Gestor de Documentos ("oficial", upload via
+modal Fotografia de Produto Completo, nunca lido em lugar nenhum) e a
+convenção `conn.imagensUrl + <código>.<ext>` (local por dispositivo, é o
+que a busca de item de Pedido/O.S. de fato usa) — subir uma foto pela tela
+oficial não a fazia aparecer onde o produto é realmente vendido. Documento
+completo (diagnóstico + comparação de estratégias + arquitetura de
+referência + modelo de dados + segurança + performance + plano de
+migração em 8 fases) publicado como Artifact
+(`https://claude.ai/code/artifact/9f14b140-a021-4b9e-b1f9-1bfa1b643b60`)
+**antes de qualquer código**, revisado com 2 observações do usuário
+("gestor de documentos deverá ser mantido para produtos, com a finalidade
+de gravar documentos"; "container... pode ser de qualquer fornecedor de
+blob storage, bem como de uma pasta no servidor local") e só implementado
+depois de "aprovado" explícito.
+
+**Backend** (tudo novo, isolado do Gestor de Documentos):
+- `backend/services/imagem_storage.py` — interface `ImagemStorageDriver`
+  (`salvar`/`ler`/`excluir`) + `LocalDiskDriver`/`BlobStorageDriver`
+  (`azure-storage-blob`, já pinado) + `resolver_driver_sync` (lê
+  `controle_aux.path_produto_imagem`/`Azure_ConnectionString`, mesma
+  detecção de URL de Blob já usada por `gestor_documentos_service.py`,
+  duplicada de propósito — 3 linhas, não vale acoplar as duas features) +
+  `_ensure_path_produto_imagem_col`.
+- `backend/services/produto_imagem_service.py` — `_ensure_produto_imagem_
+  table` (+ índice único filtrado "1 principal ativa por produto"),
+  `_upload_imagem_sync` (Pillow decodifica/valida, limite 10MB, gera
+  thumb/medium/web em WebP via `ImageOps.exif_transpose` — remove EXIF
+  como efeito colateral —, original preservado sem recompressão,
+  `storage_key` = UUID novo por upload), `_list_imagens_sync`,
+  `_arquivo_sync` (serve variante via driver, nunca URL direta),
+  `_excluir_imagem_sync` (soft-delete, nunca remove o objeto físico nesta
+  rodada), `_marcar_principal_sync`.
+- `backend/routes/produto_imagem.py` — `GET/POST /produto-imagem`,
+  `POST /produto-imagem/{codigo}/excluir`, `POST /produto-imagem/{codigo}/
+  principal`, `GET /produto-imagem/{codigo}/arquivo?variante=`. Permissão
+  reaproveitada (`PRODUTO_COMP.FOTOGRAFIA`, já existia) — sem mudança no
+  catálogo. Registrado em `server.py` e `schema_ensure.py` (2 migrações:
+  tabela nova + coluna nova em `controle_aux`).
+- `backend/services/produtos_service.py` (`_list_produtos_servicos_sync`)
+  — `LEFT JOIN produto_imagem` (principal ativa) devolve `imagem_codigo`
+  por item, evita 1 chamada extra por produto na lista de busca.
+- `backend/services/controle_sistema_service.py` — `path_produto_imagem`
+  registrado em `CAMPOS_CONTROLE_AUX` + `_CONTROLE_AUX_TEXT_FIELDS` (get/
+  save genérico da tela, mesmo mecanismo de `path_gestor_documentos`).
+- `backend/scripts/migrar_fotos_produto.py` — CLI (`--servidor --banco
+  [--dry-run]`), copia fotos já anexadas (`gestor_documentos`, `cod_
+  grupo=4`) pra `produto_imagem`, idempotente por `hash_conteudo`, nunca
+  apaga nada do sistema antigo. **Não rodado ainda contra nenhuma
+  instalação real** — precisa ser rodado manualmente, por empresa,
+  começando por conexão de teste.
+
+**Frontend**:
+- `frontend/src/utils/produtoImagem.ts` — `produtoImagemUrl(conn, codigo,
+  variante)`, único ponto que monta a URL de leitura (sempre via rota do
+  backend).
+- `frontend/src/components/produto/ProdutoImagensSection.tsx` (novo) —
+  grid de miniaturas + estrela "Principal" + seletor de Cor (reaproveita
+  `_list_cores_grade_sync`, endpoint já existente) + upload multipart
+  (mesmo padrão cru de `GestorDocumentosSection.tsx`, `apiSend` não
+  suporta `FormData`).
+- `frontend/app/produto-completo.tsx` — `FotografiaModal` passa a
+  renderizar `ProdutoImagensSection` em vez de `GestorDocumentosSection`
+  (mesmo `modalCardWebWide`, mesmo trigger no cabeçalho). `AnexosModal`
+  **não mudou uma linha** — continua com `GestorDocumentosSection`,
+  cobrindo documento do produto. Texto do Modo Didático (`PRODUTO_AJUDA_
+  ITENS`) atualizado.
+- `frontend/app/produtos.tsx` — `Item.imagem_codigo` novo (passthrough do
+  backend); `fotoUrls()` tenta a foto principal resolvida pelo backend
+  primeiro, cai pra cadeia antiga (`imagensUrl` + 4 extensões) se o
+  produto ainda não tiver foto migrada.
+- `frontend/app/controle-sistema.tsx` — campo `path_produto_imagem`
+  (aba Kontacto, ao lado de `path_gestor_documentos`) + texto de ajuda
+  explicando os 2 formatos aceitos (pasta local ou URL de container Blob).
+
+**Escopo explícito desta rodada (decisões, não omissões)** — ver a seção
+"Fora de escopo" completa no documento de arquitetura (Artifact acima):
+só 2 drivers reais (S3-compatível fica pra quando houver credencial real
+pra testar); sem CDN (todo consumo já passa por uma rota única do
+backend, adicionar CDN depois não muda nenhum consumidor); sem
+reordenação manual de fotos; sem job de limpeza física de foto soft-
+deletada; KPDV (C#) fora do escopo, rodada própria se pedido.
+
+**Verificação**: 47 testes novos/atualizados, `pytest`/`tsc` limpos (ver
+Estado Atual acima pro número exato). **TESTADO AO VIVO** contra ARGEN-
+TESTE no mesmo dia — ver detalhe completo no bloco "TESTADO AO VIVO" da
+seção "Estado Atual do Projeto" acima: upload real (produto `P10`) gerou
+os 4 arquivos físicos corretos, download de cada variante confirmado
+(thumb corretamente reduzido, original preservado), busca de produto
+passou a devolver `imagem_codigo` — a correção do achado central da
+análise (dois sistemas de foto desconectados) está confirmada. Marcar
+principal, excluir (soft-delete sem remover arquivo), rejeição de
+arquivo não-imagem, e dry-run do script de migração (2 documentos reais
+achados e pulados corretamente, arquivo não localizável nesta máquina)
+também testados ao vivo. `controle_aux.path_produto_imagem` ficou
+configurado em ARGEN-TESTE (`C:\fotos_produto_teste`, path local de
+teste) — pronto pra continuar sendo usado em sessões futuras.
+
+## 🟡 2026-08-26 — Checklist de Entrada de Veículo (O.S. Oficina)
+
+**Status: implementado, sem teste ao vivo (sem conexão disponível).**
+Registrado pra quem retomar — ver [[project_checklist_entrada_veiculo]]
+(memória) pro resumo rápido; aqui o mapa de arquivos completo.
+
+**Contexto**: pedido explícito do usuário — ao receber o veículo (O.S.
+Aberta), o atendente marca avarias existentes tocando num diagrama do
+carro. Usuário enviou um documento de referência preenchido à mão
+("MOURA SERVIÇOS AUTOMOTIVOS") que sugeria uma lista fixa de perguntas
+Sim/Não/Reparar — corrigido via `AskUserQuestion` ANTES de implementar:
+é dinâmico, cada marcação vira um item da lista. Também confirmado:
+diagrama = desenho vetorial simples (não fac-símile das 4 vistas do
+documento); campos Motor/Combustível/Direção/AR/Portas/Tanque/Cor
+descartados (o veículo já tem Placa/Marca/Modelo/Ano/KM na própria O.S.).
+
+**Achado de investigação que mudou a abordagem técnica**: nenhum
+precedente no projeto de "capturar coordenada de toque numa imagem" —
+sem `react-native-svg` instalado, sem canvas, sem `PanResponder`.
+Resolvido com um `<svg>` intrínseco do react-native-web (O.S. Completa
+já é web-only), mesmo princípio já usado por `WebDateField.tsx` — sem
+dependência nova.
+
+**Backend**:
+- `backend/services/os_checklist_veiculo_service.py` (novo) — CRUD
+  mínimo (list/add/cancelar, sem editar) sobre a tabela nova
+  `os_checklist_veiculo` (codigo, os, tipo_avaria, pos_x, pos_y [fração
+  0-1], descricao, situacao, usuario_inclusao, data_inclusao) — soft-
+  cancel (`situacao='C'`), mesmo padrão de `os_equipamento_service.py`.
+  Migração registrada em `schema_ensure.py::_MIGRACOES`.
+- `models/schemas.py` — `OSChecklistVeiculoSaveRequest`.
+- `routes/os_completo.py` — `GET/POST /os-completo/{codigo}/checklist-
+  veiculo`, `POST .../checklist-veiculo/{item}/cancelar` — audit log
+  `tela="OS_COMP"`, `comando="CHECKLIST_ADD"/"CHECKLIST_CANC"`.
+- `services/permissoes_service.py` — botões novos `CHECKLIST_ADD`/
+  `CHECKLIST_CANC` em `ACOES_OS_COMP`.
+- `services/os_completa_pdf_service.py` — `_montar_dados_os_sync` busca
+  o checklist incondicionalmente (barato, lista vazia se não houver);
+  `_desenhar_checklist_veiculo(c, dados, y, codigo)` nova, chamada
+  incondicionalmente no fim de `gerar_pdf_os_sync` — só desenha (sempre
+  numa página NOVA) quando `os.placa` não-vazio (Oficina) **e**
+  `situacao == 'A'` (Aberta); fora disso é no-op puro (`y` inalterado,
+  nenhuma página extra). Diagrama = corpo arredondado (`c.roundRect`) +
+  4 rodas (`c.rect`) + linha do para-brisa + "FRENTE"; marcações =
+  círculos numerados nas posições (`pos_x`/`pos_y` escalados, `pos_y`
+  invertido — PDF cresce pra cima); legenda numerada ao lado, com
+  paginação própria se ficar longa.
+
+**Testes backend**: `test_os_checklist_veiculo_service.py` (13 testes —
+migração, list/add/cancelar, bloqueio com O.S. não-Aberta, tipo/posição
+inválidos) + `test_os_completa_pdf_checklist.py` (7 testes — canvas
+`reportlab` real, não mockado; cobre os 2 casos de no-op, desenho com/
+sem marcação, paginação de legenda longa, tipo desconhecido não quebra,
+`_montar_dados_os_sync` inclui a chave nova). Suite completa: 2605
+passed (4 falhas pré-existentes não-relacionadas — `test_cnab_itau_
+service` data flake + 3 em `test_os_equipamento_service::
+TestUpdateEquipamento`, já existiam no HEAD antes desta sessão, git
+status limpo nesses arquivos).
+
+**Self-render visual** (`pymupdf`, mesma técnica validada na rodada
+anterior de Impressão A4) — PDF sintético com 5 marcações espalhadas:
+renderizou limpo, sem overlap de numeração/legenda. Confirmado também
+que os 2 cenários de no-op (O.S. Fechada com marcações pendentes;
+Assistência sem placa) geram PDF de 1 página só, sem seção fantasma.
+
+**Frontend**:
+- `frontend/src/components/os/types.ts` — `OSChecklistVeiculoRow`,
+  `TIPO_AVARIA_OPTIONS`/`tipoAvariaLabel`.
+- `useOSChecklistVeiculo.ts` (espelha `useOSEquipamentos.ts`, sem
+  `handleUpdate` — não existe editar aqui).
+- `ChecklistVeiculoDiagrama.tsx` (novo) — `<svg>` web-only clicável,
+  mesma silhueta do PDF; clique captura fração 0-1 via
+  `getBoundingClientRect()` (não `offsetX/offsetY`, que fica relativo ao
+  filho clicado dentro do SVG, não ao SVG inteiro); clicar numa marcação
+  já existente cancela direto (sem confirmação extra — mesmo padrão já
+  usado pelo botão de cancelar equipamento, `OSEquipamentoCard.tsx`);
+  fallback não-web mostra aviso de "só disponível na versão web".
+- `ChecklistMarcacaoModal.tsx` (novo) — tier "confirmação pontual"
+  (420px, `modalCardWebCompactNarrow`), `SelectField` Tipo de Avaria +
+  descrição opcional, mesmo padrão de `EditItemModal.tsx`.
+- `os-geral.tsx` — bloco novo condicionado a `cliente && isOficina &&
+  !isAssist && isAberto && editing && osId` (combinação inédita no
+  projeto), entre o card "Veículo" e "Equipamentos"; entrada nova no
+  Modo Didático (`AJUDA_OS_ITENS`, ícone `car-outline`).
+
+**De passagem, fechado um gap deixado em aberto da rodada anterior**: a
+logo da empresa foi aplicada também no recibo do Pedido Bar
+(`ReciboPedidoModal.tsx`) — `Empresa` type ganhou `logo_base64`/
+`logo_mime`, desenhada só no recibo completo (não `isItemMode`). Achado
+e corrigido um bug real de `tsc` nesse arquivo (faltava importar `Image`
+de `react-native` — `tsc` resolvia pro `Image` global do DOM, 3 erros de
+tipo reais) + estilo `rs.logo` que faltava adicionar.
+
+### Obrigatoriedade por permissão de grupo (mesmo dia, extensão pedida logo em seguida)
+
+Pedido explícito do usuário, 3 mensagens seguidas: "O CHECKLIST DEVE SER
+OBRIGATÓRIO VIA PERMISSÃO. Se na permissão estiver marcado para o grupo
+de usuário que tem que fazer o checklist, tem que obrigar a fazer" +
+"marcar o atendente que marcou sem avaria com os dados do veículo,
+atendente data e hora" + "acho que tem que ser criado uma tabela de
+OS_Checklist". Duas perguntas via `AskUserQuestion`: (1) o que trava
+quando obrigatório e pendente? → "deixa gravar a OS com os dados do
+veículo e cliente e cliente descreve. trava o resto." (Gravar cabeçalho
+sempre liberado; incluir item/fechar/faturar bloqueados); (2) como
+distinguir "revisado, sem avaria" de "nunca revisado"? → resolvido pela
+tabela nova (não pela resposta inicial "só marcações contam" — as 2
+mensagens seguintes do usuário mudaram a solução final pra incluir um
+botão "Concluir Checklist" explícito, apoiado numa tabela de conclusão).
+
+**Nova tabela `os_checklist`** (1 linha ATIVA por O.S., cabeçalho/
+conclusão — distinta de `os_checklist_veiculo` que guarda as marcações):
+`codigo, os, sem_avaria (BIT, calculado no momento de concluir — true
+quando não há marcação ativa), usuario, data, hora, situacao, data_
+inclusao`. "Concluir Checklist" é idempotente (soft-cancela conclusão
+anterior + grava nova, sempre reflete o estado mais recente).
+
+**Backend**:
+- `os_checklist_veiculo_service.py` ganhou `_ensure_os_checklist_table`
+  (registrada em `schema_ensure.py`), `_concluir_sync`/`concluir` (usa
+  `FecharRequest`, reaproveitado — sem model novo), e `_list_checklist_sync`
+  estendido com `concluido`/`sem_avaria`/`concluido_por` (JOIN
+  `funcionarios`, mesmo padrão `nome_guerra`-primeiro de
+  `usuario_autorizacao_nome`)/`concluido_data`/`concluido_hora`.
+- Rota nova `POST /os-completo/{codigo}/checklist-veiculo/concluir` —
+  audit log `comando="CHECKLIST_CONC"` (truncado — ver nota de nome
+  abaixo).
+- Botão de permissão novo `OS_COMP.CHECKLIST_OBRIG` ("Exigir Checklist
+  de Entrada do Veículo") em `ACOES_OS_COMP`. **Nome truncado de
+  propósito** — `CHECKLIST_OBRIGATORIO` (21 chars) estourava
+  `permissoes.comando NVARCHAR(15)`; achado ao vivo via `AssertionError`
+  do próprio catálogo declarativo (`permissoes_service.py::_tela` já
+  valida esse limite em import-time). Renomeado pra `CHECKLIST_OBRIG`
+  (15 chars exatos).
+- **Enforcement**: `pedido_common._checklist_veiculo_pendente_bloqueia(cur,
+  codigo_os, classe)` — módulo "folha" (sem imports de outros services,
+  evita circular com `os_itens_service`/`os_service`). Bloqueia quando
+  SIMULTANEAMENTE: grupo tem `CHECKLIST_OBRIG` marcado
+  (`tem_permissao`); O.S. é de Oficina (tem placa); não existe linha
+  ativa em `os_checklist`. Chamado em `os_itens_service._add_item_sync`
+  (sem distinção de `tela` — OS Mobile/OS_COMP são mutuamente exclusivas
+  por grupo, então um grupo com essa permissão nunca teria acesso à OS
+  Mobile na prática) e `os_service._fechar_os_sync`/`_faturar_os_sync`
+  (só `tela == "OS_COMP"` e `not req.master`). **Nunca chamado a partir
+  de `_save_os_completo_sync`** — Gravar o cabeçalho é sempre liberado.
+
+**PDF**: `_desenhar_checklist_veiculo` ganhou a linha "Veículo: {placa} —
+{marca} {modelo}" (repete dado da página 1, registro autocontido) e, no
+rodapé da seção, "Vistoriado por {atendente} em {data} às {hora}hs." (+
+"Nenhuma avaria encontrada..." quando `sem_avaria`) ou "Checklist ainda
+não concluído." quando sem conclusão. `_montar_dados_os_sync` ganhou 5
+chaves novas (`checklist_concluido`/`checklist_sem_avaria`/
+`checklist_concluido_por`/`checklist_concluido_data`/
+`checklist_concluido_hora`).
+
+**Frontend**: hook ganhou `conclusao`/`concluindo`/`handleConcluir`;
+botão "Concluir Checklist" no cabeçalho do card (mesma permissão
+`CHECKLIST_ADD`) + banner "✓ Vistoriado por X em dd/mm às hh:mm" quando
+já concluído; Modo Didático atualizado.
+
+**Bug de teste real, corrigido**: adicionar a query nova no meio de
+`_add_item_sync`/`_fechar_os_sync`/`_faturar_os_sync` quebrou ~9 testes
+pré-existentes (sequência de `cur.fetchone()` mockada desalinhada) — 
+corrigido com bypass no fixture `_patch()` compartilhado de cada arquivo
+(`monkeypatch.setattr(svc, "_checklist_veiculo_pendente_bloqueia",
+lambda *a, **k: None)`); o gate REAL ganhou classes de teste dedicadas
+sem esse bypass (`test_pedido_common_checklist_veiculo.py` — função
+isolada; `TestChecklistObrigatorioBloqueiaAddItem`/
+`TestChecklistObrigatorioBloqueiaFecharFaturar`).
+
+**Verificação**: `pytest` 2629 passed (mesmas 4 falhas pré-existentes),
+`tsc --noEmit` baseline 12 preservado. Self-render confirmou a nova
+linha "Vistoriado por..." sem overlap.
+
+**NÃO implementado / decisão de escopo, não omissão**:
+- Sem confirmação extra ao cancelar uma marcação (clique já cancela
+  direto) — consistente com o padrão já usado em Equipamentos, decisão
+  de manter, não uma lacuna isolada desta feature.
+- **Sem teste ao vivo contra banco real** — conexão de teste local
+  (`Minimachine`/`BD_BaxoBrisa`) com falha de login (SQL 18456) desde
+  esta mesma sessão, investigada e isolada a essa base específica (ver
+  [[reference_conexoes_teste]] pro detalhe técnico) — fora do meu
+  alcance corrigir sem acesso admin ao SQL Server.
+
+## 🟡 2026-08-26 — Impressão A4 de O.S. Completa + Logos (Empresa e Bancos)
+
+**Registrado pra quem retomar** — histórico técnico completo (decisões
+via `AskUserQuestion`, achados da investigação, trechos de código) fica
+nesta seção; aqui só o mapa do que foi tocado.
+
+**Contexto**: usuário enviou 2 modelos reais de impressão legado VB6
+(O.S. Assistência Técnica — bloco "Número de Série/Marca/Mod"; O.S.
+Oficina/RJ PNEUS — bloco "Placa/Marca/Modelo/Ano/KM") e esclareceu que o
+app já distingue, hoje, "impressão normal" (documento A4 completo) de
+"impressão não-fiscal" (recibo térmico já implementado —
+`ReciboOSModal.tsx`/`ReciboPedidoModal.tsx`, mapeado inclusive na config
+real `controle.IMPRIME_NFCE_NAO_FISCAL`). Faltava só a impressão A4 pra
+O.S. — decisão confirmada via `AskUserQuestion`: opção NOVA e adicional
+(não substitui o recibo térmico), aplicada tanto em Assistência Técnica
+quanto Oficina.
+
+No meio do trabalho, 2 pedidos adicionais confirmados: (1) enviar essas
+impressões por E-mail/WhatsApp (documento de pré-venda); (2) contemplar
+logo do cliente E dos bancos nos documentos — no VB6 é um arquivo fixo
+`App.Path & "\LOGO.bmp"` na raiz da instalação (confirmado por grep na
+fonte: `frmmanclie.frm`/`frmgespro.frm`/etc.), inviável numa arquitetura
+multi-empresa/web; usuário decidiu explicitamente: logo gravada **direto
+no banco de dados**, na própria tabela do cadastro (`controle` pra
+empresa, `bancos` pra cada banco) — não Azure Blob.
+
+**Achado crítico que mudou a arquitetura**: investigação confirmou que o
+WhatsApp deste projeto (`backend/services/whatsapp/`) só suporta
+mensagem de TEXTO — nenhum dos 3 provedores (Twilio/Meta/Evolution) tem
+envio de documento/mídia implementado (`providers.py`: "Fase 1: somente
+mensagem de texto"). Decisão confirmada via `AskUserQuestion`: E-mail
+sai com PDF real anexado, WhatsApp continua só texto (infra já 100%
+pronta e nem usada ainda em O.S. — só faltava o botão). Isso também
+levou à decisão de usar um motor **único** de PDF (server-side,
+`reportlab`) reaproveitado tanto pelo botão "Imprimir" quanto pelo
+"Enviar por Email" — em vez de duas implementações paralelas (HTML pro
+navegador + reportlab pro e-mail), que teria sido o plano original antes
+desse achado.
+
+### O que foi implementado
+
+**1. Motor de PDF da O.S. Completa** — `backend/services/
+os_completa_pdf_service.py` (novo). Desenho manual via
+`reportlab.pdfgen.canvas` (este projeto não usa `reportlab.platypus`/
+`Table` em lugar nenhum — mesmo estilo de `boleto_pdf_service.py`/
+`recibo_pdf_service.py`, confirmado antes de escrever). Busca de dado
+100% reaproveitada dos services já existentes por trás de `os-geral.tsx`
+(`os_completo_service.get_os_completo`/`os_itens_service.list_itens`/
+`os_tempo_service.list_tempo`/`forma_pagamento_service.
+list_formas_pagamento`/`os_equipamento_service.list_equipamentos`/
+`controle_service.get_empresa`/`clientes_service.cliente_resumo`) —
+nenhuma SQL nova pra ler dado que essas telas já leem. Layout replica os
+2 modelos reais: cabeçalho com logo+dados da empresa+caixa "O.S. Nº",
+bloco cliente + equipamento (Assistência, decidido por `os.placa` vazio)
+ou veículo (Oficina, `os.placa` preenchida), "Cliente Descreve/Serviço
+Executado" (`descricao_cliente`+`resumo`, 2 colunas reais confirmadas por
+schema), tabela de itens com paginação manual (`c.showPage()` quando não
+cabe), totais Subtotal/Descontos/À Pagar (só mostra as 3 colunas quando
+há desconto — replica o comportamento condicional confirmado nos 2
+modelos reais), Forma(s) de Pagamento, tabela "Tempo Gasto"
+(`os_tempo`, só quando há registro) + "Tempo Total", rodapé com
+disclaimer/assinatura (texto literal do modelo RJ PNEUS).
+
+**2. Rotas** — `backend/routes/os_completo.py`: `GET /os-completo/
+{codigo}/pdf` (devolve o PDF direto, `Response(media_type="application/
+pdf")`) e `POST /os-completo/{codigo}/enviar-email` (gera o mesmo PDF,
+resolve e-mail do cliente pela mesma cascata já usada em Contratos/
+Boletos — `ISNULL(NULLIF(email_cobranca,''), ISNULL(NULLIF(email_NFE,
+''), e_mail))` — e envia via `email_cobranca_service.enviar_email`,
+função genérica já usada por Boletos/Contratos/Gestor NFSe, nenhuma
+mudança nela). Gate de permissão: reaproveita `OS_COMP.IMPRIMIR` (já
+existente no catálogo) pros dois botões — não criou permissão nova.
+
+**3. WhatsApp da O.S.** — `frontend/app/os-geral.tsx` ganhou
+`<WhatsappButton documentType="OS" .../>` no rodapé do `ItemList`, mesmo
+padrão já usado em `pedido-geral.tsx`. **Zero mudança de backend** — o
+`doc_type="OS"` já estava implementado por completo em
+`whatsapp/repository.py` (resumo + itens), só nunca tinha sido ligado a
+uma tela. Permissão `OS_COMP.WHATSAPP` também já existia no catálogo.
+
+**4. Frontend — botões novos** — `frontend/src/components/pedido/
+PedidoHeader.tsx` (compartilhado Pedido/O.S.) ganhou 2 props opcionais
+genéricas (`onImprimirCompleto`/`onEnviarEmail`, ícones `print-outline`/
+`mail-outline`, com estado `busy` — spinner substitui o ícone durante a
+chamada) — só usadas por `os-geral.tsx` nesta rodada (Pedido não recebeu
+nenhum modelo de referência A4, fica pra quando/se pedido explicitamente).
+"Imprimir" busca o PDF via `fetch`+blob+`window.open` (mesmo padrão já
+usado em "Baixar PDF" de Boleto, `geracao-boletos.tsx`) — abre numa nova
+aba, o visualizador nativo do navegador cobre imprimir/salvar.
+
+**5. Logo da Empresa** — `controle.logo_empresa`/`logo_empresa_mime`
+(VARBINARY/NVARCHAR, migração `_ensure_logo_empresa_cols` em
+`controle_sistema_service.py`, registrada em `schema_ensure.py`). Upload
+multipart (`POST /controle-sistema/logo`, mesmo padrão de Certificado
+Digital) + remoção (`POST /controle-sistema/logo/remover`). Leitura:
+`GET /api/controle/empresa` (já usado por TODO fluxo de impressão)
+ganhou `logo_base64`/`logo_mime`, lidos numa query SEPARADA da dos
+campos de texto — achado real: serialização genérica de `bytes`
+(`_to_json_safe`) assume UTF-8 e corromperia o binário da imagem; leitura
+manual em base64, mesmo padrão de `gestor_nfse_service.
+_obter_danfe_pdf_base64_sync`. UI: `frontend/app/controle-sistema.tsx`,
+aba Empresarial, seção "Logo da Empresa" (`LogoEmpresaSection`, preview
++ upload + remover, mesmo `<input type="file">` web-only já usado por
+Certificado Digital).
+
+**6. Logo de cada Banco** — mesmíssimo padrão, por linha de `bancos`
+(`bancos.logo_banco`/`logo_banco_mime`, migração
+`_ensure_banco_logo_cols` — 1º `_ensure_*` real dessa tabela, que antes
+não rodava nenhuma migração própria). Rotas `POST /bancos/{cod}/logo` e
+`/logo/remover`. `GET /bancos/{cod}` (detalhe) ganhou `logo_base64`/
+`logo_mime` (mesma query separada); a listagem continua sem a coluna. UI
+em `frontend/app/bancos.tsx` (só habilitada com o banco já gravado —
+precisa de `cod` real). **Ligado ao PDF do Boleto** (`boleto_pdf_
+service.py`, mesmo dia, rodada seguinte): `_montar_dados_boleto_sync`
+já lia `logo_banco`/`logo_banco_mime` de graça (`SELECT * FROM bancos`
+já trazia as 2 colunas, bytes crus — geração de PDF é 100% server-side,
+não precisa de base64 aqui); `_desenhar_boleto` desenha a imagem no
+lugar do nome por extenso quando presente (o código do banco, ex.
+"341-7", continua sempre como texto — é o dado que importa pro
+processamento bancário). Bug real achado e corrigido durante o teste
+(self-render, `pymupdf`): 1ª posição vazava por baixo da imagem,
+sobrepondo a linha "Local de Pagamento" seguinte — corrigido ajustando
+o ponto de ancoragem vertical. Nunca deixa uma logo corrompida derrubar
+a geração (try/except, cai pro texto de sempre) — 4 testes novos em
+`test_boleto_pdf_service.py` (logo ausente/presente no dict de dados,
+PDF válido com logo real via Pillow, PDF válido com bytes corrompidos).
+
+**7. Recibo térmico de O.S. Oficina — gap corrigido** —
+`ReciboOSModal.tsx` (já existente, "não-fiscal") não mostrava "Dados do
+veículo" (Placa/Marca), confirmado pela 2ª imagem enviada (RJ PNEUS) e já
+registrado como gap conhecido em `project_os_oficina_analise.md`.
+Corrigido nos DOIS lugares que precisam ficar em sincronia (`buildHtml()`
++ preview JSX) — só aparece quando `os.placa` preenchida.
+
+### Verificação
+
+`pytest tests/unit -q`: 2584/2585 (1 falha pré-existente, data embutida
+em teste de CNAB Itaú, não-relacionada). `tsc --noEmit`: baseline de 12
+erros preservado, zero novos. **Nada testado ao vivo contra banco real**
+— sem credencial de conexão disponível nesta sessão. Antes de reportar
+como pronto: gerar 1 PDF de verdade (Assistência e Oficina), confirmar
+upload de logo nos 2 cadastros, confirmar o e-mail chegando com anexo, e
+confirmar visualmente o WhatsApp (`documentType="OS"`) numa OS real.
+
+### Refinamentos, mesmo dia, sessões seguintes
+
+Sem banco real disponível, a verificação passou a ser **auto-render**:
+instalei `pymupdf` (só no venv local, não em `requirements.txt`) pra
+converter o PDF gerado em PNG e conferir visualmente ANTES de mandar
+pro usuário — técnica nova nesta sessão, achou vários bugs reais que só
+apareceriam depois de impresso de verdade:
+
+1. **Caixa "O.S. Nº"** — usuário apontou 2 rodadas de ajuste contra o
+   cabeçalho real do legado ("quero igual"): texto não-centralizado
+   (1ª correção piorou, "O.S" cresceu demais); depois "O.S" pequeno
+   demais colidindo com o número grande (fonte 12→16pt, offsets fixos
+   recalibrados, sem mais distribuição uniforme).
+2. **Linha vertical Cliente|Equipamento** no cabeçalho — faltava,
+   comparado ao legado; adicionada entre as 2 bordas horizontais da
+   seção.
+3. **Rótulo em negrito + valor normal** (`_texto_label_valor`, helper
+   novo) — pedido explícito ("como o padrão da pré-venda"), aplicado em
+   todo par label:valor do cabeçalho; documentado pra reaproveitar
+   quando o A4 do Pedido for construído.
+4. **Teste de estresse pedido pelo usuário** (12 equipamentos + 40
+   itens) achou 3 bugs reais de paginação:
+   - Caixa-resumo de equipamentos sem limite crescia sem controle —
+     cap de 6 + "+ N outro(s) — ver detalhamento abaixo" (detalhe
+     completo já vive na seção "Equipamento N" abaixo, com paginação
+     própria).
+   - Rodapé "Página 1" fixo, errado a partir da 2ª página — trocado por
+     `c.getPageNumber()`.
+   - **"O número da OS e página tem que constar nas páginas
+     subsequentes"** — antes só a última página tinha essa referência.
+     Novo helper `_novo_topo_pagina(c, codigo)` centraliza os 3 pontos
+     de `c.showPage()` de continuação (bloco de equipamento, tabela de
+     itens, antes dos totais) — carimba "O.S. Nº .../Página N" no topo
+     de toda página de continuação.
+5. **Logo do banco ligada ao PDF do Boleto** (`boleto_pdf_service.py`)
+   — item que tinha ficado "fora de escopo" na rodada original, fechado
+   nesta: `_desenhar_boleto` desenha a imagem quando cadastrada (código
+   do banco, ex. "341-7", continua sempre como texto). Bug real achado
+   e corrigido no próprio self-render: 1ª posição vazava por baixo da
+   imagem, sobrepondo a linha seguinte. 4 testes novos.
+
+Suíte em 2588/2589 depois desta rodada (mesma falha CNAB pré-existente,
++4 testes novos do item 5).
+
+### Fora de escopo desta rodada, registrado
+
+- Pedido não ganhou os botões "Imprimir Completo (A4)"/"Enviar Email"
+  (props do `PedidoHeader` são genéricas, prontas, só não usadas lá) —
+  nenhum modelo A4 de Pedido foi enviado pelo usuário ainda.
+- Sem redimensionamento/validação de imagem no upload (tamanho máximo,
+  resize automático).
+- WhatsApp com anexo real — segue impossível até os provedores ganharem
+  suporte a mídia (mudança de infraestrutura, não desta tela).
+- Rodapé com número de página só na ÚLTIMA página do documento — as
+  páginas de continuação (2ª em diante) ganharam o carimbo "O.S. Nº/
+  Página N" no TOPO (item 4 acima), mas não repetem o rodapé
+  completo (disclaimer/assinatura) — decisão razoável (assinatura só
+  faz sentido uma vez), registrada pra não parecer omissão.
+
+### Bug real achado ao vivo, corrigido (2026-08-26, sessão seguinte)
+
+Usuário reportou 2x (com print de recibo real do Pedido Bar) "pedido bar
+não sai cabeçalho e logo" — a 2ª vez identificando a conexão: "Baixo
+Brisa" (conexão remota real que FUNCIONA — `DESKTOP-TDK482U`/
+`BD_BAIXOBRISA`, ver [[reference_conexoes_teste]] — distinta da conexão
+local `Minimachine`/`BD_BaxoBrisa` com login quebrado, já registrada
+acima como fora do meu alcance).
+
+**Causa raiz real** (confirmada testando direto contra a API, sem
+depender do frontend — `curl "http://localhost:8081/api/controle/
+empresa?servidor=DESKTOP-TDK482U&banco=BD_BAIXOBRISA"`):
+`controle_service._get_empresa_sync` lia `PERGUNTA_EMITE_NFCE`/
+`ESCOLHE_NFE_NFCE`/`IMPRIME_NFCE_NAO_FISCAL` de `FROM controle`, mas
+`CAMPOS_CONTROLE_AUX` (`controle_sistema_service.py` — a lista que
+define de qual tabela cada campo do Controle do Sistema vem) sempre
+classificou essas 3 colunas como pertencentes a `controle_aux`. Em
+instalações onde elas não existem redundantemente TAMBÉM em `controle`
+(caso real de `BD_BAIXOBRISA`, SQL Server 2014 SP1 — servidor mais
+antigo/menos atualizado), a query batia em "Invalid column name" e
+derrubava a função INTEIRA (`success: False`) — levando junto fantasia/
+endereço/telefone/CNPJ, não só os 3 campos fiscais. **Esse bug sempre
+existiu** (não foi introduzido pela rodada de O.S. A4/logo) — só nunca
+tinha sido reportado porque a maioria das conexões de teste tem essas
+colunas redundantemente nas duas tabelas.
+
+Corrigido movendo os 3 campos pra query de `controle_aux` (junto com
+`emite_nfce`/`emite_nfse`, que já liam de lá corretamente). Achado de
+passagem, mesmo arquivo: `logo_bytes` era lido mas nunca codificado em
+base64/devolvido no dict de resposta (dead code) — a logo nunca chegava
+ao frontend em NENHUMA conexão, mesmo nas sem o bug de tabela. Ambos
+corrigidos com try/except isolado pra logo (falha nela nunca mais
+derruba o resto do cabeçalho).
+
+**Verificado AO VIVO** (primeira verificação real de todo este arco de
+trabalho) — depois do fix + restart do backend, a mesma chamada `curl`
+retornou `success: true`, `fantasia: "BAIXO BRISA"`, `rz_social: "BAIXO
+BRISA BAR E RESTAURANTE"`, endereço/cidade/telefone/CGC todos
+corretos. `logo_base64` veio `null` — não é bug, essa empresa nunca
+teve uma logo cadastrada (dado, não código).
+
+3 testes novos (`test_controle_service.py::TestGetEmpresaSyncTabelaCorreta`,
+incluindo um que falha se as 3 colunas voltarem a aparecer na query de
+`controle`) + ajuste no teste existente que mockava as colunas na tabela
+errada. Suite completa 2634 passed (mesmas 4 falhas pré-existentes).
+
+**Ainda não verificado**: se o Checklist de Entrada de Veículo (seção
+acima) funciona de ponta a ponta contra essa mesma conexão real — ela
+está confirmadamente operacional agora, é o próximo teste natural.
+
+### Ajustes de UI seguintes, mesmo dia — pedidos rápidos do usuário
+
+- **Logo do Pedido Bar alinhada à esquerda** (`ReciboPedidoModal.tsx`) —
+  quando há logo cadastrada, layout vira logo + nome/endereço/telefone/
+  CNPJ lado a lado, tudo alinhado à esquerda (antes, tudo centralizado).
+  Sem logo, continua no bloco centralizado de sempre.
+- **Logo da Empresa movida pro topo da aba Empresarial**
+  (`controle-sistema.tsx`) — antes ficava depois de CSC/CSC Hash.
+- **Modo Didático adicionado ao Controle do Sistema** — ícone "i" no
+  cabeçalho + modal (`AJUDA_CONTROLE_ITENS`), essa tela não tinha
+  nenhum antes ("controle não possui o modo educativo").
+- **Logo da Kontacto na sidebar agora navega pra Início** — clicar na
+  marca (expandida ou recolhida) vai pra `/principal`, mesmo destino do
+  item de menu "Início" — que foi REMOVIDO da lista por ficar redundante
+  (`Sidebar.tsx`).
+- **Grupos do "Movimento de Hoje" (Tela Principal) nascem recolhidos**
+  (`PedidosTable.tsx`) — antes abriam expandidos por padrão.
+
+### Regra global registrada — prevenção de bug de tabela errada (`controle`/`controle_aux`)
+
+Pedido explícito do usuário ("precisamos prevê e corrigir sempre isso")
+— nova seção `[GLOBAL]` no CLAUDE.md logo após "Sempre checar regras
+reais de controle/controle_aux/controle_configuracao antes de criar/
+alterar campo": toda query que lê `controle`/`controle_aux` errado
+derruba a função INTEIRA, não só o campo errado — sempre conferir contra
+`CAMPOS_CONTROLE`/`CAMPOS_CONTROLE_AUX` (fonte autoritativa) e isolar
+cada sub-query (`controle` vs `controle_aux`) em seu próprio try/except.
+Auditoria rápida rodada no mesmo dia (grep pelos 3 nomes de coluna que
+causaram o bug real, em todo `backend/services/`) não achou nenhuma
+segunda ocorrência do mesmo erro — só o `controle_service.py` já
+corrigido. Uma tentativa de auditoria mais ampla (regex genérico "SELECT
+... FROM controle" cruzado contra as ~150 colunas de `CAMPOS_CONTROLE_
+AUX` em 42 arquivos) gerou só falsos positivos (regex não separa
+statements SQL distintos no mesmo arquivo de forma confiável) — não vale
+a pena repetir esse método; se aparecer um sintoma novo do tipo "campo X
+não aparece sem razão óbvia", testar a função direto via `curl` contra a
+API real (técnica que isolou o bug original rapidamente) em vez de tentar
+achar por grep amplo de novo.
+
+## 🟡 2026-08-24 — Contratos: Nota Fiscal/Boleto no Faturar Contratos
+
+Escolhido pelo usuário depois de descartar RPS municipal via
+`AskUserQuestion` (ver PENDENCIAS.md > "Estado Atual" — RPS municipal já
+tinha sido explicitamente redirecionado pro padrão nacional numa sessão
+anterior, achado confirmado com o usuário antes de prosseguir).
+
+**Protocolo Gauntlet: Kelvin+Carlos+Thomé+Apoio Fisco.**
+
+### Achado 1 — "Boleto" não tem motor próprio, é a mesma rotina de "Nota Fiscal"
+
+Releitura completa de `Clauwan\FrmFatContrato2.frm:985-1021`
+(`Command2_Click`, o loop de faturamento): `Select Case tipo` tem 3
+ramos — `Case 0 "Nota Fiscal"` chama `EmiteNF`; `Case 1 "Recibo"` chama
+`Recibo`+`TransfereComanda`; `Case 2 "Boleto"` chama **a MESMA
+`EmiteNF`** de Nota Fiscal, só gatilhado por `Grid.TextMatrix(vcont,13)
+= "B"` em vez de `"N"`. O boleto de verdade (linha digitável, código de
+barras, arquivo CNAB) nunca é desenhado aqui — é sempre feito depois,
+numa tela separada (`frmrelbol4.frm`), que **já existe neste projeto**
+como "Geração de Boletos" (Financeiro > Cobranças, implementada
+2026-07-24) — ela lê genericamente de `Duplicata_Receber`/
+`Duplicata_Rec_Venc`, sem saber nem se importar se a origem foi um
+Contrato, Pedido ou O.S. Como `_transf_receber_sync` (já implementado)
+posta corretamente nessas tabelas independente do `tipo_doc`, um
+contrato "Boleto" faturado já deveria aparecer lá **sem nenhum código
+novo** — não confirmado ao vivo nesta rodada (ver "Nunca testado ao
+vivo" abaixo).
+
+### Achado 2 — `EmiteNF` não é um motor próprio, delega pra `ImprimeNota` (rotina gigante e compartilhada)
+
+`EmiteNF(Contrato, comanda)` resolve vencimentos/CFOP e chama
+`Impressao(comanda)` → `PreparaImp` → `ImprimeNota(ModelNF)` — uma
+rotina compartilhada por várias telas do sistema (não só Contratos, o
+mesmo padrão de "modelo de impressão" já visto no Cilindro/`ModPedido`),
+não vale a pena portar literalmente. `PreparaImp` também mostra que o
+legado unifica peça+serviço numa ÚNICA nota quando os dois aparecem
+juntos (`TemPeca And TemServico` → `NaturezaNF = Desc_Con_Peca & '/' &
+Desc_Con_Servico`) — acabou virando o Achado 3 abaixo.
+
+### Implementação — reaproveita o motor de Agrupar Comandas (NFS-e)
+
+Em vez de portar `ImprimeNota`, a comanda que `_gerar_comanda_sync` já
+cria (com o item de serviço do contrato, `cfg["cod_servico_contrato"]`)
+é passada pra `nfe_agrupada_service._emitir_nfse_agrupada_sync` — o
+MESMO motor já usado por "Agrupar Comandas em NF-e" pra emitir NFS-e
+(DPS Nacional) a partir de 1+ comandas. Disparado só quando `item.
+tipo_doc` é `"N"` (Nota Fiscal) ou `"B"` (Boleto) — nunca pra `"R"`
+(Recibo, que continua exatamente como já estava).
+
+**Ordem de segurança, deliberada**: a comanda/`Receber`/
+`Duplicata_Receber` já são commitados ANTES da tentativa de emissão —
+`_emitir_nfse_agrupada_sync` abre sua PRÓPRIA conexão/transação. Uma
+falha na emissão (produto sem tributação, cliente sem CPF/CNPJ, etc.)
+**nunca desfaz o faturamento já commitado** — dinheiro real já postado
+em Contas a Receber não pode reverter por causa de um problema fiscal
+secundário. A falha só fica registrada com mensagem clara
+(`resultado.nf_e.success=False` + mensagem), e o usuário pode emitir
+manualmente depois em Gestor Fiscal > Gerar Nfe Comanda, usando a mesma
+comanda (já aparece lá normalmente, é uma comanda comum).
+
+### ✅ 2 perguntas reais respondidas pelo Leandro (mesmo dia) — uma delas CORRIGE código já implementado
+
+**Pergunta 1 (Centro de Custo)**: "Pode ser desconsiderado o acréscimo
+de 5% de iss mantendo só o valor do contrato." — resolvido, sem
+ambiguidade. Implementado `_distribuir_centro_custo_sync` (réplica de
+`CentroCustoContrato`, SEM o "+5%"), acionado só quando uma NF-e real é
+emitida pra um contrato (grava em `n_fiscal_custo`). **Limitação real
+descoberta ao implementar**: `n_fiscal_custo` é FK de `n_fiscal.codigo`
+— NFS-e grava em `dps`, que não tem tabela de custo equivalente neste
+schema. Ou seja, o rateio por Centro de Custo só se aplicava quando o
+contrato também gerava uma NF-e de produto (via `fatura_os`) — o caso
+mais comum (contrato 100% serviço, sem O.S.) não tinha onde gravar esse
+rateio. **Gap FECHADO no mesmo dia** (achada uma 2ª rotina irmã do
+legado, `receber_custo`, que roda sempre no faturamento) — ver "✅
+2026-08-24 — Contratos: Centro de Custo pra contrato 100% serviço (gap
+real fechado)".
+
+**Pergunta 2 (caso misto NF-e/NFS-e) — resposta CORRIGE uma decisão já
+implementada no mesmo dia**: "Emitir 2 documentos separados, nfe e
+nfse, sempre que em qualquer ponto que o sistema gere uma comanda com
+produto e serviço. Documentos de nfe e nfse separados e **NAO
+automaticos**. Ou seja, fica a critério do cliente se ele vai emitir a
+nota de produtos ou nota de serviços ou ambas ou nenhuma." Isso confirma
+2 documentos separados (como já assumido), mas **corrige** a 1ª versão
+desta implementação, que emitia NFS-e AUTOMATICAMENTE ao faturar um
+contrato tipo Nota Fiscal/Boleto — errado, revertido no mesmo dia. A
+regra "nunca automático, sempre critério do usuário" também é
+EXPLICITAMENTE GLOBAL ("qualquer ponto que o sistema gere uma comanda
+com produto e serviço"), não específica de Contratos — vale registrar
+pra qualquer frente futura que gere uma comanda mista automaticamente.
+
+### Backend/Frontend (versão final, pós-correção)
+
+- `services/contratos_service.py`: `_faturar_contratos_sync` volta a só
+  faturar (comanda+Receber), sem emitir nada — só repassa `tipo_doc` no
+  resultado pro frontend saber se mostra os botões de emissão. Nova
+  função `_emitir_documento_contrato_sync(tipo, comanda, ...)` — ação
+  separada e opcional, `tipo="nfe"` reaproveita `_emitir_nfe_agrupada_
+  sync` (+ roda `_distribuir_centro_custo_sync` em caso de sucesso),
+  `tipo="nfse"` reaproveita `_emitir_nfse_agrupada_sync` (sem rateio,
+  ver limitação acima). Novo endpoint `POST /contratos/faturar/emitir`,
+  permissão `FATURAR_CONTR.EMITIR_NF`.
+- `frontend/app/contrato-faturar.tsx`: resultado do faturamento não
+  mostra mais NF-e automática — cada contrato elegível (`tipo_doc`
+  "N"/"B") ganha 2 botões independentes, "Emitir NF-e" e "Emitir NFS-e"
+  (estado `emissoes`, chave `${codigo}-nfe`/`${codigo}-nfse` — um
+  contrato pode emitir os dois, um só, ou nenhum). "Gerar Recibo" volta
+  a aparecer só pra `tipo_doc==="R"`.
+- 12 testes em `test_contratos_service.py` (reescrito — os 6 da versão
+  anterior assumiam emissão automática, não existem mais): faturar nunca
+  chama motor de emissão, `_emitir_documento_contrato_sync` reaproveita
+  os motores certos por tipo, NF-e com sucesso roda o rateio (NFS-e
+  nunca roda), `_distribuir_centro_custo_sync` soma corretamente por
+  centro de custo sem o "+5%". Suíte completa: 2523 passando (1 falha
+  pré-existente/não-relacionada de sempre). Typecheck: mesma baseline de
+  12 erros conhecidos.
+
+**Nunca testado ao vivo com emissão real** — nem NF-e, nem NFS-e, nem a
+distribuição por Centro de Custo, nem a confirmação de que o contrato
+faturado aparece em "Geração de Boletos" depois. Próximo passo natural
+quando retomado.
+
+## ✅ 2026-08-25 — Envio de Cobrança de Contratos
+
+Último item da lista de "gaps reais em aberto" do ecossistema fiscal
+(levantada 2026-08-24), escolhido pelo usuário. Migração de
+`Geral\FrmEnvCob.frm` ("Envio de emails de cobrança."), 1215 linhas.
+
+**Protocolo Gauntlet: Kelvin+Carlos+Thomé** — envolve regras de cobrança
+real (o que sai no e-mail, quando o status muda) e desenho de fluxo;
+Apoio Fisco fica de fora (não é conteúdo educativo fiscal).
+
+### Achado 1 — não é CNAB, é puramente e-mail
+
+O nome "Envio de Cobrança" sugeria remessa bancária (o motor CNAB já
+existe, construído em "Geração de Boletos"). A fonte real mostra outra
+coisa: um `ListView` de cobranças pendentes + botão "Enviar" que chama
+`EnviaEmailCliente` — SMTP puro, sem nenhum arquivo de remessa
+envolvido. NFS-e nunca vai como anexo, só como LINK de verificação
+pública no corpo do e-mail (`msg2_padrao_email = "Link NFSe: " & vNFSe`).
+
+### Achado 2 — as linhas de `cobrancas_enviadas` são criadas no FATURAMENTO, não aqui
+
+`Command1_Click`/`Command2_Click` (a tela em si) só fazem `SELECT`/
+`UPDATE` em `cobrancas_enviadas` — nunca `INSERT`. Busca por
+`insert into cobrancas_enviadas` na árvore inteira revelou que o
+`INSERT` mora em `Geral\FrmFatContrato.frm`/`Clauwan\FrmFatContrato2.frm`
+— os MESMOS 2 `.frm` já rastreados pra Faturar Contratos, dentro do loop
+de faturamento. Ou seja: faturar um contrato já registra a "obrigação de
+cobrar" (`status_envio='Não Enviado'`); esta tela só CONSOME essas
+linhas depois e as envia.
+
+Confirmado ao vivo: tabela `cobrancas_enviadas` já existe com 176 linhas
+reais em ARGEN TESTE — schema batia exatamente com o rastreio
+(`codigo_cobrancas_enviadas`, `comanda`, `contrato`, `ano_referencia`,
+`mes_referencia`, `vencimento`, `data_envio`, `hora_envio`,
+`e_mail_envio`, `obs_envio`, `path_pdf`, `status_envio`, `path_recibo`,
+`path_boleto`, `path_nfse`, `parcela`, `num_nota`).
+
+### Escopo confirmado via `AskUserQuestion` — Fase 1, sem anexo de PDF
+
+Nem Recibo nem Boleto têm um arquivo PDF persistido neste projeto hoje —
+os dois são renderizados sob demanda (HTML/impressão), nunca salvos em
+disco (mesmo bloqueio já registrado em "Geração de Boletos", que também
+parou nesse ponto antes). O e-mail sai com corpo/assunto reais
+("Mensalidade de \<mês\> / \<ano\>"), sem anexo — decisão explícita do
+usuário, mesmo padrão já aceito antes pra "Geração de Boletos".
+
+**Não replicado do legado, decisão registrada** (CLAUDE.md > "Não
+replicar truques VB6"):
+- `Command3_Click`/"Preparar para Envio" — botão com `Visible=0` na
+  própria tela do legado (escondido, superado por `Command2_Click` que
+  já envia direto) — dead code confirmado, não portado.
+- Ramo `Dados_Controle_Configuracao.Cilindro` (textos/logo da Gueren
+  Gases) — fora do escopo desta migração, Cilindros tem módulo próprio.
+- Link de verificação pública de NFS-e por município (`URLNFSe`,
+  resolvido via a tabela antiga `rps` no legado) — este projeto usa
+  `dps`/DPS Nacional, sem portal de verificação por município mapeado
+  ainda. Pendência menor registrada, não adivinhada.
+
+### Implementado
+
+**Backend**: `services/contratos_service.py` — `_gerar_comanda_sync`
+ganhou o `INSERT INTO cobrancas_enviadas` (parâmetro novo `vencimento`,
+repassado por `_faturar_contratos_sync`). `_listar_cobrancas_sync`
+(réplica de `Command1_Click`, 2 variantes de filtro — período OU mês/
+ano, unificadas como parâmetros opcionais) e `_enviar_cobrancas_sync`
+(réplica simplificada de `Command2_Click`, sem anexo — resolve e-mail
+via `cliente.email_cobranca ?? email_NFE ?? e_mail`, monta assunto/
+corpo, chama `email_cobranca_service._enviar_email_sync`, atualiza
+`cobrancas_enviadas` + `contratos.historico`, lote best-effort). Rotas
+`GET /contratos/cobrancas`, `POST /contratos/cobrancas/enviar`.
+Permissão nova `ENVIO_COBRANCA` (ABRIR/ENVIAR), menu Contratos.
+
+**Frontend**: `frontend/app/contrato-envio-cobranca.tsx` — filtro (Mês/
+Ano ou Período, prioridade pro período; chips de Situação do Envio) →
+grid selecionável (todos marcados por padrão) → "Enviar Selecionadas" →
+resultado por linha. Novo card "Envio de Cobrança" no hub `contratos.tsx`.
+
+**Testes**: 15 novos em `test_contratos_service.py` (26 → 41 no arquivo)
+— filtro sem período nem mês/ano bloqueia, filtro por ano/mês, por
+período, por status; sem e-mail nunca tenta enviar (só marca status);
+envio com sucesso atualiza `cobrancas_enviadas`+`contratos.historico`;
+falha no envio marca "Falha ao Enviar"; cobrança não encontrada. Suíte
+completa: 2537 passando (1 falha pré-existente/não-relacionada de
+sempre). Typecheck: mesma baseline de 12 erros conhecidos.
+
+**Validado ao vivo, SÓ LEITURA, contra ARGEN TESTE**: `listar_cobrancas`
+por mês/ano (0 linhas em ago/2026, real) e por período (166 linhas
+reais retornadas, cliente/e-mail resolvidos corretamente); a query de
+resolução de e-mail usada dentro de `_enviar_cobrancas_sync` também
+validada isoladamente contra um registro real (id 98). **Nenhum e-mail
+real foi disparado, nenhuma escrita foi feita** — enviar de verdade
+mandaria um e-mail real pro cliente e mutaria `contratos.historico`
+permanentemente, então ficou fora desta rodada de validação.
+
+## ✅ 2026-08-24 — Contratos: Centro de Custo pra contrato 100% serviço (gap real fechado)
+
+Escolhido pelo usuário como 1ª frente da lista de "gaps reais em aberto"
+do ecossistema fiscal, depois do resumo de status pedido na mesma
+sessão. Protocolo Gauntlet: fluxo simplificado, Carlos+Thomé — decisão
+de estrutura de dados/onde gravar rateio contábil, não regra fiscal
+nova (Kelvin fica de fora).
+
+**Gap original**: `_distribuir_centro_custo_sync` (implementada mais
+cedo, réplica de `CentroCustoContrato`/`Clauwan\FrmFatContrato2.frm`)
+só grava em `n_fiscal_custo`, uma FK de `n_fiscal.codigo` — ou seja, só
+funciona quando uma NF-e (produto) é emitida. Contrato 100% serviço
+(sem `fatura_os` trazendo produto de O.S.) nunca gera uma NF-e, então
+nunca tinha onde gravar esse rateio.
+
+**Achado que fechou o gap**: `Geral\FrmFatContrato.frm:2473-2497`
+(variante irmã de `Clauwan\FrmFatContrato2.frm` — mesmo modelo de dados,
+já confirmado antes) tem sua PRÓPRIA rotina de Centro de Custo, quase
+idêntica (mesmo UNION ALL de 3 fontes: peça por nível, serviço por
+nível, lançamentos manuais de `contratos_centro_custo`), mas:
+1. Grava em **`receber_custo` (nota, custo, valor)** — chave
+   `Receber.codigo`, não `n_fiscal.codigo`.
+2. **Nunca teve o "+5%"** de ISS que a outra variante tinha — bate
+   exatamente com o que o Leandro já tinha confirmado poder ser
+   desconsiderado.
+
+Como TODO faturamento passa por `Receber` (Recibo, Nota Fiscal, ou
+Boleto — via `_transf_receber_sync`, sempre chamado independente do
+`tipo_doc`), essa distribuição roda **sempre**, no momento do
+faturamento, sem depender de nenhuma decisão futura de emitir NF-e/
+NFS-e. Fecha o gap por completo, não só o caso NF-e.
+
+**Confirmado ao vivo (ARGEN TESTE, só leitura)**: as duas tabelas têm
+dado real em produção — `n_fiscal_custo` 9.683 linhas, `receber_custo`
+8.499 linhas — não são mecanismos concorrentes, coexistem no legado
+(cada variante de negócio grava na sua). Neste projeto também coexistem
+agora, cada uma no momento certo: `receber_custo` sempre ao faturar,
+`n_fiscal_custo` só quando o usuário decide emitir NF-e depois (ação
+separada, ver seção anterior).
+
+**Implementado**: `services/contratos_service.py` —
+`_somar_centro_custo_por_nivel_sync` (query compartilhada, extraída pra
+eliminar duplicação entre as 2 rotinas) + `_distribuir_centro_custo_
+receber_sync` (nova, chamada de dentro de `_transf_receber_sync` logo
+após resolver `cod_receber`) + `_transf_receber_sync` ganhou parâmetro
+`cod_servico_contrato` (repassado por `_faturar_contratos_sync` via
+`cfg["cod_servico_contrato"]`). 5 testes novos (soma correta sem "+5%",
+não insere centro zerado, sem DELETE prévio — diferente da variante
+NF-e —, `_transf_receber_sync` chama/não chama a distribuição conforme
+o parâmetro é passado). Suíte completa: 2528 passando (1 falha
+pré-existente/não-relacionada de sempre).
+
+**Nunca testado ao vivo com escrita real** — só a query SELECT foi
+validada rodando contra o schema real de ARGEN TESTE (comanda
+inexistente, zero linhas, sem erro de sintaxe/coluna). Nenhum
+`INSERT INTO receber_custo` foi disparado contra produção.
+
+## ✅ 2026-08-24 — CFOP por item (NF-e Avulsa / Devolução)
+
+Escolhido pelo usuário ("vamos agora de CFOP por itens") de um gap já
+registrado (a antiga simplificação "CFOP é só de cabeçalho" de NF-e
+Avulsa). Rastreio completo de `NFe\frmtranfe.frm:8407-8557`
+(`ImportaDevolucao`) revelou 2 bugs reais em código já em produção
+(nunca só uma simplificação aceita), não apenas o gap original.
+
+**Protocolo Gauntlet: Kelvin+Carlos+Thomé** — regra fiscal real (CFOP
+resolvido por UF+cod_icms), mudança de motor de resolução.
+
+### Achado 1 (mais grave) — XML sempre usava o CFOP de cabeçalho, ignorando o CFOP por item já persistido
+
+`nf_aux_itens.cod_fiscal` (`_ITEM_CAMPOS_AUX`) SEMPRE existiu e sempre
+foi lido/gravado por item — a plumbing de persistência (rascunho →
+`n_fiscal_itens.cod_fiscal`) já estava correta. Mas o item usado pra
+MONTAR O XML (`itens_resolvidos`, o que realmente vai pro SEFAZ) sempre
+usava `cfop_cabecalho`, nunca `item.get("cod_fiscal")` —
+`nfe_avulsa_service.py:1072` (antes da correção). Ou seja: o valor
+gravado no banco por item podia estar certo, mas o DOCUMENTO FISCAL
+TRANSMITIDO sempre saía com o CFOP de cabeçalho pra todo item, mesmo
+quando um item tinha um valor próprio diferente. Corrigido:
+```python
+cfop_item = (item.get("cod_fiscal") or "").strip() or cfop_cabecalho
+```
+Sem migração — a coluna já existia, só não era lida no lugar certo.
+
+### Achado 2 — `devolucao_config.Destino` nunca é o UF literal do cliente
+
+Releitura completa de `frmtranfe.frm:8422-8443` (`ImportaDevolucao`):
+```
+unidade_federal = <UF do cliente, cliente_end>
+If unidade_federal = UFNFeControle Then uf_dev = UFNFeControle Else uf_dev = "XX"
+```
+`devolucao_config.Destino` só tem 2 valores possíveis por instalação: a
+UF da PRÓPRIA EMPRESA (`controle.UF`), ou o literal `'XX'`
+(interestadual, catch-all). Confirmado ao vivo contra ARGEN TESTE:
+`controle.UF='RJ'`, e `devolucao_config` só tem linhas `Destino IN
+('RJ','XX')` — nunca 'MG'/'SP'/qualquer outra sigla real. A versão
+anterior de `_importar_devolucao_sync` fazia `WHERE Destino=<UF do
+cliente>` — funcionava só quando o cliente coincidia ser do mesmo
+estado da empresa; para QUALQUER cliente de outro estado, bloqueava com
+"Sem configuração de Devolução cadastrada para a UF X" mesmo a
+instalação tendo a config certa (`Destino='XX'`). **Bug real bloqueando
+toda devolução interestadual**, não uma simplificação aceita. Corrigido:
+```python
+cur.execute("SELECT uf FROM controle")
+uf_empresa = ...
+uf_dev = uf_cliente if uf_cliente == uf_empresa else "XX"
+```
+
+### Achado 3 — CFOP de devolução realmente varia por item (`cod_icms`)
+
+A query real (`frmtranfe.frm:8514`) junta `devolucao_config.cod_icms =
+pecas.cod_icms` — o CFOP pode (em outras instalações) variar por item,
+não só por UF. Em ARGEN TESTE hoje o valor coincide entre os 2
+`cod_icms` cadastrados (não muda o resultado prático aqui, mas a
+resolução agora é a certa, item a item, não mais `TOP 1` por UF).
+**Decisão consciente de NÃO replicar um comportamento do legado**: a
+query real é um INNER JOIN — um item cujo `cod_icms` não bate com
+nenhuma linha de `devolucao_config` é simplesmente OMITIDO da nota, sem
+avisar ninguém. Implementado para BLOQUEAR a importação inteira com uma
+mensagem clara listando os itens sem configuração, em vez de importar
+silenciosamente incompleto.
+
+**Backend**: `services/nfe_avulsa_service.py` —
+`_emitir_nfe_avulsa_sync` (achado 1) e `_importar_devolucao_sync`
+(achados 2+3) corrigidos. 4 testes novos + testes existentes
+atualizados pra nova sequência de queries (52/52 no arquivo). Testado
+ao vivo, READ-ONLY, contra 3 devoluções reais de ARGEN TESTE (ids
+492/493/494) — os 3 resolveram cliente/UF/CFOP corretamente, incluindo
+o `cod_fiscal` por item populado.
+
+**Frontend**: `nfe-avulsa.tsx` ganhou o campo "CFOP Item" no card de
+cada item (`ItemRascunho.cod_fiscal`, vazio = usa o CFOP do
+cabeçalho) — antes não existia NENHUMA forma de ver ou editar CFOP por
+item na UI, mesmo a persistência já suportando desde sempre. Populado
+automaticamente pela importação de Devolução corrigida; editável à mão
+em qualquer item. Modo Didático atualizado.
+
+**Nunca testado ao vivo COM EMISSÃO REAL** — só leitura/resolução (não
+foi disparada nenhuma transmissão real ao SEFAZ nesta rodada).
+
+## ✅ 2026-08-24 — Apuração Fiscal (relatório)
+
+Escolhido pelo usuário via `AskUserQuestion` de uma lista de gaps fiscais
+restantes. Migração de `Geral\FrmCalImp.frm` ("Apuração Fiscal").
+
+**Protocolo Gauntlet: acionado (Kelvin+Carlos+Thomé)** — envolve
+apuração/exibição de valores de tributo (não decide alíquota nova, mas
+mostra cálculo fiscal real), então tratado com o mesmo peso de uma tela
+fiscal. Apoio Fisco fora — relatório interno, não texto educativo pro
+usuário final.
+
+**3 modos, cada um com sua fonte real** (confirmado campo-a-campo contra
+o `.frm` e ao vivo contra ARGEN TESTE):
+- **NFC-e**: `comanda`+`comanda_nfce`+`comanda_nfce_detalhe`+`pecas`,
+  comanda paga e NFC-e autorizada. Alíquota de ICMS **calculada na hora**
+  (`valor_icms/base_icms*100`) — achado ao vivo: `comanda_nfce_detalhe`
+  não tem coluna própria de alíquota genérica (só `ALQT_ICMS_EFETIVO`,
+  que é outra coisa), exatamente como o legado já fazia.
+- **NF-e**: `n_fiscal`+`n_fiscal_itens`+`pecas`, saída de venda
+  autorizada. Alíquota de ICMS lida de coluna própria
+  (`n_fiscal_itens.Alqt_Icms`, confirmada ao vivo) — sem recálculo,
+  diferente do NFC-e.
+- **Somente DIFAL**: mesma fonte do NF-e, só itens com partilha
+  interestadual real (`aliquota_interna_destino>0 OR
+  aliquota_interestadual>0`), mais rateio origem/destino.
+
+**Achado real NÃO resolvido, registrado como pendência explícita** (ver
+"🟡 DIFAL — rótulo Origem/Destino não confirmado" logo abaixo): no ramo
+DIFAL do `Command1_Click`, a fórmula de "$ Origem" usa
+`TempDifal*(100-percentual_origem)/100` e "$ Destino" usa
+`TempDifal*percentual_origem/100` — o oposto do que o nome da variável
+`percentual_origem` sugeriria. Sem confirmação em fonte oficial
+(Convênio ICMS 93/2015, partilha do DIFAL), a implementação replicou a
+FÓRMULA exatamente (garante paridade com o sistema antigo pra quem for
+comparar), mas os RÓTULOS da tela nova ficaram neutros ("Rateio A"/
+"Rateio B", com aviso explícito no Modo Didático pra conferir com o
+contador) — nunca cravando qual é "Origem" e qual é "Destino" sem
+validação. **DIFAL tem 0 linhas reais em ARGEN TESTE hoje** — a fórmula
+não pôde ser validada contra dado real, só testada com valores
+inventados batendo a conta na mão.
+
+**Backend**: `services/apuracao_fiscal_service.py` (uma função por modo,
+totais somados em Python — não no SQL, pra manter a mesma trilha de
+cálculo item-a-item do legado) + `routes/apuracao_fiscal.py`
+(`GET /api/apuracao-fiscal`, `modo`/`data_ini`/`data_fim`/`cfop`
+opcionais — sem filtro nenhum, roda contra todo o histórico, igual ao
+legado). 8 testes novos (`test_apuracao_fiscal_service.py`), suíte
+completa sem regressão (2507 passam, mesma falha pré-existente/não-
+relacionada de sempre em `test_cnab_itau_service.py`). Permissão
+`APURACAO_FISCAL` (Gestor Fiscal), só `ABRIR`+`EXPORTAR` — tela é 100%
+consulta, sem Gravar/Excluir.
+
+**Frontend**: `frontend/app/apuracao-fiscal.tsx`, tile novo em Gestor
+Fiscal. Seletor de modo (NFC-e/NF-e/Somente DIFAL), filtro Período
+(`WebDateField`, regra `[GLOBAL]` "data inicial repete na final") + CFOP
+opcional, tabela densa com scroll horizontal (colunas variam por modo) —
+**`FlatList` virtualizada, não `.map()`**, porque um smoke test ao vivo
+sem filtro trouxe **14.232 linhas** em NFC-e e **9.225** em NF-e — um
+`.map()` simples travaria o navegador. Cartão de totais do período acima
+da tabela. "Gerar Planilha" reaproveita `export-xlsx.ts` (já usado pelo
+Borderô de Cilindros) — exporta exatamente as linhas+totais visíveis,
+com uma linha final "TOTAL GERAL" igual ao legado. Modo Didático
+aplicado (ícone "i" no cabeçalho) — explica o cálculo de alíquota do
+NFC-e e o aviso sobre Rateio A/B do DIFAL.
+
+**Nunca testado ao vivo NA TELA** — só smoke test read-only do
+service/rota contra ARGEN TESTE (os 3 modos retornaram dados reais e
+totais coerentes; DIFAL retornou vazio, esperado, ver achado acima).
+
+### ✅ RESOLVIDO 2026-08-24 — DIFAL, rótulo Origem/Destino confirmado em fonte oficial
+
+Escolhido pelo usuário como próxima frente fiscal ("DIFAL — validar
+rótulo Origem/Destino"). Protocolo Gauntlet: Kelvin (pesquisa em fonte
+oficial).
+
+**Fonte consultada**: CONFAZ, Convênio ICMS 93/2015
+(`confaz.fazenda.gov.br/legislacao/convenios/2015/CV093_15`) — Cláusula
+segunda § 1º-A (fórmula do DIFAL: `ICMS origem = BC × ALQ_inter`,
+`ICMS destino = [BC × ALQ_intra] − ICMS origem`) e Cláusula décima
+(cronograma de partilha entre UF de origem e UF de destino): **60%
+origem/40% destino em 2016, 40%/60% em 2017, 20%/80% em 2018**, tendendo
+a 0% origem/100% destino a partir de 2019 (o Convênio 93/2015 foi
+revogado pelo Convênio ICMS 236/21, efeitos a partir de 01/01/2022).
+
+**Confirmado**: `percentual_origem` é a fatia do diferencial retida pela
+UF de ORIGEM (não a de destino) — o legado tinha o RÓTULO das duas
+colunas de rateio invertido em relação a esse significado real:
+rotulava `TempDifal*(100-percentual_origem)/100` como "$ Origem" (na
+verdade é o valor do DESTINO) e `TempDifal*percentual_origem/100` como
+"$ Destino" (na verdade é o valor da ORIGEM). Confirmado como bug real de
+rotulagem do legado, não uma convenção alternativa válida.
+
+**Corrigido** (`apuracao_fiscal_service.py`/`apuracao-fiscal.tsx`): as
+chaves/colunas `valor_rateio_a`/`valor_rateio_b` viraram `valor_origem`/
+`valor_destino`, com a fórmula EXATA de antes só remapeada pro nome
+certo (nenhum valor numérico mudou, só qual chave aponta pra qual). Tela
+não usa mais rótulo neutro nem aviso de "confira com o contador" — os
+nomes "Origem"/"Destino" agora são reais, com a fonte citada no Modo
+Didático. 8 testes (mesmo arquivo, teste renomeado e reescrito com a
+mapeação correta), suíte completa sem regressão.
+
+## ✅ 2026-08-24 — Cadastro/Consulta de NCM e CEST (tabela auxiliar fiscal)
+
+Escolhido pelo usuário via `AskUserQuestion` ("CEST/NCM (Recomendado)")
+de uma lista de gaps fiscais restantes. Migração de `Geral\FrmCesNCM.frm`
+("NCM's e CEST's...").
+
+**Protocolo Gauntlet: fluxo simplificado, Carlos+Thomé** — cadastro de
+tabela de referência oficial já populada, sem cálculo/alíquota fiscal
+novo sendo decidido (Kelvin fica de fora) e sem texto de educação fiscal
+pro usuário final além do hint padrão já embutido na tela (Apoio Fisco
+fica de fora).
+
+**Achado ao vivo que mudou a implementação a meio caminho** (contra
+ARGEN TESTE, read-only): `ncm(ncm PK 8 dígitos, descricao)` tem 10.343
+linhas; `ncm_cest(ncm, cest, descricao)` tem 1.285 — confirmado que
+`NCM_CEST_PRIMARIA` é um índice ÚNICO **composto** `(ncm, cest)`, não só
+`ncm` (a unicidade é do PAR). Mais importante: **508 das 1.285 linhas
+usam um NCM PARCIAL** (2 a 7 dígitos — capítulo/posição/subposição, ex.:
+`ncm='42'` pra "Acessórios... bolsas, mochilas..." aplicável a todo o
+capítulo 42), só 773 usam o código completo de 8 dígitos. Essa é a
+granularidade real do Convênio ICMS 142/2018 — um CEST se aplica a uma
+faixa de NCM, não só a um código-folha específico.
+
+**Impacto na implementação**: a 1ª versão do service validava "o NCM
+informado precisa existir em `ncm`" antes de gravar um vínculo — isso
+bloquearia a MAIORIA dos vínculos reais (508/1281), já que prefixos como
+`'42'` nunca são linha própria em `ncm` (que só tem códigos completos de
+8 dígitos). Corrigido antes de considerar a tarefa pronta: `_save_ncm_
+cest_sync` só valida que o NCM é numérico e cabe em 8 caracteres, nunca
+que já existe como linha cadastrada; `_get_ncm_sync` resolve os CEST
+aplicáveis a um NCM completo por PREFIXO
+(`LEFT(ncm_completo, LEN(ncm_cest.ncm)) = ncm_cest.ncm`, ordenado do mais
+específico pro mais genérico), nunca por igualdade exata — testado ao
+vivo contra o NCM real `42021100`, retornou corretamente os 6 CEST que
+valem pra ele (2 no nível `42021`, 1 no nível `42`, mais os herdados).
+
+**2 correções conscientes em relação ao `.frm`** (CLAUDE.md "Não
+replicar truques VB6"):
+1. `Command2_Click` (inserir vínculo) checava duplicata só por `NCM`,
+   ignorando `CEST` — como a chave real é composta, isso bloquearia
+   silenciosamente um 2º CEST válido pro mesmo NCM. Implementado: checa o
+   PAR completo, mensagem clara em caso de duplicata real.
+2. `Command3_Click` (excluir vínculo) tem uma checagem `RecordCount < 0`
+   que nunca dispara (bug morto) — "não encontrado" nunca aparecia de
+   fato no legado. Implementado: existência checada de verdade antes do
+   DELETE, mensagem real.
+
+**Backend**: `services/ncm_cest_service.py` (CRUD de `ncm` + vínculo
+`ncm_cest`, busca-sempre — nunca "listar tudo", já que são 10k+/1k+
+linhas) + `routes/ncm_cest.py` (`GET/POST /api/ncm`, `GET /api/ncm/
+{ncm}`, `POST /api/ncm/{ncm}/excluir`, `GET /api/ncm-cest/buscar`,
+`POST /api/ncm-cest`, `POST /api/ncm-cest/{cest}/excluir`). Excluir NCM
+bloqueado se houver CEST vinculado (guard novo, não existe no legado —
+convenção já padrão deste projeto pra exclusão). 21 testes novos
+(`tests/unit/test_ncm_cest_service.py`), suíte completa sem regressão
+(2499 passam, 1 falha pré-existente/não-relacionada em
+`test_cnab_itau_service.py`, teste sensível à data atual). Permissão
+`NCM_CEST` (menu Tabelas Auxiliares, `ACOES_PADRAO`).
+
+**Frontend**: `frontend/app/ncm-cest.tsx` (web-only, tile novo em
+Tabelas Auxiliares) — coluna esquerda com busca por NCM e busca por CEST
+independentes (ambas sempre por termo, nunca lista completa); coluna
+direita com o detalhe do NCM selecionado (descrição editável + lista de
+CEST aplicáveis, com botão pra vincular um novo CEST, NCM pré-preenchido
+e travado quando aberto a partir do detalhe, livre quando aberto a partir
+da busca solta de CEST — cobre o caso real de CEST sem NCM específico
+ainda).
+
+**Nunca testado ao vivo** (só smoke test read-only de busca/consulta
+contra ARGEN TESTE — nenhuma escrita foi feita nas tabelas `ncm`/
+`ncm_cest` desta empresa durante a implementação).
+
+**Atualização, mesmo dia** — usuário escolheu via `AskUserQuestion`
+justamente esse próximo passo ("Conectar Produto Completo ao NCM/CEST").
+Implementado: `frontend/src/components/NcmCestSearchModal.tsx` (busca
+NCM reutilizável, fluxo em 2 passos — busca NCM → resolve CEST aplicável
+via `GET /api/ncm/{ncm}`, que já usa o match por prefixo acima; 0 CEST
+segue só com o NCM, 1 preenche os dois automaticamente, 2+ pergunta qual
+usar, com opção "continuar sem CEST"). O ícone de lupa "Buscar NCM/CEST"
+em Produto Completo (`produto-completo.tsx`), que antes só mostrava
+"ainda não disponível nesta versão da tela", agora abre essa busca de
+verdade — grava em `codigo_mercosul`/`codigo_cest` (campos já existentes,
+sem migração nova). Texto do Modo Didático atualizado. Nenhuma mudança de
+backend nesta 2ª parte (reaproveitou os 2 endpoints já existentes).
+Typecheck sem novo erro (mesma baseline de 12).
+
+## ✅ 2026-08-24 — Gestor de Devolução, Fase 2: emissão real de NF-e + reposição de estoque
+
+Usuário pediu "vamos continuar" depois da lista de gaps fiscais, escolheu
+"Devolução Fase 2 (emitir NF-e)" — item já registrado como fora de
+escopo na Fase 1 ([[project_gestor_devolucao]]). A investigação levou 3
+rodadas de correção de rumo, cada uma com um achado real da fonte
+diferente do que eu tinha assumido — registrado aqui pra não repetir os
+mesmos erros se isto for retomado:
+
+1. **1ª suposição errada**: achei que "Importar Devolução" (já existente
+   em NF-e Avulsa) já cobria o caso, só faltando um botão de atalho. O
+   usuário confirmou que não servia — a função só aceitava **1**
+   `id_devolucao` digitado à mão; a fonte real (`Command14_Click`,
+   `FrmManDev.frm`) sempre monta um **array** (`VetDevolucao`),
+   consolidando 1+ devoluções (de vendas/comandas diferentes, mas do
+   MESMO cliente) numa única NF-e.
+2. **2ª suposição errada**: achei que a reposição de estoque exigiria
+   portar um 2º caminho do legado (`FrmConDev.frm`, via Recebimento de
+   Mercadoria, marcando `movimentacao.Estornado=1`) — 1223 linhas nunca
+   rastreadas. Leandro corrigiu direto: "O Gerar NFE Avulsa emite notas
+   de qualquer natureza, inclusive devolução. A baixa de estoque
+   acontece após a emissão da nota, dependendo do flag da tabela
+   tipo_mov.atualiza_est." Rastreado até `frmtranfe.frm::Atualiz`/
+   `CmdOk_Click` (linhas 4849-4854/7955-7969) — mecanismo GERAL de
+   qualquer NF-e Avulsa, não específico de devolução, nunca portado
+   nesta migração até agora.
+3. **Confirmação final do fluxo real** (Leandro, direto): "Dentro do
+   gestor de devolução quem chama a tela gerar nfe avulsa, que já abre
+   carregada com os dados da devolução, sem o usuário precisar digitar
+   manualmente." Um 3º botão no Gestor de Devolução (`Command14`,
+   caption real "Emitir Nfe de Devolução do(s) iten(s)
+   selecionado(s)."), separado do "Registrar"/"Enviar pra Devolução
+   posterior" (`Command1`) — os dois fazem o MESMO insert em
+   `devolucao_itens`, só o `Command14` também chama `FrmTraNFe.
+   ImportaDevolucao` na sequência.
+
+### Implementado
+
+- **`nfe_avulsa_service._importar_devolucao_sync`** reescrita — aceita
+  lista de `id_devolucao`, exige que todas pertençam ao MESMO cliente
+  (bloqueia com erro claro se não — nunca inventa qual cliente usar),
+  consolida os itens numa única NF-e. Novo model `ImportarDevolucaoRequest`
+  (`ids_devolucao: list[int]`), separado do `ImportarDocumentoRequest`
+  compartilhado pelos outros 5 tipos de importação (que continuam
+  1-documento-por-vez).
+- **Reposição/baixa de estoque, geral pra NF-e Avulsa** (não só
+  devolução) — `_emitir_nfe_avulsa_sync` agora lê `tipo_mov.
+  atualiza_est`; quando `'S'`, cada item soma (mov começa com "E") ou
+  subtrai (mov começa com "S") de `pecas.qtd`, mesma regra de
+  `Left(Tipo_Mov,1)` da fonte. Confirmado ao vivo contra ARGEN TESTE:
+  `tipo_mov E25` = "ENTRADA DE DEVOLUÇÃO", `atualiza_est='S'` — bate
+  exatamente com o caso de uso real.
+- **`nf_aux.ids_devolucao_origem`** (nova coluna, migração idempotente
+  registrada em `schema_ensure.py`) — carrega os ids da devolução de
+  origem do rascunho até a emissão, onde `devolucao_itens.Nfe` é
+  atualizado com o `n_fiscal.codigo` real gerado (mesmo UPDATE que
+  `frmtranfe.frm:4453` faz), fechando o ciclo Devolução → NF-e. Sem
+  isso, a Consulta do Gestor de Devolução nunca saberia que aquela
+  devolução já tem NF-e (bloqueando reemissão/permitindo cancelamento
+  indevido).
+- **`devolucao.tsx`** ganhou o botão "Emitir NF-e de Devolução" (ao lado
+  de "Registrar Devolução") — valida que os itens marcados são todos da
+  mesma venda/cliente (regra real, nunca resolvida automaticamente),
+  registra, e navega pra `/nfe-avulsa?importar_devolucao_ids=1,2,3`.
+- **`nfe-avulsa.tsx`** ganhou um `useEffect` que lê esse query param e
+  dispara a importação sozinho, assim que o rascunho é criado — sem
+  modal, sem digitação, igual ao comportamento real do legado.
+- Nova permissão `DEVOLUCAO.EMITIR_NFE` (a emissão fiscal em si continua
+  protegida por `NFE_AVULSA.GRAVAR`, já existente).
+- **`TOP 1` no CFOP de devolução por UF, achado mas NÃO corrigido**: a
+  query real (`frmtranfe.frm:8514`) casa `devolucao_config.cod_icms =
+  pecas.cod_icms` — o CFOP de devolução varia POR ITEM, não só por UF
+  (2 linhas de config por UF em `devolucao_config`, confirmado ao vivo).
+  Corrigir exigiria dar `nf_aux_itens` uma coluna de CFOP própria —
+  mudança maior que o já-aceito escopo "CFOP só de cabeçalho" da NF-e
+  Avulsa inteira. Documentado no código, não implementado.
+- 10 testes novos em `test_nfe_avulsa_service.py`
+  (`TestImportarDevolucaoSync` + reposição de estoque/vínculo
+  `devolucao_itens.Nfe` em `TestEmitirNfeAvulsaSync`). Testes antigos
+  de devolução em `test_nfe_avulsa_importacao.py` (assinatura antiga, 1
+  id só) removidos — substituídos pelos novos. Suíte completa: 2478
+  passando (só a flake pré-existente do CNAB). `tsc --noEmit` na mesma
+  baseline de 12 erros pré-existentes.
+- **Nunca testado ao vivo** — mesma ressalva de todo o resto do pacote
+  fiscal desta migração.
+
+## ✅ 2026-08-24, 3ª rodada — fechamento das "Pendências reais" do resumo do ecossistema fiscal
+
+Usuário pediu "pode avançar em todos" sobre os 4 itens restantes da lista
+de pendências do artifact publicado. Como 3 dos 4 envolviam escrita em
+produção real ou ação irreversível no SEFAZ, voltei com `AskUserQuestion`
+item a item antes de agir — resultado abaixo.
+
+### ✅ Sugestão de "Código Complementar Municipal" via `Tributacao_MUnicipio`
+
+Implementado sem precisar de confirmação adicional (funcionalidade nova,
+sem escrita em produção nem ação irreversível). Novo endpoint `GET /api/
+servicos/tributacao-municipio` (`servicos_service.py::_list_tributacao_
+municipio_sync` — busca por descrição OU por `cTribNac` batendo com o
+Código de Tributação Nacional já digitado, degrada pra lista vazia se a
+tabela não existir na instalação) + novo componente `frontend/src/
+components/TributacaoMunicipioSearchModal.tsx` (mesmo padrão de
+`FornecedorSearchModal.tsx`), com um botão de busca ao lado do campo
+"Código Complementar Municipal" em Cadastro de Serviços (aba Fiscal).
+**Continua sendo busca, nunca autofill** — um mesmo item LC116 tem vários
+códigos complementares possíveis (ex.: "Manutenção de aparelhos"/"015" vs.
+"Manutenção de equipamentos"/"032"), só o usuário sabe qual bate com o
+serviço real. Modo Didático atualizado com a entrada do botão novo. 4
+testes novos (`TestListTributacaoMunicipioSync`, `test_servicos_service.py`
+— tabela ausente degrada, busca por termo, busca por código, listagem
+padrão). Suíte completa: 2473 passando, `tsc --noEmit` na mesma baseline
+de 12 erros pré-existentes (nenhum novo).
+
+### ✅ `controle_aux.codigo_nbs` populado no ARGEN TESTE
+
+Usuário confirmou explicitamente (`AskUserQuestion`, "Sim, popular com
+120018900") depois de eu esclarecer que não é um chute — `120018900` é
+literalmente o valor de `cNBS` que o ADN já ACEITOU numa NFS-e
+genuinamente autorizada desta mesma empresa em 2026-08-23 (chave
+`33045572214341395000109000000000017426084042427390`, nNFSe 174). Escrita
+feita com `UPDATE controle_aux SET codigo_nbs = '120018900' WHERE
+codigo_nbs IS NULL OR codigo_nbs = ''` (confirmado vazio antes de
+escrever, 1 linha afetada, valor confirmado depois). **A próxima emissão
+de NFS-e no ARGEN TESTE não bloqueia mais por `codigo_nbs` vazio.**
+
+### Numeração compartilhada com o legado VB6 — deixada como está
+
+Usuário escolheu explicitamente "Deixar como está" em vez de desenhar ou
+implementar uma mitigação (ex.: consulta prévia ao SEFAZ antes de cada
+emissão, pra checar se o número já foi usado) — permanece um risco
+estrutural conhecido e documentado, sem mudança de código. Não
+re-propor essa mitigação sem o usuário pedir de novo.
+
+### 🟡 Inutilização de Faixa NF-e modelo 55 — investigado mais a fundo, AINDA sem teste ao vivo
+
+Usuário escolheu "Investigar mais a fundo antes de decidir". Achado real:
+`n_fiscal.num_nf` tem 6346+ linhas com valores `< 100000` só pra esta
+instalação (múltiplos tipos de documento misturados na mesma coluna, e
+alguns valores absurdos tipo `3298603540` — dado historicamente sujo, não
+confiável isolado). Filtrando só chaves de acesso REAIS (`chave_acesso
+LIKE '%14341395000109%' AND SUBSTRING(chave_acesso,21,2)='55'`), achei
+**1495 chaves reais** de NF-e modelo 55 desta empresa, história completa
+desde jan/2014 até a emissão de teste desta sessão (nNF 1451, a mesma que
+foi emitida+cancelada mais cedo hoje). Dentro dessa listagem real, **nNF
+10 não tem nenhuma chave registrada localmente** (nNF 9 seguido direto de
+nNF 11) — um candidato genuíno de gap.
+
+**Por que NÃO testei ao vivo mesmo assim**: um "gap" na tabela local só
+prova que ESTE app não tem o registro — não prova que o número nunca foi
+transmitido de verdade ao SEFAZ pelo sistema legado (o dado local já se
+mostrou não-confiável isoladamente, ver parágrafo acima). Essa empresa
+tem histórico real de mais de uma década de emissão fiscal — inutilizar
+por engano um número que na verdade já foi usado (só não ficou registrado
+localmente) seria pior que a rejeição "já existe" que outros achados desta
+sessão trataram como sinal seguro de aprender-e-corrigir: aqui seria uma
+divergência de verdade no histórico fiscal da empresa perante o SEFAZ.
+Além disso, o mecanismo de código em si (a correção real desta sessão —
+`serie`/`nNFIni`/`nNFFin` sem zero à esquerda) **já foi validado ao vivo**
+pelo lado NFC-e (protocolo `233262015323406`) — testar de novo no lado
+NF-e adicionaria pouca confiança extra pro tamanho do risco.
+**Recomendação, não decisão**: se algum dia isso for retomado, a forma
+seguramente correta é perguntar diretamente ao time VB6/Leandro se o nNF
+10 desta empresa é confirmadamente nunca usado, em vez de inferir só da
+tabela local — mesmo princípio já usado noutras pendências deste projeto
+(ex.: "SPED/EFD ainda usado?", ver "Gestor Fiscal" > 2026-08-22).
+
+## ✅ CORRIGIDO 2026-08-24 — bug de gravação crua de `dhRecbto` (achado no MDF-e) espalhado pra NF-e/NFC-e/contingência
+
+Depois de publicar um resumo visual do ecossistema fiscal (artifact), o
+usuário pediu pra corrigir as "pendências reais em aberto" listadas nele.
+Escolhido o item recomendado (código puro, sem risco de produção): o bug
+de gravar `dhRecbto` cru do SEFAZ (string ISO 8601 COM offset, ex.
+`"-03:00"`) direto numa coluna `DATETIME` — achado originalmente no MDF-e
+2026-08-23 (derrubou a transação de um documento JÁ AUTORIZADO em
+produção, quase perdendo o registro local pra sempre; ver `parse_dh_sefaz`
+em `nfe_fiscal_common.py`).
+
+**Correção de uma nota anterior imprecisa**: o registro original desse
+achado (seção MDF-e, "Achado crítico separado") dizia que
+`nfe_cancelamento_service.py`/`nfe_emissao_service.py`/`nfe_correcao_
+service.py` "fazem a MESMA gravação crua" — isso estava errado sobre
+ONDE. Esses 3 services só devolvem a string crua do SEFAZ no dict de
+retorno (`dh_recbto`/`data_hora_registro`); nenhum deles grava no banco
+diretamente. Um grep completo por `dhRecbto`/`dhRegEvento` em todo
+`backend/services/` encontrou os 5 pontos REAIS do bug — todos em quem
+CHAMA esses services e faz o `INSERT`/`UPDATE`:
+
+1. `comanda_service.py::_emitir_nfce_comanda_sync` — `INSERT INTO
+   n_fiscal (...dhRecbto...)`, emissão de NFC-e.
+2. `nfe_agrupada_service.py::_emitir_nfe_agrupada_sync` — mesmo formato,
+   NF-e modelo 55 (Agrupar Comandas em NF-e).
+3. `nfe_avulsa_service.py::_emitir_nfe_avulsa_sync` — mesmo formato,
+   NF-e Avulsa.
+4. `contingencia_nfe_service.py` — `UPDATE n_fiscal SET ... dhRecbto = %s`
+   dentro de "Validar Contingência" (transmite uma nota que ficou em
+   contingência quando o SEFAZ volta a responder).
+5. `gestor_nfce_service.py::_validar_contingencia_sync` — mesmo formato,
+   lado NFC-e de "Validar Contingência".
+
+Corrigidos os 5 envolvendo o valor em `nfe_fiscal_common.parse_dh_sefaz(...)`
+antes do parâmetro SQL. **Já estavam seguros, confirmado ao auditar (não
+tocados)**: `notas_fiscais_service.py` (CC-e, já usava `parse_dh_sefaz`
+desde que foi construído); `comanda_service.py`'s `dh_cancelamento`
+(usa `GETDATE()`, nunca a string do SEFAZ); `mdfe_emissao_service.py`
+(já corrigido no dia anterior, origem do padrão); `gestor_nfce_service.
+py::_consultar_situacao_uma_sync` ("Consultar Situação" nunca persiste
+`dhRecbto`, só devolve pra tela); NFS-e (`dps`/`n_fiscal`, sem campo de
+data vindo do SEFAZ).
+
+5 asserções de regressão adicionadas nos testes de sucesso já existentes
+de cada site (confirmam que o parâmetro SQL é um `datetime` naive já
+convertido, não a string crua) — sem criar arquivos de teste novos.
+Suíte completa: 2467 passando (só a flake pré-existente de sempre, CNAB
+dependente de data).
+
+### ✅ CORRIGIDO 2026-08-24, mesmo dia — `cStat` aninhado em "Validar Contingência" (NFe + NFCe)
+
+Achado ao lado da correção acima ("vamos continuar com as correções"),
+registrado como pendência e corrigido na sequência, ainda no mesmo dia.
+Tanto `contingencia_nfe_service.py::_validar_pendentes_sync` quanto
+`gestor_nfce_service.py::_validar_contingencia_sync` liam `cStat` via
+`nfe_fiscal_common.extrair_tag(resposta, "cStat")` direto na resposta
+crua do SEFAZ — o MESMO bug de "primeiro match ingênuo pega o `cStat` do
+LOTE (nível externo, neutro) em vez do `cStat` do DOCUMENTO (dentro de
+`infProt`)" já achado e corrigido em `emitir_nfce_sync`/`emitir_nfe_sync`
+2026-08-23. As duas funções de "Validar Contingência" chamam o MESMO
+webservice (`NFeAutorizacao4`) que essas já-corrigidas — corrigido por
+analogia/consistência (não por uma rejeição real do SEFAZ, já que o
+cenário fim-a-fim de contingência nunca foi exercitado ao vivo): as duas
+agora extraem `infProt` primeiro (`nfe_fiscal_common.extrair_bloco(
+resposta, "infProt") or resposta`) antes de ler `cStat`/`xMotivo`/
+`nProt`/`dhRecbto`, mesmo padrão já usado em `nfe_emissao_service.py`.
+2 testes novos (um por arquivo) replicam uma resposta com `cStat` de
+lote (104) SEGUIDO do `cStat` real do documento (100) aninhado dentro de
+`infProt`, confirmando que o valor certo é o usado. Suíte completa: 2469
+passando (só a flake pré-existente de sempre).
+
+Reauditoria do Ecossistema Fiscal **concluída** 2026-08-21 — 10 bugs
+reais corrigidos, nenhum achado grande em aberto. **Simplificações do
+Ecossistema Fiscal** (5 itens levantados ao perguntar "o que falta no
+ecossistema fiscal") **concluídas** 2026-08-22 — 3 corrigidos (frete
+NFC-e, DANFE Transportador/Volumes, PIS/COFINS NF-e Avulsa — este
+último o achado mais grave da rodada), 1 excluído por não ser bug
+(rastreabilidade item↔comanda, decisão do usuário), 1 bloqueado por
+falta de legislação (Imposto Seletivo). **Varredura de Design/UI**
+(filtro Cliente sem busca, filtros sem AccordionSection, período sem
+data atual) **concluída** 2026-08-22, incluindo achados colaterais
+(`devolucao.tsx`/`contatos.tsx`/`relatorio-os*.tsx`) — ver seção
+"🔴 FRENTE ATIVA AGORA (2)" mais abaixo pro detalhe completo.
+
+**2026-08-22, mesmo dia, 2ª rodada**: usuário levou um levantamento de
+"funcionalidades ausentes por completo" (respondido pela equipe VB6 via
+WhatsApp) — ver "Inventário de Telas Fiscais" mais abaixo pras correções
+aplicadas. **Achado principal: Carta de Correção Eletrônica (CC-e) é
+usada diariamente por TODOS os clientes** — eu tinha listado errado como
+"fora de escopo". Ver [[project_gestor_fiscal_menu]] (memória) pro
+resumo da rodada de correções.
+
+**2026-08-22, mesma sessão, 3ª rodada — CC-e implementada e testada
+(unitário).**
+Usuário escolheu CC-e entre 3 candidatos (CC-e / Recebimento Fase 2 /
+testar ao vivo), rastreio de fonte + Plan Mode + implementação completa
+no mesmo dia — backend (tabela nova, service novo, rotas, permissão) +
+frontend (botão, modal de motivo, histórico, impressão DACCe, Modo
+Didático) prontos. Suíte completa: **2372 testes, só o mesmo flake
+pré-existente de sempre** (`test_cnab_itau_service.py`, data-dependente,
+não relacionado). `tsc --noEmit` limpo. **Nada testado ao vivo contra o
+SEFAZ real**.
+
+**2026-08-22, mesma sessão, 4ª rodada — "Descomplicar Taxas": Sugerir
+com IA (Apoio Fiscal/"João") implementado.** Pedido do usuário: o
+integrante "Apoio Fiscal" (apelido "João") deveria prever configurações
+e sugerir combinações de taxas de acordo com o regime do cliente,
+reaproveitando o recurso de IA que o sistema já tem "por contrato"
+(chave Anthropic configurada por instalação, tela "IA Key"). Confirmado
+com o usuário: é **as duas coisas juntas** — feature de software real +
+texto didático na voz do Apoio Fisco. Implementado reaproveitando quase
+toda a infraestrutura de IA já existente ("Importar Formulário",
+`layout_service.py`). Suíte completa após esta rodada: **2389 testes**
+(2372 + 15 novos de `taxas_ia_service.py` + 3 novos de descrições
+oficiais), só o mesmo flake pré-existente de sempre. `tsc --noEmit`
+limpo, bundle web reconstruído e confirmado. **Nenhuma chamada real à
+API Anthropic nesta sessão** — tudo mockado. Ver seção "✅ CONCLUÍDO
+2026-08-22 — Descomplicar Taxas" mais abaixo pro detalhe completo.
+
+**2026-08-22, mesma sessão, 5ª rodada — MDF-e Fase A (cadastro,
+implementado).** Usuário escolheu MDF-e entre 3 candidatos fiscais
+(MDF-e/Apuração Fiscal/CEST-NCM), confirmado pela equipe VB6 como "em
+uso" real. Dado o tamanho da feature completa (webservice SEFAZ próprio,
+DAMDFE, eventos de Encerramento/Cancelamento), o usuário escolheu fasear
+— **Fase A agora: cadastro do manifesto + anexar NF-e/NFC-e + listagem,
+sem chamar o SEFAZ ainda.** Fase B (emissão real) fica pra rodada
+futura. Achados que reduziram muito o escopo: `veiculos_transp`
+(Veículo/Reboque) e `funcionarios` (Motorista/Ajudante) já estavam
+migrados, incluindo endpoints já filtrados por função
+(`/api/veiculos/motoristas`/`/auxiliares`); `controle_aux.numero_MDFE`/
+`serie_MDFE` já existiam e já eram editáveis via Controle do Sistema; a
+tabela `MDFe` já era referenciada (com essa grafia exata) por um guard
+de exclusão em `veiculos_service.py`, escrito numa sessão anterior que
+já antecipava este módulo. Suíte completa após esta rodada: **2416
+testes** (2389 + 28 novos de `test_mdfe_service.py`), só o mesmo flake
+pré-existente de sempre. `tsc --noEmit` limpo, bundle web reconstruído e
+confirmado. **Correção de rota no mesmo dia**: a primeira checagem de
+schema foi contra GERDELL/BARESTELA (errado — sem módulo fiscal, além
+de instável); usuário corrigiu ("fiscal sempre usa Argen") — refeito
+contra ARGEN TESTE, confirmou `MDFe`/`mdfe_notas`/`municipio`/`UF` reais
+e achou um bug real de tipo (`municipio.codigo FLOAT`, não `INT`),
+corrigido no mesmo dia.
+
+**2026-08-23, mesma sessão, 7ª rodada — MDF-e testado AO VIVO contra o
+SEFAZ real, primeira emissão fiscal genuína deste projeto inteiro.**
+Usuário autorizou explicitamente ("MDF-e: emitir um manifesto de teste"
+→ "teste com NF valor de R$1,00 / cancelar em seguida" → "continue
+tentando" depois de um bloqueio do classificador de auto mode) uma
+sequência real de emitir+cancelar contra ARGEN TESTE (produção real).
+**10 tentativas reais, 7 bugs genuínos encontrados e corrigidos**, cada
+um confirmado pela PRÓPRIA resposta do SEFAZ (nunca suposição):
+1. **Nenhuma chamada fiscal deste projeto conseguiria funcionar** — TLS
+   falhava contra `nfe.svrs.rs.gov.br`/`mdfe.svrs.rs.gov.br` com
+   "unable to get local issuer certificate": certificados SEFAZ são
+   emitidos pela hierarquia ICP-Brasil, ausente do bundle público padrão
+   (certifi/Mozilla). Corrigido com a raiz oficial ICP-Brasil v10
+   (`backend/certs/icp-brasil-raiz-v10.pem`, baixada de
+   `acraiz.icpbrasil.gov.br`, fonte ITI) combinada ao bundle certifi —
+   `nfe_fiscal_common._ca_bundle_path()`, usado em toda chamada
+   `requests` deste módulo daqui pra frente.
+2. `controle.numero` é `INT` real (não string) — quebrava o builder com
+   `AttributeError`.
+3. Tag `<infCpl>` nunca fechada — XML malformado.
+4. `municipio.codigo` FLOAT vazando pro `<cMunDescarga>` como
+   `"3304557.0"` — inválido pro schema (`TCodMunIBGE`).
+5. **O XSD do MDF-e ainda fixa a assinatura em SHA-1**, diferente de
+   NF-e/NFC-e/CC-e (que aceitam SHA-256, já confirmado por essas
+   rodadas anteriores não terem esse erro) — restrição real do SEFAZ,
+   corrigida com um `assinar_xml(..., sha1=True)` específico pro MDF-e.
+6. **`<infMDFeSupl>` (QR Code) faltando** — sem essa tag (inserida como
+   irmã de `infMDFe`, depois da assinatura, mesmo truque de string-splice
+   do VB6 original) SEFAZ recusa com "QR Code deve ser informado".
+7. **`<detEvento>` sem o wrapper `<evCancMDFe>`/`<evEncMDFe>`** —
+   `descEvento`/`nProt`/corpo específico soltos direto em `detEvento`
+   é inválido; precisam estar dentro do elemento nomeado por tipo de
+   evento (achado no 2º real: cancelamento de um MDF-e que JÁ TINHA
+   sido autorizado de verdade minutos antes).
+8. **Achado crítico de integridade, não um bug de XML**: um `UPDATE`
+   gravando `dhRecbto` (string crua do SEFAZ, com sufixo `-03:00`) numa
+   coluna `DATETIME` quebrava DEPOIS do SEFAZ já ter confirmado
+   `cStat=100` — como a função inteira roda numa única transação
+   (commit só no final, em sucesso), essa falha ROLLBACK'OU um MDF-e
+   **genuinamente autorizado em produção**, apagando o registro local
+   (chave/protocolo) de um documento fiscal real. Recuperado consultando
+   o SEFAZ de novo (`MDFeConsulta`, leitura, seguro) pela chave
+   recalculada manualmente, e reconciliando o banco local na mão antes
+   de prosseguir. Corrigido com `nfe_fiscal_common.parse_dh_sefaz()`
+   (novo helper genérico, converte timestamp do SEFAZ pra `datetime`
+   naive) — usado em toda gravação de `dhRecbto` no MDF-e.
+   **Esse mesmo padrão de bug pode existir em `nfe_cancelamento_service.
+   py`/`nfe_emissao_service.py`/`nfe_correcao_service.py`, nunca
+   testados ao vivo até hoje** — não corrigido lá ainda, registrado como
+   pendência abaixo.
+
+**Resultado final confirmado**: MDF-e #3 (ARGEN TESTE) — emitido de
+verdade (protocolo SEFAZ `933260015569617`, chave
+`33260814341395000109580010000000011000000015`) e cancelado de verdade
+em seguida (protocolo de cancelamento `933260015569655`, `cStat 135`
+"Evento registrado e vinculado ao MDF-e"), exatamente como pedido pelo
+usuário. **Efeito colateral também real, achado no meio do teste**: ao
+testar CC-e com uma nota escolhida por engano (o endpoint de listagem
+`/api/notas-fiscais/selecionar` mostra `protocolo_sefaz` errado — sempre
+null, mesmo quando a coluna real tem valor —, achado registrado como
+pendência abaixo, não corrigido ainda), quase foi enviada uma Carta de
+Correção real pra uma NF-e genuinamente autorizada sem confirmação
+prévia — só não completou por causa do mesmo problema de TLS do item 1
+(corrigido depois, только pro MDF-e testado; CC-e/NF-e/NFC-e/
+Cancelamento continuam sem essa correção validada ao vivo). Suíte
+completa depois de tudo: **2443 testes passando** (só o flake de sempre).
+Ver seção "✅ TESTADO AO VIVO 2026-08-23 — MDF-e" mais abaixo pro
+detalhe completo.
+
+**2026-08-22, mesma sessão, 6ª rodada — MDF-e Fase B (emissão real
+SEFAZ, implementada).** Usuário escolheu continuar direto pra Fase B
+entre 4 candidatos (MDF-e Fase B/Apuração Fiscal/CEST-NCM/testar ao
+vivo). Fonte lida linha a linha na DLL real (`GeraMDFe`/`EncerraMDFe`/
+`CancelaMDFe`/`ConsultaSituacaoMDFe`/`MontaXMLMDFe`/`Transmitir_MDFe`)
+antes de codar. Achado arquitetural real: a autorização MDF-e
+(`MDFeRecepcaoSinc`) exige o XML comprimido em GZIP+Base64, diferente de
+tudo já construído pra NF-e/NFC-e/CC-e neste projeto — exigiu uma
+variante própria do helper de envelope SOAP. Dois achados de bug do
+legado: o limite "só 1 UF além da UF da empresa" (hardcoded "RJ",
+workaround de instalação — não portado) e a tag `<tpTransp>` que nunca
+sai no XML de produção (bug de comparação de string — corrigido, não
+replicado). Suíte completa após esta rodada: **2440 testes** (2417 + 23
+novos de `test_mdfe_emissao_service.py`), só o mesmo flake pré-existente
+de sempre. `tsc --noEmit` limpo, bundle web reconstruído e confirmado.
+**Nada testado ao vivo contra o SEFAZ real** — sem certificado de
+homologação neste projeto; emissão real exige confirmação explícita do
+usuário antes de qualquer teste ao vivo. Ver seção "✅ CONCLUÍDO
+2026-08-22 — MDF-e (Fase B...)" mais abaixo pro detalhe completo.
+
+**2026-08-23, mesma sessão, 8ª rodada — NF-e/NFC-e testados AO VIVO contra
+o SEFAZ real com AUTORIZAÇÃO CONFIRMADA (2ª e 3ª emissões fiscais reais
+deste projeto, depois do MDF-e); NFS-e testada AO VIVO, mecanismo
+validado, bloqueada por falta de código fiscal real.** Usuário pediu
+"vamos testar NF-e/NFC-e/CC-e"; ao ser bloqueado tentando emitir NFC-e
+pra uma comanda antiga já existente, foi redirecionado pra "faça vendas a
+partir das pré-vendas e KPDV com produto e serviço, fature com nota de
+serviço e produto. faça o ciclo completo do fiscal" — pedido/faturamento
+reais criados do zero (comanda #9229, item de produto P170 + item de
+serviço S200), autorização explícita reconfirmada ("sim, continue") antes
+de faturar de verdade.
+
+**NFC-e (produto) — 15 tentativas reais, 13 bugs genuínos corrigidos**,
+cada um confirmado pela resposta real do SEFAZ, culminando em autorização
+verdadeira (protocolo `233262012034628`, chave
+`33260814341395000109650010000020011000092298`, cStat 100):
+1. Mesmo bug de `\n` residual após a declaração XML já achado no MDF-e
+   (regex sem `\s*`) — também presente em `nfe_emissao_service.py`
+   (2 pontos) e reaplicado agora.
+2. `<cNF>` (8 dígitos embutidos na chave) faltando logo após `<cUF>` —
+   `<ide>` incompleto pro schema (NFC-e e NF-e modelo 55).
+3. `<emit>` sem `<enderEmit>`/`<IE>` — faltava endereço completo do
+   emitente; criado `_montar_emit_xml`/`resolver_endereco_emitente_sync`.
+4. `<ICMSTot>` incompleto — schema exige a sequência FIXA inteira
+   (`vBC, vICMS, ..., vNF`), mesmo os campos zerados; criado
+   `_montar_icms_tot_xml`.
+5. `<infNFeSupl>` (QR Code) — 3 causas-raiz sucessivas: faltava CDATA;
+   faltava `<urlChave>`; e o erro estrutural real — é IRMÃO de `infNFe`
+   (filho de `NFe`), não filho de `infNFe` — corrigido com o mesmo
+   truque de string-splice pós-assinatura já usado no MDF-e.
+6. Fórmula do QR Code errada (V1 vazio/campos nulos, `nVersao` errado) —
+   pesquisada e corrigida a fórmula V2 real (hash SHA-1 maiúsculo sobre
+   `chave|versao|ambiente|idCSC`, formato `nfephp-org/sped-nfe`).
+7. **Mesmo achado do MDF-e**: o schema de NF-e/NFC-e TAMBÉM fixa SHA-1
+   na assinatura — `sha1=True` aplicado em TODOS os 9 pontos de
+   `assinar_xml()` do pacote fiscal (exceto NFS-e, que não teve esse
+   erro).
+8. Leitura errada do `cStat` — pegava o `cStat=104` do LOTE (nível
+   externo, "Lote processado", neutro) em vez do `cStat` real dentro de
+   `infProt` (nível interno) — corrigido extraindo `infProt` primeiro.
+9. `<cMunFG>` usava um hack (`{uf}00000`, código de município
+   inexistente) — trocado pelo `cod_municipio` real resolvido.
+10. **Bug de dado real, achado só por testar comanda MISTA (produto+
+    serviço) pela primeira vez**: `valor_total` da NFC-e usava
+    `cab.valor_venda` (total da comanda INTEIRA, incluindo o serviço) em
+    vez da soma real dos itens de PRODUTO — SEFAZ recusou (rejeição 610,
+    "Total da NF difere do somatório dos Valores"). Numa comanda só de
+    produto os dois valores coincidiam por acaso, por isso nunca foi
+    pego antes. Corrigido em `comanda_service.py`.
+11. **Achado de arquitetura cross-sistema, não bug de código**:
+    `controle_aux.numero_nfce` estava desatualizado em relação ao que o
+    VB6 legado (rodando em paralelo no MESMO banco) já tinha consumido de
+    verdade — SEFAZ recusou com "Duplicidade de NF-e" (rejeição 539).
+    Confirmado via consulta SEFAZ segura (só leitura) que a chave
+    colidente foi autorizada de verdade em 2026-08-04, 3 semanas antes
+    desta sessão — não foi nenhuma tentativa deste teste. Contornado
+    avançando o contador manualmente (não é fix de código — é o mesmo
+    risco de versionamento VB6/app-novo já documentado no topo do
+    CLAUDE.md).
+12. URLs de consulta do QR Code/chave eram genéricas nacionais — cada UF
+    tem sua própria URL esperada pelo SEFAZ (rejeição 395); pesquisadas e
+    corrigidas as URLs reais do RJ
+    (`consultadfe.fazenda.rj.gov.br/consultaNFCe/QRCode`).
+13. `parse_nfce_xml_para_exibicao` procurava `infNFeSupl` no lugar
+    errado da árvore (correção decorrente do achado #5).
+
+**Achado de consistência de dados, depois da autorização confirmada**:
+`comanda_nfce.vnf`/`n_fiscal.valor_total` também gravavam
+`cab.valor_venda` (o mesmo bug do achado #10, só que na gravação LOCAL,
+não no XML enviado ao SEFAZ) — o XML real autorizado tinha `vNF=1,00`
+(correto), mas a tabela local mostrava R$2,00. Não afetava o SEFAZ (que já
+tinha recebido o valor certo), mas quebrava qualquer relatório/consulta
+local. Corrigido pra usar `valor_total_nfce` (mesma variável já corrigida
+no achado #10) nos dois INSERTs.
+
+**NFS-e (DPS Nacional/ADN) — mecanismo validado, bloqueada por
+classificação fiscal real faltante.** Redirecionado a testar o item de
+serviço (S200, "VISITA TECNIA", R$1,00) da mesma comanda #9229 — segunda
+metade do pedido "fature com nota de serviço e produto":
+1. **Achado arquitetural real, diferente de tudo já visto no pacote
+   fiscal**: o ADN exige **zero prefixo de namespace em qualquer lugar do
+   XML** (rejeição E1228) — `ds:Signature` (aceito normalmente em NF-e/
+   NFC-e/MDF-e) é recusado aqui. A rota "óbvia" do `signxml`
+   (`XMLSigner(namespaces={{None: ds_uri}})`, documentada no próprio
+   `_ds_tag`) foi testada e descartada — produz assinatura que nem o
+   próprio `XMLVerifier` do signxml aceita. Causa raiz isolada por
+   comparação byte-a-byte: bug conhecido do `lxml` (`etree.tostring(...,
+   method="c14n")` insere `xmlns=""` espúrio em elemento que só HERDA
+   namespace padrão de um ancestral — o próprio `signxml` documenta esse
+   bug em `_c14n` via `excise_empty_xmlns_declarations`, desligado por
+   padrão). Resolvido com assinatura manual completa por concatenação de
+   string (`nfe_fiscal_common._assinar_xml_manual_sem_prefixo`,
+   `_c14n_sem_xmlns_vazio`) — testado com `XMLVerifier().verify()` real e
+   confirmado válido, sem nenhum prefixo em lugar nenhum.
+2. `E1229 - Xml não está utilizando codificação UTF-8` — faltava a
+   declaração `<?xml version="1.0" encoding="UTF-8"?>` explícita (o XML
+   já era UTF-8 de fato, só não tinha a declaração pro ADN detectar).
+3. `E1235 - Falha no esquema XML` (2 causas): `<tribMun>` sem
+   `tpRetISSQN` (obrigatório) e `<trib>` sem `<totTrib>` (grupo
+   obrigatório inteiro) — confirmado contra o XSD oficial real
+   (`schema_v101.xsd`, baixado de `notacontrol.com.br`). Corrigido com
+   `tpRetISSQN=1` (Não Retido) e `totTrib><indTotTrib>0</indTotTrib>`
+   ("não informar valor estimado de tributos", opção mais simples do
+   `<choice>` do schema).
+4. `<gIBSCBS>` dentro de `<serv>` (desde a Parte A do ecossistema fiscal,
+   2026-08-19) **nunca existiu no schema real** — o grupo IBS/CBS de
+   verdade (`TCRTCInfoIBSCBS`) é filho de `infDPS`, irmão de `valores`,
+   com estrutura bem maior (`finNFSe`/`cIndOp`/`indDest`/valores IBS-CBS
+   próprios) — removido o `<gIBSCBS>` inválido; `ibs_cbs_cst`/
+   `ibs_cbs_classtrib` continuam recebidos (não quebra os 2 call sites
+   que já calculam) mas não geram XML nenhum por enquanto — **gap real,
+   registrado abaixo, IBS/CBS não sai na NFS-e ainda**.
+5. **Bloqueio final, decisão explícita do usuário**: `<cServ>` exige
+   `cTribMun` (10 dígitos, tabela municipal de ISSQN) e `cNBS` (9
+   dígitos, tabela nacional de serviços) — nenhum dos dois cadastrado
+   neste projeto. Kelvin (regra "nunca inventa código fiscal") apontou o
+   gap; perguntado como proceder, usuário escolheu "usar valor de teste
+   só pra validar o mecanismo" (`0000000000`/`000000000`). ADN recusou
+   exatamente como o usuário previu — mas por **classificação inválida**
+   (`E1235`, "Pattern constraint failed" em `TCCodTribMun`), não por erro
+   estrutural — confirma que todo o resto do XML (namespace, codificação,
+   assinatura, schema) está correto. **NFS-e real não foi emitida** —
+   fica bloqueada até os códigos reais de `cTribMun`/`cNBS` do serviço
+   existirem.
+
+Suíte completa depois de tudo: **2450 testes passando** (2443 + 24 novos
+de `test_nfe_fiscal_common.py::TestAssinarXmlSemPrefixo` + 3 novos de
+`test_nfse_emissao_service.py`, mais os ajustes nos 2 testes que
+verificavam o `<gIBSCBS>` extinto), só o mesmo flake pré-existente de
+sempre (`test_cnab_itau_service.py`, data-dependente).
+
+**2026-08-23, mesma sessão, continuação da 8ª rodada — NF-e modelo 55 +
+CC-e testados AO VIVO com sucesso, ciclo completo fechado.** Usuário
+pediu explicitamente pra completar o pedido original ("vamos testar
+NF-e/NFC-e/CC-e") testando a CC-e sobre um documento real. Como CC-e só
+existe pra NF-e modelo 55 (nunca NFC-e — confirmado no próprio código,
+`nfe_correcao_service.py:40`), e as únicas NF-e modelo 55 autorizadas em
+ARGEN TESTE eram documentos de negócio reais e anteriores a esta sessão
+(perguntado ao usuário via `AskUserQuestion` — nunca tocar nota de
+cliente real), foi criado um novo pedido/comanda de teste (comanda #9230,
+produto P170/R$1,00) e emitida uma NF-e modelo 55 real via "Agrupar
+Comandas em NF-e", pra então testar a CC-e sobre ela. **4 bugs reais
+novos, todos confirmados por rejeição/sucesso real do SEFAZ**:
+
+1. **`cNF` da chave de acesso sempre igual a `nNF`** — `emitir_nfe_sync`
+   (modelo 55) passava `codigo_numerico=str(proximo_numero)`, o MESMO
+   valor de `numero` — rejeição 897 garantida, 100% das vezes (regra real
+   confirmada por busca: `cNF` nunca pode ser igual a `nNF` nem uma
+   sequência de dígito repetido). `emitir_nfce_sync` tinha o MESMO padrão
+   de bug (usa o nº da comanda como seed) mas nunca disparou por
+   coincidência (comanda e nNF correm em contadores independentes) — bug
+   latente, não disparado ainda. Corrigido na raiz
+   (`nfe_emissao_service._gerar_cnf_valido`, usado por
+   `montar_chave_acesso`): gera sempre um `cNF` aleatório
+   criptograficamente (`secrets`), validado contra as duas regras reais
+   antes de aceitar — nenhum caminho de emissão pode mais reintroduzir
+   esse bug. `mdfe_emissao_service.py` tem o mesmo padrão mas nunca
+   disparou (a validação de colisão parece ser específica de NF-e/NFC-e,
+   não de MDF-e — já confirmado pela emissão real de MDF-e autorizada
+   mais cedo no mesmo dia) — não tocado, reforçado indiretamente mesmo
+   assim por usar a mesma função central.
+2. **Mesmo risco de numeração VB6×app já visto na NFC-e, agora do lado
+   NF-e**: `controle.numero_nf` estava 2 números atrás do que o legado já
+   tinha consumido de verdade (rejeições 539 em nNF 1387 e 1388,
+   seguidas). Avançado manualmente pra 1450 (mesmo tratamento pragmático
+   já usado na NFC-e) — mesmo risco arquitetural já documentado no topo
+   do CLAUDE.md, não um bug de código corrigível aqui.
+3. **CC-e bloqueava até uma NF-e genuinamente autorizada** — o gate
+   `situacao_nfe <> 0` (réplica de `VerificaNFe`, pendência registrada em
+   22/08 como "não 100% resolvida") nunca é satisfeito por nenhum dos 3
+   caminhos de emissão modernos (`nfe_agrupada_service.py`/
+   `nfe_avulsa_service.py`/`comanda_service.py`), porque nenhum deles
+   grava essa coluna — rastreio completo da fonte VB6 (agente dedicado,
+   `FrmTraImpNFE.frm:2454`, `DAO_NFE.vb::GravaLoteNFe`/`AlterLoteNFe`)
+   confirmou que `situacao_nfe` é gravado num fluxo SEPARADO (tela de
+   transmissão eletrônica do VB6) que esta migração nunca replicou, e que
+   `GravaNFE` (`ModNF.bas`, função mestre de gravação) nunca grava essa
+   coluna — nunca fez parte do fluxo de persistência da nota em si. Gate
+   removido em `notas_fiscais_service._carta_correcao_sync` — fica só
+   `protocolo_sefaz <> ''`, o sinal real e já usado nesta migração (nos 3
+   caminhos modernos, o `INSERT INTO n_fiscal` só acontece depois de
+   confirmar sucesso real do SEFAZ, nunca antes).
+4. **`xCondUso`/`descEvento` da CC-e recusados pelo schema** (rejeição
+   493, "Evento não atende o Schema XML específico
+   [.../detEvento/xCondUso]") — o texto legal fixo usava acentuação
+   portuguesa correta (Correção/É/Convênio), mas o valor real esperado
+   pelo SEFAZ (confirmado caractere-a-caractere contra `nfephp-org/
+   sped-nfe`'s `Tools::sefazCCe()`/`tpEv()`, implementação de referência
+   amplamente usada em produção) é SEM acentos. Corrigidos os dois
+   (`X_COND_USO` e `<descEvento>`) pra bater exatamente. **Achado
+   colateral, mesmo bug em 2 lugares**: a extração de `cStat` da resposta
+   do SEFAZ (`nfe_correcao_service.py` e `nfe_cancelamento_service.py`)
+   tinha o MESMO bug de "pega o cStat do LOTE em vez do EVENTO" já achado
+   e corrigido hoje pra NFC-e/NF-e — corrigido nos dois arquivos (extrai
+   `infEvento` primeiro), mesmo sem cancelamento real de NF-e/NFC-e ter
+   sido testado ainda nesta sessão (só MDF-e, código separado).
+
+**Resultado final confirmado — ciclo completo fechado**: NFC-e (comanda
+#9229, produto) protocolo `233262012034628`; NF-e modelo 55 (comanda
+#9230, produto) protocolo `233260396158124`, chave
+`33260814341395000109550000000014511908566899`, nota_fisc local `9323`;
+CC-e sobre essa NF-e, protocolo `233260396175937`. **NFS-e (serviço) fica
+o único item do "ciclo completo" ainda bloqueado** — código fiscal real
+faltante (`cTribMun`/`cNBS`), ver seção "Gestor NFSe" mais abaixo.
+
+**Achado colateral, não corrigido, registrado como pendência**: consulta
+de situação NF-e (`NfeConsultaProtocolo4`) via `requests` direto (fora do
+helper `transmitir()` padrão) falhou com "Unable to handle request
+without a valid action parameter" até adicionar manualmente o header
+`Content-Type: ...; action="..."` — sugere que `montar_envelope_soap`/
+`transmitir()` (usados por TODO o pacote fiscal) nunca setam esse
+parâmetro `action` no `Content-Type`, e serviços de CONSULTA (diferente
+de autorização/evento) podem exigi-lo. Não investigado se isso afeta
+`gestor_nfce_service.py`/`gestor_nfse_service.py`'s consultas de verdade
+(nunca testadas ao vivo até hoje) — mesmo depois de adicionar o header
+manualmente, a consulta ainda voltou `cStat 242 "Mensagem SOAP invalida"`
+(não resolvido, não bloqueou o trabalho principal — a evidência de
+duplicidade já era forte o bastante sem a consulta).
+
+Suíte completa depois desta continuação: **2455 testes passando** (2450 +
+3 novos de `test_nfe_emissao_service.py::TestGerarCnfValido`/
+`TestMontarChaveAcesso` + 2 novos de regressão do `cStat` aninhado em
+`test_nfe_correcao_service.py`/`test_nfe_cancelamento_service.py`, mais
+ajustes nos testes de `_carta_correcao_sync` que mockavam `situacao_nfe`),
+só o mesmo flake pré-existente de sempre.
+
+**2026-08-23, mesma sessão, continuação final — NFS-e testada AO VIVO e
+genuinamente autorizada, fechando as 4 pontas do ciclo fiscal completo
+(NF-e/NFC-e/CC-e/NFS-e).** Usuário pediu explicitamente "faça NFSe
+acontecer" depois do bloqueio anterior (código fiscal real faltante).
+Pesquisado em fonte oficial (Kelvin) o `cTribNac`/`cTribMun`/`cNBS` reais
+pro serviço S200 ("VISITA TECNIA", `cod_lista_servico=140101`, item LC116
+14.01), usando o cadastro real já existente — nenhum código inventado.
+**Resultado final: NFS-e real autorizada** — chave de acesso
+`33045572214341395000109000000000017426084042427390`, nNFSe 174, cStat
+100, confirmada persistida em `dps` (status "Transmitida") e `comanda_nf`
+(tipo=2). **6 bugs/gaps reais adicionais corrigidos**, cada um confirmado
+por uma rejeição real do ADN, a maioria descoberta porque um XSD de
+terceiro desatualizado (usado na rodada anterior) divergia do schema
+OFICIAL real, baixado direto do gov.br pela primeira vez nesta rodada:
+
+1. **`cTribMun` — composição errada, 2 tentativas**: a 1ª rodada (rodada
+   anterior) tinha inferido uma composição de 10 dígitos (código IBGE do
+   município + complementar) a partir de um XSD de mirror de terceiro
+   (`notacontrol.com.br`) desatualizado — recusado (E1235, "Pattern
+   constraint failed"). Corrigido baixando o pacote OFICIAL de verdade
+   direto do gov.br (`pl_nfse_nt04_rtcv101-esquemas.zip`,
+   `tiposSimples_v1.01.xsd`) — o campo real é só 3 dígitos
+   (`TCCodTribMun`, pattern `[0-9]{3}`), o código complementar municipal
+   PURO, sem prefixo nenhum, e opcional (`minOccurs="0"`).
+2. **`cNBS` — código pesquisado nunca existiu na tabela real**: a
+   1ª tentativa usou `1.0128.20.00` ("manutenção de ar condicionado"),
+   achado via 2 fontes secundárias convergentes — recusado (E0316,
+   "Código da lista NBS informado inexistente na tabela de NBS do
+   sistema"). Corrigido baixando a tabela oficial de correlação Item
+   LC116↔NBS direto do gov.br (`AnexoVIII-CorrelacaoItemNBSIndOpCClassTrib_
+   IBSCBS_V1.00.00.xlsx`) — o item 14.01 não tem nenhuma subcategoria de
+   ar-condicionado nessa tabela; usado `1.2001.89.00` ("outros
+   maquinários e equipamentos não classificados em subposições
+   anteriores"), a categoria genérica real da própria planilha oficial.
+3. **`opSimpNac` sempre invertido** — o código mandava `1` quando a
+   empresa É optante do Simples Nacional; o enum real (confirmado no XSD
+   oficial) é `1=Não Optante, 2=MEI, 3=ME/EPP` — exatamente o oposto do
+   que se presumiu (por analogia errada com o CRT da NF-e, que tem enum
+   diferente). Corrigido pra `3` (ME/EPP — a empresa de teste real,
+   "ARGEN AR CONDICIONADO LTDA - EPP", confirma pelo próprio nome) quando
+   optante, `1` quando não.
+4. **`regApTribSN` faltando** — campo obrigatório quando `opSimpNac=3`
+   (E0166), "regime de apuração dos tributos federais/municipal" — sem
+   cadastro de sublimite excedido, usado `1` (regime padrão, tudo pelo
+   SN).
+5. **`totTrib` — escolha errada do `<choice>` de 4 opções pra empresa
+   ME/EPP**: `indTotTrib=0` ("não informar valor estimado") só é aceito
+   pra empresa NÃO optante (E0712, "Para ME/EPP o indicador... não pode
+   ser informado"). ME/EPP precisa de `pTotTribSN` (percentual
+   aproximado, campo informativo da Lei da Transparência 12.741/2012 —
+   nunca afeta o ISS realmente calculado/devido). Sem cadastro real de
+   faixa de faturamento (RBT12/Anexo), usado **6% como estimativa
+   conservadora — decisão explícita do usuário**, documentada por ser
+   valor aproximado por natureza da própria lei, não uma classificação
+   fiscal inventada.
+6. **Mesmo risco de numeração já visto em NFC-e/NF-e, agora do lado
+   NFS-e**: `controle_aux.numero_DPS` colidiu com tentativas de teste já
+   feitas na rodada anterior (E0014, "Conjunto de Série/Número/Município/
+   CNPJ já existe") — avançado manualmente (erro de digitação no meio do
+   processo — reduzi pra 50 quando já estava em 128 — corrigido na hora
+   antes de causar nova colisão).
+
+**Lição de processo reforçada**: baixar o XSD/tabela oficial direto do
+`gov.br` (não um mirror de terceiro) desde o início teria evitado os
+achados #1 e #2 — um mirror desatualizado pode divergir silenciosamente
+do schema real que o ADN de fato valida, mesmo parecendo uma fonte
+legítima. Sempre que possível, ir direto na fonte primária mesmo que dê
+mais trabalho (baixar/extrair zip vs. copiar de um mirror já formatado).
+
+Suíte completa depois desta continuação: **2460 testes passando** (2455 +
+5 novos: `test_cservi_tem_ctribmun_e_cnbs_obrigatorios` atualizado + 4
+novos — `test_servico_nao_mapeado_bloqueia_com_erro_claro`,
+`test_opsimpnac_nao_optante_quando_flag_falsa`,
+`test_regapstribsn_obrigatorio_quando_optante_meepp`/`_ausente_quando_
+nao_optante`, `test_tottrib_usa_ptottribsn_quando_optante_meepp`), só o
+mesmo flake pré-existente de sempre.
+
+**2026-08-23/24, mesma sessão, "Apoio Fisco armado" + cancelamento real
+testado ao vivo.** Usuário pediu que Apoio Fisco se armasse com os
+achados reais de hoje pra apoiar melhor o usuário final — confirmado via
+`AskUserQuestion` que era só memória/persona desta vez (sem código novo);
+ver [[project_apoio_fisco_erros_reais]] (memória) pra a base de
+conhecimento (rejeições reais SEFAZ/ADN traduzidas pra linguagem de
+lojista).
+
+Em seguida, pedido explícito de continuar testando cancelamento real de
+NF-e/NFC-e — fecha o par emissão+cancelamento pros documentos já
+autorizados no mesmo dia (mesmo padrão já feito com MDF-e mais cedo).
+**Tentativa 1 (NFC-e, comanda #9229)**: SEFAZ recusou — "Rejeicao: Prazo
+de Cancelamento Superior ao Previsto na Legislacao" (rejeição real e
+esperada, não um bug — NFC-e tem prazo curto de cancelamento e essa nota
+foi autorizada muitas horas antes, mais cedo no mesmo dia). **Tentativa 2
+(NF-e modelo 55, comanda #9230, autorizada minutos antes)**: **sucesso —
+cancelamento fiscal real confirmado no SEFAZ.**
+
+**Achado real no processo, corrigido**: o cancelamento aconteceu de
+verdade no SEFAZ, mas `_cancelar_comanda_sync` (`comanda_service.py`) só
+gravava `situacao='C'` — o protocolo de cancelamento e o XML assinado do
+evento (devolvidos por `nfe_cancelamento_service.cancelar_nfe_sync`, que
+por sua vez NUNCA devolvia o XML assinado pra quem chama — 2º achado
+irmão) eram descartados, sem nenhum jeito de provar depois QUANDO e com
+QUE protocolo um documento foi cancelado. Corrigido: `cancelar_nfe_sync`
+agora devolve `xml_evento`; `n_fiscal`/`comanda_nfce` ganharam 4 colunas
+novas (`protocolo_cancelamento`, `dh_cancelamento`, `motivo_cancelamento`,
+`xml_cancelamento`) via migração idempotente
+(`comanda_service._ensure_cancelamento_fiscal_cols`, registrada em
+`schema_ensure.py` — cobertura integral, não pontual), gravadas junto com
+`situacao='C'` sempre que o cancelamento passa pelo SEFAZ de verdade.
+Aplicado e confirmado ao vivo contra ARGEN TESTE (as 4 colunas existem
+nas 2 tabelas). **Não retroativo pro cancelamento da NF-e #9323 já feito
+antes do fix** — o protocolo real dessa transmissão específica já foi
+perdido, sem jeito de recuperar (SEFAZ tem o registro, o app local não).
+
+Suíte completa: **2461 testes passando** (2460 + 1 novo,
+`test_cancelamento_fiscal_persiste_protocolo_e_xml`), só o mesmo flake
+pré-existente de sempre.
+
+**2026-08-24, mesma sessão, continuação — Consultar Situação (Gestor
+NFCe) testado AO VIVO e funcionando.** Pedido explícito de continuar
+testando (retomando o bug de `SOAPAction` já achado de passagem ontem
+durante a investigação de duplicidade de NF-e). **2 bugs reais
+corrigidos**, ambos confirmados por rejeição/sucesso real do SVRS:
+
+1. **`SOAPAction` faltando** — `nfe_fiscal_common.transmitir()` nunca
+   setava o parâmetro `action` no `Content-Type` — SVRS recusa consultas
+   com "Unable to handle request without a valid action parameter"
+   (autorização/evento toleram a ausência, consulta não). Corrigido com
+   um parâmetro opcional `soap_action` (default `None`, preserva 100% o
+   comportamento já testado dos outros serviços).
+2. **Nome do serviço WSDL com maiúscula/minúscula errada, achado só
+   depois de corrigir o #1**: o código usava `"NfeConsultaProtocolo4"`/
+   `"NfeInutilizacao4"` (f/e minúsculos) — o namespace/SOAPAction real
+   (confirmado baixando o WSDL PÚBLICO de verdade direto do SVRS, que
+   exige o certificado real até pra ler) é `NFeConsultaProtocolo4`/
+   `NFeInutilizacao4` (F/e maiúsculos) — 2 strings tecnicamente
+   diferentes num identificador sensível a caixa. O bug #1 mascarava esse
+   #2 o tempo todo — o servidor recusava por falta de `action` antes
+   mesmo de checar se a `action` enviada fazia sentido. Corrigido em
+   `gestor_nfce_service.py` (consulta E inutilização NFC-e) e
+   `inutilizacao_nfe_service.py` (inutilização NF-e modelo 55, corrigido
+   por semelhança/mesmo WSDL — **nunca testada ao vivo ainda**, validar
+   antes de confiar 100%).
+
+**Resultado**: `POST /api/gestor-nfce/consultar` contra a NFC-e real
+autorizada mais cedo (comanda #9229) devolveu `cStat 100, "Autorizado o
+uso da NF-e", protocolo 233262012034628` — **bate exatamente** com o
+protocolo da autorização original, confirmando dados genuinamente reais
+do SEFAZ, não um eco/cache local.
+
+Suíte completa: **2461 testes passando** (mesmo total — só ajustes de
+mock em testes já existentes pra aceitar o novo parâmetro `soap_action`),
+só o mesmo flake pré-existente de sempre.
+
+**2026-08-24, mesma sessão, continuação — Inutilização de Faixa NFC-e
+testada AO VIVO e AUTORIZADA.** Usuário confirmado explicitamente (ação
+irreversível de verdade — número inutilizado fica queimado pra sempre no
+SEFAZ, escolhido bem à frente do que os 2 sistemas já consumiram: número
+9000, série "1", NFC-e, longe dos ~2001 já usados de verdade). **1 bug
+real corrigido**, confirmado pela primeira rejeição real:
+
+- **`<serie>`/`<nNFIni>`/`<nNFFin>` com zero à esquerda, violando o schema
+  oficial** — rejeição real "Falha no schema XML (Elemento: inutNFe/
+  infInut/serie)". `nfe_fiscal_common.montar_xml_inutilizacao` reaproveitava
+  a MESMA variável formatada (com padding fixo — `serie(3)`/`nNF(9)`) tanto
+  pro `Id` do atributo (que É de largura fixa por design, algoritmo MOC)
+  quanto pros ELEMENTOS `<serie>`/`<nNFIni>`/`<nNFFin>` do XML em si — que
+  NUNCA podem ter zero à esquerda (confirmado contra o XSD oficial,
+  `tiposBasico_v4.00.xsd`: `TSerie` = `0|[1-9]{1}[0-9]{0,2}`, `TNF` =
+  `[1-9]{1}[0-9]{0,8}`, nenhum dos dois aceita "001"/"000009000"). Corrigido
+  com 2 formatações separadas (padded pro `Id`, sem padding pro XML) — o
+  mesmo bug afeta tanto o lado NFC-e (`gestor_nfce_service.py`) quanto NF-e
+  (`inutilizacao_nfe_service.py`, ainda não testado ao vivo, mas usa a
+  MESMA função central agora corrigida).
+
+**Resultado**: `POST /api/gestor-nfce/inutilizar` (número 9000, série 1)
+autorizado de verdade — protocolo `233262015323406`, confirmado persistido
+em `inutilizacao_nfe` com o XML assinado real.
+
+Suíte completa: **2462 testes passando** (2461 + 1 novo,
+`test_serie_e_numeros_sem_zero_a_esquerda_no_xml`), só o mesmo flake
+pré-existente de sempre.
+
+**2026-08-24, mesma sessão, tentativa de Inutilização NF-e modelo 55 —
+adiada por decisão do usuário.** Diferente do lado NFC-e, o lado NF-e
+(`inutilizacao_nfe_service.py`) tem uma regra real própria: só permite
+inutilizar até o último número já emitido ("Inutilização permitida
+somente até o número 1451, pois este é o número da última Nota Fiscal
+emitida!") — não dá pra "queimar" um número futuro arbitrário como foi
+feito com sucesso na NFC-e. Sem visibilidade de um gap genuinamente nunca
+usado dentro de 1-1451 (risco real de coincidir com um número já
+consumido pelo sistema legado, mesmo padrão de colisão já visto o dia
+todo), perguntado ao usuário como proceder — escolhido **adiar o teste ao
+vivo** por enquanto. **O mecanismo já está corrigido de qualquer forma**
+(mesma função central `montar_xml_inutilizacao` usada pelos 2 lados, já
+validada de verdade via NFC-e) — só falta a confirmação ao vivo
+específica do lado NF-e, registrada aqui como pendência pra quando um
+gap real conhecido aparecer (ou o usuário autorizar testar um número
+baixo aceitando o risco de rejeição por duplicidade).
+
+## ✅ CONCLUÍDO 2026-08-22 — Descomplicar Taxas: Sugerir com IA (Apoio Fiscal/"João")
+
+**Pedido do usuário**: "o integrante Apoio Fiscal (apelido 'João') deve
+prever as configurações que usuário terá que fazer e sugerir combinações
+de taxas de acordo com o regime do cliente (descomplicar Taxas) com o
+recurso que o sistema já possui de apoio IA por contrato." Confirmado
+via pergunta direta que é **feature de software real + texto didático
+na voz de Apoio Fisco juntos**, não só uma das duas coisas.
+
+### Achado que reduziu muito o escopo — infra de IA já existe
+
+`backend/services/layout_service.py::_importar_formulario_sync`
+("Importar Formulário", 2026-08-12) já usa o SDK `anthropic`
+(`client.messages.stream(model="claude-opus-5", output_config=
+{"format":{"type":"json_schema","schema":...}})`), já restringe o
+`enum` de saída da IA a valores que existem numa tabela real (nunca
+inventa), e já nunca grava direto — só devolve proposta pra revisão. A
+chave vem de `controle.ANTHROPIC_API_KEY` (tela "IA Key", master-only)
+— é o "apoio IA por contrato" citado pelo usuário. `_estimar_custo_ia`/
+`_friendly_query_error`/`_IA_IMPORT_MODEL` foram reaproveitados
+diretamente (import cruzado), não duplicados.
+
+### Achado importante — `taxas.tributacao` (CST/CSOSN) tem 2 fontes possíveis
+
+`tributacao` é validado contra `Tributacao`, tabela auxiliar **por
+instalação, digitada pelo próprio cliente** (`tabelas_aux_service.py:
+4032-4038`) — não uma tabela nacional fechada. Decisão (documentada no
+plano, aprovada): tabela nacional nova como constante Python (`CST_ICMS`
+11 códigos, `CSOSN` 10 códigos — mesma categoria de `IBGE_POR_UF`), a IA
+escolhe dali, e ao aceitar o frontend faz upsert em `Tributacao`
+(endpoint já existente, idempotente) com a descrição oficial ANTES de
+gravar `taxas.tributacao` — nunca inventa fora do conjunto fechado, e
+satisfaz o guard de gravação (`_save_taxa_sync:4735-4740`) por
+construção.
+
+### Escopo V1 — dentro (fonte fechada/citada) vs. fora (sem fonte segura)
+
+**Dentro**: `tributacao` (CST/CSOSN, filtrado pelo CRT real da empresa —
+`controle_aux.Regime_Trib`, 1/2=CSOSN, 3=CST); `CST_TRIB_PIS`/
+`CST_TRIB_COFINS` (tabela nacional nova, 30 códigos, SPED Tabela
+4.3.3/4.3.4, filtrada por entrada/saída via `tipo_mov`); `CST_IBS`/
+`CCLASSTRIB_IBS` (já seguro, tabela `classtrib` já existente); os
+percentuais de redução/monofasia ligados ao ClassTrib escolhido
+(`pRedIBS`/`pRedCBS`/`ind_g*`) — **não gerados pela IA**, lidos direto
+de `classtrib` via `_classtrib_lookup_sync` (a mesma função que já
+alimenta o botão manual "Consultar ClassTrib" da tela) depois que a IA
+escolhe o par CST/ClassTrib.
+
+**Fora, sem fonte segura hoje** (limite de segurança mais importante do
+recurso): `icms`, `reducao_base_icms`, `icms_substituicao`, `ALQT_FCP*`,
+todo o bloco DIFAL, e a ALÍQUOTA estadual/municipal em si de IBS/CBS
+(`ALQT_IBS_ESTADO`/`ALQT_CBS_ESTADO`) — variam por estado/produto/
+operação, este projeto não integra nenhuma tabela oficial de alíquota
+pra essas. A tela sinaliza isso claramente (texto fixo do Apoio Fisco/
+João: "Alíquotas de ICMS, FCP e DIFAL continuam manuais... confirme com
+seu contador").
+
+### Backend
+
+- `backend/services/fiscal_referencia_nacional.py` (novo) — `CST_ICMS`
+  (11, Ajuste SINIEF 07/2005 Anexo Tabela B), `CSOSN` (10, Ajuste SINIEF
+  3/10 — confirmado ao vivo que a página do CONFAZ trata desse ajuste),
+  `CST_PIS_COFINS` (30, Tabela 4.3.3/4.3.4 SPED/Receita Federal) +
+  `CST_PIS_COFINS_SAIDA`/`_ENTRADA` (filtros derivados). **Cross-checado
+  contra fontes secundárias especializadas, não contra o PDF primário
+  direto** (erro de redirecionamento no fetch) — recomendado validar
+  antes de confiar em produção real.
+- `backend/services/taxas_ia_service.py` (novo) — `_sugerir_tributacao_
+  sync`: lê `controle.ANTHROPIC_API_KEY` (bloqueia se ausente) +
+  `controle_aux.Regime_Trib`/`opcao_simples` (bloqueia se CRT não
+  configurado — nunca adivinha regime), monta o JSON Schema com `enum`
+  restrito às tabelas reais (omite o bloco IBS/CBS se `classtrib`
+  estiver vazia nesta instalação), chama a IA só com texto (sem
+  upload), anexa descrição oficial (`_anexar_descricoes_oficiais`, nunca
+  gerada pela IA) e os derivados de ClassTrib (`_anexar_derivados_
+  classtrib` — descarta o bloco inteiro se a IA "alucinar" um par CST/
+  ClassTrib que não existe de verdade na tabela). **Nunca grava nada.**
+- Rota nova: `POST /api/taxas/sugerir-ia`
+  (`backend/routes/taxas_ia.py`, sem colisão checada) — wired em
+  `server.py`.
+- 18 testes novos (`test_taxas_ia_service.py`) — primeira infra de teste
+  do projeto mockando o SDK `anthropic` (`monkeypatch.setitem(sys.
+  modules, "anthropic", fake_module)`, já que o `import anthropic` é
+  local à função, igual `layout_service.py`) — reaproveitável por
+  qualquer feature de IA futura.
+
+### Frontend (`taxas.tsx`)
+
+- Seção "Sugerir com IA (Apoio Fiscal)" (`AccordionSection`, recolhida
+  por padrão) perto do botão Gravar — campo livre opcional "descrição
+  da operação", botão "Sugerir com IA".
+- Painel de revisão nunca preenche o formulário sozinho — por campo
+  sugerido, mostra a descrição oficial + o `motivo` da IA (linguagem
+  simples) + um `Switch` "aplicar", marcado por padrão só quando o campo
+  já estava vazio (avisa "já havia um valor preenchido" quando não).
+  "Aplicar selecionados" só seta os campos localmente — Gravar continua
+  o único caminho de persistência real.
+- Aceitar `tributacao` dispara o upsert em `Tributacao` antes de aplicar
+  o campo (Opção B acima).
+- Campos com valor aplicado por IA ganham um badge "✨ IA" discreto ao
+  lado do label — some sozinho assim que o usuário edita o campo de
+  novo (comparação de valor, não uma flag manual — sobrevive a qualquer
+  edição sem precisar limpar estado à parte).
+- Aplicar CST_IBS reaproveita o `useEffect` JÁ EXISTENTE
+  (`[conn, formOpen, form.CST_IBS]`) que recarrega as opções de
+  ClassTrib — não precisou de código novo pra isso.
+- Novo item em `TAXAS_AJUDA_ITENS` (Modo Didático, já existia na tela).
+
+### Verificação e pendências
+
+`pytest tests/unit -q`: 2389 passando (só o flake de sempre). `tsc
+--noEmit`: limpo. Bundle web reconstruído e confirmado com os testIDs
+novos. **Nenhuma chamada real à API Anthropic nesta sessão** — sempre
+mockada nos testes. Recomendações antes de produção real: (1) validar
+`CST_ICMS`/`CSOSN`/`CST_PIS_COFINS` contra o texto primário do Ajuste
+SINIEF/SPED (só cross-checado contra fontes secundárias aqui); (2)
+testar manualmente contra uma instalação com `ANTHROPIC_API_KEY`
+configurada.
+
+## ✅ CONCLUÍDO 2026-08-22 — MDF-e (Fase A — cadastro, sem emissão SEFAZ)
+
+**Pedido do usuário**: entre os gaps fiscais confirmados pela equipe VB6
+("o que falta no ecossistema fiscal"), o usuário escolheu puxar o MDF-e
+(Manifesto Eletrônico de Documentos Fiscais) — confirmado como "em uso"
+real, maior prioridade dos gaps ainda não tocados. Dado o tamanho da
+feature completa (webservice SEFAZ próprio, DAMDFE impresso, eventos de
+Encerramento/Cancelamento), o usuário escolheu fasear: **Fase A =
+cadastro + anexar notas + listagem, sem chamar o SEFAZ** — Fase B fica
+pra rodada futura.
+
+### Fonte VB6 rastreada — `Kontacto\FrmTraMDF.frm` (3681 linhas, única
+cópia no projeto)
+
+Rastreio completo via agente de exploração dedicado, cruzado contra
+`Backon.Controllers/NFe.vb` (funções `GeraMDFe`/`EncerraMDFe`/
+`CancelaMDFe`/`ConsultaSituacaoMDFe`/`MontaXMLMDFe`, linhas 4952-6784 —
+confirmado como implementação REAL, não stub morto como a memória do
+projeto tinha registrado sobre `NFe2.vb`, que na verdade não tem nenhum
+código de MDF-e).
+
+**Achados que reduziram muito o escopo, confirmados por evidência já
+existente no próprio código deste projeto** (não por suposição):
+- `veiculos_transp` (Veículo/Reboque) e `funcionarios` (Motorista/
+  Ajudante) já migrados — `veiculos.tsx`/`veiculos_service.py` — com
+  endpoints já filtrados por função (`GET /api/veiculos/motoristas`/
+  `/auxiliares`, `Funcoes.descricao='MOTORISTA'`/`'MOTORISTA AUXILIAR'`)
+  prontos pra reaproveitar direto.
+- `controle_aux.numero_MDFE`/`serie_MDFE` já existem e já são editáveis
+  via Controle do Sistema (`CAMPOS_MDFE_NUMERACAO`, botão "Gravar
+  Alterações MDF-e" já construído) — não tocados nesta Fase A (alocação
+  de número é ação de `GeraMDFe`, Fase B).
+- **A tabela `MDFe` (grafia exata) já é referenciada** pelo guard de
+  exclusão de `veiculos_service.py::_delete_veiculo_sync`
+  (`SELECT ... FROM MDFe WHERE veiculo=%s`) — escrito numa sessão
+  anterior que já antecipava este módulo. Usei essa mesma grafia na
+  migração nova, em vez de inventar um nome diferente.
+- `n_fiscal.volumes`/`peso_bruto`/`peso_liquido` (adicionados numa
+  rodada anterior desta mesma sessão, pro Transportador da NF-e Avulsa)
+  já cobrem o que cada nota anexada ao manifesto precisa.
+
+**Regras reais portadas** (`FrmTraMDF.frm`): carga é sempre o endereço
+da própria empresa (`:2152-2155`, nunca por nota); descarga é resolvida
+da contraparte de cada nota via `tipo_mov.origem_destino`
+(`'C'`→Cliente, `'F'`→Fornecedor, `:2113-2149`), casando `cidade`/`uf`
+do cadastro contra `municipio`/`UF` reais; campos obrigatórios pra
+gravar são Veículo e Motorista (`:1932-1941`), Reboque/Ajudante
+opcionais, UF Início/Fim default pra UF da empresa; notas só editáveis
+enquanto `mdfe.situacao IN ('A','N')` (`:1410`/`:2075`/`:2772`/`:2887`
+— nesta Fase A a situação nunca sai de `'A'`); busca de notas exige
+`nf.situacao='A'`, sem bloqueio de `situacao_nfe`/`protocolo_sefaz` na
+seleção (só aviso visual — inutilizada/denegada/não validada/
+contingência); percurso é lista livre de UFs sem limite nesta fase (o
+limite "só 1 UF além da UF da empresa" é regra de EMISSÃO, Fase B).
+
+### ✅ Schema confirmado ao vivo (correção de rota: fiscal sempre usa ARGEN TESTE)
+
+A primeira tentativa de checar o schema real foi contra GERDELL/
+BARESTELA — errado por 2 motivos: essa conexão não tem módulo fiscal
+(já registrado em memória desde 2026-08-20) e, além disso, estava com a
+conexão instável no momento. O usuário corrigiu diretamente ("para o
+fiscal usar sempre a conexão Argen") — refeito contra **ARGEN TESTE**,
+resolveu na hora: `MDFe`/`mdfe_notas`/`municipio`/`UF` existem de
+verdade, com nomes/tipos batendo com o desenho desta migração —
+**exceto `municipio.codigo`, que é `FLOAT`, não `INT`** como presumido
+antes de confirmar. Isso era um bug real (`mdfe_notas.origem`/`.destino`
+são `INT`, o valor do JOIN/fallback nunca era normalizado antes do
+INSERT) — corrigido com `_normalizar_cod_municipio` (`int(float(valor))`
+sempre antes de gravar). Suíte final: **2417 testes** (mais 1 pra cobrir
+a normalização). Ver [[project_mdfe]] (memória) pro detalhe completo.
+
+### Backend
+
+- `backend/services/mdfe_service.py` (novo) — `_ensure_mdfe_tables`
+  (idempotente, tabelas `MDFe`/`mdfe_notas`), CRUD de cabeçalho
+  (`_save_mdfe_sync` valida Veículo/Motorista, default UF da empresa),
+  `_delete_mdfe_sync` (só em `situacao='A'`), `_buscar_notas_elegiveis_
+  sync` (réplica de `Command2_Click`, reaproveitando o mesmo padrão de
+  query já usado em `notas_fiscais_service._list_consulta_sync` pra
+  resolver Cliente vs Fornecedor via `tipo_mov.origem_destino`),
+  `_anexar_nota_sync`/`_remover_nota_sync` (só em `situacao IN
+  ('A','N')`), `_resolver_municipio_contraparte_sync`/`_resolver_
+  origem_empresa_sync` (tenta o JOIN real contra `municipio`/`UF`
+  primeiro, cai pro seed já existente `nfe_fiscal_common.resolver_cod_
+  municipio_ibge` se a tabela não existir/não achar — nunca bloqueia a
+  tela, só avisa).
+- Rotas novas — `backend/routes/mdfe.py` (`GET/POST /api/mdfe`,
+  `GET/DELETE /api/mdfe/{codigo}`, `POST /api/mdfe/notas/buscar`,
+  `POST /api/mdfe/{codigo}/notas`, `DELETE /api/mdfe/{codigo}/notas/
+  {nota}` — sem colisão checada) — wired em `server.py`.
+- Permissão nova `MDFE` (`ACOES_PADRAO`) em `permissoes_service.py`. Log
+  de auditoria em gravar/excluir/anexar/remover nota.
+- 27 testes novos (`test_mdfe_service.py`) — inclui caso de fallback
+  quando a query contra `municipio` levanta exceção (tabela ausente/
+  incompatível), confirmando que o código nunca propaga o erro.
+
+### Frontend
+
+- `frontend/app/mdfe.tsx` (novo) — lista de manifestos em rascunho +
+  formulário (Veículo/Reboque via novo `VeiculoSearchModal.tsx`,
+  Motorista/Ajudante via `SelectField` alimentado pelos endpoints já
+  filtrados por função, UF Início/Fim, Percurso em chips, Tipo
+  Transportador, Observações — densidade "Design Desktop"). Painel
+  "Buscar e Anexar Notas" (Cliente via `ClientSearchModal`/
+  `useClienteSearchModal` já existentes, Fornecedor via
+  `FornecedorSearchModal` já existente, número/série/período) com
+  checkbox de seleção + aviso por nota problemática, sem bloquear a
+  seleção. Lista de notas já anexadas, com remover (só quando o
+  manifesto ainda está em edição).
+- Card novo "MDF-e" no hub `gestor-fiscal.tsx`.
+- Modo Didático (`AjudaPedidoModal`) desde já, tela nova.
+- Novo componente reaproveitável `frontend/src/components/
+  VeiculoSearchModal.tsx` (clone de `FornecedorSearchModal.tsx`).
+
+### Verificação e pendências
+
+`pytest tests/unit -q`: 2417 passando (só o flake de sempre). `tsc
+--noEmit`: limpo. Bundle web reconstruído e confirmado com os testIDs
+novos. **Schema confirmado ao vivo contra ARGEN TESTE** (só leitura —
+`MDFe`/`mdfe_notas`/`municipio`/`UF` existem de verdade, achado e
+corrigido o bug de tipo `municipio.codigo FLOAT`, ver seção acima).
+**Ainda não testado**: clicar a tela de verdade no navegador, nem o
+fluxo completo (criar manifesto → buscar nota → anexar → remover) fim a
+fim contra dados reais — só a existência/tipos do schema foram
+confirmados, não o comportamento do fluxo inteiro.
+
+## ✅ TESTADO AO VIVO 2026-08-26 — Contingência NF-e/NFC-e ponta a ponta
+
+Pedido direto do usuário ("vamos fazer Contingência NF-e/NFC-e ponta a
+ponta"), depois de eu apontar que era o único item fiscal genuinamente
+restante nunca exercitado ao vivo (o mecanismo já estava implementado e
+um bug de `cStat` aninhado já tinha sido corrigido por analogia em
+2026-08-24, mas o ciclo completo — emitir em contingência → validar →
+transmitir de verdade — nunca tinha rodado contra o SEFAZ real).
+
+**Fluxo confirmado, os dois lados**: abrir contingência (`POST /api/
+contingencia-nfce/abrir` ou `/contingencia-nfe/abrir`, só grava um
+período — nenhum contato com o SEFAZ) → emitir a nota normalmente
+enquanto a contingência está aberta (assina e grava `situacao='G'`,
+**também nenhum contato com o SEFAZ** — achado confirmado direto no
+código, `nfe_emissao_service.emitir_nfce_sync`/`emitir_nfe_sync`:
+`if em_contingencia: return {...} ` antes de qualquer `transmitir()`) →
+fechar a contingência (só grava `data_fim`) → **"Validar Contingência"/
+"Validar Pendentes" é o ÚNICO passo que realmente fala com o SEFAZ**,
+reassinando o XML já gravado e reusando o mesmo envelope de autorização
+normal.
+
+**Dados de teste**: 2 comandas novas criadas via Pedido→Faturar
+(produto `P170`, R$1,00 — mesmo produto/valor já usado nos testes
+anteriores desta sessão, cliente do RJ pra evitar o gate de "município
+não reconhecido"). Comanda #9231 (cliente 2395, mesmo cliente das
+tentativas anteriores) → NFC-e. Comanda #9233 (cliente 2394, RJ — a
+#9232/cliente 2395 falhou o município "DISTRITO FEDERAL/DF", não
+cadastrado nos códigos IBGE conhecidos, achado sem importância —
+simplesmente troquei de cliente) → NF-e modelo 55 via "Agrupar
+Comandas".
+
+### 4 bugs reais achados e corrigidos, TODOS em "Validar Contingência"/
+"Validar Pendentes" — nunca exercitados ao vivo antes desta rodada
+
+1. **`id_nfe` errado** (`gestor_nfce_service._validar_contingencia_sync`)
+   — usava `f"NFe{num_nfce}"` (número sequencial curto, ex. "NFe2002")
+   em vez de `f"NFe{chave_acesso}"` (44 dígitos, o mesmo Id usado na
+   assinatura ORIGINAL). Rejeitado **localmente**, antes de qualquer
+   contato com o SEFAZ: `Unable to resolve reference URI: #NFe2002` —
+   o assinador (`signxml`) não achava no XML nenhum elemento com esse
+   Id pra montar a `<ds:Reference>`. Corrigido: `chave_acesso` passou a
+   ser selecionado (não estava nem no SELECT original) e usado
+   corretamente. **Achado de brinde**: o UPDATE final de `n_fiscal`
+   (`WHERE chave_acesso = %s`) também estava condenado a rodar sempre
+   com `NULL` por esse mesmo motivo — corrigido junto.
+2. **Reassinar o documento já assinado, sem limpar antes** (mesmo
+   arquivo) — `xml_guardado` é o documento FINAL persistido pela
+   emissão original: já tem `<ds:Signature>` E (só NFC-e) `<infNFeSupl>`
+   grudados. Assinar esse documento DE NOVO, do jeito que está, corrompe
+   o resultado — rejeição real do SEFAZ: `Falha no Schema XML da NFe
+   (Elemento: enviNFe/NFe[1]/infNFeSupl/qrCode/)`. Corrigido replicando
+   a sequência exata da emissão original: extrai o bloco `infNFeSupl`
+   (só NFC-e), remove `infNFeSupl` + `<ds:Signature>` antigos, assina o
+   XML limpo, regruda o MESMO `infNFeSupl` extraído depois.
+3. **O achado mais substancial — QR Code OFFLINE pra contingência**
+   (`nfe_emissao_service.montar_url_qrcode`/`emitir_nfce_sync`): depois
+   de corrigir 1-2, a MESMA rejeição de schema persistiu — o XSD real
+   (`leiauteNFe_v4.00.xsd`) tem 5 padrões alternativos pro `qrCode`
+   (V1/V2 online/V2 offline/V3 online/V3 offline), e o dígito do `tpEmis`
+   embutido na própria chave de acesso (posição 35) decide qual bate:
+   `tpEmis=9` (contingência) EXIGE o padrão offline, bem mais longo e
+   NUNCA implementado neste projeto (o código sempre gerava o formato
+   online mais curto, `chave|2|tpAmb|cscId|hash`). Fórmula offline real
+   confirmada contra código de referência (`nfephp-org/sped-nfe`,
+   `QRCode::get200`, ramo `tpEmis==9`, mesma biblioteca já usada pra
+   confirmar a fórmula online em 2026-08-23): `chave|2|tpAmb|dia(2)|
+   valor(0.00)|digHex(56)|cscId|hash` — `digHex` é o `DigestValue` da
+   PRÓPRIA assinatura (já base64), com cada CARACTERE hex-encoded byte a
+   byte (não decodificado antes — 28 chars base64 × 2 = 56 hex,
+   batendo exato o `maxLength` do XSD). Como o QR Code passou a
+   depender da assinatura, o cálculo foi movido pra DEPOIS de assinar
+   (antes era calculado antes, e passado como parâmetro nunca lido por
+   `_montar_xml_nfce` — conferido no código, remover essa dependência
+   não quebrou nada).
+4. **Mesmo bug do item 2, replicado no lado NF-e** (`contingencia_nfe_
+   service._validar_pendentes_sync`) — corrigido **por analogia, antes
+   do teste ao vivo desse lado** (mesmo princípio já usado várias vezes
+   nesta sessão pra bugs da mesma classe): NF-e modelo 55 não tem
+   `infNFeSupl` (isso é exclusivo do QR Code de NFC-e), só precisou
+   remover a assinatura antiga antes de reassinar. Resultado: a
+   transmissão real do lado NF-e funcionou de primeira, sem nenhuma
+   rejeição — só a correção preventiva bastou.
+
+**Resultado final, os dois lados AUTORIZADOS DE VERDADE pelo SEFAZ**:
+- NFC-e: comanda #9231, protocolo `233262023324887`, `n_fiscal.
+  situacao='A'`/`cstat='100'`, `comanda_nfce.situacao='F'` — confirmado
+  persistido corretamente.
+- NF-e modelo 55: comanda #9233, protocolo `233260398954185`,
+  `n_fiscal.situacao='A'`/`cstat='100'`, `comanda_nf.situacao='A'` —
+  confirmado persistido corretamente.
+
+**Testes**: regressão em `test_gestor_nfce_service.py` (+3: `id_nfe`
+usa `chave_acesso` via spy em `assinar_xml`, XML já-assinado-com-supl é
+relimpo antes de reassinar — verificando 1 único `infNFeSupl`/1 único
+`Signature` no envelope final, `chave_acesso` real no UPDATE de
+`n_fiscal`), `test_nfe_emissao_service.py` (+2: fórmula offline bate
+contra `QRCode::get200` recomputado independente, ramo online sem
+regressão), `test_contingencia_nfe_service.py` (+1: mesma limpeza de
+assinatura antiga, replicada por analogia). Suíte completa: 2584
+passando (só o flake de data de sempre). `tsc --noEmit`: baseline de 12
+erros, sem novos (nenhuma mudança de frontend nesta rodada).
+
+## ✅ TESTADO AO VIVO 2026-08-23 — MDF-e (1ª emissão fiscal real deste projeto)
+
+**Autorização do usuário**: sequência explícita de `AskUserQuestion` —
+"testar ao vivo" escolhido entre 4 frentes fiscais → "MDF-e: emitir um
+manifesto de teste" escolhido entre 4 ações reais possíveis → "teste com
+NF valor de R$1,00 / cancelar em seguida" (instrução direta, meio-turno)
+→ "continue tentando" (depois de o classificador de auto mode bloquear
+uma tentativa, exigindo reconfirmação explícita).
+
+**Dado de teste usado**: veículo `TST0002` (codigo 3, criado só pra este
+teste, mantido — está referenciado por um MDF-e real agora, não faz
+sentido excluir), motorista real (`ELUISIO`, codigo 23, já cadastrado),
+nota fiscal real #9301 (NF-e autêntica, protocolo `233260341091640`,
+emitida 2026-07-24, R$1.432,00 — não R$1,00 exato, porque nenhuma nota
+com valor ~R$1 tinha chave/protocolo genuinamente válidos; usada a mais
+barata entre as recentes e realmente autorizadas).
+
+**10 tentativas reais contra ARGEN TESTE (produção), 7 bugs genuínos
+achados e corrigidos** — resumo completo já está em "Estado Atual do
+Projeto" acima (não duplicar aqui); pontos técnicos extras:
+
+- **Arquivo novo**: `backend/certs/icp-brasil-raiz-v10.pem` (raiz pública
+  ICP-Brasil, sem segredo, fonte oficial ITI/acraiz.icpbrasil.gov.br) +
+  `nfe_fiscal_common._ca_bundle_path()` (bundle certifi+ICP-Brasil,
+  cacheado por processo) — usado em TODA chamada `requests` deste módulo
+  (`transmitir`/`transmitir_json_mtls`/`consultar_json_mtls`/
+  `consultar_binario_mtls`), não só MDF-e — corrige silenciosamente
+  qualquer chamada fiscal futura desta migração, mesmo que a descoberta
+  tenha vindo do MDF-e.
+- **`assinar_xml(..., sha1=True)`** — nova opção no assinador genérico
+  (`_XMLSignerPermiteSha1`, subclasse de `signxml.XMLSigner` que
+  sobrescreve `check_deprecated_methods` pra permitir SHA-1 só quando
+  explicitamente pedido) — usada SÓ pro MDF-e (emissão e eventos); NF-e/
+  NFC-e/CC-e continuam SHA-256 por padrão, sem mudança.
+- **`nfe_fiscal_common.parse_dh_sefaz()`** — novo helper genérico
+  (converte timestamp do SEFAZ, com offset de timezone, pro `datetime`
+  naive que uma coluna `DATETIME` do SQL Server aceita). **Usado só no
+  MDF-e por enquanto** — `nfe_cancelamento_service.py`/
+  `nfe_emissao_service.py`/`nfe_correcao_service.py` gravam `dhRecbto`/
+  `dh_reg`/`dhRegEvento` do mesmo jeito (string crua), nunca testados
+  contra o SEFAZ real até hoje, então esse mesmo bug pode estar
+  latente lá — **pendência explícita, não corrigida ainda**: aplicar
+  `parse_dh_sefaz()` nesses 3 arquivos também, na próxima rodada que
+  tocar neles (idealmente antes do próximo teste ao vivo desses
+  documentos, pra não repetir o incidente de rollback perdendo um
+  documento já autorizado).
+- **Achado colateral, não corrigido ainda**: `GET /api/notas-fiscais/
+  selecionar` mostra `protocolo_sefaz` sempre `null` na listagem, mesmo
+  quando a coluna real de `n_fiscal` tem valor (confirmado ao vivo:
+  nota #9301 aparecia com `protocolo_sefaz: null` na listagem, mas o
+  valor real no banco era `"233260341091640"`) — isso quase causou o
+  envio de uma Carta de Correção real sem confirmação prévia (só não
+  completou por causa do problema de TLS do item 1, corrigido depois).
+  **Pendência explícita**: achar e corrigir esse campo em
+  `notas_fiscais_service.py` (provavelmente um SELECT que não inclui a
+  coluna, ou um mapeamento de resposta que a descarta) antes de confiar
+  nessa listagem pra decisões automáticas de novo.
+- **Estado técnico final**: `pytest tests/unit -q` → 2443 passando (só o
+  flake de sempre). `tsc --noEmit` não tocado nesta rodada (só backend).
+  MDF-e #3 (ARGEN TESTE): situação `C` (Cancelado), protocolo de emissão
+  `933260015569617`, protocolo de cancelamento `933260015569655` — os
+  dois reais, consultáveis no SEFAZ.
+
+## ✅ CONCLUÍDO 2026-08-22 — MDF-e (Fase B — emissão real SEFAZ, Encerrar, Cancelar, Consultar, Gerar XML, DAMDFE)
+
+**Pedido do usuário, mesmo dia**: continuar direto pra Fase B (emissão
+real ao SEFAZ), escolhida entre 4 candidatos via `AskUserQuestion`
+(MDF-e Fase B / Apuração Fiscal / CEST-NCM / testar ao vivo).
+
+### Fonte rastreada por completo antes de codar (Protocolo Gauntlet —
+Kelvin liderou o rastreio)
+
+`Backon.Controllers/NFe.vb:4952-6216` lida linha a linha (não resumida
+por agente, diferente da Fase A) — `GeraMDFe`, `EncerraMDFe`,
+`CancelaMDFe`, `ConsultaSituacaoMDFe`, `MDFeConsulta`, `MontaXMLMDFe`,
+`Transmitir_MDFe` — mais `Kontacto\FrmTraMDF.frm`'s `Command7_Click`
+("Gerar MDFe") e os handlers de Encerrar/Cancelar (linhas ~1500-1690/
+2205-2299), que faltavam da Fase A. Endpoints reais do SEFAZ (grupo
+SVRS) confirmados por busca (fonte: portal.fazenda.sp.gov.br "URL
+WebServices" MDF-e) — nunca inventados.
+
+**Achados de fonte, alguns só descobertos nesta rodada**:
+- **Vocabulário real de `MDFe.situacao`** (confirmado via os 5
+  checkboxes de filtro do `.frm`, linhas 3633-3637): `A`=Sem MDFe,
+  `N`=Não Transmitido, `T`=Transmitido, `E`=Encerrado, `C`=Cancelado.
+- **`MDFeRecepcaoSinc` (autorização) exige o XML assinado comprimido em
+  GZIP + Base64** antes de entrar no envelope SOAP — confirmado tanto no
+  código legado (`compactaArquivo`+`ConvertFileToBase64`) quanto no MOC
+  MDF-e oficial (Confaz/SPED). **Diferente de tudo já construído pra
+  NF-e/NFC-e/CC-e neste projeto** (que mandam XML puro) — exigiu uma
+  variante própria do helper de envelope SOAP
+  (`nfe_fiscal_common.montar_envelope_soap_gzip_b64`). Encerramento/
+  Cancelamento/Consulta NÃO comprimem — XML assinado puro, mesmo padrão
+  já usado em `nfe_cancelamento_service.py`.
+- **`MontaXMLMDFe` é uma função separada de `GeraMDFe`**, não duplicata
+  por acidente — remonta e reassina o XML final a partir dos dados já
+  gravados (pra "Gerar XML"/reexportação, sem transmitir de novo).
+  Extraído um único builder compartilhado
+  (`mdfe_emissao_service._montar_xml_mdfe_sync`), usado tanto na emissão
+  quanto no "Gerar XML" — melhoria real de DRY em relação ao legado.
+- **Bug do legado achado e NÃO replicado, decisão consciente**:
+  `Command7_Click` (linhas 2243-2259) bloqueia a emissão se o conjunto
+  de UFs das notas passar de 2 (a UF da empresa + 1 outra), mas
+  hardcodeia literalmente `"RJ"` na mensagem/cálculo — workaround
+  específico desta instalação, de uma versão antiga do MDF-e que tinha
+  essa limitação real; o layout 3.00 (o mesmo declarado por este código)
+  não tem mais esse limite no MOC oficial. **Não portado.**
+- **Bug do legado achado e CORRIGIDO** (não replicado): `TpTransp`
+  sempre chega `"2"` hardcoded na chamada de `GeraMDFe`
+  (`Command7_Click`, linha 2277), e `MontaXMLMDFe`/`GeraMDFe` só emitem a
+  tag `<tpTransp>` quando o valor é DIFERENTE de `"2"` — ou seja, a tag
+  nunca sai no XML de produção hoje, com ou sem o combo da tela. Aqui a
+  tag é emitida sempre que `mdfe.tptransp` está preenchido — bug de
+  comparação de string do chamador, não regra fiscal.
+- Resgate de transmissão pendente por `nRec` (`ConsultaSituacaoMDFe`,
+  caminho "204 - lote em processamento") **não portado** — registrado
+  como pendência explícita, não omissão silenciosa (ver "Fora de
+  escopo" abaixo).
+
+### Backend
+
+- `backend/services/nfe_fiscal_common.py` — `montar_envelope_soap` ganhou
+  parâmetros opcionais `ns`/`tag` (default preserva 100% o comportamento
+  NF-e já existente); `montar_envelope_soap_gzip_b64` (novo, só MDF-e);
+  `MDFE_NS`/`ENDPOINTS_MDFE`/`resolver_endpoint_mdfe` (sem gating por UF
+  — MDF-e usa um único autorizador nacional, diferente do resto do
+  módulo); `extrair_bloco` (novo, extrai um elemento XML inteiro com
+  suas próprias tags, usado pra reencaixar `<protMDFe>` da resposta do
+  SEFAZ no XML final).
+- `backend/services/mdfe_service.py` — `_COLUNAS_MDFE_FASE_B` (14
+  colunas novas em `MDFe`: `num_mdfe`, `serie_mdfe`, `chave_acesso`,
+  `dhemi`, `tp_amb`, `protocolo_sefaz`, `dhRecbto`, `xml_protMDFe`,
+  `xml`, `urlqrcode`, `cstat`, `municipio_encerra`, `data_encerramento`,
+  `xml_retEventoMDFe_encerra`, `xml_retEventoMDFe_Cancela`,
+  `motivo_cancelamento`, `historico`), registradas no mesmo
+  `_ensure_mdfe_tables` já existente; `_get_mdfe_sync` passou a fazer
+  LEFT JOIN com `veiculos_transp`/`funcionarios` (placa/nome do
+  motorista, faltava na Fase A); `_buscar_municipios_sync` (busca por
+  nome, usada pelo seletor de Município de Encerramento).
+- `backend/services/mdfe_emissao_service.py` (novo) — `emitir_mdfe_sync`
+  (aloca número/série de `controle_aux.numero_MDFE`/`serie_MDFE`, mesmo
+  padrão exato já usado em `comanda_service.py` pra NFC-e; monta chave
+  de acesso reaproveitando `nfe_emissao_service.montar_chave_acesso`,
+  modelo "58"; só grava em sucesso confirmado pelo SEFAZ), `encerrar_
+  mdfe_sync`/`cancelar_mdfe_sync` (eventos 110112/110111), `consultar_
+  situacao_mdfe_sync` (por chave de acesso), `gerar_xml_mdfe_sync`.
+- Rotas novas em `backend/routes/mdfe.py` — `POST /api/mdfe/{codigo}/
+  emitir`, `/encerrar`, `/cancelar`, `/consultar`, `GET /api/mdfe/
+  {codigo}/xml`, `GET /api/mdfe/municipios` — sem colisão checada.
+- Permissão `MDFE` trocou de `ACOES_PADRAO` pra `ACOES_MDFE` dedicada
+  (EMITIR/ENCERRAR/CANCELAR/CONSULTAR, mesmo padrão de
+  `ACOES_GESTOR_NFCE`). Log de auditoria em todas as ações novas.
+- 23 testes novos (`test_mdfe_emissao_service.py`) — inclui round-trip
+  do envelope gzip+base64, gating de situação por ação, motivo de
+  cancelamento <15 chars rejeitado, e o teste que prova a correção do
+  bug do `<tpTransp>` (emite quando preenchido, mesmo com valor `"2"`).
+
+### Frontend
+
+- `frontend/app/mdfe.tsx` — bloco de status (situação por extenso,
+  número/série, protocolo, chave de acesso) + botões de ação
+  (Emitir/Encerrar/Cancelar/Consultar Situação/Imprimir DAMDFE),
+  visíveis condicionalmente pela situação do manifesto. Modal de
+  Encerrar (busca de Município via novo `MunicipioSearchModal.tsx`) e
+  modal de Cancelar (motivo, mínimo 15 caracteres) — mesmo tier de modal
+  "confirmação pontual" (420px) já padronizado no projeto. Emitir/
+  Cancelar pedem confirmação explícita antes (`useFeedback().
+  showConfirm`) — ações irreversíveis com efeito fiscal real.
+- `frontend/src/components/MunicipioSearchModal.tsx` (novo) — clone do
+  padrão de `VeiculoSearchModal.tsx`/`FornecedorSearchModal.tsx`.
+- `frontend/src/utils/danfeFacsimile.ts` ganhou `buildDamdfeHtml` — DAMDFE
+  como fac-símile HTML (mesmo precedente de DANFE/DANFCe/DANFSe, já que
+  o legado imprime via GDI hand-drawn, não tem motor de relatório).
+  Monta a partir dos dados já carregados na própria tela, sem reanalisar
+  o XML no frontend. QR Code renderizado só como texto/link (sem imagem
+  PNG) — simplificação deliberada, mesmo espírito do DANFCe quando não
+  tem `qr_code_png_base64`.
+- Modo Didático (`MDFE_AJUDA_ITENS`) ganhou as 5 entradas novas.
+
+### Fora de escopo desta rodada
+
+Resgate de transmissão pendente por `nRec` (`ConsultaSituacaoMDFe`,
+"204 - lote em processamento") — o "Consultar Situação" por chave já
+cobre o caso de uso prático. UFs fora do grupo SVRS (não existe MDF-e
+com autorizador próprio fora do SVRS hoje). QR Code gráfico no DAMDFE
+(só texto/link por enquanto).
+
+### Verificação e pendências
+
+`pytest tests/unit -q`: 2440 passando (2417 + 23 novos), só o flake de
+sempre. `tsc --noEmit`: limpo (mesma baseline de 12 erros pré-existentes).
+Bundle web reconstruído e confirmado com os testIDs novos. **Nada
+testado ao vivo contra o SEFAZ real** — não existe certificado de
+homologação neste projeto; qualquer teste ao vivo de emissão precisa de
+confirmação explícita do usuário antes (ARGEN TESTE tem certificado de
+PRODUÇÃO real carregado — ver `reference_conexoes_teste.md`).
+
+## ✅ CONCLUÍDO 2026-08-22 — Carta de Correção Eletrônica (CC-e)
+
+**Pedido do usuário 2026-08-22**, escolhida entre 3 candidatos depois da
+correção da equipe VB6 (ver "Inventário de Telas Fiscais" mais abaixo) —
+"usado integralmente e diariamente por todos os nossos clientes... fica
+na tela manutenção/notas fiscais". Rastreio de fonte feito, nenhuma linha
+de código escrita ainda — próximo passo é Plan Mode.
+
+### Fonte VB6 rastreada — `Geral\FrmManRec.frm`
+
+**`Command32_Click`** (botão que abre o painel, linhas 7541-7621) — gates:
+`Pos_Sistema` (global de licença, já resolvido/adiado em
+[[project_chave_renovacao_analise]], não é gap novo) e `VerificaNFe`
+(`:9824`, bloqueia se `n_fiscal.situacao_nfe = 0` com "Operação permitida
+somente para NFe!" — **`situacao_nfe` não está 100% resolvido**, ver
+"Pergunta em aberto" abaixo). Requer `n_fiscal.protocolo_sefaz` não-vazio
+(nota realmente transmitida ao SEFAZ, não basta estar cadastrada). Se já
+existe carta de correção anterior (`obs_livro` contém "Carta de
+Correção"), pergunta se quer emitir outra (incrementa `NumCarta` via
+`InputBox`) ou só reabrir a existente.
+
+**`Command33_Click`** (envio, linhas 7623-7708) — valida `MotivoCorrecao`
+com no mínimo 15 caracteres (**confirmado regra real do SEFAZ**, não
+capricho do legado — ver NT 2011.003 abaixo), então chama
+`Backon_Controllers.Nfe.CartadeCorrecao(vcodNf, "0", conexão, Ambiente_
+NFe, 55, chave_acesso, MotivoCorrecao, HorarioDeVerao, CodUFNFeControle,
+NomeComputador, Format(NumCarta,"00"), Path_Certificado, Senha_
+Certificado, VERSAO_NFE, True)` — **modelo hardcoded em `55`, só NF-e,
+nunca NFC-e** (mesmo escopo desta migração, a menos que pedido
+diferente). Resposta (`retornopcrj`) é uma string com prefixo de 2
+caracteres (status) + o XML de retorno (`retEvento`) embutido — o legado
+salva esse texto CRU dentro de `n_fiscal.obs_livro` (concatenado com
+`Chr(13)&Chr(10)`, sem tabela própria) e também grava o XML assinado da
+carta num arquivo local (`cce_NN_chaveacesso.xml`, pasta por ano/mês via
+`CriaPastaXML`).
+
+**`Command38`/`Command39`** (imprimir, linhas 7961-8126) — recompõe os
+campos (`cStat`/`xMotivo`/`nProt`/`dhRegEvento`/`xCorrecao`/`dhEvento`)
+fazendo parsing de string por posição dentro de `obs_livro` (tags
+customizadas tipo `<xml da carta correcao01>...</xml da carta
+correcao01>`), e chama `Backon_Controllers.Nfe.ImprimeCartadeCorrecao(...)`
+— gera o documento impresso (DACCe, "Documento Auxiliar da Carta de
+Correção Eletrônica"), função da DLL ainda não lida (fora do escopo desta
+rodada de rastreio; não achei o `.vb` fonte ainda).
+
+**`PrepEventos`** (linhas 9506-9544) — monta a listagem de eventos vinculados
+à nota (grid "Eventos"); o loop que lista cartas de correção já emitidas
+vai só até `k=5` (`For k = 1 To 5`) — **confirmado como limitação
+arbitrária de UI do legado, não a regra real do SEFAZ** (ver NT abaixo,
+limite real é 20) — não replicar o cap de 5, usar o limite real.
+
+### Regra oficial (Nota Técnica 2011.003, SEFAZ) — Kelvin, fonte
+confirmada via busca + fetch, PDF oficial (`nfe.fazenda.gov.br`) não
+carregou direto (loop de redirecionamento) — cross-checado num guia
+técnico especializado (flexdocs.net) que cita a mesma NT; recomendo
+confirmar contra o PDF oficial antes de produção, não é 100% primário
+ainda
+
+- `tpEvento` = **110110** (Cancelamento é 110111, mesma família de
+  eventos, mesmo webservice `NFeRecepcaoEvento4` — já usado por
+  `nfe_cancelamento_service.py` nesta migração).
+- `nSeqEvento`: 1 a **20** (não 5). "Uma NF-e pode ter até 20 cartas de
+  correção e a última carta substitui as anteriores" — a 20ª é o limite
+  real, uma 21ª deve ser bloqueada no backend, não só deixada pro SEFAZ
+  recusar.
+- `xCorrecao`: texto livre, **15 a 1000 caracteres** — confirma o mínimo
+  de 15 já visto no `.frm` como regra real do SEFAZ (não capricho do
+  legado), e adiciona um máximo de 1000 que o legado não parecia validar
+  explicitamente (checar se vale a pena validar no frontend também).
+- `xCondUso` — texto FIXO obrigatório dentro de `detEvento` (depois de
+  `descEvento`/`xCorrecao`, nessa ordem), verbatim: *"A Carta de Correção
+  é disciplinada pelo § 1°-A do art. 7° do Convênio S/N, de 15 de
+  dezembro de 1970 e pode ser utilizada para regularização de erro
+  ocorrido na emissão de documento fiscal, desde que o erro não esteja
+  relacionado com: I - as variáveis que determinam o valor do imposto
+  tais como: base de cálculo, alíquota, diferença de preço, quantidade,
+  valor da operação ou da prestação; II - a correção de dados cadastrais
+  que implique mudança do remetente ou do destinatário; III - a data de
+  emissão ou de saída."* — string fixa, nunca editável pelo usuário,
+  sempre a mesma em toda CC-e emitida.
+- `descEvento` = "Carta de Correção".
+- `cStat` de sucesso: **135** ("Evento registrado e vinculado a NF-e") —
+  mesmo código já usado como sucesso em `nfe_cancelamento_service.py`
+  (mesma família de eventos).
+
+### Infraestrutura já reaproveitável (achado importante — reduz MUITO o
+escopo de trabalho novo)
+
+`backend/services/nfe_cancelamento_service.py` (evento 110111,
+Cancelamento) é **quase um template pronto** pra CC-e (evento 110110) —
+mesmo webservice (`NFeRecepcaoEvento4`), mesmo envelope SOAP
+(`nfe_fiscal_common.montar_envelope_soap`), mesma assinatura XMLDSig
+(`nfe_fiscal_common.assinar_xml`), mesmo transporte TLS mútuo
+(`nfe_fiscal_common.transmitir`), mesmo carregamento de certificado
+(`nfe_fiscal_common.carregar_certificado_sync`), mesma tabela de
+endpoints por UF (hoje só grupo SVRS mapeado — mesma limitação, não é um
+gap novo do CC-e). Só muda: `tpEvento`/`id_evento` (110110 em vez de
+110111, `nSeqEvento` variável em vez de sempre 1), o conteúdo de
+`detEvento` (`xCorrecao`+`xCondUso` fixo em vez de `xJust`), e a origem
+do `motivo`/validação (15-1000 caracteres, não só 15+).
+
+### Decisões de arquitetura a propor no Plan Mode (não decidir sozinho
+aqui)
+
+1. **Persistência — não replicar o blob de texto em `obs_livro`.** O
+   legado concatena XML cru dentro de uma coluna de texto livre com tags
+   customizadas feitas na mão (`<xml da carta correcaoNN>`) — isso é
+   gambiarra de era VB6 (sem acesso fácil a criar tabela nova
+   por instalação, ver "Não replicar truques VB6" no CLAUDE.md), não
+   regra fiscal. Proposta: tabela própria nova (ex.:
+   `n_fiscal_carta_correcao`: codigo, n_fiscal_codigo FK, n_seq_evento,
+   motivo/xCorrecao, protocolo, cstat, xmotivo, data_registro, xml_evento,
+   criado_em, usuario) — mesma disciplina de sempre (`_ensure_*` +
+   `schema_ensure.py`). `obs_livro` continua existindo (compatibilidade
+   com o legado rodando em paralelo sobre o mesmo banco), mas deixa de
+   ser a fonte de verdade pro app novo.
+2. **XML assinado**: o legado salva num arquivo local
+   (`cce_NN_chave.xml`) — este backend é multi-tenant/stateless, sem
+   pasta local por instalação; proposta é gravar o XML assinado dentro da
+   própria linha da tabela nova (`xml_evento`), mesmo padrão já usado
+   pra XML de NF-e/NFC-e emitidas nesta migração (`n_fiscal.xml`).
+3. **Impressão (DACCe)**: a função `ImprimeCartadeCorrecao` da DLL não foi
+   lida ainda (fonte `.vb` não localizada nesta rodada). Proposta: seguir
+   o mesmo padrão já usado pro DANFE (`danfeFacsimile.ts`, HTML +
+   `printHtml.ts`) — um facsimile HTML da DACCe, mais simples que o DANFE
+   (poucos campos: emitente, chave, protocolo, data, texto da correção,
+   texto fixo do `xCondUso`). Precisa confirmar o layout visual oficial
+   (SEFAZ costuma publicar um manual de leiaute do DACCe) antes de
+   desenhar.
+4. **Escopo: só modelo 55 (NF-e), não NFC-e** — mesmo escopo do legado
+   (`CartadeCorrecao(..., 55, ...)` hardcoded). Não estender pra NFC-e
+   sem pedido explícito.
+5. ✅ **RESOLVIDA 2026-08-23** (ver "Estado Atual do Projeto", continuação
+   da 8ª rodada, e memória `project_nfce_nfe_teste_ao_vivo`): rastreio
+   completo (`FrmTraImpNFE.frm:2454`, `DAO_NFE.vb::GravaLoteNFe`/
+   `AlterLoteNFe`) confirmou que `situacao_nfe` é gravado num fluxo
+   SEPARADO (tela de transmissão eletrônica do VB6) que nenhum dos 3
+   caminhos de emissão modernos desta migração replica — `GravaNFE`
+   (`ModNF.bas`) também nunca grava essa coluna. Confirmado ao vivo: o
+   gate `situacao_nfe<>0` bloqueava até uma NF-e genuinamente autorizada.
+   **`checar só protocolo_sefaz <> '' JÁ ERA suficiente`** — removido o
+   gate de `situacao_nfe` em `_carta_correcao_sync`.
+6. **Cap de 20 cartas por nota**: enforçar no backend (não só confiar no
+   SEFAZ recusar a 21ª).
+
+### Implementação — CONCLUÍDA 2026-08-22, plano aprovado e executado sem mudanças
+
+**Backend**:
+- `nfe_fiscal_common.py` ganhou `ENDPOINTS_RECEPCAO_EVENTO` compartilhado
+  (extraído de `nfe_cancelamento_service.py`, que agora importa de lá —
+  mesmo mapa, sem duplicação).
+- `backend/services/nfe_correcao_service.py` (novo) — evento 110110,
+  clone quase 1:1 de `nfe_cancelamento_service.py`: `_montar_xml_evento_
+  correcao` (tpEvento 110110, `detEvento` na ordem `descEvento`/
+  `xCorrecao`/`xCondUso`), `X_COND_USO` (texto legal fixo, NT 2011.003,
+  verbatim), `emitir_carta_correcao_sync` (valida 15-1000 chars +
+  1≤n_seq_evento≤20, mesmo cStat 135 de sucesso).
+- `notas_fiscais_service.py` — nova tabela `n_fiscal_carta_correcao`
+  (`_ensure_n_fiscal_carta_correcao_table`, registrada em
+  `schema_ensure.py::_MIGRACOES`), `_carta_correcao_sync` (gate
+  `situacao_nfe<>0` + `protocolo_sefaz` + cap real de 20, replica
+  `VerificaNFe`/`Command33_Click` do legado), `_list_cartas_correcao_sync`,
+  `_get_carta_correcao_dacce_sync` (dados pra impressão).
+- `routes/notas_fiscais.py` — `POST .../carta-correcao`,
+  `GET .../cartas-correcao`, `GET .../carta-correcao/{n_seq}/dacce`
+  (checado: sem colisão com rota existente). Log de auditoria
+  (`comando="CARTA_CORRECAO"`) só em caso de sucesso, mesmo padrão de
+  Cancelar/Excluir.
+- `permissoes_service.py` — `ACOES_NOTAS_FISCAIS` ganhou
+  `("CARTA_CORRECAO", "Carta de Correção")`.
+- Testes novos: `test_nfe_correcao_service.py` (18 testes — XML/
+  assinatura/envelope/orquestração, mesmo mock de SEFAZ que o
+  cancelamento) + `TestCartaCorrecaoSync`/`TestListCartasCorrecaoSync`
+  em `test_notas_fiscais_service.py` (gates + INSERT + commit).
+
+**Frontend** (`notas-fiscais.tsx`):
+- Botão "Carta de Correção" no `statusRow`, ao lado de "Baixar DANFE"
+  (gated por `chave_acesso` + permissão — servidor reforça
+  `situacao_nfe`/`protocolo_sefaz`/cap de 20 de qualquer forma).
+- Modal de motivo (clonado do padrão de `gestor-nfce.tsx`) com contador
+  de caracteres (15-1000) e histórico das cartas já emitidas dentro do
+  mesmo modal, cada uma com botão de imprimir.
+- `frontend/src/utils/dacceFacsimile.ts` (novo) — fac-símile de 1 página
+  (sem leiaute legal obrigatório, confirmado via pesquisa — ver Context
+  do plano), reaproveitando o mesmo `printFullHtml`/`fetchEmpresaHeader`
+  do fluxo de DANFE.
+- Modo Didático adicionado à tela inteira de passagem (não tinha antes)
+  — ícone "i" no header + `AjudaPedidoModal` com 5 itens (DANFE/
+  Criticar/Cancelar/Excluir/Carta de Correção).
+
+**Verificação feita**: suíte completa (`pytest tests/unit -q`) 2372
+testes, só o flake pré-existente de sempre; `tsc --noEmit` limpo (só os
+12 erros de baseline, nenhum novo); bundle web reconstruído e confirmado
+buildando com os testIDs novos presentes.
+
+**Nada testado ao vivo contra o SEFAZ real** — mesma cautela de sempre
+(ARGEN TESTE tem certificado de produção real, nunca usar sem
+confirmação explícita). Recomendações antes de considerar isto pronto
+pra produção: (1) validar o texto do `xCondUso`/schema contra o PDF
+oficial da NT 2011.003 (não carregou via fetch nesta sessão, só
+cross-checado num guia técnico secundário); (2) testar a emissão real
+contra um ambiente de homologação SEFAZ antes de emitir em produção;
+(3) clicar a tela de verdade no navegador — nada disso foi verificado
+visualmente.
+
+## 🔴 FRENTE ATIVA AGORA (3) — Simplificações do Ecossistema Fiscal
+
+**Pedido do usuário 2026-08-22** ("vamos fazer as Simplificações dentro
+do que já existe"), a partir de um levantamento de 5 itens (ver resposta
+completa dada ao usuário, não repetida aqui). Escopo real de cada um,
+depois de investigar a fonte:
+
+1. ✅ **NFC-e `modFrete` hardcoded em 9** — `DAO_NFE.vb:2613-2745/5436-
+   5476` (ramo `ModeloNota="65"`). Diferente da NF-e (seletor de tipo via
+   `paga_frete`), o frete da NFC-e é um item de SERVIÇO na própria
+   comanda, identificado por `controle_aux.SERVICO_FRETE_NFCE` (já
+   exposto em Controle do Sistema, nunca lido na emissão) — a soma dele
+   vira `<vFrete>` e decide `modFrete=1` (com `<transporta>` resolvido
+   via `controle_aux.TRANSPORTADOR_FRETE_NFCE` → `fornecedor`/
+   `fornecedor_end`) ou `9`. **Corrigido**: `comanda_service.
+   _emitir_nfce_comanda_sync` resolve `frete_valor`/`transportador`;
+   `nfe_emissao_service._montar_transp_nfce_xml` monta o XML. 6 testes
+   novos. Schema (`SERVICO_FRETE_NFCE`/`TRANSPORTADOR_FRETE_NFCE`)
+   confirmado real ao vivo (ARGEN TESTE, ambos vazios/0 nessa
+   instalação) — caminho "com frete" só validado por teste unitário, não
+   ao vivo.
+2. ⏸️ **NF-e/NFS-e Agrupada — rastreabilidade item↔comanda só a nível de
+   comanda** — **NÃO é bug**, decisão explícita do usuário 2026-08-19
+   (rejeitou melhorar isso, replicando de propósito a perda do legado).
+   Excluído desta varredura.
+3. ✅ **DANFE sem bloco Transportador/Volumes** — achado real: `nf_aux`
+   já capturava `cnpj_transportadora`/`placa`/`motorista`/`volumes`/
+   `especie_volume`/`peso_bruto`/`peso_liquido` desde a Fase 1 de NF-e
+   Avulsa (2026-08-20), mas nada disso nunca chegava ao XML transmitido
+   nem à `n_fiscal` promovida — ficava só armazenado, sem uso real.
+   **Corrigido**: `nfe_emissao_service._montar_transp_completo_nfe_xml`
+   monta `<transporta>`/`<veicTransp>`/`<vol>` (todos campos opcionais no
+   XSD); `nfe_avulsa_service.py` resolve os dados do rascunho + busca
+   nome/IE do transportador em `fornecedor` (best-effort, por CNPJ) e
+   carrega tudo pra `n_fiscal` na promoção (7 colunas novas no INSERT,
+   contadas manualmente — 30 placeholders = 30 params, mesmo cuidado do
+   incidente de Recebimento); `parse_nfe_xml_para_exibicao` extrai
+   `mod_frete`/`transportador`/`veiculo`/`volumes`; `danfeFacsimile.ts`
+   ganhou a seção "TRANSPORTADOR/VOLUMES TRANSPORTADOS". **NF-e Agrupada
+   não captura esses campos ainda** (sem UI própria) — DANFE mostra "-"
+   pra ela, comportamento correto dado o que existe hoje. 12 testes
+   novos (6 no builder de XML, 3 no parser, 2 no wiring de
+   `nfe_avulsa_service.py`, 1 já corrigido/reaproveitado). PIS/IPI/ICMS
+   detalhado por item continua fora (`-`), não fazia parte deste item.
+4. ✅ **NF-e Avulsa — PIS/COFINS cruzado contra `SetaPisCofins`/
+   `LancaPisCofins`** (`NFe\frmtranfe.frm:8811/8311`, chamadas por
+   `Calcula()` — a rotina que roda na emissão, não `JogaV()` que só
+   sugere na tela) — **CORRIGIDO, achado GRANDE e real, não teórico**.
+   A versão anterior só implementava o caminho `taxas.CST_TRIB_PIS`/
+   `ALQT_TRIB_PIS` ("Caminho A"), tratando `CST_TRIB_PIS` vazio como
+   CST 07 (Isenta)/R$0,00. O legado, quando esse campo vem vazio, cai
+   INTEIRO pro cadastro do produto/serviço (`pecas`/`servicos`.
+   `tributacao_pis`/`perc_valor_pis`/`tributacao_cofins`/
+   `perc_valor_cofins`, "Caminho B") — a escolha é `Trim(TaxaCstPis)<>""
+   And Trim(TaxaCstCofins)<>""`, os DOIS precisam estar preenchidos pro
+   Caminho A, não é por-imposto. **Confirmado ao vivo contra ARGEN
+   TESTE que Caminho B é o único caminho real nessa instalação**:
+   82/82 linhas de `taxas` têm `CST_TRIB_PIS` vazio, e 2670/2681
+   produtos têm valor real de PIS/COFINS só no cadastro do produto
+   (`tributacao_pis=99`/`perc_valor_pis=0.30%` — "Outras Operações",
+   regime não-cumulativo padrão). **Sem este fix, toda NF-e Avulsa
+   emitida nesta instalação sairia com PIS/COFINS zerado e CST errado
+   em TODO item** — o achado mais sério de toda a rodada de
+   "Simplificações", com impacto financeiro/fiscal real, não só
+   cosmético. Caminho B também aplica `taxas.reducao_base_pis_cofins`
+   (`ReducaoPisCofins`) reduzindo a base antes do cálculo. **Divergência
+   deliberada da fonte, não replicação 1:1**: o VB6 usa uma variável
+   `basepiscofins` compartilhada entre PIS e COFINS — zerar a base do
+   PIS (aliquota 0) também zera a do COFINS por efeito colateral de
+   reuso de variável, sem nenhuma razão tributária (nenhuma legislação
+   liga "PIS a 0%" a "COFINS também zera") — replicado aqui como 2
+   cálculos independentes (ver "Não replicar truques VB6" no
+   CLAUDE.md). `_resolver_item_produto_sync` estendida com os 4 campos
+   novos (via `pecas`/`servicos`, mesma cascata já usada). 7 testes
+   novos, unitários e diretos na função pura. Nada testado ao vivo além
+   da confirmação de schema/dados reais.
+5. ⛔ **IBS/CBS — Imposto Seletivo sem alíquota/legislação definida** —
+   bloqueado por definição, não é gap de implementação (regra de
+   Kelvin: nunca inventar alíquota sem fonte oficial). Nada a fazer até
+   existir legislação/nota técnica confirmável.
+
+**Suíte completa depois dos itens 1+3+4: 2347 testes passando** (mesmo
+flake pré-existente de sempre). Restam só os itens 2 (não é bug) e 5
+(bloqueado por legislação) — nenhum trabalho pendente real nesta lista.
+
+Suíte completa depois dos itens 1+3: **2340 testes passando** (mesmo
+flake pré-existente de sempre). Nada testado ao vivo além da checagem de
+schema (`SERVICO_FRETE_NFCE`/`TRANSPORTADOR_FRETE_NFCE` confirmados reais
+mas sem valor configurado em ARGEN TESTE) — recomendar configurar um
+transportador de teste e emitir uma NFC-e/NF-e real com frete antes de
+confiar em produção.
+
+## 🔴 FRENTE ATIVA AGORA — Reauditoria do Ecossistema Fiscal + Gestor de Devolução (CONCLUÍDA 2026-08-21, ver seção "Status" abaixo)
+
+**Registrado 2026-08-21, user-directed, explicitamente pra handoff entre
+sessões/usuários** ("gravar essa nova tarefa para passar para outra
+seção com outro usuário"). Ler esta subseção inteira antes de continuar
+— é o ponto exato onde o trabalho parou.
+
+**Motivo**: no mesmo dia, implementando "Recebimento de Mercadoria",
+2 bugs reais escaparam da análise original (ver "Recebimento de
+Mercadoria" mais abaixo pro detalhe completo): um INSERT SQL com
+contagem de coluna≠placeholder, e uma regra de negócio real
+(`politica_preco`/`Altera_preco_venda_tela`) documentada corretamente no
+achado mas só metade implementada, silenciosamente — só achada por
+pergunta direta do usuário. Isso levou a uma nova regra `[GLOBAL]` em
+CLAUDE.md ("Toda ramificação condicional da fonte VB6 tem que ser
+rastreada até a raiz") e à perda de confiança do usuário na qualidade da
+análise já feita em todo o pacote fiscal: **"não estou confiando na
+análise realizada pela equipe Kontacto. Por isso vamos fazer uma nova
+análise em todo ecossistema fiscal, incluindo o gestor de devolução."**
+
+**Escopo da reauditoria** — reler cada módulo abaixo contra sua fonte
+VB6 real (não contra o resumo já escrito em PENDENCIAS.md/memória),
+aplicando o checklist "Regras 1-4" da nova seção `[GLOBAL]` (resolver
+toda variável de controle até a origem, cobrir todo caminho documentado,
+sinal de alerta em forks quase-espelhados, auditoria achado-por-achado
+contra o código real):
+
+1. ✅ **Gestor de Devolução** — `Geral\FrmManDev.frm` × `backend/services/devolucao_service.py`. **CONCLUÍDO 2026-08-21**, 2 achados reais corrigidos (validação de cliente do Vale + Data Final no futuro) — ver "Gestor de Devolução" > "Reauditoria 2026-08-21" mais abaixo pro detalhe completo.
+2. ✅ **Motor de emissão NF-e modelo 55** — `Geral\ModNF.bas` (`GravaNFE`, linha 7468+) × `backend/services/nfe_emissao_service.py` + `ibs_cbs_service.py`. **Revisado 2026-08-21** (passe mais leve — já tinha passado por 2 rodadas de correção real esta semana: ordem IBS/CBS antes de emitir, `ambiente_nfe`/contingência conectados). Achado único, baixo risco: `GravaNFE` só grava `n_fiscal_itens` quando `Tipo_Mov <> "E04" And Tipo_Mov <> "S04"` (`ModNF.bas:7568` — E04/S04 = "Entrada/Saída Oficina", movimentação física de peças, não fluxo de venda/NFe) — **não aplicável** aos caminhos atuais (`nfe_avulsa_service.py`/`nfe_agrupada_service.py`/emissão de Comanda nunca chamam com esses `tipo_mov`), registrado só por completude. Nenhum outro branch condicionado a `controle`/`controle_aux`/`Dados_Controle_Configuracao` encontrado dentro de `GravaNFE` além do já conhecido (`tipo_mov.transf_livro/transf_pagar/transf_contabil`, já portado). Não lido linha-a-linha 100% da função (7468-~8000) por tempo — se retomado, ler o restante (blocos `Imprime_NFE`/`TipoSai`, linhas 7786/7990).
+3. ✅ **NF-e Avulsa ("Gerar NFe")** — `NFe\frmtranfe.frm` × `backend/services/nfe_avulsa_service.py`. **CONCLUÍDO 2026-08-21** (passe focado em config-gates, não releitura 100% das 9009 linhas — já tinha passado por 2 rodadas de rastreio profundo em sessões anteriores). 1 achado real corrigido: `controle.soma_iss` (`CmdOk_Click`, `frmtranfe.frm:5612-5615`) zera ISS de TODO item quando desligado — "If Not Soma_Iss Then Camp(13)=0: Camp(12)=0" — nunca checado em `nfe_avulsa_service.py`, corrigido em `_save_itens_rascunho_sync` (reforçado no servidor). 2 testes novos.
+4. ✅ **NF-e Agrupada ("Gerar NFe Comanda")** — `NFe\FrmTraImpNFE.frm` + `Geral\FrmSelComandas.frm` × `backend/services/nfe_agrupada_service.py`. **CORRIGIDO 2026-08-21, mesmo dia, decisão de Leandro.** Achado original: item de Serviço numa comanda agrupada era SILENCIOSAMENTE excluído da NF-e (`INNER JOIN` só contra `pecas`), sem aviso, sem gerar NFS-e alternativa. Perguntado o que fazer, Leandro respondeu direto: "na tela existem duas funcionalidades completamente distintas e independentes: 1) emitir NFe dos produtos, 2) emitir NFSe dos serviços — o usuário escolhe a ação que ele quer: nenhuma / só produto / só serviço / produto e serviço." **Implementado**: `_emitir_nfse_agrupada_sync` (nova, generaliza `comanda_service._emitir_nfse_comanda_sync` — antes só 1 comanda — pro mesmo agrupamento de várias comandas já usado por NF-e, reaproveitando `nfse_emissao_service.emitir_nfse_sync`) + `_emitir_agrupado_sync` (orquestrador: chama NF-e e/ou NFS-e conforme `emitir_nfe`/`emitir_nfse` do request, cada uma em transação PRÓPRIA — uma falhar não desfaz a outra já transmitida). Gate de "já agrupada" (`_list_comandas_agrupaveis_sync`/`comanda_nf`) deixou de ser genérico e virou POR TIPO (`tipo=3` NF-e / `tipo=2` NFS-e) — uma comanda com NF-e já emitida ainda pode entrar numa NFS-e depois, e vice-versa. Tela (`nfe-agrupada.tsx`) ganhou 2 checkboxes independentes ("Emitir NF-e de Produtos"/"Emitir NFS-e de Serviços") substituindo o botão único; modal de resultado mostra os 2 documentos quando ambos emitidos. 14 testes novos (`_emitir_nfse_agrupada_sync` + orquestrador, incl. sucesso parcial). Ver docstring de `nfe_agrupada_service.py` pro racional completo. **Ainda sem tratamento de ISS/`base_iss`/`valor_iss` na NFS-e agrupada além do que `nfse_emissao_service.emitir_nfse_sync` já fazia pra comanda única** (mesma simplificação "uma DPS = um serviço principal" herdada) — não investigado se precisa de mais.
+
+**Testado ao vivo 2026-08-22 (parcial, só leitura) contra ARGEN TESTE, achou e corrigiu 1 bug real**: `_list_comandas_agrupaveis_sync` usava `EXISTS(SELECT ...) AS coluna` direto no SELECT — sintaxe **inválida** no SQL Server ("Incorrect syntax near EXISTS"; `EXISTS` só é predicado válido em WHERE/HAVING/CASE, nunca projetável direto como coluna). Esse padrão já existia ANTES desta rodada (era assim desde a implementação original, nunca tinha sido aberto no navegador nem testado ao vivo) — os 3 EXISTS originais (`tem_nfce`/`ja_agrupada`/`tem_item_produto`) e os 2 novos desta rodada (`ja_tem_nfe`/`ja_tem_nfse`/`tem_item_servico`) tinham o MESMO problema. Corrigido pra `CASE WHEN EXISTS(...) THEN 1 ELSE 0 END AS coluna` nos 5. Reconfirmado ao vivo depois da correção — inclusive achou uma comanda real (8774, cliente 2008) com NFS-e antiga já emitida, detectada corretamente pelo `ja_tem_nfse`. **A emissão de verdade (`_emitir_agrupado_sync`) NÃO foi testada** — ARGEN TESTE está com `controle_aux.ambiente_nfe=1` (PRODUÇÃO real, não homologação) e tem certificado digital válido carregado; rodar a emissão de verdade transmitiria um documento fiscal REAL ao SEFAZ. Perguntado, o usuário escolheu não arriscar — parar na confirmação de leitura. Testar a emissão em si fica pendente (precisa mudar pra homologação primeiro, ou autorização explícita pra gerar documento real).
+5. ✅ **Gestor NFCe** (+ Contingência/Inutilização NFCe embutidas) — `Geral\FrmTraNFC.frm` + `Geral\FrmConNFC.frm` + `Geral\FrmTraINF.frm` (lado NFCe) × `backend/services/gestor_nfce_service.py` + `backend/services/contingencia_nfce_service.py`. **Revisado 2026-08-21** (passe focado, não releitura 100% das 2184 linhas). Achado positivo: a validação "motivo da Inutilização precisa ter no mínimo 15 caracteres" (`FrmTraNFC.frm:1529`) já estava corretamente implementada (`gestor_nfce_service.py:447-448`) — nenhum gap encontrado nesta rodada. Módulo já tinha passado por correção real em sessão anterior (bug de schema em `inutilizacao_nfe`/`contingencia_nfce`).
+6. ✅ **Notas Fiscais — Manutenção** (CUIDADO: `FrmManRec.frm`, diferente de `FrmtraRec.frm`/Recebimento) × `backend/services/notas_fiscais_service.py`. **CONCLUÍDO 2026-08-21**, 2 achados reais corrigidos: (1) "Data de Movimento deve ser posterior ao fechamento do Livro Fiscal/Contabilidade" (`Valida_Data`, `:9162-9174`) nunca era checado; (2) cancelar uma NF que veio de Recebimento com baixa de Pedido de Compra nunca revertia `pedido_itens.qtd_recebida`/reabria o pedido (`"'refaz pedidos de compra"`, `:5461-5474`) — achado direto conectado ao trabalho de Recebimento de hoje mais cedo. 4 testes novos.
+7. ✅ **Contingência/Inutilização NFe** — `Geral\FrmConNFe.frm` (sem nenhuma referência a `controle`/`controle_aux` — confirma o achado antigo "simples CRUD, sem chamada de DLL") + `Geral\FrmTraINF.frm` (lado NFe) × `backend/services/contingencia_nfe_service.py` + `backend/services/inutilizacao_nfe_service.py`. **CONCLUÍDO 2026-08-21** — fechou uma pendência de 3 sessões atrás: `Pos_Sistema` (`FrmTraINF.frm:246`, "global usado num gate inicial, não rastreado até `Mdl_Proc.bas` ainda") **rastreado até a raiz agora**: é derivado de `controle.situacao` + `Controle_validade`/`TestaValidade` (`Mdl_Proc.bas:4504-4514`) — o mesmo mecanismo de licença/Chave de Renovação do Sistema já analisado em [[project_chave_renovacao_analise]] (memória), que está deliberadamente adiado até existir Contas a Receber geral. **Não é um gap novo** — é um gate de sistema (bloqueia praticamente qualquer ação se a licença estiver inválida), não específico de Inutilização/Contingência NFe, e já coberto pela decisão de adiamento existente. Nenhum outro achado de ramificação condicionada a config encontrado nos 2 forms.
+8. ✅ **Gestor NFSe + emissão NFS-e** — `Geral\FrmManNSeSefin.frm` × `backend/services/gestor_nfse_service.py` + `backend/services/nfse_emissao_service.py` + `comanda_service.py::_emitir_nfse_comanda_sync`. **CONCLUÍDO 2026-08-21.** `FrmManNSeSefin.frm` (tela de listagem/consulta) só tem 1 referência a `controle`, sem ramificação condicionada — confirma que é mesmo uma tela simples. A emissão em si (`_emitir_nfse_comanda_sync`) não é um port linha-a-linha de um `.frm` específico (Fase 3, desenhada contra o padrão DPS Nacional/Sefin diretamente) — módulo `Sefin_Nacional` confirmado corretamente gateado em todos os 3 arquivos Python. Nenhum achado real novo nesta rodada.
+
+   **✅ TESTADO AO VIVO E AUTORIZADO 2026-08-23** contra o ADN real (Sefin
+   Nacional) — ver "Estado Atual do Projeto" (continuação final da 8ª
+   rodada) pro relatório completo dos 6 bugs/gaps corrigidos nesta rodada
+   (cTribMun 3 dígitos não 10, cNBS real via tabela oficial AnexoVIII,
+   opSimpNac invertido, regApTribSN faltando, totTrib/pTotTribSN pra
+   ME/EPP, numeração colidindo). **Resultado**: NFS-e real autorizada,
+   chave `33045572214341395000109000000000017426084042427390`, nNFSe
+   174, cStat 100. `cTribMun`/`cNBS` foram resolvidos nesse momento via um
+   mapa `_MAPA_TRIBUTACAO_CONHECIDO` só pra `cod_lista_servico="140101"`
+   (pesquisado em fonte oficial), como mecanismo provisório.
+
+   **✅ CORRIGIDO 2026-08-24 — cadastro real, não mais mapa hardcoded.**
+   Rastreando `Backon.Data/DAO_NFE.vb` até a raiz (pedido do usuário:
+   "Cadastro real de cTribMun/cNBS por serviço"), achado que os dois já
+   são cadastros REAIS do legado, existentes e já editáveis neste app,
+   só nunca ligados à emissão:
+   - `cTribMun` é **por serviço** — `servicos.cod_servico_municipio`
+     (`DAO_NFE.vb:1140/1216`, sobrescreve incondicionalmente um valor-
+     sugestão que viria da tabela `tributacao_municipio`/`ctribmun`, real
+     e já carregada com 1071 linhas nesta instalação — sugestão
+     automática por `cod_lista_servico` fica de fora desta rodada, ver
+     "Fora de escopo" abaixo). Já era um campo editável em Cadastro de
+     Serviços (aba Fiscal, "Código Complementar Municipal") — confirmado
+     ao vivo contra ARGEN TESTE: só 18/264 serviços têm esse cadastro
+     preenchido hoje (ex.: S200 "VISITA TECNIA" = `"015"`, "Manutenção de
+     aparelhos" — mais preciso que o `"032"` genérico usado no teste ao
+     vivo de 08/23).
+   - `cNBS` **NÃO é por serviço** (correção de design da 1ª tentativa) —
+     é um campo **único por EMPRESA**, `controle_aux.codigo_nbs`
+     (`DAO_NFE.vb:625`), já editável em Controle do Sistema (aba Fiscal).
+     Confirmado `NULL` no ARGEN TESTE ao vivo (2026-08-24) — **não
+     populado por esta sessão** (escrever dado de produção sem pedido
+     explícito seria exatamente o tipo de ação a evitar); a próxima
+     tentativa de emissão real de NFS-e contra essa conexão vai BLOQUEAR
+     com a mensagem amigável até alguém preencher via Controle do
+     Sistema.
+   - Bônus achado no mesmo rastreio: `pTotTribSN` (percentual da Lei da
+     Transparência) trocou a estimativa fixa de 6% (decisão só-pra-
+     validar-o-mecanismo de 08/23) por `controle.simples_servico`
+     (`DAO_NFE.vb:585-587`) — também um cadastro real, já editável
+     (label "Alíquota Simples Nacional"), confirmado 13,80% no ARGEN
+     TESTE, não uma estimativa.
+   - **Comportamento de bloqueio, confirmado com o usuário
+     (`AskUserQuestion`, "Bloquear com mensagem clara")**: emissão de
+     NFS-e falha com mensagem amigável ("Cadastro de Serviços > aba
+     Fiscal.../"Controle do Sistema > aba Fiscal...") quando qualquer um
+     dos dois estiver vazio — nunca inventa/pré-popula um valor.
+   - Ambos os campos de UI (Cadastro de Serviços, Controle do Sistema)
+     ganharam texto de ajuda (Modo Didático) explicando o papel de cada
+     um e que são obrigatórios pra emitir NFS-e.
+   - `backend/services/nfse_emissao_service.py` (`_montar_xml_dps`/
+     `emitir_nfse_sync`), `comanda_service.py::_emitir_nfse_comanda_sync`
+     e `nfe_agrupada_service.py::_emitir_nfse_agrupada_sync` atualizados;
+     17 testes novos/reescritos em `test_nfse_emissao_service.py` +
+     2 testes novos de wiring em `test_comanda_service.py`/
+     `test_nfe_agrupada_service.py`. **Fora de escopo desta rodada**
+     (registrado, não esquecido): sugestão automática de `cTribMun` via
+     `tributacao_municipio` quando o serviço ainda não tem o campo
+     preenchido (tabela real já existe, só não é consultada); o grupo
+     IBS/CBS completo de verdade (`TCRTCInfoIBSCBS`, filho de `infDPS`) —
+     a NFS-e emitida ainda **não informa IBS/CBS nenhum**.
+9. **Recebimento de Mercadoria** — já reauditado nesta mesma rodada (Fase 1+2, achou os 2 bugs que motivaram tudo isso) — não repetir, só reconfirmar se mexido de novo por outro motivo.
+
+**Status: CONCLUÍDA (rastreio manual, sem agentes — todos os 8 agentes
+Explore originais falharam por limite de sessão, abandonados em favor de
+Bash/Grep/Read direto, mesmo método já usado com sucesso no rastreio de
+Recebimento).** Os 8 módulos + Recebimento foram revisados um a um contra
+a fonte VB6 real, achado-por-achado, aplicando a regra `[GLOBAL]` nova
+("rastrear ramificação condicional até a raiz"). Resultado final: **8
+bugs reais novos encontrados e corrigidos** nesta rodada (6 da reauditoria
+em si, mais o achado grande de NF-e Agrupada/Serviço resolvido no mesmo
+dia com decisão de Leandro, mais o achado de Frete por Conta/`modFrete`
+achado pós-fechamento — ver seção própria mais abaixo), além dos 2 que
+motivaram a reauditoria em Recebimento = **10 bugs reais no total nesta
+rodada inteira**. Nenhum achado grande fica em aberto. Suíte de testes
+unitários completa passando (2328 testes, 1 flake pré-existente
+não-relacionado em `test_cnab_itau_service.py`). **Nenhum dos módulos foi
+testado ao vivo nesta rodada** (exceto Recebimento e a confirmação de
+schema de Frete/NFS-e agrupada, já feitas) — recomendar teste ao vivo
+contra ARGEN TESTE antes de considerar cada correção definitivamente
+validada.
+
+**Resumo dos 6 bugs corrigidos nesta reauditoria** (além dos 2 de
+Recebimento já documentados na seção própria mais abaixo):
+1. **Gestor de Devolução** — Vale de Devolução podia ser emitido pra
+   qualquer cliente, não só o da venda original ou a própria empresa
+   (`FrmManDev.frm:1537-1540`, validação nunca implementada) — corrigido
+   em `devolucao_service.py` (`_cliente_permitido_para_vale_sync`).
+2. **Gestor de Devolução** — filtro de período aceitava Data Final no
+   futuro sem bloquear (`Critica`, `FrmManDev.frm:1054-1058`) — corrigido.
+3. **NF-e Avulsa** — `controle.soma_iss` desligado devia zerar ISS de
+   todo item (`frmtranfe.frm:5612-5615`), nunca era checado — corrigido em
+   `nfe_avulsa_service.py::_save_itens_rascunho_sync`.
+4. **Notas Fiscais — Manutenção** — nenhuma validação de data de
+   movimento vs. fechamento de Livro Fiscal/Contabilidade — corrigido em
+   `notas_fiscais_service.py::_save_cabecalho_sync`.
+5. **Notas Fiscais — Manutenção** — cancelar uma NF gerada a partir de um
+   Recebimento não revertia a baixa no Pedido de Compra (item ficava
+   permanentemente marcado como recebido mesmo com a NF cancelada) —
+   corrigido em `notas_fiscais_service.py::_cancelar_sync`.
+
+**Achado grande do item 4 acima — CORRIGIDO 2026-08-21, mesmo dia.**
+Decisão de Leandro (não nenhuma das 3 alternativas propostas): a tela tem
+2 ações fiscais independentes (Emitir NF-e de Produtos / Emitir NFS-e de
+Serviços), usuário escolhe nenhuma/uma/outra/as duas. Ver item 4 do
+checklist acima pro detalhe completo da implementação.
+
+**7º bug real, achado DEPOIS do fechamento inicial desta reauditoria
+(2026-08-21, mesmo dia)** — usuário contestou diretamente uma pergunta de
+esclarecimento sobre o seletor de "Frete por Conta" ("o legado grava sim.
+o campo é usado sim. e todos os tipos de frete funcionam sim"), forçando
+um rastreio que a análise original tinha resumido errado (exatamente o
+padrão que a regra `[GLOBAL]` nova existe pra pegar). `_montar_xml_nfe`
+(modelo 55, `nfe_emissao_service.py`) tinha `<modFrete>9</modFrete>`
+cravado sempre. Fonte real: `n_fiscal.paga_frete` é gravado de verdade
+(`Grava_Frete`, `ModNF.bas`/`ModNFNfe.bas`, chamado por
+`FrmTraImpNFE.frm` via o seletor `opFrete` Emitente/Destinatário) e lido
+de verdade pelo motor compartilhado de emissão do legado
+(`DAO_NFE.vb:5478-5491`) — tabela com os 6 códigos reais de `<modFrete>`
+(0=Emitente/CIF, 1=Destinatário/FOB, 2=Terceiros, 3=Próprio Remetente,
+4=Próprio Destinatário, 9=Sem Transporte). **Corrigido**:
+`_resolver_mod_frete` (`nfe_emissao_service.py`) replica essa tabela;
+`nf_aux.paga_frete` (coluna nova, `_ensure_nf_aux_paga_frete_col`,
+registrada em `schema_ensure.py`, aplicada e confirmada ao vivo contra
+ARGEN TESTE) + `n_fiscal.paga_frete` (já existia, confirmado ao vivo)
+persistem o valor nos dois lados (NF-e Avulsa e NF-e Agrupada); seletor
+"Frete por Conta" (`SelectField`, 6 opções) adicionado em `nfe-avulsa.tsx`
+(cabeçalho) e `nfe-agrupada.tsx` (barra de seleção, antes de emitir) +
+itens de Modo Didático correspondentes. 4 testes novos (mapeamento puro +
+wiring ponta-a-ponta nos 2 fluxos). **`frmtranfe.frm` (NF-e Avulsa) não
+tem esse seletor no legado** — sem valor informado, o comportamento
+correto é `modFrete=0` (Emitente), não 9 (era esse o bug). O hardcode do
+modelo 65/NFC-e (`_montar_xml_nfce`, outra regra —
+`FreteNFCeValor > 0 → 1, senão 9`, `DAO_NFE.vb:5438-5476`) **não foi
+tocado nesta rodada** — fica registrado como possível gap futuro, não
+investigado ainda. Nada testado ao vivo (só schema/migração confirmados
+contra ARGEN TESTE) — recomendar emitir uma NF-e de teste real com cada
+opção de frete antes de confiar em produção.
+
+## 🔴 FRENTE ATIVA AGORA (2) — Varredura de Design/UI fora do padrão
+
+**Registrado no mesmo pedido, mesmo dia** ("aproveite para corrigir
+telas no âmbito de design. encontrei alguns filtros fora do padrão").
+Usuário relatou (visualmente, sem apontar telas específicas ainda)
+3 categorias de violação de padrão já `[GLOBAL]` neste CLAUDE.md:
+
+1. **"Filtro de Cliente e produto sem pesquisa"** — viola "Campos
+   provenientes de identidade precisam de mecanismo de busca"
+   (`[GLOBAL]`, CLAUDE.md) — campo de Cliente/Produto usado como FILTRO
+   de tela (não só formulário de edição) sem `ClientSearchModal`/
+   `ProdutoSearchModal`.
+2. **"Filtros sem accordion"** — viola o padrão já estabelecido no
+   Painel de Pedidos (`AccordionSection` envolvendo busca+chips de
+   filtro, ver "Painel de Pedidos" mais abaixo) — nem toda tela de lista
+   com filtros usa esse padrão ainda.
+3. **"Período de datas sem data atual"** — provavelmente relacionado a
+   "Filtro de período — data inicial sempre repete na final" (`[GLOBAL]`
+   já existente) e/ou falta de valor padrão (hoje) ao abrir a tela pela
+   primeira vez — precisa investigar tela por tela pra confirmar o que
+   exatamente falta (o rótulo do usuário foi genérico, "e etc.").
+
+**Levantamento parcial já feito** (grep, não uma lista final validada —
+tem falso-positivo, cada item precisa ser aberto e confirmado antes de
+mexer): busca por telas em `frontend/app/*.tsx` que mencionam "cliente"
+mas NÃO importam `ClientSearchModal` devolveu ~60 arquivos — a MAIORIA é
+falso-positivo (telas que só têm uma referência incidental a "cliente"
+em texto/comentário, não um campo de filtro real, ex.: `funcoes.tsx`,
+`situacao.tsx`, `regioes.tsx`, tabelas auxiliares genéricas). Candidatos
+que MERECEM checagem real (têm cara de tela com filtro de
+cliente/produto que deveria ter busca): `app/relatorio-descontos.tsx`,
+`app/relatorio-itens-pedido.tsx`, `app/relatorio-ranking-vendas.tsx`,
+`app/relatorio-apuracao-vendas.tsx`, `app/relatorio-descontos-concedidos.tsx`,
+`app/relatorio-os.tsx`/`relatorio-os-descontos.tsx`/`relatorio-busca-os.tsx`/
+`relatorio-custo-os.tsx`/`relatorio-resumo-atendimento.tsx`, `app/pedido-lista.tsx`,
+`app/os-lista.tsx`, `app/gestor-comandas.tsx`, `app/atendimento-lista.tsx`,
+`app/bordero-cilindros.tsx`, `app/mala-direta.tsx`, `app/projetos.tsx`,
+`app/gestor-nfce.tsx`, `app/gestor-nfse.tsx`, `app/recebimento.tsx`
+(cabeçalho já usa `FornecedorSearchModal`, mas conferir se tem algum
+outro campo de filtro cru). Ainda **não foi feita** a checagem
+equivalente pra "filtros sem accordion" nem "período sem data atual" —
+próximo passo ao retomar.
+
+**Item 1 (filtro de Cliente/Produto sem pesquisa) — CONCLUÍDO 2026-08-22.**
+Confirmado via agente de pesquisa (leitura real de cada candidato, não só
+grep) — 7 violações reais, todas de Cliente (nenhuma de Produto nesses
+20 candidatos): `relatorio-descontos.tsx`, `relatorio-descontos-
+concedidos.tsx`, `relatorio-os-descontos.tsx`, `relatorio-resumo-
+atendimento.tsx`, `gestor-comandas.tsx`, `gestor-nfce.tsx`,
+`gestor-nfse.tsx`. Os outros 13 candidatos eram falso-positivo (seletor
+de agrupamento/categoria via `SelectField`, busca livre combinada
+"cliente ou nº do pedido" já intencional, ou já corretos).
+
+**Decisão de design**: em vez de trocar o campo de texto livre por um
+seletor de "cliente único" (mudaria o contrato do backend em telas que só
+suportam `cliente_nome` LIKE, não `cod_cliente` exato), o campo de texto
+FOI MANTIDO como estava (preserva "nome contém"/busca livre já existente)
+e ganhou um ícone de busca ao lado (`IconButtonWithTooltip`, mesmo padrão
+de "Padrão de Campo Cliente") que abre `ClientSearchModal` — ao escolher,
+preenche o campo com o nome (telas de "nome contém") ou código (telas de
+"Cód. Cliente") do cliente encontrado. Zero mudança de backend. Extraído
+hook compartilhado `frontend/src/hooks/useClienteSearchModal.ts`
+(open/term/loading/results/openModal/closeModal com debounce de 300ms) —
+evita repetir o boilerplate 7 vezes. `tsc --noEmit` limpo (só o erro
+pré-existente de `relatorio-descontos.tsx:365`, já catalogado antes desta
+rodada). Bundle web confirmado buildando sem erro (Metro), todos os 7
+testIDs novos presentes no bundle compilado — não testado clicando no
+navegador (só confirmação de build).
+
+**Item 3 (período de datas sem "data atual") — CONCLUÍDO 2026-08-22.**
+Confirmado via agente de pesquisa (leu o `onChange` real de todo par
+De/Até fora da lista já corrigida em 2026-07-18, 49 telas): a regra
+`[GLOBAL]` de cópia data-inicial→final **está sendo seguida em 100% das
+telas** — nenhuma regressão, nenhuma tela nova esqueceu a regra. Achado
+secundário, menor: `app/curva-abc.tsx` (2 pares, seções "Gerar Curva
+ABC"/"Reprocessar Estoques") e `app/relatorio-listagem-clientes.tsx`
+nasciam com datas em branco, destoando dos 15 relatórios-irmãos que já
+usam `firstDayOfMonthISO()`/`todayISO()`. **Corrigido só `curva-abc.tsx`**
+(os 2 pares agora nascem com "últimos 12 meses" pré-selecionado, mesmo
+padrão do chip "12 meses" já existente na tela — 12 meses = ano cheio,
+evita viés de sazonalidade numa Curva ABC); `relatorio-listagem-
+clientes.tsx` não foi tocado nesta rodada (fica registrado, prioridade
+baixa — é só o modo "por data" da tela que nasce em branco, o modo padrão
+não usa essas datas).
+
+**Item 2 (filtros sem AccordionSection) — CONCLUÍDO 2026-08-22.** Agente
+de pesquisa confirmou 24 candidatos (API do `AccordionSection` lida,
+grep por `styles.filters`/filtro substancial + leitura real de cada
+arquivo) — corrigidos os 22 arquivos reais (2 dos 24 eram duplicata de
+contagem: `devolucao.tsx` tem 2 blocos de filtro distintos, ambos
+corrigidos, contados como 1 arquivo): `relatorio-apuracao-vendas.tsx`,
+`relatorio-caixa.tsx`, `relatorio-caixa-analitico.tsx`,
+`relatorio-custo-os.tsx`, `relatorio-descontos.tsx`, `relatorio-
+descontos-concedidos.tsx`, `relatorio-inatividade-clientes.tsx`,
+`relatorio-itens-funcionario.tsx`, `relatorio-movimentacao-itens.tsx`,
+`relatorio-movimentacao-nivel.tsx`, `relatorio-os.tsx`, `relatorio-os-
+descontos.tsx`, `relatorio-ranking-vendas.tsx`, `relatorio-resumo-
+atendimento.tsx`, `relatorio-resumo-venda.tsx`, `relatorio-venda-nivel-
+funcionario.tsx`, `pedido-lista.tsx`, `notas-fiscais.tsx`, `taxas.tsx`,
+`gestao-compras-ressuprimento.tsx`, `devolucao.tsx` (2 blocos), `contatos.tsx`.
+Padrão aplicado uniformemente: `<AccordionSection title="Buscar e
+Filtrar" defaultExpanded testID="...">` envolvendo o conteúdo do filtro
+já existente, dentro do card/`WEB_FILTER_CARD` que já existia (não trocou
+o container, só envolveu o conteúdo) — `defaultExpanded` pra manter o
+comportamento atual (filtro visível ao abrir a tela), só ganhando o
+mecanismo de colapsar. `tsc --noEmit` final: **zero erros novos** (só os
+mesmos 12 erros pré-existentes de sempre, nenhum deles nos arquivos
+tocados). Bundle web reconstruído do zero, confirmado sem erro, todos os
+22 testIDs novos presentes.
+
+**Achados colaterais — CORRIGIDOS 2026-08-22 (rodada seguinte, a pedido
+do usuário: "seguir pros achados colaterais")**:
+- `relatorio-os.tsx`/`relatorio-os-descontos.tsx` usam `DateField`
+  (componente compartilhado mobile+web, não o `WebDateField` web-only —
+  no web ele já renderiza `<input type="date">` dentro de um wrapper com
+  chrome próprio, ícone e borda, então não tem o bug visual histórico de
+  `webDateInputStyle` cru). As duas telas já nasciam com período default
+  preenchido (1º dia do mês → hoje) — só faltava mesmo a regra `[GLOBAL]`
+  de cópia data-inicial→final no `onChange`. Adicionada nos 2 arquivos
+  (`onChange={(v) => { setDataIni(v); if (v) setDataFim(v); }}`).
+- `devolucao.tsx` — 2 campos de Cliente em texto livre sem busca (aba
+  "Buscar": `cliente`/`devolucao-cliente`; aba "Consulta":
+  `consultaCliente`/`devolucao-consulta-cliente`) ganharam ícone de busca
+  + `ClientSearchModal`, via 2 instâncias novas de `useClienteSearchModal`
+  (`clienteBuscaSearch`/`clienteConsultaSearch`) — o campo de Cliente do
+  fluxo de Vale (`clienteVale`) já tinha busca própria antes, não mexido.
+- `contatos.tsx` — campo de Cliente do FILTRO da lista (`fCliente`/
+  `filtro-cliente`) ganhou o mesmo tratamento (`filtroClienteSearch`). O
+  campo de Cliente do FORMULÁRIO (`cliente`/`contato-cliente`) já tinha
+  busca própria antes (`searchOpen`/`ClientSearchModal` já existente),
+  não mexido — só o filtro da lista estava com o gap.
+- `relatorio-listagem-clientes.tsx` — **investigado e decidido NÃO
+  aplicar o default de período** (diferente de `curva-abc.tsx`): os
+  campos De/Até só aparecem quando o modo de busca é "Data de Cadastro"
+  ou "Data de Nascimento" (1 de 6 modos alternativos — código/CNPJ/nome/
+  tipo são os outros 5, cada um com seu próprio campo). Deixar em branco
+  aqui significa "sem restrição de data" dentro daquele modo — mesma
+  semântica de "termo vazio = busca tudo" que os outros 5 modos já têm,
+  não é o mesmo bug de "relatório de período nasce sem intervalo" que
+  motivou o fix em `curva-abc.tsx`. Nenhuma mudança feita neste arquivo.
+- `tsc --noEmit` final: **zero erros novos** (mesmos 12 erros
+  pré-existentes de sempre, nenhum nos 4 arquivos tocados nesta rodada).
+  Não testado clicando no navegador de verdade.
+
+**Varredura de Design/UI — CONCLUÍDA 2026-08-22**, incluindo os achados
+colaterais. Nada testado clicando no navegador de verdade em nenhum item
+— só `tsc --noEmit` + bundle web reconstruído com sucesso + confirmação
+de testID presente no bundle compilado.
+
+---
+
+**Frente de trabalho anterior (concluída): Ecossistema Fiscal.** Nesta
+rodada (mesmo
 dia), implementado de ponta a ponta: motor de emissão NF-e modelo 55
 (`nfe_emissao_service.py`), Agrupar Comandas em NF-e ([[project_
 nfe_agrupada]] na memória), NF-e Avulsa/"Gerar NFe" ([[project_nfe_
 avulsa]]), hub de navegação "Gestor Fiscal" (Transações — reúne Gerar
-NFe Comanda/Gerar NFe/Gestor NFCe/Notas Fiscais), 3 módulos fiscais
-reais em Configurações > Módulos e Recursos (`emite_nfce`/`nfe_ws`/
-`emite_nfse`, tabela `controle_aux` — ver "Módulos NFCe/NFe/NFSe" mais
-abaixo pro mapeamento real, corrigido depois de um erro real no mesmo
-dia), e Contingência NFe (achou e corrigiu um bug real em Contingência
-NFCe de pé desde uma rodada anterior — coluna `id` que não existe na
-tabela real).
+NFe Comanda/Gerar NFe/Gestor NFCe/Notas Fiscais/Contingência NFe/
+Inutilização de Faixa NFe), 3 módulos fiscais reais em Configurações >
+Módulos e Recursos (`emite_nfce`/`nfe_ws`/`emite_nfse`, tabela
+`controle_aux` — ver "Módulos NFCe/NFe/NFSe" mais abaixo pro mapeamento
+real, corrigido depois de um erro real no mesmo dia), Contingência NFe
+(achou e corrigiu um bug real em Contingência NFCe de pé desde uma
+rodada anterior — coluna `id` que não existe na tabela real), Inutilização
+de Faixa NFe (mesmo achado de bug real se repetiu em `inutilizacao_nfe` —
+mesma causa raiz, DDL nunca batia com o schema real já existente no
+legado), **conexão de Contingência à emissão de NF-e** — `nfe_agrupada_
+service.py`/`nfe_avulsa_service.py` agora consultam contingência aberta
+antes de emitir (mesmo mecanismo já existente pra NFC-e), mais "Validar
+Contingência" equivalente pra NF-e (`contingencia_nfe_service.
+listar_pendentes`/`validar_pendentes`, ação nova na própria tela
+Contingência NFe), **IBS/CBS passou a ser calculado ANTES de emitir**
+em TODO o pacote de emissão modelo 55 (Agrupar Comandas + NF-e Avulsa,
+mesmo princípio já usado por NFC-e) — corrige um bug real de assinatura
+perdida em Agrupar Comandas (reescrevia `n_fiscal.xml` sem reassinar) e
+estende o mesmo princípio (confirmado pelo usuário: "IBS/CBS não é nada
+mais que um grupo dentro do XML, como qualquer outro") pra NF-e Avulsa,
+que antes gravava IBS/CBS só em colunas estruturadas locais sem embutir
+no XML transmitido, e **Ambiente NFe (Homologação/Produção) conectado
+de ponta a ponta** — `controle_aux.ambiente_nfe` (campo real do legado,
+"Módulos do Cliente" > aba Kontacto) agora é lido de verdade por TODO o
+pacote fiscal (emissão NFC-e/NF-e/NFS-e, cancelamento, inutilização,
+consulta de situação, validar contingência) através de um resolvedor
+único (`nfe_fiscal_common.resolver_tp_amb_sync`) — antes disso, tudo
+hardcodava produção, sem nenhuma forma de testar em homologação sem
+editar código (ver "Ambiente NFe / Danfe" mais abaixo pro detalhe
+completo), e **Gestor NFSe (Sefin Nacional/DPS)** — nova tela de
+listagem/consulta em cima da emissão de NFS-e já existente (Fase 3,
+`comanda_service.py::_emitir_nfse_comanda_sync`), migração de `Geral\
+FrmManNSeSefin.frm` só no lado padrão nacional (Sefin Nacional/DPS, já
+usado pela cidade do Rio de Janeiro — decisão explícita do usuário de
+focar nisso primeiro, não no RPS municipal/Ginfes por prefeitura, que
+segue sem implementar). Autocorreção real registrada durante esta
+rodada: cheguei a afirmar que a emissão nunca gravava na tabela `dps`
+(baseado num resumo do próprio PENDENCIAS.md) e perguntei ao usuário como
+retrofitar — reli o código completo de `_emitir_nfse_comanda_sync` e
+confirmei que o `INSERT INTO dps` **já existia** desde uma sessão
+anterior; a informação errada foi corrigida explicitamente pro usuário
+antes de prosseguir, e o escopo encolheu de "retrofit + tela" pra só
+"tela" (ver "Gestor NFSe" mais abaixo pro detalhe completo), e **DANFE
+NF-e (modelo 55, Retrato/Paisagem)** — primeiro gerador de documento
+fiscal real do sistema (`danfeFacsimile.ts::buildDanfeHtml` +
+`nfe_emissao_service.parse_nfe_xml_para_exibicao`, HTML + impressão via
+iframe, mesmo padrão já usado por `buildDanfceHtml`/`buildDanfseHtml` —
+nenhuma lib de PDF nova). Descoberta importante nesta rodada: um
+fac-símile de NFC-e/NFS-e **já existia** em produção
+(`danfeFacsimile.ts`, usado por `gestor-comandas.tsx`) — o gap real era
+só NF-e modelo 55, que reduziu o escopo pedido originalmente
+("Gerador de DANFE em PDF") de 2 documentos pra 1 (fortalecer o Extrato
+NFC-e com código de barras/QR reais ficou pendente naquela rodada —
+**fechado logo em seguida, mesmo dia**, ver próximo parágrafo). Wired
+em 3 pontos: botão no cabeçalho de "Notas Fiscais" (Manutenção), botão
+no modal de resultado de "Gerar NFe"/"Gerar NFe Comanda" pós-emissão, e
+o branch `tipo === "NF"` de `gestor-comandas.tsx`'s reimpressão por
+comanda (antes só mostrava campos crus).
+
+**Extrato NFC-e fortalecido com código de barras e QR Code reais**
+(`buildDanfceHtml`) — `nfe_fiscal_common.gerar_qrcode_png_base64(texto)`
+(novo, generaliza o padrão já usado em `equipamentos_service.
+_gerar_qrcode_sync`) desenha o QR a partir da MESMA URL já embutida no
+XML transmitido (`qr_code_url`, conteúdo público, nada decidido aqui);
+`comanda_service._get_doc_fiscal_sync`'s branch NFCE calcula o PNG
+base64 uma vez no servidor (evita round-trip extra), `buildDanfceHtml`
+embute como `<img>` e adiciona `buildBarcodeSvg` (já existente,
+reaproveitado) pra chave de acesso. **Achado real ao implementar**:
+`Pillow` está em `requirements.txt` mas **não estava instalado em
+nenhum dos venvs deste projeto** (`.venv`, `.venv - Copia`) —
+`qrcode.make(...).save(...)` depende dele; sem isso, a geração de QR
+Code de Equipamentos (`equipamentos_service.py`, já em produção) também
+estava quebrada nesta máquina, sem nenhum teste unitário cobrindo esse
+caminho pra pegar a regressão. Corrigido instalando `pillow==12.2.0` no
+`.venv` ativo — beneficia os dois recursos.
+
+**Pendência "TSO/DMC/Alterdata" fechada, com correção do usuário no
+mesmo dia** — `TSO` rastreado contra `FrmGerKon.frm` e confirmado como
+módulo de segmento Ótica (não fiscal, `Caption = "O.S. TSO"`);
+`DMC`/`Alterdata` já estavam resolvidos numa rodada anterior. O usuário
+confirmou os 3 achados ("DMC está extinto. Alterdata é do Fiscal. TSO é
+uma Ordem de Serviço para Ótica") e pediu 2 ajustes em cima disso: (1)
+rótulo final "Ordem de Serviço TSO" (não "TSO (Ótica)"); (2) TSO entra
+no grupo "Pré Venda" (renomeado de "Pedidos") junto de Oficina/
+Assistência — 3ª variação de Ordem de Serviço, mutuamente exclusiva com
+as outras duas, mas o grupo "Pré Venda" inteiro NÃO é exclusivo com o
+grupo de Pedido (Bar/Cilindro/etc.) — os dois podem estar ligados ao
+mesmo tempo. Ver "Módulos NFCe/NFe/NFSe" mais abaixo pro detalhe
+completo desta 2ª correção.
+
+**As 6 sub-rotinas de importação automática de "Gerar NFe" implementadas
+2026-08-20** (Pedido de Venda/Devolução/Compra/Requisição/outra Nota
+Fiscal/Complementar de Comanda) — passou por Plan Mode formal, 3 agentes
+Explore em paralelo (arquitetura atual do rascunho + as 3 pendências
+deixadas em aberto pelo rastreio anterior de `frmtranfe.frm` + schema
+real das tabelas de origem) mais checagem ao vivo de 4 tabelas que
+nenhum código Python ainda tocava (`devolucao_config`,
+`requisicao_config_nfe`, `comanda_nfce_detalhe`, colunas de
+`pedido_venda_prod`). Arquitetura: os 6 endpoints são **read-only** (não
+escrevem em `nf_aux`), só resolvem o documento de origem e devolvem
+`{header, itens}` pro frontend aplicar no rascunho já em edição — mesmo
+fluxo de "Salvar Rascunho"/"Emitir" de sempre, nenhuma persistência nova.
+Achado que fechou uma pendência antiga: o marcador "`nf_aux` já
+promovida" (`nf_aux.num_nf`) já é gravado corretamente por
+`_emitir_nfe_avulsa_sync` desde que a tela foi implementada — a fonte
+real do gravamento no VB6 (`frmtranfe.frm:5251`, dentro de `ImprimeA`,
+não em `Coliga`/`GravaNFE` como se suspeitava) só confirmou que a
+implementação Python já estava certa, nenhuma mudança necessária. Ver
+"6 sub-rotinas de importação automática" mais abaixo pro detalhe
+completo (inclusive o que cada importação NÃO resolve automaticamente —
+CFOP em Pedido/Compra, cabeçalho inteiro em Requisição).
+
+**Gestor NFSe ganhou "Baixar DANFE" e "Enviar por e-mail"** (2026-08-20,
+mesmo dia) — fecha os 2 itens que tinham ficado de fora da rodada
+original do Gestor NFSe. Achado real ao rastrear `Command4_Click`
+("Enviar por e-mail", `FrmManNSeSefin.frm:763-856`): o legado depende de
+arquivos (XML/PDF) já em disco local, gambiarra de arquitetura pré-web —
+a regra de negócio real por trás ("mandar o DANFE em PDF por e-mail pro
+cliente da comanda") foi replicada buscando o PDF fresco do ADN em vez
+de depender de um cache local que este backend nunca teve. Reaproveita a
+infra SMTP já existente (`email_cobranca_service`, já testada ao vivo
+pra Boletos) — nenhum motor de e-mail novo. Ver "Gestor NFSe —
+'Baixar DANFE'/'Enviar por e-mail'" mais abaixo pro detalhe completo.
 
 **NADA deste pacote fiscal foi testado ao vivo no navegador ainda** —
-só testes unitários (suíte completa: 2128 passando, 1 falha
+só testes unitários (suíte completa: 2251 passando, 1 falha
 pré-existente não relacionada em `test_cnab_itau_service.py`, data
 hardcoded). Antes de continuar empilhando telas fiscais novas, considerar
 testar o que já existe (ver seções "Agrupar Comandas em NF-e", "NF-e
-Avulsa", "Módulos NFCe/NFe/NFSe", "Contingência NFe" mais abaixo pro
-detalhe completo de cada uma).
+Avulsa", "Módulos NFCe/NFe/NFSe", "Contingência NFe", "Inutilização de
+Faixa NFe", "Ambiente NFe / Danfe", "Gestor NFSe", "DANFE NF-e (modelo
+55)", "6 sub-rotinas de importação automática" mais abaixo pro detalhe
+completo de cada uma) — agora com o caminho de Homologação genuinamente
+disponível pra testar sem risco de emissão fiscal real. **Nota de
+conexão de teste**: BARESTELA (GERDELL/BARESTELA, a conexão padrão de
+teste deste projeto) não utiliza módulo fiscal — qualquer verificação de
+schema/dado real do pacote fiscal deve usar ARGEN TESTE em vez disso
+(já é o padrão adotado desde a rodada de Gestor NFSe, ver
+[[reference_conexoes_teste]]) — verificação de SCHEMA (nomes de coluna
+de tabelas comerciais gerais, não fiscais) continua segura em qualquer
+conexão, é só emissão/dado fiscal real que exige ARGEN TESTE.
+
+**Atualização 2026-08-21 — Recebimento de Mercadoria completo (Fase 1 +
+Fase 2)**, fechando o último item do hub "Gestor Fiscal" por completo
+(ver "Recebimento de Mercadoria" mais abaixo pro detalhe completo —
+achados de fonte com citação de linha, schema real confirmado ao vivo,
+fórmula exata de custo médio ponderado, baixa FIFO de Pedido de Compra,
+parsing de XML de NF-e de entrada). Fase 1 (digitação manual):
+`backend/services/recebimento_service.py` (novo), rotas/models/permissão
+`RECEBIMENTO` novos, `frontend/app/recebimento.tsx` (novo, card em
+`gestor-fiscal.tsx`), 23 testes. **Fase 2 (importação de XML, mesmo dia,
+escolhida pelo usuário como próximo passo)**: `_parse_xml_nfe` (parsing
+puro com `xml.etree.ElementTree`, não o string-matching frágil do
+legado) + `_importar_xml_sync` (resolve/cria fornecedor por CNPJ, cascata
+de vínculo de produto em 3 níveis, CFOP, PIS/COFINS) — arquitetura
+deliberadamente diferente do legado: em vez de gravar `nf_recebimento`
+direto, devolve `{header, itens, itens_sem_vinculo}` pro rascunho da Fase
+1 já aberto (mesmo princípio das 6 sub-rotinas de importação de "NF-e
+Avulsa"), reaproveitando 100% do ciclo crítica/atualizar já pronto.
+Frontend ganhou botão "Importar XML" + destaque/"Vincular Produto" pra
+item sem produto reconhecido. 22 testes novos nesta 2ª rodada (45 no
+arquivo, 2296 passando no total, mesma 1 falha pré-existente não
+relacionada em `test_cnab_itau_service.py`). `tsc --noEmit`: 12 erros
+pré-existentes, nenhum novo.
+
+**Testado ao vivo contra ARGEN TESTE, mesmo dia, a pedido do usuário** —
+ver "Recebimento de Mercadoria" > "Teste ao vivo" mais abaixo pro
+detalhe completo. **Achou e corrigiu um bug real e crítico**: os 2
+INSERTs de promoção (`n_fiscal`/`n_fiscal_itens`) tinham 1 placeholder
+`%s` a menos que o número de colunas/parâmetros — bloquearia TODO clique
+em "Atualizar" em produção; só foi pego pelo teste ao vivo (nenhum mock
+de teste unitário detecta contagem de coluna/valor, quem valida isso é o
+próprio SQL Server). Corrigido, suíte revalidada, reexecutado com
+sucesso — custo médio ponderado conferido numericamente contra um
+produto real (bateu exato), Nota Fiscal gerada, fornecedor auto-criado
+por CNPJ, cascata de vínculo de produto funcionando (via código de
+fábrica) e item sem vínculo corretamente sinalizado.
+
+**2º achado real, mesmo dia, motivado por pergunta direta do usuário**
+sobre o campo "Tipo Preço" do Cadastro de Produtos: o gating do preço de
+venda dependia de um MODO real por instalação
+(`controle_aux.Altera_preco_venda_tela`, não lido na Fase 1 original) —
+Modo 1 (padrão, GERDELL/BARESTELA e ARGEN-TESTE estão nele) gateia por
+`pecas.politica_preco='E'`, Modo 2 gateia pelo checkbox do item. A Fase
+1 só implementava o Modo 2, então nenhum produto teria preço atualizado
+nas duas instalações de teste conhecidas até esta correção. Corrigido +
+4 testes novos + revalidado ao vivo (2299 passando). Ver "Recebimento de
+Mercadoria" > "2º bug real..." mais abaixo pro detalhe completo.
 
 **Pendências reais em aberto, mais relevantes agora**:
-- Reorganização "Gestor Fiscal" ainda incompleta: faltam telas pra
-  Recebimento, Gestor NFSe (RPS municipal), Contingência NFe (agora
-  pronta) já conectada à emissão de NF-e (ainda não está), Inutilização
-  de Faixa NFe (só a metade NFCe existe, dentro de Gestor NFCe).
-- "Ambiente NFe" (Homologação/Produção) e "Danfe" (Retrato) — campos
-  reais do legado (`controle_aux.ambiente_nfe`/`modelo_danfe`) nunca
-  portados; `nfe_emissao_service.py` hoje hardcoda produção (`tp_amb=
-  "1"`) em todo lugar.
-- Reorganização do menu "Gestor Fiscal" pro pedido original do usuário
-  incluía também agrupar os módulos fiscais em Configurações > Módulos
-  — feito (grupo "Fiscal"), mas TSO/DMC/Alterdata não foram totalmente
-  esclarecidos quanto a pertencerem ou não a esse grupo (só Alterdata
-  entrou, por pedido explícito).
-- As 6 sub-rotinas de importação automática de "Gerar NFe" (Pedido/
-  Devolução/Compra/Requisição/NF/Complementar) — Fase A implementada foi
-  só digitação livre, sem nenhuma importação.
+- Recebimento de Mercadoria: simplificações documentadas no cabeçalho do
+  service — rateio de frete-fora-da-nota só proporcional (sem NF de
+  frete vinculada), sem ramos de custo pra Veículo/Serviço (só Peças),
+  sem telas de Resumo Tributário/Centro de Custo (tabelas de staging
+  existem, sem uso ainda), transição de `pedido.situacao` F/RP→R/RP
+  implementada por inferência razoável (não achada literal na fonte),
+  ICMS desonerado/retenção anterior (CST 60) não entram na composição de
+  custo, cascata de NCM→`ncm_cest` simplificada pra 1 tentativa (sem
+  truncamento progressivo), bloco Veículo do XML (`<veicProd>`) não
+  replicado, branch `<dest>` da função de parsing (usado por outra tela)
+  não implementado.
+- **Verificar se `pillow` está instalado em QUALQUER outro ambiente onde
+  este backend rode de verdade** (não só os venvs locais desta máquina)
+  antes de considerar QR Code de Equipamentos/NFC-e confiável em
+  produção — só foi confirmado aqui.
+- CFOP não resolvido automaticamente nas importações de Pedido de Venda
+  e Compra (nenhuma tabela de configuração equivalente a
+  `devolucao_config`/`requisicao_config_nfe` foi encontrada pra essas
+  duas) — usuário completa manualmente. Cabeçalho inteiro (destinatário/
+  mov/CFOP) não resolvido na importação de Requisição — a tabela
+  `requisicao` não tem FK de cliente/fornecedor própria confirmada.
+- **Seletor de tipo de frete (`opFrete`) — investigado a fundo 2026-08-20
+  e DELIBERADAMENTE não implementado, decisão do usuário.** Rastreio
+  completo em `frmtranfe.frm`+`ModNF.bas` (os únicos 2 arquivos do
+  `.vbp` real) confirmou que `opFrete` **nunca é lido fora do próprio
+  `_Click`/`_KeyPress`** — só auto-preenche os campos de transportadora
+  quando "Emitente" é marcado; o valor escolhido nunca é gravado nem
+  usado pra montar o XML no legado. Achado relacionado: `modFrete` já
+  sai **hardcoded em `"9"` (Sem transporte) pra TODA NF-e/NFC-e emitida
+  por este backend** (`nfe_emissao_service.py`, `_montar_xml_nfe`/
+  `_montar_xml_nfce`), independente de qualquer dado de transportadora
+  preenchido. Como não é regra do legado (nem o VB6 resolve isso de
+  verdade), implementar um seletor funcional seria construir uma feature
+  nova do zero, não portar comportamento existente — perguntado ao
+  usuário via `AskUserQuestion`, decisão foi pular por ora. Se retomado
+  no futuro: rótulos reais já confirmados (Emitente/Destinatário/
+  Terceiros/Proprio por conta do remetente/Proprio por conta do
+  destinatário/Sem Transporte), mas precisa de coluna nova em `nf_aux`/
+  `n_fiscal` (nenhuma existente hoje guarda o código 1-6) e trocar o "9"
+  hardcoded pelo valor real — mudança de escopo maior que só UI.
+- Endpoint do DANFE em PDF (`https://adn.nfse.gov.br/danfse/{chave}`)
+  não tem variante de homologação/produção restrita confirmada (só um
+  host único encontrado) — validar contra o ADN real antes de confiar em
+  produção.
+
+---
+
+## Recebimento de Mercadoria (Fase 1 + Fase 2 — digitação manual + XML)
+
+**Status: implementado 2026-08-21, Fase 1 (manhã) e Fase 2 (mesmo dia,
+escolhida pelo usuário como próximo passo logo após a Fase 1) — as duas
+TESTADAS AO VIVO contra ARGEN TESTE, mesmo dia.** Fonte:
+`Geral\FrmtraRec.frm` (14.069 linhas, o maior form do sistema) +
+`Geral\Mdl_Imp_XML.bas` (parsing de XML, Fase 2). Último item do hub
+"Gestor Fiscal" a ser fechado, agora por completo.
+
+### Teste ao vivo (2026-08-21, ARGEN TESTE) — achou e corrigiu 1 bug real
+
+Pedido explícito do usuário logo após a Fase 2 ficar pronta
+("Testar ao vivo (Recebimento)"). Rodado direto contra os services (sem
+passar pela API HTTP), usando dados reais já existentes em ARGEN-TESTE
+(servidor `minimachine`, banco `ARGEN-TESTE` — ver
+[[reference_conexoes_teste]]).
+
+**Bug real encontrado e corrigido**: os 2 INSERTs de promoção
+(`n_fiscal` e `n_fiscal_itens`, dentro de `_atualizar_sync`) tinham 1
+placeholder `%s` a menos que o número real de colunas/parâmetros —
+`"There are more columns in the INSERT statement than values specified
+in the VALUES clause"`. Bloquearia **TODO** clique em "Atualizar" em
+produção, sem exceção. Nenhum dos 45 testes unitários (com `FakeCursor`
+mockado) pegou isso — só o SQL Server real valida a contagem
+coluna↔valor, e um `FakeCursor` nunca executa a query de verdade.
+**Lição**: pra INSERTs grandes (40+/49 colunas neste caso), testar ao
+vivo pelo menos uma vez continua sendo a única forma real de pegar esse
+tipo de erro de contagem — mocks não substituem.
+
+**Fase 1 — round-trip completo**: rascunho→cabeçalho→itens→vencimentos→
+criticar→atualizar, usando o produto real `pecas.codigo_int='P10'`
+(estoque 61, custo_reposicao 0,77) e tipo de movimentação real `E01`
+(COMPRA, `atualiza_est='S'`, `altera_custo=True`). Resultado: Nota Fiscal
+nº 9320 gerada; `pecas.qtd` 61→62; `custo_medio` calculado
+**exatamente** igual ao cálculo manual da fórmula do achado 2
+(`(61×0,77+1×1,00)/62 = 0,7736999988555908` — bateu na casa decimal);
+`custo_reposicao`/`p_custo`/`custo_inventario` atualizados (porque
+`altera_custo=True`); `n_fiscal_itens`/`nf_vencimento` gravados
+corretamente; `nf_recebimento.situacao='P'`+`n_fiscal_gerado=9320`.
+
+**Fase 2 — importação de XML**: XML sintético com 2 itens e um CNPJ de
+fornecedor novo. Resultado: fornecedor `99887766000155` criado
+automaticamente (`fornecedor`+`fornecedor_end`, dados corretos); item 1
+(`cProd='C35990'`) vinculado corretamente via cascata de código de
+fábrica contra o produto real `pecas.codigo_int='P1014'`; item 2
+(código inventado) corretamente marcado `vinculado=False`; CFOP
+resolvido pelo fallback de prefixo (sem linha em `cfop_xml`); vencimento
+parseado certo.
+
+**Dados de teste deixados no banco, por escolha do usuário** ("Deixar
+como está" — evidência do teste bem-sucedido, sem risco por ser banco de
+teste): Nota Fiscal `n_fiscal.codigo=9320` (num_nf 999001/série TST,
+fornecedor 1), rascunho `nf_recebimento.codigo=7697` não promovido
+(XML de teste), fornecedor de teste `codigo_int=566`
+(`99887766000155`), e a mutação real de estoque/custo em `pecas.
+codigo_int='P10'` (documentada acima, não revertida).
+
+### 2º bug real, achado por pergunta direta do usuário sobre "Tipo Preço"
+
+**2026-08-21, mesmo dia.** Usuário perguntou: *"em cadastro de produtos,
+existe o campo tipo Preço. se for 'entrada' o custo do produto e o
+preço de venda é atualizado automaticamente no recebimento correto?"* —
+a pergunta expôs um gap real na Fase 1: o campo **Tipo Preço**
+(`pecas.politica_preco`, aba Preços do Produto Completo — ver
+"Produto Completo" mais abaixo, seção "Campos que viraram combobox")
+**nunca tinha sido lido** pelo Recebimento.
+
+Voltando à fonte (`FrmtraRec.frm:7290-7311`, não lida com esse nível de
+detalhe na Fase 1 original): o gating do preço de venda depende de um
+MODO real por instalação — `controle_aux.Altera_preco_venda_tela`
+(confirmada ao vivo, GERDELL/BARESTELA **e** ARGEN-TESTE = 1, o padrão):
+- **Modo 1 (padrão)**: preço só atualiza se `pecas.politica_preco='E'`
+  (Entrada) — o checkbox "Atualiza Preço" da tela de Recebimento é
+  **ignorado** neste modo.
+- **Modo 2**: o inverso — só o checkbox por item conta,
+  `politica_preco` é ignorado.
+
+A Fase 1 original só implementava o Modo 2. Como as duas instalações de
+teste conhecidas (GERDELL/BARESTELA, ARGEN-TESTE) estão no Modo 1 (o
+padrão), **nenhum produto teria o preço de venda atualizado no
+Recebimento**, mesmo com "Tipo Preço = Entrada" marcado no cadastro —
+até esta correção. Custo (`custo_medio`/`custo_reposicao`/`p_custo`/
+`custo_inventario`) nunca foi afetado por esse gap — é controlado só por
+`tipo_mov.altera_custo`, sem relação com `politica_preco`.
+
+**Corrigido** em `_atualizar_sync`: lê `Altera_preco_venda_tela` uma vez
+por promoção, decide o gating por item conforme o modo. 4 testes novos
+(2 pro Modo 2, 2 pro Modo 1 — incluindo o caso "config ausente" caindo
+no padrão Modo 1). Suíte completa: 2299 passando.
+
+**Revalidado ao vivo contra ARGEN-TESTE** com o produto real
+`pecas.codigo_int='P1029'` (`politica_preco='E'`, `margem_lucro=500`) —
+confirmado que o Recebimento agora LÊ o campo corretamente. **Achado
+adicional no processo** (não um bug — config real da instalação):
+nenhum tipo de movimentação de entrada (`E00`-`E08`) em ARGEN-TESTE tem
+`altera_venda=True` — então o preço nunca é tocado por NENHUM tipo de
+compra hoje nessa instalação, independente do Modo/`politica_preco`
+(gate duplo: `tipo_mov.altera_venda` **e** o gating por modo, os dois
+precisam ser verdadeiros). O caminho completo "preço realmente muda" só
+foi confirmado pelos testes unitários (que fabricam `altera_venda=True`
+livremente); pra ver isso acontecer ao vivo, seria necessário um
+`tipo_mov` real com `altera_venda=True` — nenhum encontrado nas 2
+instalações de teste disponíveis até agora.
+
+### Fase 1 — digitação manual
+
+### Achados da fonte, com citação exata
+
+1. **Crítica de recebimento** (`CmdCritica_Click`, `FrmtraRec.frm:7918`):
+   compara cada total do cabeçalho (`Campo(N)`) contra `SUM(...) FROM
+   nf_recebimento_itens WHERE codigo=...`. `Valor_Libera_Critica`
+   (`FrmtraRec.frm:11451`) vem de `controle.Valor_Libera_Critica` (coluna
+   real, confirmada ao vivo — `real`, minúsculo no schema: `valor_libera_
+   critica`). Diferença dentro da tolerância → `AjeitaCritica` (`FrmtraRec.
+   frm:12531`) ajusta o ITEM de MAIOR valor daquele campo (nunca o
+   cabeçalho, nunca distribui entre vários itens). Fora da tolerância →
+   bloqueia "Atualizar".
+2. **Custo médio ponderado** (`FrmtraRec.frm:7196-7255`):
+   `CustoMedio = (EstoquePos×CustoPos + EstoqueAnt×CustoAnt) / (EstoqueAnt+EstoquePos)`
+   — `CustoAnt` é `pecas.custo_reposicao` (não `custo_medio`!, achado
+   não-óbvio). Grava sempre `custo_medio`/`qtd`(se `atualiza_est='S'`)/
+   `qtd_un_compra`/`alterado`/`data_ultima_compra`; só grava `p_custo`/
+   `custo_reposicao`/`custo_inventario`/`custo_alterado` quando `tipo_mov.
+   altera_custo` (bit real, confirmado ao vivo) é verdadeiro.
+3. **Preço de venda por margem** (`FrmtraRec.frm:7288-7307`, gated por
+   `tipo_mov.altera_venda` + `nf_recebimento_itens.atualiza_preco`,
+   ambos confirmados ao vivo): variante simples só (mesma fórmula já
+   portada em Produto Completo, `custo_base×(1+margem/100)`) — a variante
+   `PrecoCLD` (deduz PIS/COFINS/Simples/Outras Despesas) não é replicada,
+   mesma simplificação documentada lá.
+4. **Baixa FIFO de Pedido de Compra** (`BaixaPedidoCompra`, `FrmtraRec.
+   frm:13772`): consome `pedido_itens` com `pedido.situacao IN ('F','RP')`,
+   mesmo fornecedor+`codigo_int`, `ORDER BY pedido.codigo` (mais antigo
+   primeiro = FIFO). Grava uma alocação por linha em `nf_recebimento_
+   pedido`. **Transição de `situacao` F/RP→R/RP não encontrada
+   literalmente na fonte** — implementada por inferência razoável (todas
+   as linhas do pedido com `qtd=qtd_recebida` → `'R'`, senão `'RP'`).
+5. **Estoque** só atualiza se `tipo_mov.atualiza_est='S'` (nvarchar,
+   valores 'S'/'N', confirmado ao vivo).
+
+### Schema real confirmado (GERDELL/BARESTELA, ao vivo)
+
+As 9 tabelas staging já existiam por completo, nenhuma migração de
+tabela necessária: `nf_recebimento` (53 col.), `nf_recebimento_itens`
+(133 col., inclui todo o bloco IBS/CBS/IS da Reforma Tributária),
+`nf_recebimento_icms`, `nf_recebimento_custo`, `nf_recebimento_
+vencimento`, `nf_recebimento_pedido` (recebimento/pedido/item/quant/
+quant_p), `nf_recebimento_frete` (recebimento/nf_frete), `nf_recebimento_
+num_serie`, `nf_recebimento_liberado` (recebimento/usuario). `pecas` já
+tem todas as colunas de custo necessárias (`custo_medio`, `custo_
+reposicao`, `custo_inventario`, `p_custo`, `custo_alterado`, `margem_
+lucro`, `margem_tabela`). `pedido_itens.qtd_recebida` já existia (sempre
+0 até agora, nunca escrito por código nenhum) — Recebimento é o primeiro
+escritor real. **Única migração nova**: `nf_recebimento.n_fiscal_gerado`
+(INT NULL, `_ensure_nf_recebimento_gerado_col` em `recebimento_
+service.py`, registrada em `schema_ensure.py`) — rastreia qual `n_fiscal.
+codigo` foi gerado ao promover (sem equivalente no legado, que usa só
+`situacao`; necessário aqui pro mesmo papel de `nf_aux.num_nf` em
+`nfe_avulsa_service.py`).
+
+### Implementação
+
+- `backend/services/recebimento_service.py` (novo) — mesmo padrão
+  rascunho→promoção de `nfe_avulsa_service.py`: `_novo_rascunho_sync`/
+  `_get_rascunho_sync`/`_save_cabecalho_rascunho_sync`/`_save_itens_
+  rascunho_sync`/`_save_vencimentos_rascunho_sync` (staging em
+  `nf_recebimento`/`_itens`/`_vencimento`), `_aplicar_critica_sync`+
+  `_criticar_sync` (achado 1), `_baixar_pedido_compra_sync` (achado 4),
+  `_atualizar_sync` (a promoção: copia cabeçalho/itens/vencimentos pra
+  `n_fiscal`/`n_fiscal_itens`/`nf_vencimento`, recalcula custo médio e
+  preço por margem só pra itens que batem com uma Peça — item que não é
+  Peça ainda é gravado em `n_fiscal_itens`, só sem efeito colateral de
+  custo/estoque —, soma ao estoque, baixa Pedido de Compra).
+- Permissão nova tela `RECEBIMENTO` (`ABRIR`/`GRAVAR`/`CRITICAR`),
+  `backend/models/recebimento.py` + `backend/routes/recebimento.py`
+  (registrados em `server.py`), log de auditoria no `_atualizar_sync`.
+- `frontend/app/recebimento.tsx` (novo) — Full CRUD Form Screen Standard,
+  "Design Desktop", Modo Didático (ícone "i" no cabeçalho). Card em
+  `gestor-fiscal.tsx` ("Recebimento de Mercadoria").
+- 23 testes novos em `backend/tests/unit/test_recebimento_service.py`
+  (permissão, crítica com/sem ajuste automático, baixa FIFO com 1/2
+  linhas de pedido e sem pedido aberto, promoção completa com custo
+  médio ponderado — fórmula exata verificada numericamente —, preço por
+  margem com/sem flag, bloqueios de duplicidade/campos obrigatórios/
+  vencimento não batendo/já promovido). Suíte completa: 2274 passando (+23,
+  mesma 1 falha pré-existente não relacionada). `tsc --noEmit`: 12 erros
+  pré-existentes, nenhum novo.
+
+### Simplificações desta fase, documentadas
+
+- **Fase 1 = só digitação manual.** Importação de XML de NF-e de entrada
+  fica pra uma Fase 2 futura (mesmo padrão de faseamento de "NF-e
+  Avulsa") — não pedida ainda.
+- Rateio de "frete fora da nota" (`pfre`) usa só a variante proporcional
+  ao valor de cada item — a variante "NF de frete vinculada"
+  (`nf_recebimento_frete`) não foi implementada (tabela existe, sem uso
+  nesta rodada).
+- Ramos de custo pra Veículo/Serviço não replicados — só Peças (`pecas`)
+  recebem atualização de custo/estoque/baixa de Pedido de Compra.
+- Resumo Tributário (`nf_recebimento_icms`) e Centro de Custo
+  (`nf_recebimento_custo`) — tabelas de staging confirmadas no schema,
+  sem tela/endpoint de edição nesta rodada.
+- Crédito de ICMS na composição do custo de inventário usa o valor de
+  ICMS do próprio item (não um rateio mais fino).
+- Transição de `pedido.situacao` F/RP→R/RP implementada por inferência
+  razoável (não achada literal na fonte) — revisitar se o usuário
+  reportar comportamento inesperado no Pedido de Compra após um
+  Recebimento.
+
+### Fase 2 — Importação de XML de NF-e de entrada
+
+Fonte lida por completo: `Geral\Mdl_Imp_XML.bas::Inicia_Importacao_XML`
+(parsing, linhas 127-599) + `FrmtraRec.frm::ImportaXML` (orquestração/
+gravação, linhas 13187-13758).
+
+**Achados da fonte, com citação exata**:
+
+1. Parsing legado é string-matching manual (`InStr`/`Mid`,
+   `RetornaConteudoXML`/`VerificaItem`, `Mdl_Imp_XML.bas:621-674`) — esta
+   migração usa `xml.etree.ElementTree` (biblioteca padrão) em vez disso.
+2. Por item (`<det>`): cascata de ICMS por `CST` (00/10/20/30/60/70/90)
+   ou `CSOSN` (101/102/201/202/500/900, Simples Nacional); FCP (normal/
+   ST/retido); IPI; PIS com 4 variantes (`PISAliq`/`PISQtde`/`PISNT`/
+   `PISOutr`) + PIS-ST; COFINS mesmas 4 variantes + COFINS-ST. Bloco
+   Veículo (`<veicProd>`) não replicado, mesma decisão da Fase 1.
+3. Vencimentos (`<dup>`): se a soma não bate com `vNF`, a diferença
+   inteira é jogada na 1ª parcela (`Mdl_Imp_XML.bas:539-543`) — replicado.
+4. Cabeçalho sempre lê `<emit>` (o FORNECEDOR emissor) — o branch
+   `<dest>` do parâmetro `XML=True` é usado por OUTRA tela, não
+   Recebimento (que sempre chama com `XML=False`, `FrmtraRec.
+   frm:13192`) — não implementado.
+5. Resolução de fornecedor por CNPJ (`FrmtraRec.frm:13210-13255`): busca
+   `fornecedor.codigo=CNPJ` (chave textual do CNPJ); não achando, cria
+   automaticamente (`fornecedor`+`fornecedor_end`, schema confirmado ao
+   vivo — `fornecedor.codigo` é `nvarchar`, `fornecedor_end` tem
+   endereco/numero/complemento/bairro/cidade/uf/cep/pais/tipo_endereco).
+6. Vínculo de produto — cascata de 3 níveis (`FrmtraRec.frm:13276-
+   13323`): (a) EAN via `pecas_xml.codigo_xml` JOIN `pecas`; (b) código
+   de fábrica (`pecas.codigo_fab`); (c) EAN de novo, mas contra
+   `pecas_xml.codigo_xml=cProd`. Item sem vínculo fica marcado
+   (`vinculado=False`) pro usuário resolver na tela via "Vincular
+   Produto" (reaproveita `ProdutoSearchModal` já existente).
+7. Conversões auxiliares: CFOP via `cfop_xml` (fallback por prefixo);
+   NCM→`pecas.codigo_mercosul` (só se vazio, 1 tentativa contra
+   `ncm_cest`, sem truncamento progressivo — simplificação); EAN→
+   `pecas.codigo_bar`+`codbarra_auxiliar`; PIS/COFINS via
+   `cfop_pis_cofins` (achando com `Acatar_nfe=1`, mantém valores do XML;
+   com `Acatar_nfe=0`, recalcula local por quantidade/percentual; não
+   achando, fallback por faixa de CST).
+8. Gravação final no legado é DIRETA em `nf_recebimento`/`_itens`/
+   `_vencimento` (sem passar pelo ciclo rascunho→crítica→atualizar) —
+   decisão de arquitetura diferente nesta migração, ver abaixo.
+
+**Decisão de arquitetura, diferente do legado**: em vez de duplicar um
+segundo caminho de gravação, `_importar_xml_sync` é READ-ONLY pro
+documento em si (nunca escreve em `nf_recebimento`/`_itens`/
+`_vencimento`) — devolve `{header, itens, itens_sem_vinculo}` pro
+frontend aplicar no rascunho da Fase 1 já aberto, e o usuário confirma
+com os mesmos botões "Salvar Rascunho"/"Criticar"/"Atualizar" já
+existentes (mesmo princípio das 6 sub-rotinas de importação de "NF-e
+Avulsa", `nfe_avulsa_service.py`). **Exceção deliberada**: resolução de
+entidade (criar fornecedor por CNPJ, gravar vínculo produto↔EAN em
+`pecas_xml`, atualizar `pecas.codigo_bar`/`codigo_mercosul` quando
+vazios) grava imediatamente, mesmo antes de "Salvar Rascunho" — mesmo
+princípio já usado em Cliente/Fornecedor (`CLAUDE.md` > "Global Entity
+Rules", auto-load/auto-create por CPF/CNPJ); são tabelas de cadastro/
+lookup reaproveitáveis, não o documento fiscal em si.
+
+**Implementação**: `_parse_xml_nfe` (função pura, sem cursor — testável
+isolada) + `_resolver_produto_xml_sync`/`_resolver_cfop_xml_sync`/
+`_atualizar_cadastro_produto_xml_sync`/`_resolver_pis_cofins_xml_sync`
+(resolução contra o banco) + `_importar_xml_sync` (orquestra tudo).
+Rota `POST /recebimento/importar-xml`
+(`models.recebimento.ImportarXmlRecebimentoRequest`, corpo com
+`conteudo_xml` como texto puro — sem multipart, mesmo princípio de
+simplicidade já usado noutros uploads pequenos deste projeto). Frontend:
+botão "Importar XML" (input de arquivo escondido + ref, mesmo padrão já
+usado em `geracao-boletos.tsx`) na seção Itens; item sem vínculo ganha
+borda de alerta + botão "Vincular Produto" (reaproveita
+`ProdutoSearchModal`); "Salvar Rascunho"/"Atualizar" bloqueiam
+explicitamente se algum item ainda estiver sem vínculo.
+
+**Testes**: 22 novos (`TestParseXmlNfe` — CST normal/CSOSN/CST com ST/
+4 variantes de PIS/flag de soma de PIS-ST/vencimento com diferença/chave
+de acesso/XML inválido; `TestImportarXmlSync` — permissão, recebimento
+não encontrado/já promovido, fornecedor existente/criado automaticamente,
+produto vinculado/sem vínculo, bloqueio de nota duplicada em `n_fiscal`/
+já importada em outro recebimento, XML sem itens, XML inválido). 45
+testes no arquivo total (23 Fase 1 + 22 Fase 2).
+
+**Simplificações documentadas**: bloco Veículo não replicado; ICMS
+desonerado (`vICMSDeson`/`vICMSSTDeson`) e retenção anterior (CST 60,
+`vBCSTRet`/`vICMSSTRet`) não entram na composição de custo; cascata de
+NCM→`ncm_cest` só 1 tentativa; branch `<dest>` da função de parsing não
+implementado (usado por outra tela, não Recebimento).
 
 ---
 
@@ -659,6 +4351,52 @@ revisar se esse mesmo padrão aparece em outro service que leia
 - Config de CFOP/Código ICMS por tipo de movimento/destino
   (`devolucao_config`) — só é necessária pra emissão de NF, fora de
   escopo nesta fase.
+
+### Reauditoria 2026-08-21 — 2 achados reais corrigidos
+
+Parte da reauditoria completa do Ecossistema Fiscal (ver "🔴 FRENTE
+ATIVA" no topo do arquivo). Releitura completa de `FrmManDev.frm`
+aplicando o checklist "Regras 1-4" (CLAUDE.md > "Toda ramificação
+condicional..."):
+
+1. **"Devolução permitida somente para o proprio cliente da venda ou em
+   nome da propria empresa!"** (`Command14_Click`, `FrmManDev.frm:1537-
+   1540`) — regra real de negócio nunca implementada nesta migração: o
+   campo `cliente` do Vale de Devolução era livre, sem checar se batia
+   com o cliente da venda original. Rastreada a variável `ClienteControle`
+   até a origem (`Form_Load:2271-2287`) — é a lista de `cliente.codigo`
+   cujo `cgc_cpf` bate com `controle.cgc` (clientes cadastrados com o
+   CNPJ da própria empresa, usados quando a devolução é "em nome da
+   empresa"). Corrigido: `_cliente_permitido_para_vale_sync` em
+   `devolucao_service.py`, aplicada só quando `emitir_vale=True` (a regra
+   na fonte só existe dentro do fluxo combinado Vale+NFe, mas é uma regra
+   de integridade real, não amarrada à emissão de NF em si — decisão de
+   estender ela pro Vale isolado desta migração). 2 testes novos (permite
+   cliente da venda/da empresa, bloqueia cliente sem relação).
+2. **"A Data Final deve ter Valor Máximo: DATESIST"** (`Critica`,
+   `FrmManDev.frm:1054-1058`) — validação de que o filtro de Data Final
+   não pode ser no futuro, nunca implementada na busca de itens.
+   Corrigido em `_list_itens_venda_sync`. 1 teste novo.
+
+Suíte completa revalidada: 2302 passando (mesma 1 falha pré-existente
+não relacionada). **Não testado ao vivo ainda** — próximo passo, se
+retomado.
+
+**Achados não-bugs, registrados pra referência**: `Command14_Click`
+sempre acopla Vale+NFe no legado (nunca existe um botão "só Vale, sem
+NFe" — a decisão desta migração de oferecer o Vale desacoplado da NFe é
+uma extensão real, não um port 1:1, já documentada como decisão
+consciente desde a Fase 1 original); a fórmula de rateio de frete/
+outras/desconto (`FrmManDev.frm:1609-1615`) só existe dentro do fluxo
+combinado Vale+NFe, reforça que a simplificação já documentada ("sem
+rateio") é consistente com o escopo já decidido, não uma omissão nova; o
+"split" de `movimentacao` que o legado faz pra devolução parcial
+(`FrmManDev.frm:1637-1641`, grava uma 2ª linha de `movimentacao` com a
+diferença) foi substituído por um desenho equivalente nesta migração
+(soma de `devolucao_itens.Qtd_Devolvida` calculada em tempo de busca,
+sem duplicar a linha de `movimentacao`) — funcionalmente equivalente
+(mesmo resultado: saldo disponível pra devolução futura correto), design
+diferente por escolha, não um gap.
 
 ---
 
@@ -1994,21 +5732,40 @@ migração.
   ação em lote, Modo Didático. Card em `transacoes.tsx` gated por
   `can("NFE_AGRUPADA.ABRIR")`.
 
-**Correção de ordem 2026-08-20, user-directed**: "para comandas
-agrupadas, o cálculo de ibs/cbs só é feito após a geração do registro
-na tabela n_fiscal" — diferente do caminho de comanda única
-(`comanda_service.py`, que calcula IBS/CBS ANTES de emitir/gravar). Sob
-pergunta de esclarecimento (`AskUserQuestion`, já que a mecânica não
-era óbvia — não gravar informação fiscal em cima de suposição), o
-usuário confirmou o mecanismo: **"Recalcula e reescreve o XML salvo"**
-— a NF-e é assinada/transmitida ao SEFAZ e gravada em `n_fiscal` SEM
-IBS/CBS embutido no XML; em seguida, já com `codigo_n_fiscal`
-disponível, o IBS/CBS é calculado por item consolidado e a coluna
-`xml` de `n_fiscal` é **reescrita** (recalculada, com os fragmentos
-IBS/CBS embutidos) — **sem reassinar nem retransmitir ao SEFAZ**, é só
-um registro mais completo pro banco, não um novo envio fiscal. Ver
-docstring de `_emitir_nfe_agrupada_sync` ("Correção de ordem") pro
-detalhe de implementação.
+**Correção de ordem 2026-08-20, user-directed (revertida no mesmo dia —
+ver abaixo)**: "para comandas agrupadas, o cálculo de ibs/cbs só é feito
+após a geração do registro na tabela n_fiscal" — diferente do caminho
+de comanda única (`comanda_service.py`, que calcula IBS/CBS ANTES de
+emitir/gravar). Sob pergunta de esclarecimento (`AskUserQuestion`, já
+que a mecânica não era óbvia — não gravar informação fiscal em cima de
+suposição), o usuário confirmou o mecanismo: **"Recalcula e reescreve o
+XML salvo"** — a NF-e era assinada/transmitida ao SEFAZ e gravada em
+`n_fiscal` SEM IBS/CBS embutido no XML; em seguida, já com `codigo_n_
+fiscal` disponível, o IBS/CBS era calculado por item consolidado e a
+coluna `xml` de `n_fiscal` era **reescrita** (recalculada, com os
+fragmentos IBS/CBS embutidos) — **sem reassinar nem retransmitir ao
+SEFAZ**.
+
+**Bug real encontrado + correção revertendo a ordem, mesmo dia**: essa
+reescrita pós-emissão **nunca reassinava** o XML enriquecido —
+`n_fiscal.xml` ficava com uma versão SEM assinatura digital válida,
+divergente do que foi de fato transmitido/autorizado pelo SEFAZ
+(achado ao trabalhar em "Validar Contingência NFe", mesma sessão — ver
+"Contingência NFe"). Registrado como pendência e levado de volta ao
+usuário, que corrigiu a orientação original com um princípio mais
+amplo: **"não existe característica especial pra NF-e agrupada"** e
+**"IBS/CBS não é nada mais que um grupo dentro do XML da NFe/NFSe/NFCe,
+como qualquer outro"** — ou seja, deve receber o MESMO tratamento que
+ICMS/PIS/COFINS já recebem neste arquivo (calculado junto com o resto
+da tributação, embutido no XML ORIGINAL que sai assinado). Implementado
+assim: IBS/CBS agora é calculado dentro do mesmo loop de itens que já
+resolve ICMS/CFOP, **antes** de chamar `emitir_nfe_sync` — mesmo
+momento/mesmo padrão de `comanda_service.py` (NFC-e). **Nenhuma
+reescrita pós-emissão existe mais** — o XML gravado em `n_fiscal.xml` é
+exatamente o que saiu assinado (e transmitido, quando não em
+contingência) de `emitir_nfe_sync`, sempre. `n_fiscal.XML_TOT_IBS_CBS`
+também passou a ser gravado no INSERT original (antes só era
+atualizado, tardiamente, no bloco removido).
 
 **Testes**: `backend/tests/unit/test_nfe_emissao_service.py` ganhou
 `TestMontarXmlNfe`/`TestEmitirNfeSync` (12 testes — destinatário
@@ -2025,6 +5782,14 @@ pré-existente e não relacionada em `test_cnab_itau_service.py`, teste
 sensível à data corrente hardcoded — nada a ver com esta feature).
 `tsc --noEmit` no frontend: 0 erros novos (baseline de 12 erros
 pré-existentes não relacionados, inalterado).
+
+**Atualização 2026-08-20, mesmo dia — correção da ordem IBS/CBS (ver
+"Bug real encontrado..." acima)**: +1 teste novo (`test_ibs_cbs_
+calculado_antes_de_emitir_sem_reescrever_xml`) confirmando que `ibs_cbs_
+totais_xml`/`item["ibs_cbs_xml"]` chegam prontos no `emitir_nfe_sync` e
+que nenhum `UPDATE n_fiscal` acontece depois do `INSERT` — só o XML já
+assinado é gravado. Suíte completa: 2169 passando (mesma falha
+pré-existente não relacionada).
 
 **Fora de escopo, não implementado nesta rodada** (ver "Escopo desta
 rodada" no plano aprovado): NF-e avulsa genérica sem comanda de origem
@@ -2407,13 +6172,24 @@ GERDELL/BARESTELA — não presumido): `n_fiscal_itens`/`n_fiscal` já têm
 colunas ESTRUTURADAS dedicadas pra IBS/CBS por item (`CST_IBS_UF`/
 `VALOR_IBS_UF`/`CST_CBS`/`VALOR_CBS`/etc., mesmo conjunto que
 `ibs_cbs_service.calcular_item_ibs_cbs` já devolve pronto) + totais no
-cabeçalho (`n_fiscal.XML_TOT_IBS_CBS`) — **esta feature grava IBS/CBS
-direto nessas colunas**, não reescreve o XML inteiro (diferente do
-mecanismo usado em [[project_nfe_agrupada]], que nasceu antes desse
-achado). **Decisão explícita do usuário: não retrofitar
-`nfe_agrupada_service.py`** pra usar o mesmo mecanismo agora ("não tem
-porque ficar comparando com agrupar comandas") — registrado como
-melhoria pendente pra rodada futura, não implementada.
+cabeçalho (`n_fiscal.XML_TOT_IBS_CBS`).
+
+**Ordem revertida 2026-08-20, mesmo dia**: a versão original desta
+feature calculava IBS/CBS só DEPOIS da promoção pra `n_fiscal`, gravando
+direto nas colunas estruturadas acima **sem embutir no XML transmitido
+ao SEFAZ** (decisão explícita na época: "não tem porque ficar comparando
+com agrupar comandas", que aí calculava depois também — ver [[project_
+nfe_agrupada]]). O mesmo dia, um bug real de assinatura perdida foi
+achado no mecanismo equivalente de `nfe_agrupada_service.py` (reescrevia
+XML sem reassinar) — corrigido lá calculando IBS/CBS ANTES de emitir, e
+o usuário estendeu o mesmo princípio pra cá: **"IBS/CBS não é nada
+mais que um grupo dentro do XML da NFe/NFSe/NFCe, como qualquer outro"**.
+Implementado: IBS/CBS agora é calculado no MESMO loop que resolve o
+resto da tributação (ICMS/PIS/COFINS), antes de `emitir_nfe_sync` —
+`ibs_cbs_totais_xml`/`item["ibs_cbs_xml"]` chegam prontos e entram no XML
+que sai assinado/transmitido. As colunas estruturadas continuam gravadas
+depois do `INSERT` (úteis pra consulta sem parsear XML), mas com o MESMO
+valor já calculado, nunca recalculado de novo.
 
 **Arquivos**: `backend/services/nfe_avulsa_service.py` (novo — rascunho
 `nf_aux`/`nf_aux_itens`/`nf_aux_vencimento`, `_sugerir_tributacao_sync`,
@@ -2452,6 +6228,18 @@ mesmos casos já cobertos pro cliente). Suíte completa: 2113 passando (1
 falha pré-existente não relacionada, data hardcoded em
 `test_cnab_itau_service.py`).
 
+**Atualização 2026-08-20, mesmo dia — ordem do IBS/CBS revertida (ver
+acima)**: `INSERT INTO n_fiscal_itens` ganhou `OUTPUT INSERTED.id`
+(elimina a necessidade do `SELECT id FROM n_fiscal_itens WHERE codigo=…
+ORDER BY id` que existia só pra recuperar os IDs depois, já que agora
+o item IBS/CBS calculado é o MESMO objeto usado no `zip()` da gravação —
+não precisa mais re-resolver produto/re-calcular nada). +1 teste novo
+(`test_ibs_cbs_calculado_antes_de_emitir_e_gravado_estruturado`)
+confirmando `ibs_cbs_totais_xml`/`item["ibs_cbs_xml"]` chegando prontos
+no `emitir_nfe_sync` e as colunas estruturadas ainda gravadas depois
+(sem duplicar cálculo). Suíte completa: 2170 passando (mesma falha
+pré-existente não relacionada).
+
 **Fora de escopo desta rodada** (ver "Escopo desta rodada" no plano
 aprovado): as 6 sub-rotinas de importação automática (Pedido/Devolução/
 Compra/Requisição/NF/Complementar); reemissão de rascunho já promovido;
@@ -2459,6 +6247,141 @@ Compra/Requisição/NF/Complementar); reemissão de rascunho já promovido;
 "Gestor Fiscal" e do grupo "Fiscal" em Configurações > Módulos (pedido
 explícito do usuário, mas pra rodada futura separada); retrofit de
 `nfe_agrupada_service.py` pras colunas estruturadas de IBS/CBS.
+
+### 6 sub-rotinas de importação automática — "Gerar NFe" — IMPLEMENTADO 2026-08-20
+
+Escolhido pelo usuário como próxima frente (opção "todas as 6 de uma vez"
+via `AskUserQuestion`), fechando o item que a rodada de NF-e Avulsa acima
+tinha deixado de fora de propósito. Passou por Plan Mode formal — 3
+agentes Explore em paralelo (arquitetura atual do rascunho `nf_aux`,
+resolução das 3 pendências deixadas em aberto pelo rastreio anterior de
+`frmtranfe.frm`/`ModNF.bas`, e schema real das tabelas de origem via
+código Python já existente) — mais uma checagem ao vivo direta
+(`INFORMATION_SCHEMA.COLUMNS`, GERDELL/BARESTELA) das 4 tabelas que
+nenhum código Python ainda tocava, antes de escrever qualquer linha.
+
+**As 3 pendências da fonte, resolvidas nesta rodada**:
+1. **Marcador "`nf_aux` já promovida"** — achado em `NFe\frmtranfe.frm:
+   5251` (`tb2("num_nf") = Codigo_NF`, dentro de `ImprimeA`, chamada por
+   `CmdImprimir_Click` logo depois de `GravaNFE` setar o `Codigo_NF`) —
+   não em `Coliga` nem dentro do próprio `GravaNFE`, como se suspeitava.
+   **Já não era mais pendência de implementação** — `_emitir_nfe_avulsa_
+   sync` (implementado na rodada anterior) já fazia exatamente essa
+   gravação (`UPDATE nf_aux SET num_nf=...` ao final da promoção); o
+   achado só CONFIRMA que a implementação Python já estava certa, sem
+   precisar de nenhuma mudança.
+2. **FCP 2% em `ImportaComplementar`** — confirmado como literal
+   hardcoded de verdade na fonte (`frmtranfe.frm:8999`,
+   `precoFCP * 2 / 100`), não vem de config nem de coluna — fato fiscal
+   real e deliberado (não gambiarra de linguagem), seguro replicar como
+   literal. Validado ao vivo contra dado real (comanda 4695 de
+   BARESTELA): base R$12,00 → FCP R$0,24, bate exato.
+3. **Rótulos `opFrete`** (tipo de frete, `NFe\frmtranfe.frm:2207-2269`,
+   `OptionButton` array) — confirmados: Emitente/Destinatário/Terceiros/
+   Proprio por conta do remetente/Proprio por conta do destinatário/Sem
+   Transporte. **Fora de escopo desta rodada** — nenhuma das 6
+   importações depende de seleção de frete; o campo de transportadora já
+   existe no schema (`cnpj_transportadora`/`placa`/`motorista`/`volumes`/
+   `especie_volume`/`peso_bruto`/`peso_liquido`, em `_CAB_CAMPOS_AUX`)
+   mas sem exposição na UI ainda — registrado como pendência separada.
+
+**Schema real confirmado ao vivo** (`INFORMATION_SCHEMA.COLUMNS`,
+GERDELL/BARESTELA — nenhum código Python tocava essas 4 tabelas antes):
+`devolucao_config`/`requisicao_config_nfe` (`CFOP, Tipo_Mov, Cod_Icms,
+Destino` — resolução por UF confirmada); `comanda_nfce_detalhe` (tem
+`produto, qtd, p_unit, cfop, tributacao, BASE_FCP, VALOR_FCP, ALQT_FCP`
+diretos, mas **NÃO tem `COD_ICMS` própria** — o filtro `COD_ICMS='6'`
+do VB6 é contra `pecas.cod_icms`, via JOIN por `produto`, achado real
+desta rodada); `pedido_venda_prod.qtd_atendida` (confirmada existente,
+mas **sem CFOP por item** — mesma limitação estrutural de `nf_aux`, não
+é perda de dado real).
+
+**Decisão de arquitetura**: as 6 importações **não escrevem em `nf_aux`/
+`nf_aux_itens` diretamente** — cada uma é um endpoint READ-ONLY
+(`POST /nfe-avulsa/importar/{tipo}`) que resolve o documento de origem e
+devolve `{header, itens}` já no formato de rascunho; o frontend aplica
+isso no estado local (mesmo padrão que adicionar um item manualmente já
+usa) e o usuário confirma com "Salvar Rascunho"/"Emitir" já existentes.
+Nenhuma tabela nova, nenhuma escrita nova, reaproveita 100% do fluxo de
+persistência já implementado — reduziu bastante o escopo real em relação
+ao que o plano inicial temia.
+
+**As 6 funções** (`backend/services/nfe_avulsa_service.py`):
+- `_importar_pedido_sync` — `pedido_venda`+`pedido_venda_prod`. Mapeia
+  `tipo` → `mov` (5→S09, 2→S08, 3→S07, demais→S01, réplica direta,
+  **sem** a gambiarra `App.EXEName="JAMER"` da fonte). CFOP não
+  resolvido automaticamente (nenhuma tabela de configuração equivalente
+  encontrada) — usuário completa.
+- `_importar_devolucao_sync` — `devolucao_itens` JOIN `movimentacao`,
+  cliente resolvido via `CodMov→movimentacao.id_mov→movimentacao.
+  num_nf→comanda.comanda→comanda.cliente` (mesma cadeia já usada em
+  `notas_fiscais_service.py`'s cancelamento). CFOP/`mov` resolvidos via
+  `devolucao_config` por UF do cliente (`Destino`) — única das 6 (junto
+  com Requisição) que resolve cabeçalho fiscal automaticamente.
+- `_importar_compra_sync` — `pedido`+`pedido_itens` (fornecedor).
+  Desconto uniforme do cadastro do fornecedor (`fornecedor.desconto`),
+  réplica direta. CFOP não resolvido automaticamente (mesmo motivo do
+  Pedido).
+- `_importar_requisicao_sync` — `requisicao`+`rec_prod`. **Só itens** —
+  a tabela `requisicao` não tem FK de cliente/fornecedor própria
+  confirmada, então a resolução de CFOP por UF via
+  `requisicao_config_nfe` (schema confirmado, mas sem destinatário pra
+  alimentar o `Destino`) não pôde ser feita sem inventar uma fonte —
+  usuário completa cabeçalho inteiro manualmente.
+- `_importar_nota_fiscal_sync` — cópia quase 1:1 de `n_fiscal_itens` pra
+  `nf_aux_itens` (qtd/p_unit/desconto/bases-valores ICMS/IPI/ICMS-ST —
+  não PIS/COFINS/IBS-CBS, que `nf_aux_itens` não tem), sem recalcular
+  CFOP/tributação (assume origem correta, réplica da fonte). `tipo_
+  pessoa` (cliente/fornecedor) resolvido via JOIN `tipo_mov.origem_
+  destino` do `mov` da nota de origem.
+- `_importar_complementar_sync` — `comanda_nfce_detalhe` filtrado por
+  `pecas.cod_icms='6'` (JOIN via `produto`). `mov` fixo `S50`, CFOP fixo
+  `5102` (réplica). Item com `qtd=0`/`p_unit=0`; `BASE_FCP`/`VALOR_FCP`
+  vão pro CABEÇALHO (`SUM(qtd*p_unit)` e `×2%`). **Não replica o
+  endereço hardcoded do VB6** ("Rua Vitor Meireles 221, Riachuelo/RJ",
+  achado no rastreio anterior) — dado de uma instalação específica, não
+  regra de negócio (mesmo princípio de "Não replicar truques VB6");
+  destinatário resolvido do `cliente` real da comanda.
+
+Todas devolvem `header.tipo_pessoa` ("C"/"F") explícito quando
+`header.fornecedor` vem preenchido — evita o frontend precisar inferir
+cliente-vs-fornecedor a partir do `mov` (que nem sempre vem junto, ex.:
+Compra não resolve `mov` mas sempre é fornecedor).
+
+**Frontend** (`frontend/app/nfe-avulsa.tsx`): botão "Importar de..." ao
+lado do "+ Item" já existente, abre modal compacto (`SelectField` com as
+6 opções + campo numérico do documento). Ao importar: aplica `mov`/
+`cfop`/`BASE_FCP`/`VALOR_FCP` no cabeçalho, resolve e seta `cliente`/
+`fornecedor` (busca por código exato nos endpoints já existentes de
+busca de cliente/fornecedor) e adiciona os itens ao array local — usuário
+revisa/ajusta e usa "Salvar Rascunho"/"Emitir" normalmente. **`BASE_FCP`/
+`VALOR_FCP` ganharam estado próprio e entraram no payload de
+`salvarCabecalho`** (antes não existiam na tela — sem isso, o valor de
+FCP calculado pela importação Complementar se perderia no primeiro
+"Salvar Rascunho", já que esse endpoint sobrescreve o cabeçalho inteiro).
+Modo Didático: item novo em `NFE_AVULSA_AJUDA_ITENS` explicando as 6
+opções.
+
+**Testes**: `backend/tests/unit/test_nfe_avulsa_importacao.py` (novo, 24
+testes) — 1 por sub-rotina cobrindo documento não encontrado, sem itens,
+sucesso com mapeamento de campos correto, resolução de CFOP por UF
+(Devolução), FCP 2% (Complementar, com soma de múltiplos itens),
+`tipo_pessoa` resolvido (Nota Fiscal). Todas as 6 também validadas ao
+vivo contra dado real de BARESTELA antes de escrever os testes formais
+(pedido 10341, comanda 4695 — os únicos 2 documentos com dado real
+suficiente pra exercitar o caminho feliz nesse banco). Suíte completa:
+2235 passando (+24, mesma 1 falha pré-existente não relacionada).
+`tsc --noEmit`: 0 erros novos (baseline de 12 inalterada).
+
+**Fora de escopo desta rodada**: seletor de tipo de frete (`opFrete`) na
+UI — rótulos já rastreados, mas nenhuma das 6 importações depende dele;
+telas de busca/seleção dedicadas por tipo de documento (o VB6 usa
+`InputBox`/vetores pré-selecionados em outra tela pra várias delas) —
+esta rodada usa entrada numérica simples e uniforme pras 6; bloqueio de
+reimportação (o próprio VB6 não tem essa checagem, não inventado aqui).
+
+**NUNCA testado ao vivo no navegador** — mesma ressalva de todo o pacote
+fiscal (CLAUDE.md §12).
 
 ### Módulos NFCe/NFe/NFSe — implementado, com correção real no meio do caminho, 2026-08-20
 
@@ -2551,7 +6474,77 @@ nenhuma função Python; o gate correto da emissão continua sendo só
   e não foram portados — `nfe_emissao_service.py` hoje hardcoda
   `tp_amb="1"` (produção) em todo lugar. Achado de passagem durante o
   rastreio desta correção, fora do pedido original — registrar aqui pra
-  não esquecer, não implementar sem pedido explícito.
+  não esquecer, não implementar sem pedido explícito. **Resolvido depois**
+  — ver "Ambiente NFe / Danfe" mais abaixo, implementado 2026-08-20.
+
+**Atualização 2026-08-20, mesmo dia — pendência de "TSO" fechada.**
+Escolhido pelo usuário como item da rodada ("Reorganização de módulos
+(TSO/DMC/Alterdata)"). `DMC` e `Alterdata` já estavam resolvidos (ver
+acima); só `TSO` continuava com o comentário "nome ambíguo, não
+confirmado como fiscal" no grupo "Fiscal" de `modulos-recursos.tsx`.
+Rastreado contra `Geral\FrmGerKon.frm` (mesma tela desta seção):
+`Caption = "O.S. TSO"` (linha 113) + texto de e-mail de auditoria "TSO
+Ótica" (`Msgemail`, linhas 624/658/691) — confirma que é o módulo de
+segmento **Ótica** (mesma família de Posto/Cilindro/Clínica/
+Assistência), sem nenhuma relação com fiscal. Não entra no grupo
+"Fiscal" (já não entrava), fica na lista alfabética genérica junto dos
+demais módulos de segmento — mesmo tratamento que `DMC` já recebeu.
+Rótulo desambiguado em `controle_config_service.py`:
+`("TSO", "TSO")` → `("TSO", "TSO (Ótica)")`, mesmo padrão de
+`("DMC", "DMC (Posto)")` logo abaixo na mesma lista. Comentário de
+`modulos-recursos.tsx` atualizado pra registrar a conclusão (deixa de
+dizer "ambíguo"). Sem migração de schema, sem endpoint novo, sem teste
+novo (mudança de rótulo/comentário, nenhum comportamento novo) — suíte
+completa seguiu em 2206 passando, `tsc --noEmit` sem erros novos.
+
+**Correção do usuário, mesmo dia, logo em seguida** — confirmou os 3
+achados ("DMC está extinto. Alterdata é do Fiscal. TSO é uma Ordem de
+Serviço para Ótica") e pediu 2 ajustes sobre o que tinha acabado de ser
+implementado:
+
+1. **Rótulo final**: "TSO (Ótica)" → **"Ordem de Serviço TSO"**
+   (`controle_config_service.CAMPOS`).
+2. **TSO não fica na lista alfabética genérica — entra no grupo "Pré
+   Venda"** (renomeado de "Pedidos"), junto de Oficina/Assistência.
+   Rastreio confirma que TSO é a 3ª variação de Ordem de Serviço (mesmo
+   papel de Oficina/Assistência) pro segmento Ótica — mutuamente
+   exclusiva com as outras duas (só uma variação de O.S. ativa por vez),
+   mas o grupo "Pré Venda" inteiro (Pedido + O.S.) NÃO é exclusivo
+   consigo mesmo entre os dois subgrupos — uma empresa pode ter um
+   segmento de Pedido E um de O.S. ligados ao mesmo tempo, só não duas
+   variações do MESMO subgrupo.
+
+**Implementação**:
+- `backend/services/controle_config_service.py`: novo
+  `SEGMENTOS_OS_EXCLUSIVOS = ["Oficina", "Assistencia", "TSO"]` (espelha
+  `SEGMENTOS_PEDIDO_EXCLUSIVOS` já existente); `_save_config_sync` ganhou
+  o mesmo bloqueio server-side (defesa em profundidade) pra essa
+  exclusividade, mensagem própria.
+- `backend/services/permissoes_service.py::disabled_telas`: a regra "O.S.
+  habilitada se Oficina OU Assistência" ganhou o `OU flags.get("TSO",
+  False)` — TSO agora também libera as telas `OS`/`OS_COMP`/`RETIFICA`.
+- `frontend/app/modulos-recursos.tsx`: `Grupo` ganhou campo novo
+  `subgruposExclusivos?: string[][]` (mais granular que `exclusivo`, que
+  trata TODO `campos` do grupo como uma exclusividade só). Grupo
+  renomeado "Pedidos" → **"Pré Venda"**, `campos` agora é a união de
+  `SEGMENTOS_PEDIDO_EXCLUSIVOS` + `SEGMENTOS_OS_EXCLUSIVOS`, com
+  `subgruposExclusivos: [SEGMENTOS_PEDIDO_EXCLUSIVOS,
+  SEGMENTOS_OS_EXCLUSIVOS]` — os dois subgrupos convivem no mesmo
+  cabeçalho visual, cada um com exclusividade só entre si mesmo.
+  `toggle()` passou a checar subgrupo ANTES do grupo inteiro (senão
+  ligar "TSO" desligaria também "Bar"/"Cilindro", que não têm nada a
+  ver). "TSO" saiu do comentário de exclusão do grupo "Fiscal" (não fez
+  mais sentido reafirmar lá, já que agora tem posição própria).
+
+**Testes**: `test_save_rejects_dois_segmentos_os_ligados`/`test_save_
+rejects_tres_segmentos_os_ligados`/`test_save_allows_um_segmento_os_
+ligado`/`test_save_allows_um_pedido_e_um_os_juntos` (4 novos,
+`test_controle_config_service.py`) — cobre a nova exclusividade E
+confirma que Pedido+O.S. juntos continuam permitidos.
+`test_os_e_os_comp_visiveis_se_tso_ligado` (novo) +
+`_flags()`/2 testes renomeados pra incluir `TSO` na base
+(`test_permissoes_service.py`). Suíte completa: 2211 passando (+5, mesma
+1 falha pré-existente não relacionada). `tsc --noEmit`: 0 erros novos.
 
 ### Hub "Gestor Fiscal" (frontend) — IMPLEMENTADO 2026-08-20
 
@@ -2747,19 +6740,54 @@ própria compacta) + card no hub Gestor Fiscal, gateado por
 `moduleOn("nfe_ws")` (mesmo módulo "NFe" que já gateia Gerar NFe/Gerar
 NFe Comanda).
 
-**Gap registrado, fora do escopo desta rodada**: diferente de
-Contingência NFCe (já consultada por `comanda_service._emitir_nfce_
-comanda_sync` na emissão real), `nfe_agrupada_service.py`/`nfe_avulsa_
-service.py` **ainda não chamam** `contingencia_nfe_service.
-contingencia_aberta_sync` nem passam `contingencia=` pro `emitir_nfe_
-sync` — a tela fica só como registro/CRUD por enquanto, sem "Validar
-Contingência" equivalente ainda (não existe essa ação nas telas de NF-e
-hoje). Registrar quando/se for pedido.
+**Atualização 2026-08-20, mesmo dia — Contingência conectada à emissão de
+NF-e.** O gap acima ("nfe_agrupada_service.py/nfe_avulsa_service.py ainda
+não chamam contingencia_aberta_sync") foi fechado, escolhido pelo usuário
+como próxima frente do ecossistema fiscal. Mudança cirúrgica em cada
+service (2 linhas): antes de chamar `emitir_nfe_sync`, consulta
+`contingencia_nfe_service.contingencia_aberta_sync(cur)` e passa
+`contingencia=` adiante — o motor de emissão (`nfe_emissao_service.
+emitir_nfe_sync`) **já suportava esse parâmetro desde que foi criado**
+(mesmo mecanismo genérico de `emitir_nfce_sync`, replicado igual pro
+modelo 55) — o gap real estava só nos 2 CALLERS, não no motor.
 
-**Testes**: `backend/tests/unit/test_contingencia_nfe_service.py` (novo,
-14 testes — abrir com os dois tipos, bloqueios de módulo/permissão/
-motivo/dupla abertura, fechar, status). Suíte completa: 2128 passando (1
-falha pré-existente não relacionada). `tsc --noEmit`: 0 erros novos.
+**"Validar Contingência" pra NF-e** — equivalente ao que já existe no
+Gestor NFCe (`gestor_nfce_service._validar_contingencia_sync`), mas sem
+uma tela "Gestor NFe" própria pra embutir a ação (não existe essa
+listagem hoje). Solução: `contingencia_nfe_service.py` ganhou
+`listar_pendentes`/`validar_pendentes` — a PRÓPRIA tela Contingência NFe
+agora mostra as NF-e com `n_fiscal.situacao='G'` (aguardando) e permite
+validar (reassinar + transmitir de verdade) uma a uma ou em lote
+("Validar Todas"). Mesmo achado confirmado 2026-08-19 (Gestor NFCe)
+reaplicado aqui: "Validar Contingência" não é uma operação SEFAZ
+especial, é a autorização normal (`NFeAutorizacao4`) atrasada,
+reassinando o XML já gravado. Ao suceder: `n_fiscal.situacao='A'` +
+`UPDATE comanda_nf SET situacao='A' WHERE nota_fisc=%s AND situacao='G'`
+(no-op seguro pra NF-e Avulsa, que nunca grava `comanda_nf`).
+
+**Achado colateral fora de escopo, registrado**: em `nfe_agrupada_
+service.py`, o bloco de IBS/CBS (roda depois da emissão) reescreve
+`n_fiscal.xml` com uma versão SEM assinatura digital (monta XML puro via
+`_montar_xml_nfe`, nunca chama `assinar_xml` de novo) — vale pra toda
+emissão agrupada, contingência ou não, bug pré-existente não introduzido
+nesta rodada. Não quebra "Validar Contingência" (que reassina o que
+estiver salvo, então funciona de qualquer forma), mas deixa o campo
+`xml` de notas normais (situação "A") fora de sincronia com o que foi
+realmente transmitido/autorizado — só um problema de conferência/
+reimpressão, não de autorização em si. Ver "Estado Atual do Projeto" no
+topo deste arquivo — decisão de correção pendente do usuário.
+
+**Testes**: `backend/tests/unit/test_contingencia_nfe_service.py` — 14
+testes originais + 12 novos (`TestListarPendentesSync`/
+`TestValidarPendentesSync`, cobrindo bloqueios de permissão/módulo/
+certificado/UF/endpoint/estado da nota, sucesso, recusa SEFAZ, falha de
+comunicação). `test_nfe_agrupada_service.py`/`test_nfe_avulsa_service.py`
+ganharam fixture autouse `_sem_contingencia` (mock sem contingência
+aberta por padrão, mesmo racional do fixture `_modulo_nfe_ativo` já
+existente) + 1 teste novo cada confirmando que uma contingência aberta é
+repassada pro `emitir_nfe_sync` e grava `situacao='G'` corretamente.
+Suíte completa: 2168 passando (1 falha pré-existente não relacionada).
+`tsc --noEmit`: 0 erros novos.
 
 9. **Inutilização de Faixa NFe/NFCe** = `Geral\FrmTraINF.frm` (513 linhas,
    confirmado canônico). A mais complexa das telas pequenas — inutiliza
@@ -2785,6 +6813,554 @@ falha pré-existente não relacionada). `tsc --noEmit`: 0 erros novos.
      função em `NFe2.vb` — mesmo padrão de versionamento paralelo já visto
      em outras funções desta DLL, conferir qual delas está de fato em uso
      antes de portar.
+
+### Inutilização de Faixa NFe — IMPLEMENTADO 2026-08-20 (+ bug real corrigido em `inutilizacao_nfe`, compartilhado com NFC-e)
+
+Item 9 do blueprint acima, lado NFe — escolhido pelo usuário como próxima
+frente do ecossistema fiscal. O lado NFC-e já existia como ação embutida
+em Gestor NFCe (`gestor_nfce_service._inutilizar_faixa_sync`,
+2026-08-19). Protocolo Gauntlet acionado (Carlos+Kelvin+Thomé).
+
+**Achado importante ao rastrear o schema real antes de codar** (mesma
+disciplina que já tinha achado o bug de `contingencia_nfce`/`contingencia_
+nfe` no mesmo dia): `inutilizacao_nfe` **já existe no legado** —
+confirmado via `INFORMATION_SCHEMA`/`sys.indexes` ao vivo (GERDELL/
+BARESTELA). Schema real: PK **`codauto_inutilizacao`** (não `id`),
+`numero_inicial`/`numero_final` **FLOAT** (não INT — herdado do legado,
+preservado por fidelidade), `motivo` **NVARCHAR(50)** (não 500),
+`protocolo_sefaz` **NVARCHAR(20)** (não 50), `data_registro`
+**NVARCHAR(30)** (o legado grava uma STRING formatada à mão
+"dd/mm/aaaa às hh:mm:ss", não um `DATETIME`), `usuario` **NVARCHAR(50)**
+(texto livre — `Trim(UCase(UsuarioAtual))` no VB6 — não FK numérica).
+
+**Isso revelou o MESMO tipo de bug real já achado em `contingencia_
+nfce_service.py`, desta vez em `gestor_nfce_service.py`**: a DDL de
+`inutilizacao_nfe` (`_DDL_INUTILIZACAO_NFE`, escrita na rodada "Gestor
+NFCe") assumia `id INT IDENTITY` e tipos "modernizados" que não batem
+com a tabela real. Como o `CREATE TABLE IF NOT EXISTS` nunca dispara
+contra um banco que já tem a tabela, isso nunca quebrou nada — mas o
+`INSERT` já rodava **sem popular `data_registro`** (coluna nunca
+gravada, ficava `NULL`) e gravando `usuario` como **número cru** numa
+coluna que o VB6 sempre leu como texto. **Corrigido no mesmo dia**: DDL
+alinhada ao schema real (`gestor_nfce_service.py`), `_inutilizar_faixa_
+sync` (NFC-e) ganhou `data_registro` formatado + resolução de `usuario`
+pra texto (`nfe_fiscal_common.resolver_usuario_texto_sync` — nome_guerra
+do funcionário, novo helper compartilhado) + validação de `motivo` máx.
+50 chars (só tinha mínimo 15). Todos os 47 testes de `gestor_nfce`
+continuaram passando sem alteração (nenhum passava `usuario=`, então a
+resolução nova não quebrou nenhuma sequência de mock).
+
+**Generalização, não duplicação**: `_montar_xml_inutilizacao` (antes só
+NFC-e, `modelo="65"` fixo, vivia em `gestor_nfce_service.py`) foi movida
+pra `nfe_fiscal_common.montar_xml_inutilizacao` com parâmetro `modelo`
+— `gestor_nfce_service.py` mantém `_montar_xml_inutilizacao` como alias
+fino (`modelo="65"` fixo), mesmo padrão já usado pra `resolver_
+destinatario_cliente_sync`/`nfe_agrupada_service._resolver_destinatario_
+sync`, pra não quebrar `test_gestor_nfce_service.py` (chama a função do
+módulo diretamente). Os dicts de endpoint `_ENDPOINTS_CONSULTA`/
+`_ENDPOINTS_INUTILIZACAO` (só tinham "65") também migraram pra
+`nfe_fiscal_common.ENDPOINTS_CONSULTA_PROTOCOLO`/`ENDPOINTS_
+INUTILIZACAO`, ganhando a chave "55" — URLs SVRS de NF-e confirmadas
+direto no Portal SVRS via WebFetch (`nfe.svrs.rs.gov.br/ws/
+nfeinutilizacao/nfeinutilizacao4.asmx` produção, `nfe-homologacao...`
+homologação — mesmo padrão de troca `nfce↔nfe` já usado nos outros
+endpoints deste pacote), nunca inventadas.
+
+**Diferença real confirmada na releitura completa da fonte
+(`FrmTraINF.frm`, 513 linhas, lido por completo)**: ao contrário do
+lado NFC-e (que consulta o SEFAZ número a número antes de bloquear, via
+`comanda_nfce.chave_acesso` + `NfeConsultaProtocolo4`), o lado NFe faz
+uma checagem **100% local** — `SELECT num_nf FROM n_fiscal WHERE
+situacao_nfe IN (1,2,3,5) AND serie_nf=? AND num_nf BETWEEN ? AND ?`
+(réplica exata de `Command1_Click:300-318`) — nenhuma chamada ao SEFAZ
+antes de bloquear. Replicado fielmente, não é simplificação inventada.
+Também confirmado: a série de NF-e é lida de **duas tabelas diferentes**
+conforme o tipo — `controle` (série "principal") + `controle_nota_
+fiscal` (séries adicionais, multi-série) pro lado NFe (`Option1_Click`);
+`controle_aux.serie_nfce` é exclusiva do lado NFC-e (`Option2_Click`) —
+nunca confundidas.
+
+**Fora de escopo desta rodada, decisão explícita** (mesmo padrão já
+usado em Gestor NFCe): "Gerar XML" (`Command4_Click`) escreve arquivos
+`.xml` no disco LOCAL da máquina Windows rodando o VB6 — não portável
+pra um backend web multiempresa. A tela nova mostra o histórico (mesma
+fonte de dados, `inutilizacao_nfe`) mas sem exportação de arquivo —
+mesma decisão já tomada em Gestor NFCe ("Ver XML" nunca virou download
+real nesta app).
+
+**Arquivos**: `backend/services/inutilizacao_nfe_service.py` (novo —
+`_series_disponiveis_sync`, `_historico_sync`, `_inutilizar_faixa_nfe_
+sync`), `backend/services/nfe_fiscal_common.py` ganhou `montar_xml_
+inutilizacao`, `ENDPOINTS_CONSULTA_PROTOCOLO`/`ENDPOINTS_INUTILIZACAO`
+(ambos com "55"/"65"), `resolver_usuario_texto_sync`,
+`backend/services/gestor_nfce_service.py` corrigido (DDL real + `data_
+registro`/`usuario` no INSERT + motivo máx. 50 + alias fino de `_montar_
+xml_inutilizacao`), `backend/routes/inutilizacao_nfe.py` + `backend/
+models/inutilizacao_nfe.py`, permissão `INUTIL_NFE` (`ABRIR`/`GRAVAR`,
+menu `TRANSACOES`, nome de exibição "Inutilização NFe" — limite
+nvarchar(20) de `permissoes.nome`), `frontend/app/inutilizacao-nfe.tsx`
+(novo — série/números/motivo, dupla confirmação réplica das 2 caixas de
+diálogo do VB6, histórico read-only, Modo Didático) + card no hub Gestor
+Fiscal, gateado por `moduleOn("nfe_ws")` (mesmo módulo de Gerar NFe/
+Contingência NFe).
+
+**Gap registrado, fora do escopo desta rodada**: mesmo gap já registrado
+pra Contingência NFe — `nfe_agrupada_service.py`/`nfe_avulsa_service.py`
+não bloqueiam inutilização de números que ainda estejam "reservados"
+numa emissão em andamento (condição de corrida teoricamente possível,
+não tratada; mesmo nível de risco que já existe no legado, que também
+não trata isso).
+
+**Testes**: 16 novos em `backend/tests/unit/test_inutilizacao_nfe_
+service.py` (séries disponíveis, histórico, todos os bloqueios de
+validação/permissão/módulo/série/número-já-emitido, sucesso com série
+principal e com série adicional, recusa SEFAZ, falha de comunicação,
+falha de conexão) + 8 novos em `test_nfe_fiscal_common.py` (`montar_xml_
+inutilizacao` modelo 55 e 65, `resolver_usuario_texto_sync`). Suíte
+completa: 2153 passando (1 falha pré-existente não relacionada,
+`test_cnab_itau_service.py`, data hardcoded). `tsc --noEmit`: 0 erros
+novos (baseline de 12 inalterada).
+
+**NUNCA testado ao vivo contra SEFAZ real** — mesma ressalva de todo o
+resto do pacote fiscal desta migração (CLAUDE.md §12).
+
+### Ambiente NFe / Danfe (Homologação vs Produção) — IMPLEMENTADO 2026-08-20
+
+Escolhido pelo usuário como próxima frente, depois de 6+ rodadas seguidas
+de código fiscal novo sem nenhuma forma de testar contra o SEFAZ sem
+arriscar emissão real (tudo hardcodava `tp_amb="1"`, Produção). Protocolo
+Gauntlet acionado (Kelvin+Carlos+Thomé).
+
+**Rastreio da fonte antes de codar** (regra `[GLOBAL]` de controle/
+controle_aux — CLAUDE.md): `controle_aux.ambiente_nfe`/`modelo_danfe`
+confirmados reais via `INFORMATION_SCHEMA.COLUMNS` (GERDELL/BARESTELA,
+`smallint` os dois). **Não são configurados em `FrmGerCon.frm`** (a tela
+regular de Controle do Sistema, já toda mapeada) — grep no arquivo
+inteiro não achou nenhuma menção a "ambiente" e só achou "Modelo Danfe
+NFCe" (um campo DIFERENTE, `modelo_danfe_nfce`, já coberto). Achados em
+**`Geral\FrmGerKon.frm`** ("Módulos do Cliente", aba Kontacto — a mesma
+tela já usada pra `emite_nfce`/`nfe_ws`/`emite_nfse` numa rodada
+anterior):
+- `Option11`("Homologação")/`Option12`("Produção") — radio pair, linhas
+  353-368. Grava `tbconfig2("ambiente_nfe") = IIf(Option11.Value, 2, 1)`
+  **e** `Ambiente_NFSE = IIf(Option11.Value, 2, 1)` no MESMO clique
+  (linhas 520-522) — o legado usa um único toggle pra NFe E NFS-e, não
+  dois campos separados. Fail-safe confirmado no load (linha 858):
+  `CByte("0" & TbAux("ambiente_nfe")) = 0 Or ... = 2 Then Option11`
+  (Homologação) — valor ausente/`0`/`2` sempre cai pra Homologação, só
+  `1` exato é Produção. Replicado fielmente em `resolver_tp_amb_sync`.
+- `Option13`("Retrato") — modelo de Danfe, linha 377. `Option14`
+  ("Paisagem", presumido pelo nome da variável) **nunca foi implementado
+  como controle vivo** — só aparece numa linha de código COMENTADA
+  (`'If Not Option13.Value And Not Option14.Value Then`, linha 529); o
+  form sempre força `Option13.Value = True` antes de gravar (linha 530)
+  e no load (linha 863) — ou seja, nesta variante do form o campo é
+  efetivamente inerte, sempre grava/mostra Retrato. Capturado no
+  Controle do Sistema mesmo assim (a coluna aceita os dois valores), mas
+  sem nenhum consumidor ainda — não existe gerador de DANFE em PDF nesta
+  migração.
+
+**Implementação**:
+- `backend/services/nfe_fiscal_common.py` ganhou `resolver_tp_amb_sync
+  (cur) -> str` — único resolvedor, reaproveitado por todo o pacote.
+- `backend/services/controle_sistema_service.py`: `ambiente_nfe`/
+  `modelo_danfe` adicionados a `CAMPOS_CONTROLE_AUX`, na seção "Kontacto"
+  (só Master vê/edita — mesmo critério já usado pros outros campos dessa
+  seção, coerente com `FrmGerKon.frm` ser a aba interna de suporte, não
+  uma tela client-facing). Caem no ramo numérico genérico de
+  `_coerce_vals` (mesmo tratamento de `modelo_danfe_nfce`, que já vivia
+  ali) — não são boolean nem texto.
+- `frontend/app/controle-sistema.tsx`: nova subseção "Ambiente Fiscal"
+  dentro da aba Kontacto (`tab === "kontacto" && isMaster`) — 2
+  `SelectField` (compactWeb): "Ambiente NFe/NFSe" (Homologação/Produção)
+  e "Modelo Danfe" (Retrato/Paisagem), com texto de ajuda em linguagem
+  simples explicando o efeito real (documento de teste vs. documento
+  fiscal que vale contra o SEFAZ).
+- **11 call sites corrigidos**, `tp_amb="1"` hardcoded → `nfe_fiscal_
+  common.resolver_tp_amb_sync(cur)` (resolvido uma vez por função, fora
+  de loops quando há mais de uma nota/comanda por chamada):
+  `comanda_service.py` (`_cancelar_comanda_sync` — cancelamento fiscal
+  real; `_emitir_nfce_comanda_sync`; `_emitir_nfse_comanda_sync`),
+  `gestor_nfce_service.py` (`_cancelar_nfce_sync`; `_consultar_situacao_
+  sync`; `_inutilizar_faixa_sync`; `_validar_contingencia_sync`),
+  `inutilizacao_nfe_service.py` (`_inutilizar_faixa_nfe_sync`),
+  `contingencia_nfe_service.py` (`_validar_pendentes_sync`),
+  `nfe_agrupada_service.py`/`nfe_avulsa_service.py` (chamada a
+  `emitir_nfe_sync`).
+
+**Testes**: 7 novos em `test_nfe_fiscal_common.py`
+(`TestResolverTpAmbSync` — valor 1/2/0/NULL/linha ausente, fail-safe
+sempre Homologação exceto 1 exato) + 1 novo em `test_inutilizacao_nfe_
+service.py` (`test_ambiente_homologacao_usa_endpoint_de_homologacao` —
+prova ponta a ponta: com `ambiente_nfe=2`, a URL de fato usada na
+transmissão é a de Homologação, não só o resolvedor isolado). Fixture
+autouse `_tp_amb_producao` (mock "1", preserva comportamento anterior
+por padrão) adicionada a `test_comanda_service.py` (2 classes),
+`test_gestor_nfce_service.py` (nível de módulo, cobre as 4 classes
+afetadas), `test_inutilizacao_nfe_service.py`, `test_contingencia_nfe_
+service.py`, `test_nfe_agrupada_service.py`, `test_nfe_avulsa_service.py`
+— mesmo padrão já usado pra `modulo_nfce_ativo_sync`/`contingencia_
+aberta_sync`. Suíte completa: 2176 passando (1 falha pré-existente não
+relacionada). `tsc --noEmit`: 0 erros novos (baseline de 12 inalterada).
+
+**NUNCA testado ao vivo contra SEFAZ real, nem em Homologação** — mesma
+ressalva de todo o resto do pacote fiscal (CLAUDE.md §12) — mas agora,
+pela primeira vez, o caminho de Homologação está genuinamente disponível
+pra fazer esse teste sem risco de emissão fiscal real.
+
+### Gestor NFSe (Sefin Nacional/DPS) — IMPLEMENTADO 2026-08-20
+
+Escolhido pelo usuário como próxima frente ("Gestor NFSe (RPS
+municipal)"). Protocolo Gauntlet acionado (Kelvin+Carlos+Apoio Fisco+
+Thomé). **O escopo real ficou diferente do que foi escolhido** — ver os
+dois pivôs abaixo, ambos motivados por instrução explícita do usuário
+durante a própria implementação.
+
+**Pivô 1 — RPS municipal (Ginfes/ABRASF) abandonado em favor do padrão
+nacional.** Pesquisa inicial confirmou que o caminho RPS municipal é real
+e tem WSDL cacheado localmente (`Web References/NFSe_Nova_Iguacu/
+ServiceGinfesImplService.wsdl`, endpoints reais `https://homologacao.
+ginfes.com.br/ServiceGinfesImpl`/`https://producao.ginfes.com.br/
+ServiceGinfesImpl`, usado por Nova Iguaçu/IBGE 3303500) — mas
+`Backon_Controllers.NFSe.vb` tem 4250 linhas com um dialeto XML
+bespoke por município (Rio, Niterói, Itaguaí, Duque de Caxias, São
+Gonçalo cada um com branch própria), e implementar isso de verdade seria
+uma integração grande e de alto risco de divergência por cidade. Levado
+ao usuário via pergunta direta (1 município como prova de conceito, qual
+começar) — resposta do usuário mudou o eixo inteiro: **"fazer o padrão
+nacional. o município do Rio de janeiro usa esse."** Isso redirecionou
+a implementação inteira pra `Geral\FrmManNSeSefin.frm` (Sefin Nacional/
+DPS) em vez de `Geral\FrmManNSe.frm` (RPS municipal — lido por completo,
+1367 linhas, mas NÃO implementado, fica registrado como pendência
+conhecida caso algum cliente futuro precise de um município fora do
+padrão nacional).
+
+**Pivô 2 — autocorreção real sobre a tabela `dps`.** Baseado numa leitura
+rápida de um resumo do próprio PENDENCIAS.md ("grava n_fiscal
+(situacao_nfse)+comanda_nf (tipo=2)"), cheguei a afirmar ao usuário que
+"nosso motor de emissão nunca grava na tabela `dps`" e perguntei como
+retrofitar isso. O usuário pediu pra checar/testar contra a conexão
+**ARGEN TESTE** em vez de GERDELL/BARESTELA (BARESTELA não usa módulo
+fiscal — ver nota em "Estado Atual do Projeto" no topo deste arquivo) —
+lá, `dps` tem **119 linhas reais**, `STATUS='Transmitida'`, chaves de
+acesso reais de 50 posições (ex.:
+`33045572214341395000109000000000011926087055475000`), e `n_fiscal` tem
+8837 linhas com `situacao_nfse` preenchido — claramente dado de produção
+real, não teste vazio. Isso me levou a reler `_emitir_nfse_comanda_sync`
+por completo, e confirmei que o `INSERT INTO dps (...)` **já existia**
+(linhas 1380-1386), gravado corretamente numa sessão anterior — minha
+afirmação original estava ERRADA, e corrigi isso explicitamente pro
+usuário antes de continuar. Efeito prático: o escopo desta rodada
+encolheu de "retrofit da emissão + tela de gestão" pra só "tela de
+gestão" — a emissão já estava certa.
+
+**O que foi de fato implementado — só a listagem/consulta que faltava
+em cima da emissão já existente**:
+- `backend/services/nfe_fiscal_common.py` ganhou `consultar_json_mtls`
+  (GET autenticado por mTLS — mesmo padrão de `transmitir_json_mtls`,
+  mas sem corpo, pra consulta).
+- `backend/services/gestor_nfse_service.py` (novo) — `_list_nfse_sync`
+  (lista `dps` JOIN `comanda`/`cliente`, filtros de data/comanda/
+  cliente) e `_consultar_situacao_sync`/`_consultar_situacao_uma_sync`
+  ("Recuperar Informações", réplica de `Command3_Click`,
+  `FrmManNSeSefin.frm:692-758` → `Backon_Controllers.NFSeDPS.
+  RetornaXMLDANFEDPS`, `NFSeDPS.vb:672-737`) — endpoint real confirmado
+  na fonte VB.NET: `GET https://sefin.nfse.gov.br/SefinNacional/nfse/
+  {chave_acesso_nfse}` (distinto do endpoint de emissão, POST, já usado
+  por `nfse_emissao_service.py`; e distinto do endpoint de DANFE PDF,
+  `GET https://adn.nfse.gov.br/danfse/{chave}`, host diferente, binário
+  — não implementado nesta rodada). Sucesso grava `dps.STATUS`/
+  `dps.XML_NFSE`. Reaproveita `_modulo_sefin_nacional_ativo`
+  (`comanda_service.py`), `resolver_tp_amb_sync`, `carregar_certificado_
+  sync`, `_resolver_url_dps`/`_desempacotar_nfse`
+  (`nfse_emissao_service.py`) — nada duplicado.
+- `backend/models/gestor_nfse.py` + `backend/routes/gestor_nfse.py`
+  (novos) — `POST /gestor-nfse` (listar), `POST /gestor-nfse/consultar`
+  (com log de auditoria, tela `GESTOR_NFSE`, comando `CONSULTAR`).
+  Registrado em `server.py`.
+- Catálogo de permissões: tela `GESTOR_NFSE` (`ABRIR`/`CONSULTAR`),
+  registrada em `permissoes_service.py` logo após `GESTOR_NFCE`.
+- `frontend/app/gestor-nfse.tsx` (novo) — filtros (Emissão DPS de/até via
+  `WebDateField`, Comanda, Cód. Cliente), barra de seleção em lote
+  ("Recuperar Informações"), lista com checkbox por linha (comanda,
+  data, cliente, valor, STATUS colorido, nº DPS/série, chave de acesso),
+  modal de resultado por item, Modo Didático (`AjudaPedidoModal`, 4
+  itens). Gated por `can("GESTOR_NFSE.ABRIR"/"CONSULTAR")`, sem
+  `moduleOn` (o próprio fluxo de emissão em Alterar Comandas também não
+  tem esse guard no frontend — o módulo `sefin_nacional` é checado no
+  backend).
+- Card "Gestor NFSe" adicionado ao hub `gestor-fiscal.tsx` e à condição
+  de visibilidade do card "Gestor Fiscal" em `transacoes.tsx`.
+
+**Fora de escopo desta rodada** (documentado no docstring do módulo, não
+implementar sem pedido explícito): "Enviar por e-mail" (link público da
+NFS-e) e download de DANFE em PDF (`GET https://adn.nfse.gov.br/danfse/
+{chave}`, resposta binária, host diferente) — ambas ações existem no
+legado (`Command4_Click`/parte de `Command3_Click`) mas não têm
+consumidor Python ainda.
+
+**Testes**: `backend/tests/unit/test_gestor_nfse_service.py` (novo, 15
+testes) — sem permissão, módulo desligado, listagem básica + filtros no
+WHERE, falha de conexão, ambiente não reconhecido, sem certificado,
+sucesso/erro HTTP/falha de comunicação da consulta unitária, bloqueio
+sem código, sem chave de acesso (NFS-e ainda não transmitida), sucesso
+atualizando `dps.STATUS`, falha de comunicação não propaga exceção (grava
+resultado parcial e comita). Suíte completa: 2191 passando (+15, mesma 1
+falha pré-existente não relacionada em `test_cnab_itau_service.py`).
+`tsc --noEmit`: 0 erros novos (baseline de 12 inalterada).
+
+**NUNCA testado ao vivo contra o ADN real** — mesma ressalva de todo o
+resto do pacote fiscal (CLAUDE.md §12).
+
+### Gestor NFSe — "Baixar DANFE" e "Enviar por e-mail" — IMPLEMENTADO 2026-08-20
+
+Fecha os 2 itens deixados de fora da rodada original do Gestor NFSe,
+escolhido pelo usuário como próximo item do ecossistema fiscal.
+
+**Rastreio real de `Command4_Click`** ("Enviar por e-mail",
+`FrmManNSeSefin.frm:763-856`), antes de codar: o legado, pra cada linha
+selecionada, resolve o e-mail do cliente (`TestaEmail`, bloqueia se
+vazio), pede confirmação, e monta o anexo procurando ARQUIVOS JÁ EM
+DISCO (`Path_Ativo\xml\NFSe\<ano>\<mês-por-extenso>\<chave>.XML`/`.pdf`)
+antes de chamar `EnviaDocumentoEmail`. **Gambiarra de arquitetura
+pré-web, não regra de negócio** (mesmo princípio de "Não replicar
+truques VB6") — este backend nunca teve (nem teria como ter) um cache
+de arquivo local equivalente. A regra de negócio REAL por trás — "mandar
+o DANFE em PDF por e-mail pro cliente da comanda" — foi replicada
+buscando o PDF **fresco do ADN** a cada envio (com cache em
+`dps.PDF_DANFE_NFSE`, evita re-baixar à toa).
+
+**Implementação**:
+- `backend/services/nfe_fiscal_common.py` ganhou `consultar_binario_
+  mtls(endpoint, key_pem, cert_pem)` — irmã de `consultar_json_mtls`,
+  mesmo padrão de certificado como client cert TLS, mas devolve o corpo
+  BINÁRIO da resposta em vez de tentar decodificar JSON (o DANFE é um
+  PDF, `GET https://adn.nfse.gov.br/danfse/{chave}` — host `adn.`,
+  diferente do `sefin.` usado pra consulta/transmissão de DPS).
+- `backend/services/gestor_nfse_service.py` ganhou
+  `_obter_danfe_pdf_base64_sync` (busca `dps.PDF_DANFE_NFSE` em cache;
+  se ausente, baixa do ADN via `consultar_binario_mtls` e grava —
+  `varbinary(max)`, coluna já existente no schema real, confirmada ao
+  vivo) e duas funções públicas: `_baixar_danfe_sync` (usada pelo botão
+  "Baixar DANFE") e `_enviar_email_sync` (usada por "Enviar por
+  e-mail" — resolve `cliente.e_mail` via `dps.comanda → comanda.cliente
+  → cliente.e_mail`, bloqueia SÓ a linha sem e-mail/sem PDF disponível,
+  não o lote inteiro, mesmo padrão de "Recuperar Informações"). Reaproveita
+  `email_cobranca_service._enviar_email_sync` (já existente, já testada
+  ao vivo pra Boletos) pra disparar o SMTP — nenhum motor de e-mail novo,
+  só o corpo/assunto/anexo montados aqui.
+- Rotas novas: `POST /gestor-nfse/danfe`, `POST /gestor-nfse/
+  enviar-email` (log de auditoria, comando `CONSULTAR` — mesmo catálogo
+  de 2 comandos já existente pra esta tela, sem comando novo).
+- `frontend/app/gestor-nfse.tsx`: ícone "Baixar DANFE" por linha (só
+  quando a NFS-e já tem chave de acesso), decodifica o base64 recebido
+  em `Blob` e dispara download via `<a download>` (mesmo padrão já usado
+  pra baixar remessa CNAB em `geracao-boletos.tsx`). Botão "Enviar por
+  E-mail" na barra de seleção em lote, ao lado de "Recuperar
+  Informações". Modo Didático atualizado com as 2 ações novas.
+
+**Endpoint do DANFE em PDF não tem variante de homologação confirmada**
+(só um host único, `adn.nfse.gov.br`, foi encontrado — diferente de
+`_ENDPOINTS_DPS` que tem par produção/produção-restrita) — registrado
+como pendência, validar contra o ADN real antes de confiar em produção.
+
+**Testes**: `TestBaixarDanfeSync` (7) + `TestEnviarEmailSync` (7) — sem
+permissão, módulo desligado, não encontrada, PDF já em cache não chama
+o ADN de novo, sem chave/sem certificado bloqueiam, sucesso grava cache,
+falha de download não propaga exceção; cliente sem e-mail bloqueia só
+aquela linha, sucesso chama `email_cobranca_service` com o anexo
+correto, falha no envio é reportada sem derrubar o lote inteiro. Suíte
+completa: 2251 passando (+16, mesma 1 falha pré-existente não
+relacionada). `tsc --noEmit`: 0 erros novos (baseline de 12 inalterada).
+
+**NUNCA testado ao vivo contra o ADN real nem contra SMTP de verdade
+nesta tela específica** — mesma ressalva de todo o pacote fiscal
+(CLAUDE.md §12); a infra de SMTP em si (`email_cobranca_service`) já foi
+validada ao vivo em outro contexto (Boletos), mas não neste fluxo.
+
+### DANFE NF-e (modelo 55, Retrato/Paisagem) — IMPLEMENTADO 2026-08-20
+
+Escolhido pelo usuário como próxima frente ("Gerador de DANFE em PDF").
+Protocolo Gauntlet acionado (Kelvin+Carlos+Thomé). Passou por Plan Mode
+formal (`EnterPlanMode`) — 2 agentes Explore em paralelo investigaram (1)
+o pipeline de impressão/PDF já existente do projeto e (2) os 4 pontos de
+integração + schema real de `n_fiscal`, antes de qualquer código.
+
+**Descoberta que mudou o escopo real, achada durante a pesquisa**: a
+premissa inicial era "nada gera documento fiscal nenhum" — só é
+verdade pra NF-e modelo 55. `frontend/src/utils/danfeFacsimile.ts`
+(`buildDanfceHtml`/`buildDanfseHtml`) **já existia em produção**, usado
+por `gestor-comandas.tsx` pra reimprimir NFC-e/NFS-e (pedido de
+2026-07-21, "tem que trazer o documento fiscal") — simplificado (chave
+em texto, sem código de barras real; QR como link de texto, sem imagem),
+mas funcionando. Confirmado com o usuário via `AskUserQuestion`: esta
+rodada cobre **só NF-e** — fortalecer o Extrato NFC-e (código de barras
+e QR reais) fica pra rodada futura (ver "Pendências" no topo do
+arquivo).
+
+**Fonte legada rastreada, não portada linha a linha**:
+`Backon.Controllers/Danfe.vb` (15.518 linhas) — desenha o documento
+pixel a pixel via GDI+ (`System.Drawing`/`PrintDocument`). 3 caminhos
+reais confirmados na função `Danfe(...)`: `DanfeRetrato`/`DanfePaisagem`
+(modelo 55, condicionado ao mesmo toggle já capturado em `controle_aux.
+modelo_danfe`) e `DanfeNFCe` inteiramente separado (modelo 65 — confirma
+que Retrato/Paisagem é exclusividade de NF-e). Reconstruído contra a
+estrutura pública conhecida do DANFE (MOC Anexo I/II, Confaz/SEFAZ — a
+busca ao portal oficial bloqueou por redirect loop; layout implementado
+é conhecimento geral amplamente documentado do formato, **não fonte
+primária lida campo a campo** — Kelvin: validar contra o manual oficial
+antes de considerar definitivo).
+
+**Implementação**:
+- `backend/services/nfe_emissao_service.py` ganhou
+  `parse_nfe_xml_para_exibicao(xml_texto)` — irmã de `parse_nfce_xml_
+  para_exibicao` já existente, mas pro XML mais rico de modelo 55
+  (destinatário estruturado com endereço completo, NCM/CFOP/unidade por
+  item, dados de contingência `tp_emis`/`dh_cont`/`x_just`, e o
+  fragmento `<IBSCBSTot>` de `<total>` quando presente — extração exige
+  navegar 1 nível a mais, `gIBS/vIBS`/`gCBS/vCBS`, não é um dict plano
+  como os campos de `ide`/`emit`). **Achado ao escrever o teste**: uma
+  primeira versão fazia `{child.tag: child.text for child in
+  ibs_cbs_tot}` (só filhos diretos) — `gIBS`/`gCBS` são grupos aninhados
+  sem `.text` próprio, então os totais reais (`vIBS`/`vCBS`) ficavam de
+  fora silenciosamente; corrigido pra usar XPath explícito
+  (`n:gIBS/n:vIBS`) antes de escrever qualquer teste formal, confirmado
+  com um round-trip manual no REPL primeiro.
+- `backend/services/notas_fiscais_service.py` ganhou `_get_danfe_sync` —
+  busca `xml`/`protocolo_sefaz`/`chave_acesso`/`dhRecbto`/`situacao` de
+  `n_fiscal`, bloqueia com mensagem clara se `xml` vazio ("nota ainda
+  não emitida"), chama o parser, e **as colunas do cabeçalho sempre
+  sobrepõem o que vier do XML** (mesmo princípio já usado no consumidor
+  de `parse_nfce_xml_para_exibicao` — o XML assinado nunca é reescrito
+  com o protocolo pós-autorização). Busca também `controle_aux.
+  modelo_danfe`. Nova rota `GET /notas-fiscais/{codigo}/danfe`. **Sem
+  checagem de permissão própria** — mesma convenção já em uso no resto
+  deste service (`_get_sync` etc. não checam `classe`/`master`, só o
+  frontend gateia via `can("NOTAS_FISCAIS.ABRIR")`), não introduzida
+  inconsistência nova.
+- `backend/services/comanda_service.py::_get_doc_fiscal_sync` — branch
+  `tipo == "NF"` estendido com `xml`/`dhRecbto` no SELECT + o mesmo
+  parse, devolvendo `detalhe`/`modelo_danfe` — mesma forma que o branch
+  `NFCE` já fazia, alimenta a reimpressão por comanda sem rota nova.
+- `frontend/src/utils/danfeFacsimile.ts` ganhou `buildDanfeHtml(empresa,
+  detalhe, modeloDanfe)` — **desvio deliberado do padrão dos irmãos**
+  (`buildDanfceHtml`/`buildDanfseHtml` devolvem um FRAGMENTO `<div
+  class="doc">`, embrulhado pelo chamador via `printHtml`): esta função
+  devolve um DOCUMENTO HTML COMPLETO, porque precisa de `@page { size:
+  A4 portrait|landscape }` próprio pra alternar Retrato/Paisagem — o
+  wrapper padrão de `printHtml` só aceita largura de bobina térmica. O
+  chamador usa `printFullHtml` (não `printHtml`), mesmo padrão já usado
+  por `equipamentos.tsx` (impressão de QR Code com página própria).
+  Seções: cabeçalho (tipo Entrada/Saída), chave de acesso + código de
+  barras real (`buildBarcodeSvg`, já existente/reaproveitado, CODE128) +
+  protocolo, natureza da operação, emitente (`EmpresaHeader`),
+  destinatário completo, cálculo do imposto (só `valor_total` +
+  IBS/CBS real quando o XML trouxer — sub-totais de ICMS/IPI mostram
+  "-", XML atual não carrega essa granularidade, mesmo precedente já
+  usado no bloco IBS/CBS de `buildDanfseHtml`), tabela de itens, dados
+  adicionais, banner vermelho de "AMBIENTE DE HOMOLOGAÇÃO" quando
+  `tp_amb === "2"`, banner de contingência quando `tp_emis !== "1"`.
+  Bloco Transportador/Volumes **omitido de propósito** — o XML montado
+  por este backend não carrega dado de transporte ainda, mostrar campos
+  vazios seria enganoso.
+- Wiring em 3 pontos, todos `printFullHtml(buildDanfeHtml(...))`:
+  botão "Baixar DANFE" no `statusRow` de `notas-fiscais.tsx` (ao lado de
+  Criticar/Cancelar/Excluir, gated em `cab.chave_acesso` presente, com
+  spinner enquanto processa — regra `[GLOBAL]` de feedback >3s); botão
+  no modal de resultado pós-emissão de `nfe-avulsa.tsx`/`nfe-agrupada.
+  tsx` (idêntico nos dois arquivos); novo branch `j.tipo === "NF" &&
+  j.detalhe` em `gestor-comandas.tsx::reimprimirDocFiscal` (substitui o
+  fallback genérico de texto cru só pra esse tipo).
+- Nenhuma dependência nova — `buildBarcodeSvg`/`jsbarcode` já instalado;
+  QR Code não entra aqui (exclusividade de NFC-e, fora de escopo).
+
+**Testes**: `TestParseNfeXmlParaExibicao` (5, `test_nfe_emissao_
+service.py`) — extração completa, totais IBS/CBS aninhados, dados de
+contingência, XML vazio/inválido. `TestGetDanfeSync` (5, `test_notas_
+fiscais_service.py`) — nota não encontrada, sem XML bloqueia, XML
+inválido bloqueia, colunas sobrepõem o XML, `controle_aux` ausente não
+quebra. `test_nf_com_xml_inclui_detalhe_do_danfe` (`test_comanda_
+service.py`) + ajuste do teste NF já existente pro novo SELECT. Suíte
+completa: 2202 passando (+11, mesma 1 falha pré-existente não
+relacionada). `tsc --noEmit`: 0 erros novos (baseline de 12 inalterada).
+
+**NUNCA testado ao vivo contra impressão real/SEFAZ** — mesma ressalva
+de todo o pacote fiscal (CLAUDE.md §12). Layout não validado campo a
+campo contra o manual oficial (MOC Anexo I/II) — só contra a estrutura
+pública amplamente conhecida do formato.
+
+### Extrato NFC-e — código de barras e QR Code reais — IMPLEMENTADO 2026-08-20
+
+Fechamento da pendência deixada em aberto na rodada de "DANFE NF-e"
+acima, mesmo dia — escolhido pelo usuário como próximo item via
+`AskUserQuestion`. `buildDanfceHtml` (`danfeFacsimile.ts`) mostrava a
+chave de acesso e a URL do QR Code só como texto puro; passou a
+desenhar os dois de verdade.
+
+**Implementação**:
+- `backend/services/nfe_fiscal_common.py` ganhou
+  `gerar_qrcode_png_base64(texto)` — generaliza o padrão já usado em
+  `equipamentos_service._gerar_qrcode_sync` (`qrcode.make(...)` → PNG em
+  `BytesIO` → base64), mas pra qualquer texto/URL em vez de um prefixo
+  fixo. O conteúdo do QR (a própria `qr_code_url`, já montada por
+  `nfe_emissao_service.montar_url_qrcode` e embutida no XML transmitido)
+  é especificação pública — esta função só desenha a imagem, não decide
+  nada fiscal novo.
+- `comanda_service._get_doc_fiscal_sync`'s branch `NFCE` calcula
+  `detalhe["qr_code_png_base64"]` uma vez no servidor (quando
+  `qr_code_url` está presente), evitando um round-trip extra do
+  frontend — mesmo princípio de "servidor devolve o fac-símile pronto"
+  já usado em toda a linha DANFE/DANFCe/DANFSe. `try/except` silencioso
+  em volta da geração — falha ao desenhar o QR não pode derrubar a
+  reimpressão inteira, só omite a imagem (o link em texto continua
+  aparecendo como fallback).
+- `frontend/src/utils/danfeFacsimile.ts::buildDanfceHtml` — adiciona
+  `buildBarcodeSvg(chave_acesso, 32)` (CODE128, já existente,
+  reaproveitado sem mudança) logo abaixo da chave em texto, e
+  `<img src="data:image/png;base64,...">` do QR quando
+  `qr_code_png_base64` vier preenchido (mantém o link em texto ao lado,
+  não substitui). Também ganhou o banner vermelho "AMBIENTE DE
+  HOMOLOGAÇÃO — SEM VALOR FISCAL" quando `tp_amb === "2"` — dado já
+  presente em `detalhe.tp_amb`, mesmo requisito universal já aplicado
+  no DANFE NF-e, sem necessidade de pesquisa extra. Como este é o mesmo
+  `buildDanfceHtml` consumido tanto por `gestor-comandas.tsx` quanto por
+  `gestor-nfce.tsx` (`imprimirDanfce`) — os dois pontos de chamada já se
+  beneficiam automaticamente, nenhum wiring extra precisou ser tocado.
+
+**Achado real, fora do escopo original desta rodada**: `Pillow` está
+declarado em `backend/requirements.txt` (`pillow==12.2.0`) mas **não
+estava instalado em nenhum dos 2 venvs presentes nesta máquina**
+(`.venv`, `.venv - Copia`) — `qrcode.make(...).save(..., format="PNG")`
+depende dele pra rasterizar (`from PIL import Image` dentro do próprio
+pacote `qrcode`). Descoberto ao rodar um smoke-test manual da nova
+função no REPL (`ModuleNotFoundError: No module named 'PIL'`), não pelos
+testes unitários — **não existe nenhum teste unitário cobrindo
+`equipamentos_service._gerar_qrcode_sync`** (grep por "qrcode" em
+`test_equipamentos_service.py` não achou nada), então essa mesma
+dependência ausente já deixava o QR Code de Equipamentos (feature
+anterior, já em produção segundo a memória do projeto) quebrado nesta
+máquina sem que nada acusasse. Corrigido rodando `pip install
+pillow==12.2.0` no `.venv` ativo — resolve os dois recursos de uma vez,
+já que compartilham a mesma chamada `qrcode.make(...)`. **Não
+verificado se outros ambientes (produção, outra máquina de
+desenvolvimento) têm o mesmo problema** — registrado como pendência
+acima, no topo do arquivo.
+
+**Testes**: `TestGerarQrcodePngBase64` (2, `test_nfe_fiscal_common.py`)
+— PNG válido (assinatura de arquivo `\x89PNG\r\n\x1a\n`), conteúdos
+diferentes geram imagens diferentes. `test_nfce_com_qr_code_url_ganha_
+imagem_png_base64`/`test_nfce_sem_qr_code_url_nao_gera_imagem`
+(`test_comanda_service.py`) — confirma o merge condicional no branch
+NFCE. Suíte completa: 2206 passando (+4, mesma 1 falha pré-existente
+não relacionada). `tsc --noEmit`: 0 erros novos (baseline de 12
+inalterada).
+
+**NUNCA testado ao vivo** — mesma ressalva de todo o pacote fiscal
+(CLAUDE.md §12), agora reforçada pelo achado do Pillow: mesmo com o
+código correto, um ambiente sem a dependência instalada faria a geração
+de QR falhar silenciosamente (o `try/except` faz o link em texto
+aparecer sozinho, sem crash — comportamento aceitável, mas vale
+confirmar visualmente antes de considerar pronto).
 
 ### Gap real confirmado 2026-08-19 — `CalculaIBSCBS` NUNCA foi portado pro motor de emissão
 
@@ -8207,10 +12783,13 @@ direto quando pedirem (O.S. usaria sub-grupo "Ordens de Serviço",
 
 **Status: 🟡 Fase A implementada (2026-07-19)** — Cadastros auxiliares +
 Contrato completo (dados, itens, centro de custo, reajuste de valor,
-acréscimo/desconto, encerramento) + Rateio de Centro de Custo. **Faturar
-Contratos implementado 2026-07-20** (Faturar + Recibo — ver seção própria
-abaixo); Nota Fiscal/Boleto (dentro de Faturar Contratos) e **Envio de
-Cobrança** (remessa bancária/e-mail em massa) continuam fora de escopo.
+acréscimo/desconto, encerramento). **Faturar Contratos implementado
+2026-07-20** (Faturar + Recibo — ver seção própria abaixo); **Nota
+Fiscal/Boleto implementados 2026-08-24** (emite NFS-e automaticamente,
+ver seção "🟡 2026-08-24 — Contratos: Nota Fiscal/Boleto no Faturar
+Contratos" — caso misto com produto de O.S. e Rateio de Centro de Custo
+ainda bloqueados em 2 perguntas reais enviadas ao Leandro). **Envio de
+Cobrança** (remessa bancária/e-mail em massa) continua fora de escopo.
 
 **Atualizado 2026-07-19 (mesmo dia)**: o módulo inteiro passou a ser
 gateado por `controle_configuracao.contratos` (coluna legada, já existia
@@ -8554,23 +13133,34 @@ contrato já faturado no mês/ano, geração de Recibo com numeração
 sequencial e valor por extenso.
 
 **Não implementado nesta rodada** (confirmado escopo via
-`AskUserQuestion`):
-- **Nota Fiscal** (`EmiteNF` no legado — emissão fiscal real, provavelmente
-  via `Backon.Controllers.Nfe`, ver "Legacy VB6 Source Reference" no
-  CLAUDE.md) — motor de emissão fiscal completo, fora de escopo.
-- **Boleto** — layout específico por banco (Itaú, Bradesco, Banco do
-  Brasil, Santander, Sicredi, Sicoob, Inter, HSBC) + os campos de
-  `Duplicata_Rec_Venc` relacionados (banco_cedente/carteira/
-  numero_boleto/dados_remessa) já existem no schema mas não são
-  preenchidos por este backend ainda.
-- `CentroCustoContrato` (`n_fiscal_custo`) — distribuição de custo por
-  centro atrelada à emissão real de NF, não implementada (depende de NF
-  real existir).
-- **Envio de Cobrança** (`FrmEnvCob.frm`) — remessa bancária CNAB 240/400 +
-  e-mail em massa — continua inteiramente fora de escopo, própria
-  etapa de descoberta antes de estimar. **Ver seção própria "Bancos
-  (Cadastro de Cobrança)" logo abaixo** — análise feita 2026-07-23 sobre
-  se essa infraestrutura CNAB ainda faz sentido tal como no legado.
+`AskUserQuestion`) — **atualização 2026-08-24: Nota Fiscal/Boleto
+implementados como AÇÃO OPCIONAL (nunca automática, confirmado com o
+Leandro), ver "✅ 2 perguntas reais respondidas pelo Leandro" dentro de
+"🟡 2026-08-24 — Contratos: Nota Fiscal/Boleto no Faturar Contratos"**,
+itens abaixo mantidos só como histórico do que ainda faltava até então:
+- ~~**Nota Fiscal/Boleto** (`EmiteNF` no legado)~~ — implementado
+  2026-08-24 como botões separados "Emitir NF-e"/"Emitir NFS-e"
+  (`_emitir_documento_contrato_sync`, reaproveitando os motores de
+  Agrupar Comandas) — nunca dispara sozinho ao faturar.
+- **Boleto** — o layout específico por banco (Itaú, Bradesco, BB,
+  Santander, Sicredi, Sicoob, Inter, HSBC) já é coberto pela tela
+  "Geração de Boletos" (achado 2026-08-24: "Boleto" no legado chama a
+  MESMA rotina `EmiteNF` de Nota Fiscal, não tem motor próprio) — não
+  confirmado ao vivo ainda que o contrato faturado aparece lá.
+- ~~`CentroCustoContrato` (`n_fiscal_custo`)~~ — implementado 2026-08-24
+  (`_distribuir_centro_custo_sync`, sem o "+5%" — confirmado com o
+  Leandro que pode ser desconsiderado). ~~Só cobria o lado NF-e~~ — gap
+  do contrato 100% serviço FECHADO no mesmo dia: achada uma 2ª rotina
+  irmã do legado (`Geral\FrmFatContrato.frm`) que grava em
+  `receber_custo` (chave `Receber.codigo`) sempre no momento do
+  faturamento, independente de NF-e ser emitida — ver "✅ 2026-08-24 —
+  Contratos: Centro de Custo pra contrato 100% serviço (gap real
+  fechado)" mais abaixo.
+- ~~**Envio de Cobrança** (`FrmEnvCob.frm`)~~ — implementado 2026-08-25.
+  Achado real ao rastrear de verdade: NÃO é remessa CNAB (esse motor já
+  existia à parte, "Geração de Boletos") — é só envio de e-mail. Fase 1
+  sem anexo de PDF (nem Recibo nem Boleto têm arquivo persistido ainda).
+  Ver "✅ 2026-08-25 — Envio de Cobrança de Contratos" mais abaixo.
 
 ---
 
@@ -9210,15 +13800,14 @@ PDF/e-mail), deixando o motor de desenho como pendência separada.
   `frontend/src/utils/export-xlsx.ts`, já usado pelo Borderô de
   Cilindros) dos títulos atualmente na grade (já filtrados).
 
-**Fora de escopo desta rodada, registrado**: "Gerar PDF" (boleto com
-código de barras) e "Enviar por Email" (com o PDF anexado) — dependem do
-motor de desenho descrito acima. O SERVIÇO DE E-MAIL EM SI já está pronto
-e testado (ver seção "Serviço de E-mail de Cobrança" abaixo) — só falta o
-PDF pra anexar. "Somente registrados"/"Só duplicatas sem boleto" foram
-portados como filtros; o cruzamento com nota fiscal/comanda
-(`duplicata_rec_nf`/`n_fiscal`/`comanda_nf`, usado no legado só pra exibir
-"Comanda" na grade de impressão) não foi portado — não necessário pro
-fluxo de remessa/planilha.
+~~**Fora de escopo desta rodada, registrado**: "Gerar PDF" (boleto com
+código de barras) e "Enviar por Email" (com o PDF anexado)~~ — implementado
+2026-08-26, ver seção própria "Boleto em PDF" mais abaixo. "Somente
+registrados"/"Só duplicatas sem boleto" foram portados como filtros; o
+cruzamento com nota fiscal/comanda (`duplicata_rec_nf`/`n_fiscal`/
+`comanda_nf`, usado no legado só pra exibir "Comanda" na grade de
+impressão) não foi portado — não necessário pro fluxo de remessa/
+planilha/PDF/e-mail.
 
 ---
 
@@ -9317,6 +13906,173 @@ teste ao vivo do usuário.
 
 ---
 
+## ✅ CONCLUÍDO 2026-08-26 — Boleto em PDF (código de barras real) + anexo no e-mail
+
+Pedido direto do usuário ("vamos fazer a geração do boleto em PDF e
+anexá-lo no e-mail"), fecha o gap que tinha ficado registrado em
+"Geração de Boletos" (Fase 1, 2026-07-24) e em "Envio de Cobrança de
+Contratos" (Fase 1 sem anexo, 2026-08-25) — os dois bloqueados pelo
+mesmo motivo: nenhum motor de desenho de PDF existia neste projeto.
+
+**Fonte VB6 rastreada**: `Geral\IntegracaoBancaria.bas` (`BoletoItau`/
+`BoletoBradesco`, funções `Modulo_10`/`Modulo_11_Real`/
+`Modulo_11_Unibanco`) + `Kontacto\BancoInter.bas` (`BoletoInter`) —
+lidas linha a linha. Cada rotina tem cálculo de linha digitável/código
+de barras (regra Febraban real, portada literalmente) + desenho visual
+via `Printer` do VB6 (workaround GDI, não portado — ver "Não replicar
+truques VB6"). **Decisão de arquitetura**: layout único genérico padrão
+Febraban (mandatório pra todo banco desde 2015 — os 3 bancos no legado
+desenham a MESMA grade de campos, só com coordenadas diferentes por
+terem sido escritas em momentos diferentes), em vez de replicar 3
+rotinas de ~500 linhas de coordenadas GDI quase idênticas.
+
+**Achado real que mudou o escopo**: `duplicata_rec_venc.banco_cedente`/
+`conta_cedente`/`carteira`/`numero_boleto` são gravados na fonte VB6 no
+momento em que o boleto é IMPRESSO PELA PRIMEIRA VEZ (não existe um
+passo "Gerar Boleto" separado no legado) — e é essa gravação que
+HABILITA depois o título a aparecer em "Gerar Remessa"
+(`cnab_*_service._titulos_para_remessa_sync` exige `drv.banco_cedente`
+já batendo com o banco escolhido). Como nenhuma rotina desta migração
+grava esses 4 campos na criação da duplicata (`contratos_service.
+_transf_receber_sync` não grava), "Gerar PDF"/"Baixar PDF" agora
+REGISTRA o título no banco escolhido (idempotente) — mesmo comportamento
+da fonte, e fecha de brinde um gap de acoplamento real que impedia
+"Gerar Remessa" de achar títulos recém-faturados.
+
+**Bancos suportados: Itaú (341), Bradesco (237), Inter (77)** — mesmo
+escopo dos motores de remessa CNAB já implementados. Santander/BB
+devolvem mensagem clara, não implementados.
+
+**Backend**: `backend/services/boleto_pdf_service.py` (novo) —
+`_modulo_10`/`_modulo_11_real`/`_modulo_11_unibanco` (portados
+literalmente da fonte), `_montar_boleto_itau`/`_bradesco`/`_inter`
+(composição exata do código de barras de 44 dígitos + linha digitável
+por banco, ordem de campos copiada da fonte), `_gerar_itf25_bars`
+(código de barras Intercalado 2 de 5 desenhado manualmente via
+`reportlab.canvas.rect` — sem biblioteca de barcode externa, nenhuma
+instalada no venv), `_desenhar_boleto` (layout único Febraban-padrão,
+Recibo do Sacado + Ficha de Compensação), `_registrar_banco_no_titulo_
+sync` (a gravação achada acima, reaproveita `_gerar_nosso_numero_sync`
+de cada `cnab_*_service.py` — dispatch por atributo de módulo A CADA
+CHAMADA, não por dict fechado no import, pra `monkeypatch` funcionar
+nos testes), `gerar_pdf_titulos_sync`/`gerar_pdf_um_titulo_sync`.
+**Nova dependência**: `reportlab==5.0.1` (PDF puro-Python, sem
+dependência de sistema — `requirements.txt`).
+
+Rotas novas em `routes/geracao_boletos.py`: `POST /api/geracao-boletos/
+{cod_banco}/pdf` (download binário, `Content-Disposition: attachment`)
+e `POST /api/geracao-boletos/{cod_banco}/enviar-email` (por título:
+registra o banco, resolve e-mail do cliente pela mesma cascata já usada
+em Contratos, gera o PDF de 1 título, chama `email_cobranca_service`).
+Permissão `GERACAO_BOLETOS` ganhou ações `PDF`/`EMAIL`.
+
+**Retrofit em `contratos_service._enviar_cobrancas_sync`**: resolve o
+`duplicata_rec_venc.codigo` real ligado à comanda (join `cobrancas_
+enviadas.comanda = Receber.nota_fiscal(serie='CO') → Duplicata_Rec_Nf.
+nf_fiscal=Receber.codigo → Duplicata_Rec_Nf.duplicata=Duplicata_
+Receber.codigo → Duplicata_Rec_Venc.duplicata=Duplicata_Receber.
+codigo`) — se achar uma linha com `banco_cedente` já preenchido (título
+já passou por "Geração de Boletos" alguma vez), anexa o PDF de verdade.
+**Nunca aloca um banco novo aqui** (não há banco escolhido explicitamente
+nessa tela) — contrato tipo Recibo, ou Boleto que nunca passou por
+"Geração de Boletos", continua sem anexo, comportamento de 2026-08-25
+preservado.
+
+**Frontend**: `frontend/app/geracao-boletos.tsx` ganhou botões "Baixar
+PDF" (download direto via blob) e "Enviar por Email" (confirmação +
+lista de resultado por título, mesmo padrão de `contrato-envio-
+cobranca.tsx`), operando sobre os títulos marcados na grade já
+existente. `contrato-envio-cobranca.tsx` só teve o texto do Modo
+Didático atualizado (anexo passa a acontecer automaticamente no
+backend, sem mudança de fluxo na tela).
+
+**Validação da linha digitável/código de barras — 3 verificações
+independentes antes de virar código de produção**: (1) reimplementação
+isolada dos algoritmos de checksum (fora do módulo) comparada byte-a-
+byte contra a saída real, pros 3 bancos — bateu exato; (2) `_montar_
+boleto_itau` teve TODOS os blocos da linha digitável (DAC1/2/3, não só
+o código de barras) conferidos manualmente contra a mesma reimplementação
+isolada; (3) **PDF gerado contra dado REAL** de KONTACTO TESTE (só
+leitura — `SELECT`, nenhuma escrita), título #20616 (Banco Inter, cliente
+"TROPIFLORA DE GUARATIBA COMERCIO DE PLANTAS LTDA", valor R$300, boleto
+já registrado pelo sistema anteriormente) — cliente/cedente/valor/
+instruções corretos, código de barras de 44 dígitos válido. PDF enviado
+ao usuário pra conferência visual (2 vezes — um com dado fictício, um
+com dado real).
+
+**Testes**: `test_boleto_pdf_service.py` (novo, 25 testes — checksum,
+composição de código de barras por banco com valor esperado fixo,
+estrutura ITF-25, PDF multi-página válido), `test_geracao_boletos_
+service.py` (+12 testes — baixar PDF/enviar e-mail), `test_contratos_
+service.py` (+2 testes — anexo aparece quando duplicata resolvida, some
+quando não). Suíte completa: 2568 passando (só o flake de data de
+sempre). `tsc --noEmit`: baseline de 12 erros, sem novos.
+
+**Nunca testado com envio de e-mail real** — a governança de sempre
+(nunca disparar e-mail real/ação de produção sem confirmação explícita)
+foi mantida; a validação acima cobriu geração de PDF (leitura + desenho
+local), não o envio.
+
+### Recibo em PDF, mesmo dia (2026-08-26) — anexo pra contrato tipo Recibo
+
+Pedido direto do usuário logo em seguida ("fazer o recibo"). Diferente
+do Boleto (documento com efeito bancário real, código de barras/
+checksum), o Recibo de Contrato já tinha TODOS os dados computados por
+`contratos_service._gerar_recibo_sync` (usado pelo botão "Gerar Recibo"
+em Faturar Contratos, hoje só impressão HTML no navegador via
+`printHtml`) — só faltava um gerador de PDF de verdade pra poder ser
+anexado num e-mail (que o navegador não consegue gerar sozinho).
+
+**Bloqueio real levantado antes de implementar**: `Recibos` (tabela
+real) não tem NENHUMA coluna de referência de volta pra `comanda`/
+`contrato`/`cobrancas_enviadas` — confirmado ao vivo (schema real de
+KONTACTO TESTE). Sem essa referência, não há como saber "já foi emitido
+um Recibo pra esta cobrança" antes de gerar um novo, e `_gerar_recibo_
+sync` sempre avança `Controle.Seq_Recibo` (numeração sequencial oficial)
+a cada chamada — reenviar o mesmo e-mail geraria um Recibo NOVO (número
+diferente) cada vez. Perguntado ao usuário via `AskUserQuestion` como
+proceder (3 opções: só PDF sem mexer no e-mail / PDF+anexar aceitando o
+risco de duplicar numeração / PDF+coluna nova em `Recibos`) — escolheu
+"PDF + anexar no Envio de Cobrança".
+
+**Resposta de Leandro, no mesmo pedido, resolveu o risco sem precisar de
+coluna nova**: "recibo de contrato é o próprio número da comanda... não
+precisa criar coluna, pois o controle é o número da comanda, que já é
+controlado no sistema." Implementado literalmente: o anexo de e-mail usa
+o **número da COMANDA** como identificador do recibo (não o `seq/ano`
+sequencial) — nova função `contratos_service._montar_recibo_para_anexo_
+sync`, **só leitura, nunca grava em `Recibos`/`Controle.Seq_Recibo`** —
+reenviar o mesmo e-mail sempre produz o mesmo PDF, idempotente, sem
+risco de duplicar numeração oficial. O botão "Gerar Recibo" (Faturar
+Contratos, numeração sequencial oficial, `_gerar_recibo_sync`) continua
+existindo e funcionando exatamente como antes, sem nenhuma relação com
+este anexo — são 2 fluxos independentes por decisão explícita.
+
+**Implementado**: `backend/services/recibo_pdf_service.py` (novo,
+`gerar_recibo_pdf_bytes` — mesmo conteúdo já usado hoje no HTML impresso
+por `contrato-faturar.tsx`'s "Gerar Recibo": "Recebemos de X. A
+importância de R$ Y (Y por extenso). Referente à Z.", data, linha de
+assinatura). `contratos_service._enviar_cobrancas_sync` ganhou o ramo
+`tipo_cobranca=0` (Recibo) ao lado do já existente `tipo_cobranca=2`
+(Boleto) — mutuamente exclusivos por construção (um contrato só tem 1
+tipo de cobrança).
+
+**Validado com dado REAL** de KONTACTO TESTE (só leitura) — contrato
+#198 (tipo Recibo, "CONTRATO DE MAUNTEÇÃO"), comanda #13998, cliente
+"Restaurante Valle do peixe", valor R$150,00 — PDF gerado e enviado ao
+usuário pra conferência visual, número do recibo = "13998" (a própria
+comanda), exatamente como pedido.
+
+**Testes**: `test_recibo_pdf_service.py` (novo, 9 testes — formatação de
+moeda/data, quebra de linha, PDF válido mesmo com dados faltando),
++2 testes em `test_contratos_service.py` (anexo com número da comanda,
+sem anexo quando contrato/comanda não resolvem). Suíte completa: 2579
+passando (só o flake de data de sempre). `tsc --noEmit`: baseline de 12
+erros, sem novos. **Nunca testado com envio de e-mail real** (mesma
+governança do Boleto acima).
+
+---
+
 ## Serviço de E-mail de Cobrança
 
 **Status: 🟢 Implementado e testado com envio real 2026-07-24.**
@@ -9344,11 +14100,10 @@ teste foi enviado com sucesso para `carlos@kontacto.com.br`, confirmando
 autenticação e envio funcionando de ponta a ponta. 5 testes unitários
 (`test_email_cobranca_service.py`, SMTP mockado), todos passando.
 
-**Reutilizável, ainda sem tela que o consuma de verdade com anexo** — a
-única tela que precisaria dele hoje ("Enviar por Email" em Geração de
-Boletos) depende do PDF do boleto, que ainda não existe (ver seção
-"Geração de Boletos" acima). O serviço já suporta anexos
-(`MIMEApplication`), só falta o gerador de PDF pra produzir o que anexar.
+~~**Reutilizável, ainda sem tela que o consuma de verdade com anexo**~~ —
+2026-08-26: agora tem 2 consumidores reais com anexo — "Enviar por Email"
+em Geração de Boletos, e "Envio de Cobrança" de Contratos (quando o
+contrato já tem boleto registrado). Ver seção "Boleto em PDF" abaixo.
 
 ---
 
@@ -12743,8 +17498,14 @@ todos os casos `Tag` bate exatamente com o form chamado no handler).
   `Rel_Rec_ECO_Click` (abre `FrmEnvCob`, Envio de Cobrança) no código, mas
   **nenhum** `CommandButton Rel_Rec_ECO` está declarado no form — handler
   órfão (botão removido da tela em algum momento, handler ficou pra trás).
-  Envio de Cobrança já existe nesta migração dentro do módulo Bancos (ver
-  memória `project_bancos_cobranca`), então não é uma lacuna real.
+  **Correção 2026-08-25**: a nota original aqui ("já existe dentro do
+  módulo Bancos") estava ERRADA — confundia `FrmEnvCob` (tela de e-mail
+  de cobrança, sem nada de CNAB) com o motor CNAB de "Geração de
+  Boletos"/Bancos, que é uma coisa completamente diferente. `FrmEnvCob`
+  foi rastreado de verdade e implementado como "Envio de Cobrança" dentro
+  de Transações > Contratos (ver "✅ 2026-08-25 — Envio de Cobrança de
+  Contratos" mais abaixo) — a lacuna era real, só não tinha sido
+  percebida até esta rodada.
 - **Hardcode de CNPJ específico de cliente** (gambiarra, não regra de
   negócio — ver CLAUDE.md > "Não replicar truques VB6"): dentro do grupo
   Combustíveis, "Contagem de Abastecimentos" e "Mapa de Fechamento Diário"
@@ -17216,6 +21977,129 @@ Implementado nesta rodada — ver detalhe completo na memória
   navegar até o Painel de Pedidos de verdade pra validar visualmente o
   accordion, os chips ativos, o toast e o painel de Ajuda nas duas telas.
 
+### Sessão 2026-08-26 — Conexão da máquina, ofuscação do binário, layout da Venda, navegação por teclado (Produto + Forma de Pagamento)
+
+**Registrado pra quem retomar em sessão nova** (Leandro, conta
+`desenvolvimento@kontacto.com.br`) — histórico técnico completo (causa
+raiz de cada bug, trechos de código, tentativas que falharam antes de
+achar a certa) está na memória `project_kpdv.md`; aqui só o resumo do
+que mudou e o que ainda precisa de confirmação visual ao vivo.
+
+**1. Tela "Trocar conexão" travava quando a conexão salva estava
+quebrada.** Achado ao testar a instalação Baixo Brisa: a autorização pra
+trocar a conexão da máquina exigia logar pela API/conexão ATUAL — se
+essa conexão estivesse quebrada, a tela que serviria pra corrigi-la
+ficava travada também (efeito cascata). Corrigido substituindo por uma
+credencial FIXA e LOCAL (usuário `KONTACTO`, senha própria, guardada
+como hash SHA-256 em `Services/ConexaoMasterCredential.cs`) — a
+autorização não depende mais de rede nenhuma.
+
+**2. Binário ganhou ofuscação real.** `Obfuscar.GlobalTool` (MIT, open
+source) integrado no processo de build (`scripts/obfuscate.ps1`, chamado
+por `scripts/build-installer.ps1`) — esconde strings literais (inclusive
+o hash da credencial acima) e renomeia membros privados. Mitigação leve
+(não impede reverse engineering motivado), mas sobe bem a régua contra
+`ILSpy`/`strings` casual. Mapa de nomes original↔ofuscado fica em
+`obfuscation-maps/<versão>-mapping.txt` — necessário pra decodificar um
+crash report futuro, nunca deve ir pro cliente.
+
+**3. Tela de Venda usava só uma fração da largura da tela.** `MaxWidth`
+de 2026-08-15 (pensado pra não esticar os alvos de toque) criava espaço
+morto enorme em monitor largo — removido; a tela agora ocupa a largura
+real da janela.
+
+**4. Navegação por teclado no campo Produto — 3 bugs reais até acertar
+de vez** (todos confirmados ao vivo, dois por instrumentação de log
+temporária, já removida):
+   - Destaque visual não aparecia: `RelativeSource` não atravessa a
+     fronteira de um `Popup` (limitação real do WPF); depois `x:Reference`
+     também falhou (`ResourceDictionary` tem NameScope próprio). Solução
+     definitiva: padrão "BindingProxy" (`Helpers/BindingProxy.cs`).
+   - Setas silenciosamente não faziam nada se pressionadas antes da lista
+     de sugestões terminar de carregar (~300ms-1s de debounce+rede) —
+     corrigido forçando a busca na hora, igual o Enter já fazia.
+   - **O bug mais sutil**: mesmo com tudo certo no C# (confirmado por
+     log), o destaque ainda não aparecia — `Tag` é `object`, e o WPF NÃO
+     converte o `Value="True"` do `Trigger` pra `bool` nesse caso; ficava
+     comparando um `bool` contra uma STRING, nunca batia. Corrigido
+     devolvendo `"True"`/`"False"` (string) no conversor.
+   - Foco também ajustado: sempre no campo Produto ao carregar a tela E
+     depois de cada item inserido (antes só focava o `UserControl`
+     inteiro, não o campo em si) — e agora também ao voltar pra tela
+     principal depois de finalizar uma venda.
+
+**5. Campo Forma de Pagamento (painel Fechar Venda) redesenhado pro
+mesmo padrão** — pedido explícito do usuário depois de ver o resultado
+no Produto. Removido o combo "Tipo" (agora derivado da forma escolhida,
+não escolhido à parte); campo virou busca por teclado (local/síncrona,
+sem debounce/rede, já aplicando de saída a lição do bug de tipagem
+acima). Como pode haver várias linhas de pagamento simultâneas, cada
+uma tem seu próprio "destaque" independente (BindingProxy por linha,
+não um só global). Also: se o valor pago não cobrir o total, o foco
+volta sozinho pro campo (nunca bloqueia quando o valor é MAIOR — troco
+em dinheiro é cenário normal, não erro).
+
+**6. Painel de Pedidos (Bar) — paridade visual com o web.** Pedido
+explícito, depois do item 5: "o Pedido Bar do KPDV tem que ter as
+funções e recursos visuais do Pedido Bar Web, inclusive cores de cada
+grupo de situação dos cards." Funções já estavam quase todas portadas
+(drag-and-drop, Modificadores, Taxa de Serviço, etc.) — 3 gaps VISUAIS
+reais achados comparando com o código-fonte web (`painelTipos.ts`/
+`PainelPedidoCard.tsx`): borda de destaque do card estava embaixo, não
+na esquerda como o web; faltava o ícone por tipo (mesa/recibo/loja/
+bicicleta/livro) ao lado do número do pedido — só a cor já existia;
+cabeçalho de cada coluna (Mesa/Comanda/...) não tinha cor nenhuma. Os 3
+corrigidos, ícones confirmados contra a fonte real do WPF-UI antes de
+usar (não chutados).
+
+**7. Menu "Relatórios" novo, com "Fechamento de Caixa".** Pedido
+explícito: "criar Relatórios no menu lateral do KPDV. nele vamos criar a
+tela de Fechamento de caixa, o mesmo web app." Réplica de
+`frontend/app/relatorio-caixa.tsx`, mesmo endpoint
+(`GET /api/relatorios/caixa`) e mesmos 2 lookups já existentes
+(`/api/funcionarios`, `/api/area-atuacao`) — **nenhuma mudança de
+backend, nenhuma regra de negócio nova**. Novo item pai "Relatórios" no
+menu lateral (mesmo padrão de submenu do "Configurações", gate de
+permissão `REL_CAIXA.ABRIR` — permissão já existente no catálogo, não
+criada nesta rodada), com 1 filho por enquanto ("Fechamento de Caixa").
+
+Arquivos novos: `Models/RelatorioCaixaModels.cs` (DTOs espelhando o
+contrato exato do endpoint, inclusive `FuncionarioLookupDto.NomeExibicao`
+seguindo a regra `[GLOBAL]` "Nome do Vendedor — sempre nome_guerra"),
+`Services/RelatorioCaixaService.cs`, `ViewModels/
+RelatorioCaixaViewModel.cs` (filtro de período com a regra `[GLOBAL]`
+"data inicial repete na final"), `Views/RelatorioCaixaView.xaml(.cs)`.
+Conversores novos em `Converters/CommonConverters.cs`: `DateOnlyConverter`
+(`DateOnly` ↔ `DateTime?`, pro `DatePicker`) e `BoolToAsteriscoConverter`
+(marca "(*) " nas formas que não totalizam caixa — `Run` não tem
+`Visibility`, só dava pra resolver trocando o próprio texto).
+
+**Escopo desta rodada, registrado explicitamente**: só a tela de
+CONSULTA (filtros + os 2 cards de resultado "Entradas e Saídas"/"Resumo"
++ aviso de pedidos faturados sem forma de pagamento). **Fora de escopo
+por decisão consciente, não implementados**: impressão/PDF (o web usa
+`expo-print`, sem equivalente no KPDV), exportação de planilha
+(`export-fechamento-caixa.ts`/xlsx), e o gráfico de barras
+(`SimpleBarChart`, precisaria de lib de charting nova). Se qualquer um
+virar pedido explícito, é rodada própria.
+
+Build limpo (0 erros). Durante a revisão binding-a-binding contra os
+DTOs reais (sem debugger/teste ao vivo disponível nesta rodada — sem
+credencial de conexão em mãos), 3 bugs de lógica foram achados e
+corrigidos ANTES de qualquer teste externo: 2 conversores de
+`Visibility` invertidos (card de aviso e a área de resultado — mostrava
+exatamente o oposto do que devia) e 1 tentativa de usar `Visibility` num
+`Run` (propriedade que não existe em `Inline`/`TextElement`, corrigida
+trocando o texto direto via `BoolToAsteriscoConverter`).
+
+**Estado da verificação — importante pra quem retomar**: (1)-(4) foram
+efetivamente testadas ao vivo pelo usuário rodando o app de verdade,
+com idas e vindas até confirmar. (5) Forma de Pagamento, (6) Pedido Bar
+e (7) Fechamento de Caixa só passaram por build limpo + revisão de
+código — **nenhum dos três foi confirmado visualmente rodando o app
+ainda**. Primeira coisa a testar na próxima sessão, nesta ordem (mais
+antigo primeiro).
+
 ## Persistência de schema INTEGRAL (não pontual) — `backend/services/schema_ensure.py` (2026-08-11) — IMPLEMENTADO
 
 Correção arquitetural pedida pelo usuário logo após a regra `[GLOBAL]`
@@ -18926,11 +23810,29 @@ Módulos e Recursos depois, se pedido.
 - **Cupom não-fiscal** (`ImprimeNFceNaoFiscal`, emula uma NFCe
   visualmente sem ser documento real) — depende de infraestrutura de
   impressão térmica pra esse formato que ainda não existe nesta
-  migração.
+  migração. **Confirmado real pela equipe VB6 (2026-08-22)**: "temos
+  sim, impresso no final da venda na própria tela de vendas, dependendo
+  de como está configurado no gerencial/controle" — é gateado por uma
+  config real em `controle`/`controle_aux` (nome exato da coluna ainda
+  não rastreado), não um recurso opcional raramente usado.
 - **Contingência SEFAZ** — nem o backend Python nem o KPDV suportam
   ainda; uma emissão durante indisponibilidade real do SEFAZ falha com
   erro claro, não silenciosamente. Fica pro backlog (telas Contingência
-  NFe/NFCe do inventário abaixo).
+  NFe/NFCe do inventário abaixo). **Nuance levantada pela equipe VB6
+  (2026-08-22)**: "Temos sim. Fica em transações/notas fiscais/
+  contingência nfe... contingência nfce" — as telas Contingência NFe/
+  NFCe (que emitem em MODO contingência quando o SEFAZ está fora do ar,
+  mas ainda dependem de backend/banco disponíveis) **já estão
+  implementadas** (ver seção C do inventário, linha Contingência NFe
+  corrigida acima). O gap que este bullet descreve é mais literal —
+  operar o PDV/KPDV **sem nenhuma conectividade** (banco/backend também
+  indisponíveis, não só o SEFAZ) — que é uma pergunta DIFERENTE da que a
+  equipe VB6 respondeu. **Não resolvido ainda**: confirmar com a equipe
+  VB6 se esse cenário mais literal (backend/banco também fora do ar)
+  tem algum tratamento no legado, ou se "Contingência" no VB6 sempre
+  significou só "SEFAZ fora do ar, resto disponível" — não presumir a
+  resposta, perguntar antes de fechar este item como atendido ou como
+  gap real.
 - **Réplica prompt-a-prompt exata** do legado — esta rodada consolida
   num único painel (decisão de design acima); se pedido depois,
   registrar como pedido separado.
@@ -18947,7 +23849,15 @@ Módulos e Recursos depois, se pedido.
 ## Inventário de Telas Fiscais — pra revisão da equipe VB6 (v3, 2026-08-19)
 
 **Status: v3 — retorno real da equipe VB6 (Leandro Kontacto) recebido e
-incorporado.** Reúne tudo que já foi rastreado em sessões anteriores
+incorporado. Correções pontuais aplicadas 2026-08-22** (2ª rodada de
+perguntas, a partir de um levantamento de "funcionalidades ausentes por
+completo" respondido pela equipe VB6 via WhatsApp) — ver marcações
+"2026-08-22" nas linhas/notas abaixo pro que mudou: **CC-e adicionada
+como gap real de alta prioridade** (uso diário confirmado, eu tinha
+listado errado como fora de escopo), CT-e confirmado fora de escopo,
+Contingência NFe corrigida pra 🟢 (estava desatualizada na tabela),
+Cupom não-fiscal/CEST-NCM/Download-XML com escopo mais claro. Reúne tudo
+que já foi rastreado em sessões anteriores
 (Emissão Fiscal Real, Blueprint Gestor Fiscal, Agrupamento de Comandas)
 + uma varredura adicional por caption (`SPED`/`MDF`/`Sintegra`/
 `Substituição`/`DIFAL`/`Certificado`). Caminhos sempre relativos a
@@ -18991,7 +23901,8 @@ incorporado.** Reúne tudo que já foi rastreado em sessões anteriores
 | Gerar Nfe Comanda (impressão de NF) | `NFe\FrmTraImpNFE.frm` | 9009 | 🟡 núcleo (NFCe Fase1/NFSe Fase3) implementado; agrupamento e vários fluxos auxiliares não |
 | Gerar Nfe (avulsa, qualquer tipo de movimentação) | `NFe\frmtranfe.frm` (não a cópia desatualizada `Geral\FrmTraNFe.frm`) | 9009 | 🔴 não implementada |
 | Selecionar Comandas para Gerar NFE (agrupamento) | `Geral\FrmSelComandas.frm` | 2010 | 🔴 não implementada — achado 2026-08-18, gap real |
-| MDF-e — Manifesto de Documentos Fiscais Eletrônicos | `Kontacto\FrmTraMDF.frm` | 3681 | 🔴 não implementada — apontada pela equipe VB6 como faltante na v2 |
+| MDF-e — Manifesto de Documentos Fiscais Eletrônicos | `Kontacto\FrmTraMDF.frm` | 3681 | ✅ **Fase A + Fase B implementadas 2026-08-22** (cadastro + anexar NF-e/NFC-e + emissão real SEFAZ + Encerrar/Cancelar/Consultar/Gerar XML/DAMDFE — `mdfe.tsx`/`mdfe_service.py`/`mdfe_emissao_service.py` — ver seções "✅ CONCLUÍDO 2026-08-22 — MDF-e" acima). Nada testado ao vivo contra o SEFAZ real. |
+| Carta de Correção Eletrônica (CC-e) | `Geral\FrmManRec.frm` (ação dentro da tela já migrada, `notas-fiscais.tsx`/`notas_fiscais_service.py`) — `.frm` específico da ação ainda não localizado/lido | — | 🔴 não implementada. **Achado 2026-08-22, correção de análise minha**: eu tinha listado CC-e como "fora de escopo" num levantamento anterior; a equipe VB6 (Leandro) corrigiu direto: "usado integralmente e diariamente por todos os nossos clientes. Essa é uma funcionalidade que fica na tela manutenção/notas fiscais." Prioridade alta — é a única funcionalidade desta rodada de correções confirmada como uso diário generalizado (todos os clientes), o resto do gap-list era esporádico/legado/nunca usado. Próximo passo se retomado: localizar a rotina de CC-e dentro de `FrmManRec.frm` (ou módulo relacionado) e rastrear campo-a-campo antes de implementar — mesmo processo padrão de "Legacy VB6 Source Reference". |
 
 ### B. Gestão/Consulta por tipo de documento
 
@@ -19005,9 +23916,9 @@ incorporado.** Reúne tudo que já foi rastreado em sessões anteriores
 
 | Tela | Caminho | Linhas | Status |
 |---|---|---|---|
-| Contingência NFe | `Geral\FrmConNFe.frm` | 444 | 🔴 não implementada |
+| Contingência NFe | `Geral\FrmConNFe.frm` | 444 | 🟢 implementada 2026-08-20/21 (`contingencia-nfe.tsx` + `contingencia_nfe_service.py`), conectada à emissão real (NF-e Agrupada/Avulsa) + Validar Contingência — ver [[project_contingencia_nfe]]. **Linha desatualizada nesta tabela (v3, 08-19) corrigida em 08-22** — status real já era 🟢 antes desta rodada de perguntas, só não tinha sido refletido aqui. |
 | Contingência NFCe | `Geral\FrmConNFC.frm` | 467 | 🟡 infraestrutura mínima implementada 2026-08-19 (abrir/fechar/estado atual — não a grade histórica completa com Excluir) — ver seção "Gestor NFCe + Contingência NFCe" no fim deste arquivo |
-| Inutilização de Faixa NFe/NFCe | `Geral\FrmTraINF.frm` | 513 | 🟡 lado NFCe implementado 2026-08-19 (dentro do Gestor NFCe) — lado NFe não |
+| Inutilização de Faixa NFe/NFCe | `Geral\FrmTraINF.frm` | 513 | 🟢 lado NFCe implementado 2026-08-19 (dentro do Gestor NFCe); lado NFe implementado 2026-08-20 (`inutilizacao-nfe.tsx`, tela própria) — ver seção "Inutilização de Faixa NFe" |
 
 ### D. Recebimento / Entrada / Despacho
 
@@ -19023,15 +23934,15 @@ incorporado.** Reúne tudo que já foi rastreado em sessões anteriores
 |---|---|---|---|
 | Controle do Sistema (séries NF, Certificado Digital, CEP APIs, etc.) | `Geral\FrmGerCon.frm` | ~339KB | 🟢 implementada (`controle-sistema.tsx`) |
 | **Manutenção de Taxas** — inclui Reforma Tributária IBS/CBS/IS (Diferimento, Redução, CST/ClassTrib) | `Geral\FrmManTaxas.frm` | 4038 | 🟢 **CORREÇÃO 2026-08-19 — já implementada desde 2026-07-08**, rastreada campo-a-campo (não achada agora — meu inventário de 08/18 errou ao marcar como "nunca rastreada", ver nota abaixo). `frontend/app/taxas.tsx` + `tabelas_aux_service.py` (`CAMPOS_TAXAS`/`_list_taxas_sync`/`_get_taxa_sync`/`_save_taxa_sync`/`_delete_taxa_sync`), tabela `taxas` (~80 colunas). CST_IBS/CCLASSTRIB_IBS já validados contra a tabela nacional real `classtrib` (LC 214/2025, 145 linhas, confirmada ao vivo). Testada ao vivo contra GERDELL/BARESTELA (insert/update/list/delete, restaurado ao estado original). Detalhe completo em [[project_log_auditoria]] > "Décima sexta feature". |
-| CEST/NCM (Código Especificador de Substituição Tributária) | `Geral\FrmCesNCM.frm` | 559 | 🔴 não implementada — Produto Completo usa campo texto livre pra NCM/CEST hoje |
+| CEST/NCM (Código Especificador de Substituição Tributária) | `Geral\FrmCesNCM.frm` | 559 | 🔴 não implementada — Produto Completo usa campo texto livre pra NCM/CEST hoje. **Escopo confirmado pela equipe VB6 (2026-08-22)**: "isso é apenas uma tela de cadastro e consulta de ncm's e cest's" — é uma tabela auxiliar simples (CRUD + busca), não lógica de validação embutida em outro lugar. Bom candidato a vitória rápida se retomado — escopo pequeno e bem definido, mesmo padrão de outras tabelas auxiliares já migradas. |
 
 ### F. Apuração / Obrigações Acessórias — achadas agora, nunca rastreadas
 
 | Tela | Caminho | Linhas | Status |
 |---|---|---|---|
-| Apuração Fiscal | `Geral\FrmCalImp.frm` | 809 | 🔴 nunca rastreada, achada 2026-08-18 |
-| EFD — Escrituração Fiscal Digital (SPED) | `Geral\frmtraefd.frm` | 638 | 🔴 nunca rastreada. **Confirmado pela equipe VB6 (2026-08-19): "tem importância sim, mas faz menção a um layout bem antigo da EFD"** — validar contra a especificação SPED atual antes de usar este `.frm` como referência de layout. |
-| Exportação de Notas Fiscais (Sintegra) | `Geral\FRMEXPNF2003.frm` | 1002 | 🔴 nunca rastreada, achada 2026-08-18. **Confirmado pela equipe VB6 (2026-08-19)**: é a versão em uso — `Geral\FrmExpNF.frm` (2003) foi substituída por esta e saiu do inventário. |
+| Apuração Fiscal | `Geral\FrmCalImp.frm` | 809 | 🔴 nunca rastreada, achada 2026-08-18. **Esclarecido 2026-08-22** (usuário achou confuso o nome bater com um relatório já migrado): **não é o mesmo relatório** que "Apuração de Vendas - DRE" (`relatorio-apuracao-vendas.tsx`/`relatorio_apuracao_vendas_service.py`, já implementado, Painel de Relatórios > Caixa). Esse último vem de um `.frm` totalmente diferente (`Kontacto\FrmRelAPV.frm`) e é um relatório GERENCIAL/DRE — receita por mês/categoria (Contratos, Produtos/Serviços O.S., Venda Produtos/Serviços), custo, margem. `FrmCalImp.frm` (este item, ainda não migrado) é um relatório FISCAL de apuração de imposto — soma PIS/COFINS/ICMS(com alíquota efetiva calculada)/FCP/FCP Retido por item de NFe/NFCe já emitida, com modos "Somente DIFAL"/NFe/NFCe, filtro de período+CFOP, exporta planilha (`Command1_Click`, linhas 281-370+, lido nesta sessão pra confirmar — não presumido pelo nome). Os dois têm nome parecido em português ("Apuração de Vendas" vs "Apuração Fiscal") mas são conceitos e telas diferentes — só o segundo (fiscal) continua como gap real desta lista. |
+| EFD — Escrituração Fiscal Digital (SPED) | `Geral\frmtraefd.frm` | 638 | 🔴 nunca rastreada. **Confirmado pela equipe VB6 (2026-08-19): "tem importância sim, mas faz menção a um layout bem antigo da EFD"** — validar contra a especificação SPED atual antes de usar este `.frm` como referência de layout. **Detalhe adicional 2026-08-22**: "usado somente quando a contabilidade do posto freeway e posto mattar ainda eram da contabilidade da SMiguel" — uso histórico ligado a 2 instalações específicas sob uma contabilidade terceirizada que já não é mais a atual (verbo no passado). **Pergunta em aberto reencaminhada pra equipe VB6 (mesmo dia) — resposta de Leandro repetiu literalmente a mesma frase já registrada acima, sem confirmar diretamente "ainda usam por outro caminho" nem "está inativo"**. Não tratar a repetição como confirmação de inatividade (seria inferir além do que foi dito) — a pergunta original ("essas 2 instalações ainda usam EFD por algum outro caminho hoje, ou o módulo está genuinamente inativo?") continua tecnicamente em aberto; só reformular pra Leandro de forma mais direta (ex.: pergunta binária Sim/Não) se este módulo virar prioridade de verdade — não vale a pena insistir agora, dado o módulo não estar em nenhuma frente ativa. |
+| Exportação de Notas Fiscais (Sintegra) | `Geral\FRMEXPNF2003.frm` | 1002 | 🔴 nunca rastreada, achada 2026-08-18. **Confirmado pela equipe VB6 (2026-08-19)**: é a versão em uso — `Geral\FrmExpNF.frm` (2003) foi substituída por esta e saiu do inventário. **Aparente contradição com a resposta de 2026-08-22 ("não usado mais")** — não necessariamente contraditório: Sintegra como OBRIGAÇÃO FISCAL foi extinto nacionalmente há vários anos (substituído por SPED Fiscal em quase todo estado), então "é a versão em uso" (08-19, sobre qual `.frm` é o vigente no código) e "não usado mais" (08-22, sobre a feature em si) podem ser as duas verdadeiras ao mesmo tempo. Tratado como fora de escopo — nenhuma ação necessária, mas não reescrever a nota de 08-19 como errada sem confirmar essa leitura com a equipe VB6 primeiro. |
 
 ### G. Módulo de suporte (não é tela)
 
@@ -19071,6 +23982,22 @@ autorrevisão. Ver [[feedback_check_memory_before_inventory]].
   fiscal ativo).
 - `Geral\FrmExpNF.frm` (2003) — removida do inventário 2026-08-19,
   confirmado pela equipe VB6 como substituída por `FRMEXPNF2003.frm`.
+- **CT-e (Conhecimento de Transporte Eletrônico)** — adicionada aqui
+  2026-08-22: perguntado à equipe VB6 junto com MDF-e, resposta direta
+  "não temos" — cliente não usa/nunca usou CT-e, diferente de MDF-e
+  ("em uso", ver seção A do inventário). Fora de escopo genuíno, não
+  colocar no roadmap a menos que um cliente real peça no futuro.
+- **Download de XML de compra** — perguntado à equipe VB6 2026-08-22
+  junto com a confirmação de escopo de Recebimento de Mercadoria:
+  "não temos download de xml de compra, mas temos a importação de xml
+  no recebimento de notas fiscais" — ou seja, nunca existiu no legado
+  como feature própria (não é um gap de migração, porque não há nada
+  pra migrar); a funcionalidade real e confirmada como necessária é a
+  IMPORTAÇÃO de XML no Recebimento de Mercadoria, que já está desenhada
+  e não iniciada — ver [[project_recebimento_mercadoria]] e o plano
+  salvo em modo Plan (`virtual-yawning-pearl.md`, "Fase 2 — Importação
+  de XML de NF-e de entrada"). Esta resposta é uma confirmação forte de
+  que esse plano é a prioridade certa, não um desvio.
 
 ---
 
@@ -19218,8 +24145,9 @@ não a grade histórica completa com Excluir). Protocolo Gauntlet acionado
   de escopo, só abrir/fechar/estado atual foi pedido.
 - "Vincular NFCe a NFe de Devolução" — órfão na fonte, decisão do
   usuário de deixar fora.
-- Inutilização de faixa do lado **NFe** (`Geral\FrmTraINF.frm` cobre os
-  dois documentos) — só o lado NFCe foi implementado nesta rodada.
+- ~~Inutilização de faixa do lado **NFe**~~ — **implementada 2026-08-20**,
+  tela própria `inutilizacao-nfe.tsx`/`inutilizacao_nfe_service.py`, ver
+  seção "Inutilização de Faixa NFe" mais acima.
 - "Ver XML" é só visualização em modal — não baixa um arquivo `.xml` de
   verdade (sem precedente de download de arquivo nesta app ainda,
   `createObjectURL`/`<a download>` nunca usado). Se o usuário pedir

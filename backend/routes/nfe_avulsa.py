@@ -6,6 +6,8 @@ from fastapi import APIRouter, Request
 
 from models.nfe_avulsa import (
     EmitirNfeAvulsaRequest,
+    ImportarDevolucaoRequest,
+    ImportarDocumentoRequest,
     NovoRascunhoRequest,
     SalvarCabecalhoRascunhoRequest,
     SalvarItensRascunhoRequest,
@@ -44,6 +46,39 @@ async def salvar_itens(req: SalvarItensRascunhoRequest):
 @router.post("/nfe-avulsa/vencimentos")
 async def salvar_vencimentos(req: SalvarVencimentosRascunhoRequest):
     return await nfe_avulsa_service.save_vencimentos_rascunho(req.servidor, req.banco, req.codigo, req.vencimentos)
+
+
+# Importação automática (6 sub-rotinas) — ver "Importação automática" em
+# `services/nfe_avulsa_service.py`. Todas read-only (não escrevem em
+# `nf_aux`), o frontend aplica `header`/`itens` no rascunho já em edição.
+@router.post("/nfe-avulsa/importar/pedido")
+async def importar_pedido(req: ImportarDocumentoRequest):
+    return await nfe_avulsa_service.importar_pedido(req.servidor, req.banco, req.documento)
+
+
+@router.post("/nfe-avulsa/importar/devolucao")
+async def importar_devolucao(req: ImportarDevolucaoRequest):
+    return await nfe_avulsa_service.importar_devolucao(req.servidor, req.banco, req.ids_devolucao)
+
+
+@router.post("/nfe-avulsa/importar/compra")
+async def importar_compra(req: ImportarDocumentoRequest):
+    return await nfe_avulsa_service.importar_compra(req.servidor, req.banco, req.documento)
+
+
+@router.post("/nfe-avulsa/importar/requisicao")
+async def importar_requisicao(req: ImportarDocumentoRequest):
+    return await nfe_avulsa_service.importar_requisicao(req.servidor, req.banco, req.documento)
+
+
+@router.post("/nfe-avulsa/importar/nota-fiscal")
+async def importar_nota_fiscal(req: ImportarDocumentoRequest):
+    return await nfe_avulsa_service.importar_nota_fiscal(req.servidor, req.banco, req.documento)
+
+
+@router.post("/nfe-avulsa/importar/complementar")
+async def importar_complementar(req: ImportarDocumentoRequest):
+    return await nfe_avulsa_service.importar_complementar(req.servidor, req.banco, req.documento)
 
 
 @router.post("/nfe-avulsa/sugerir-tributacao")

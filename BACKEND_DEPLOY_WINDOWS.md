@@ -1,7 +1,18 @@
 # Back-On — Guia de Instalação do Backend em Windows
 
 > Guia passo a passo testado e validado. Use sempre `requirements-windows.txt`
-> (não o `requirements.txt`, que tem libs internas da Emergent).
+> (não o `requirements.txt`, que tem libs internas da Emergent e várias
+> dependências não usadas por este backend).
+>
+> **Atualizado 2026-08-26**: `requirements-windows.txt` estava desatualizado
+> (faltavam `reportlab`/`cryptography`/`lxml`/`signxml`/`qrcode`/`pillow`/
+> `requests`/`python-multipart`/`anthropic` — várias telas fiscais e de PDF
+> quebrariam com `ModuleNotFoundError` se instaladas com a versão antiga).
+> Corrigido e **testado numa venv nova, isolada** (`import server` funciona
+> só com o que está listado nele). Porta padrão do backend também corrigida
+> pra **8081** (o script oficial de inicialização usa essa porta — ver seção
+> "Rodar como serviço Windows" abaixo, reescrita pra usar o script já pronto
+> do projeto em vez do NSSM).
 
 ---
 
@@ -22,7 +33,7 @@
 ┌──────────────────────────┐
 │   💻 PC Windows          │
 │   uvicorn server:app     │ ◄── Este guia
-│   na porta 8001          │
+│   na porta 8081          │
 └────────────┬─────────────┘
              │ TCP 1433 (LAN da empresa)
              ▼
@@ -104,31 +115,39 @@ pip install -r requirements-windows.txt
 ```
 > ⚠️ **NÃO USE** `requirements.txt` — ele tem libs internas da Emergent que não existem no PyPI público.
 
-### 9. Criar/editar o arquivo `.env`
+### 9. Arquivo `.env` — OPCIONAL, só se a senha do `sa` for diferente do padrão
+Por padrão, o backend já usa `sa` / `Cmslrav@155` (a senha padrão de instalação
+Kontacto) — **não precisa criar `.env` nenhum** na maioria dos clientes. Só crie
+esse arquivo se o SQL Server do cliente tiver uma senha de `sa` diferente:
 ```powershell
 notepad .env
 ```
-Cole exatamente isto (apenas 2 linhas — as credenciais SQL `sa`/senha são estáticas no código):
 ```ini
-MONGO_URL="mongodb://localhost:27017"
-DB_NAME="backon_aux"
+SQL_LOCAL_USER=sa
+SQL_LOCAL_PASSWORD=SenhaRealDesteCliente
 ```
 Salve (`Ctrl+S`) e feche.
 
-> 💡 **Observação importante**: A conta administrativa do SQL Server (`sa` + senha
-> `Cmslrav@155`) está **fixa no arquivo `server.py`** e é a mesma para todos os
-> clientes Kontacto. Não precisa configurar nada além disso. O app envia a
-> **instância** (servidor) e o **nome do banco** no momento do login.
+> 💡 **Como o login funciona**: a conta administrativa do SQL Server (`sa` +
+> senha) é a mesma pra todos os clientes Kontacto, a não ser que sobrescrita
+> acima. O app/frontend envia a **instância** (servidor) e o **nome do banco**
+> no momento do login — nunca uma senha de banco por conexão.
+> **Incompatibilidade de versão do SQL Server**: se o servidor for antigo
+> (SQL Server 2014 ou anterior) e a conexão falhar com erro de protocolo
+> (`Adaptive Server connection failed`), o backend já tenta várias versões de
+> TDS automaticamente (7.4→7.0) — não costuma precisar de ajuste manual, mas
+> se precisar, `SQL_TDS_VERSION=7.0` no mesmo `.env` força a versão mais
+> compatível.
 
 ### 10. Liberar a porta no firewall (PowerShell como Administrador)
 ```powershell
 New-NetFirewallRule -DisplayName "Back-On API" -Direction Inbound `
-                    -LocalPort 8001 -Protocol TCP -Action Allow
+                    -LocalPort 8081 -Protocol TCP -Action Allow
 ```
 
 ### 11. Iniciar a API
 ```powershell
-uvicorn server:app --host 0.0.0.0 --port 8001 --reload
+uvicorn server:app --host 0.0.0.0 --port 8081 --reload
 ```
 
 > **IMPORTANTE (estrutura modular):** a partir de jun/2026 o backend deixou de ser
@@ -140,18 +159,18 @@ uvicorn server:app --host 0.0.0.0 --port 8001 --reload
 > Se você inicia pelo **Visual Studio** (cujo diretório de trabalho costuma ser a
 > raiz da solução), use **uma** das opções abaixo — ambas já funcionam:
 > - Definir o *Working Directory* do projeto como a pasta `backend` e iniciar `server:app`; ou
-> - Iniciar a partir da raiz com `uvicorn backend.server:app --host 0.0.0.0 --port 8001`
+> - Iniciar a partir da raiz com `uvicorn backend.server:app --host 0.0.0.0 --port 8081`
 >   (o `server.py` agora insere a própria pasta no `sys.path` e resolve os imports).
 
 
 Você verá:
 ```
-INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     Uvicorn running on http://0.0.0.0:8081 (Press CTRL+C to quit)
 INFO:     Application startup complete.
 ```
 
 ### 12. Testar no navegador
-Abra: http://localhost:8001/api/
+Abra: http://localhost:8081/api/
 Deve mostrar:
 ```json
 {"message":"Back-On API ativo"}
@@ -171,7 +190,7 @@ Exemplo de resposta:
    Endereço IPv4. . . . . . . . . . . . . . : 192.168.18.50
 ```
 
-Use esse IP no celular: `http://192.168.18.50:8001/api/`
+Use esse IP no celular: `http://192.168.18.50:8081/api/`
 
 Esse IP+porta é o valor que vai no campo **"API"** da tela de Conexões do app.
 
@@ -186,7 +205,7 @@ No celular (ou Expo Go), na tela **Conexões → Nova Conexão**, preencha:
 | **Empresa** | `BAR ESTELA` |
 | **Servidor (instância SQL)** | `GERDELL` ou `192.168.18.10\SQLEXPRESS` |
 | **Banco** | `BARESTELA` |
-| **API (endereço do backend)** | `http://192.168.18.50:8001` ← este guia |
+| **API (endereço do backend)** | `http://192.168.18.50:8081` ← este guia |
 
 > 💡 O campo **API** aceita qualquer URL alcançável pelo celular: IP local,
 > domínio público com HTTPS, etc. Múltiplos clientes podem coexistir no mesmo
@@ -208,7 +227,7 @@ $body = @{
     senha = "`$KONT2011"
 } | ConvertTo-Json
 
-Invoke-RestMethod -Uri "http://localhost:8001/api/login" `
+Invoke-RestMethod -Uri "http://localhost:8081/api/login" `
                   -Method Post -Body $body -ContentType "application/json"
 
 # Teste 2 — Usuário real da tabela usuarios (precisa SQL Authentication ligado)
@@ -220,13 +239,13 @@ $body = @{
     senha = "minhasenha_real"
 } | ConvertTo-Json
 
-Invoke-RestMethod -Uri "http://localhost:8001/api/login" `
+Invoke-RestMethod -Uri "http://localhost:8081/api/login" `
                   -Method Post -Body $body -ContentType "application/json"
 ```
 
-> ⚠️ **Observe**: este teste manual usa `http://localhost:8001/api/login` porque
+> ⚠️ **Observe**: este teste manual usa `http://localhost:8081/api/login` porque
 > está rodando no mesmo PC. No celular o app vai usar o IP/URL configurado no
-> campo **API** da conexão (ex: `http://192.168.18.50:8001/api/login`).
+> campo **API** da conexão (ex: `http://192.168.18.50:8081/api/login`).
 
 ---
 
@@ -235,51 +254,83 @@ Invoke-RestMethod -Uri "http://localhost:8001/api/login" `
 Quando houver atualização do código no GitHub:
 
 ```powershell
-# Pare o uvicorn (Ctrl+C)
+# Se o backend estiver rodando como Tarefa Agendada (ver seção abaixo), pare antes:
+Stop-ScheduledTask -TaskName "BackOn-Backend"
+Get-Process python -ErrorAction SilentlyContinue | Where-Object {
+    (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -like "*server:app*"
+} | Stop-Process -Force
+
 cd C:\desenv\BackOn-mobile
 git pull
 cd backend
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements-windows.txt    # atualiza libs se mudou algo
-uvicorn server:app --host 0.0.0.0 --port 8001 --reload
+
+# Reinicia a tarefa (ver seção abaixo) — ou, se estiver testando manualmente:
+Start-ScheduledTask -TaskName "BackOn-Backend"
 ```
+
+> ⚠️ **O backend em produção roda SEM `--reload`** (mesmo padrão do script
+> oficial `scripts\start-backend.ps1`) — uma mudança de código só entra em
+> vigor depois de **reiniciar o processo**. Sempre confirme que não sobrou
+> nenhuma instância antiga rodando antes de subir a nova (comando de
+> diagnóstico na seção Troubleshooting, "Porta 8081 já em uso") — uma
+> instância órfã de uma sessão anterior pode continuar servindo código
+> desatualizado sem avisar.
 
 ---
 
-## 🛠 Rodar como serviço Windows (produção, opcional)
+## 🛠 Rodar como serviço Windows (produção) — script oficial do projeto
 
-Para a API subir junto com o Windows e reiniciar sozinha:
+O projeto já tem 2 scripts prontos em `backend\scripts\` — **use-os em vez de
+NSSM ou de qualquer outra ferramenta de terceiros**:
 
-### 1. Baixar NSSM
-https://nssm.cc/download → `nssm-2.24.zip` → extraia em `C:\nssm`
+- **`start-backend.ps1`** — sobe `uvicorn server:app` (porta 8081 por
+  padrão), grava log diário em `backend\logs\backend-AAAAMMDD.log`, e fica
+  num loop de supervisão: se o processo cair (ex.: SQL Server ainda não
+  disponível no boot), ele reinicia sozinho depois de alguns segundos.
+- **`install-startup-task.ps1`** — registra o `start-backend.ps1` como uma
+  **Tarefa Agendada do Windows** (`BackOn-Backend`), rodando como `SYSTEM`
+  desde a inicialização do Windows, **mesmo sem ninguém logar** — é o
+  equivalente ao que o NSSM faria, mas sem instalar nada de terceiro.
 
-### 2. Instalar serviço (PowerShell como Administrador)
+### 1. Registrar a tarefa (uma única vez, PowerShell como Administrador)
 ```powershell
-cd C:\nssm\win64
-.\nssm.exe install BackOnAPI
+cd C:\desenv\BackOn-mobile\backend\scripts
+powershell -ExecutionPolicy Bypass -File .\install-startup-task.ps1
+```
+Isso já cria a tarefa `BackOn-Backend` configurada pra iniciar no boot,
+com até 999 tentativas de reinício automático em caso de falha.
+
+### 2. Iniciar agora (sem precisar reiniciar o PC)
+```powershell
+Start-ScheduledTask -TaskName "BackOn-Backend"
 ```
 
-No diálogo gráfico:
-- **Path**: `C:\desenv\BackOn-mobile\backend\.venv\Scripts\python.exe`
-- **Startup directory**: `C:\desenv\BackOn-mobile\backend`
-- **Arguments**: `-m uvicorn server:app --host 0.0.0.0 --port 8001`
-- Aba **Details** → Display name: `Back-On API`
-- Aba **I/O** → Output: `C:\Logs\backon-stdout.log` / Error: `C:\Logs\backon-stderr.log`
-- Clique **Install service**
-
-### 3. Iniciar
+### 3. Comandos úteis
 ```powershell
-nssm start BackOnAPI
+# Ver status
+Get-ScheduledTask -TaskName "BackOn-Backend" | Get-ScheduledTaskInfo
+
+# Parar
+Stop-ScheduledTask -TaskName "BackOn-Backend"
+
+# Ver logs ao vivo
+Get-Content (Get-ChildItem C:\desenv\BackOn-mobile\backend\logs\*.log | Sort-Object LastWriteTime -Descending | Select-Object -First 1) -Wait -Tail 50
+
+# Desinstalar
+Unregister-ScheduledTask -TaskName "BackOn-Backend" -Confirm:$false
 ```
 
-### 4. Comandos úteis do serviço
+### 4. Checar se não há instâncias duplicadas (fazer isso sempre que algo "não atualizar")
 ```powershell
-nssm stop BackOnAPI         # parar
-nssm start BackOnAPI        # iniciar
-nssm restart BackOnAPI      # reiniciar
-nssm remove BackOnAPI confirm   # desinstalar
-Get-Content C:\Logs\backon-stdout.log -Wait -Tail 50    # ver logs ao vivo
+Get-CimInstance Win32_Process | Where-Object {
+    $_.CommandLine -like "*start-backend.ps1*" -or $_.CommandLine -like "*uvicorn*server:app*"
+} | Select-Object ProcessId, CommandLine
 ```
+Se aparecer **mais de um processo `start-backend.ps1` e mais de um `uvicorn`**,
+tem instância órfã de uma execução manual anterior — mate todas e reinicie só
+a Tarefa Agendada (passo 2 acima), nunca deixe rodando em paralelo.
 
 ---
 
@@ -295,8 +346,8 @@ Get-Content C:\Logs\backon-stdout.log -Wait -Tail 50    # ver logs ao vivo
 | Mobile não chega na API | Firewall do Windows (rode o comando do passo 10) ou celular em rede diferente |
 | `Cannot connect to SQL Server` | Habilite TCP/IP no SQL Server Configuration Manager. Reinicie o serviço SQL. |
 | `ModuleNotFoundError: pymssql` (ou outra lib) | Você esqueceu de ativar o venv. Rode `.\.venv\Scripts\Activate.ps1` antes |
-| Porta 8001 já em uso | Outro processo está usando. Mate com `Get-Process -Id (Get-NetTCPConnection -LocalPort 8001).OwningProcess \| Stop-Process` |
-| App mostra "A conexão selecionada não tem URL da API definida" | Edite a conexão e preencha o campo **API** com `http://SEU-IP:8001` |
+| Porta 8081 já em uso | Outro processo está usando. Mate com `Get-Process -Id (Get-NetTCPConnection -LocalPort 8081).OwningProcess \| Stop-Process` |
+| App mostra "A conexão selecionada não tem URL da API definida" | Edite a conexão e preencha o campo **API** com `http://SEU-IP:8081` |
 | App retorna "Falha na conexão" com nome do servidor SQL | A API foi alcançada com sucesso, mas ela mesma não consegue chegar no SQL. Verifique se o nome/IP do servidor SQL informado no app está acessível pelo PC da API |
 
 ---
@@ -315,13 +366,20 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
 .\.venv\Scripts\Activate.ps1
 pip install --upgrade pip
 pip install -r requirements-windows.txt
-notepad .env        # cole as 4 linhas do passo 9
+# notepad .env      # só se a senha do sa for diferente do padrão, ver passo 9
 
 # Firewall (Administrador)
-New-NetFirewallRule -DisplayName "Back-On API" -Direction Inbound -LocalPort 8001 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "Back-On API" -Direction Inbound -LocalPort 8081 -Protocol TCP -Action Allow
 
-# Iniciar
-uvicorn server:app --host 0.0.0.0 --port 8001 --reload
+# Teste manual rápido (Ctrl+C pra parar depois de confirmar)
+uvicorn server:app --host 0.0.0.0 --port 8081 --reload
+
+# Só depois de confirmar que funcionou, suba como serviço de verdade
+# (PowerShell como Administrador, uma vez só):
+cd scripts
+powershell -ExecutionPolicy Bypass -File .\install-startup-task.ps1
+Start-ScheduledTask -TaskName "BackOn-Backend"
 ```
 
-**Pronto!** Em ~5 minutos a API está no ar em qualquer máquina Windows.
+**Pronto!** Em ~5 minutos a API está no ar em qualquer máquina Windows, e
+sobrevive a reinicialização do PC sem precisar de ninguém logar.

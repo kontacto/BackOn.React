@@ -18,7 +18,7 @@ from services.constants import SITUACAO_LABEL
 from services.pedido_common import (
     _check_cliente_ativo, _check_area_atuacao, _auto_abrir_dia_se_necessario, _chassi_obrigatorio_ok,
     DavPagamento, DAV_OS, _fecha_fpag_dav, _qtd_formas, _liberar_reservado, _mover_estoque,
-    _ensure_os_forma_pagamento_garantia_col,
+    _ensure_os_forma_pagamento_garantia_col, _checklist_veiculo_pendente_bloqueia,
 )
 from services.permissoes_service import tem_permissao
 from services.os_itens_service import _recalc_os_total, _check_os_aberta
@@ -645,6 +645,11 @@ def _fechar_os_sync(req: FecharRequest, codigo: int, tela: str = "OS") -> dict:
         if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, tela, "SITUACAO"):
             conn.close()
             return {"success": False, "message": "Sem permissão para fechar a O.S."}
+        if tela == "OS_COMP" and not req.master:
+            bloqueio_checklist = _checklist_veiculo_pendente_bloqueia(cur, codigo, req.classe)
+            if bloqueio_checklist:
+                conn.close()
+                return {"success": False, "message": bloqueio_checklist}
         conflito = _checar_conflito_versao(cur, codigo, req.versao_esperada)
         if conflito:
             conn.close()
@@ -798,6 +803,11 @@ def _faturar_os_sync(req: FaturarOSRequest, codigo: int, tela: str = "OS") -> di
         if not req.master and req.classe is not None and not tem_permissao(cur, req.classe, tela, "FATURAR"):
             conn.close()
             return {"success": False, "message": "Sem permissão para faturar a O.S."}
+        if tela == "OS_COMP" and not req.master:
+            bloqueio_checklist = _checklist_veiculo_pendente_bloqueia(cur, codigo, req.classe)
+            if bloqueio_checklist:
+                conn.close()
+                return {"success": False, "message": bloqueio_checklist}
 
         # Mesmo recálculo defensivo do Fechar — não confiar em os.valor cru.
         _recalc_os_total(cur, codigo)

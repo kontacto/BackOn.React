@@ -136,8 +136,12 @@ export default function Sidebar() {
     });
   };
 
+  // Item "Início" removido da lista (pedido explícito do usuário,
+  // 2026-08-26, "retirar esse") — a própria logo/marca no topo já navega
+  // pra `/principal` (ver Pressable acima), tornando um item de menu
+  // dedicado redundante. `activeHref`/`DETAIL_TO_TAB` continuam
+  // funcionando normalmente pras outras 7 rotas.
   const items: NavItem[] = [
-    { key: "principal", label: "Início", icon: "home-outline", href: "/principal", visible: true },
     { key: "cadastros", label: "Cadastros", icon: "albums-outline", href: "/cadastros", visible: true },
     { key: "transacoes", label: "Transações", icon: "swap-horizontal-outline", href: "/transacoes", visible: true },
     { key: "financeiro", label: "Financeiro", icon: "cash-outline", href: "/financeiro", visible: true },
@@ -164,13 +168,23 @@ export default function Sidebar() {
           marca completa (~6:1, não cabe legível nos 56px do menu
           recolhido); recolhido troca pro ícone circular (`kontacto-icon.png`,
           mesmo "K" da marca, formato quadrado — cabe no menu estreito). */}
-      <View style={styles.logoWrap}>
+      {/* Logo também navega pra Início (mesma rota do item "Início" logo
+          abaixo) — convenção padrão de app/web (clicar na marca volta pro
+          começo), pedido explícito do usuário 2026-08-26. Tooltip "Início"
+          só no modo recolhido, mesmo padrão já usado nos itens de menu. */}
+      <Pressable
+        onPress={() => router.push("/principal" as never)}
+        onHoverIn={() => setHoveredKey("logo")}
+        onHoverOut={() => setHoveredKey(null)}
+        style={styles.logoWrap}
+        testID="sidebar-logo-home"
+      >
         {!collapsed ? (
           <Image
             source={require("../../assets/images/kontacto-logo-color.png")}
             style={styles.logo}
             resizeMode="contain"
-            accessibilityLabel="Kontacto Sistemas"
+            accessibilityLabel="Kontacto Sistemas — Início"
             testID="sidebar-logo"
           />
         ) : (
@@ -178,11 +192,18 @@ export default function Sidebar() {
             source={require("../../assets/images/kontacto-icon.png")}
             style={styles.logoIcon}
             resizeMode="contain"
-            accessibilityLabel="Kontacto Sistemas"
+            accessibilityLabel="Kontacto Sistemas — Início"
             testID="sidebar-logo-icon"
           />
         )}
-      </View>
+        {collapsed && hoveredKey === "logo" ? (
+          <View style={styles.tooltip} pointerEvents="none">
+            <View style={styles.tooltipInner}>
+              <Text style={styles.tooltipText}>Início</Text>
+            </View>
+          </View>
+        ) : null}
+      </Pressable>
       <Pressable
         onPress={toggleCollapsed}
         style={[styles.collapseBtn, collapsed && styles.collapseBtnCollapsed]}
@@ -250,6 +271,9 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+    // position:relative pra ancorar o tooltip "Início" no modo recolhido —
+    // mesmo motivo já documentado em `item` acima.
+    position: "relative",
   },
   // Proporção real do arquivo (~6:1, bem mais largo que alto) — 150x25
   // preenche quase toda a largura útil do menu expandido (188px - padding)

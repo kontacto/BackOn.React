@@ -82,13 +82,29 @@ def confirmar(cfg: dict, job_id: int, sucesso: bool, mensagem_erro: str = None) 
 
 
 def imprimir(cfg: dict, item: dict) -> None:
-    nome_impressora = item.get("impressora") or cfg.get("impressora_padrao")
-    if not nome_impressora:
-        raise RuntimeError(
-            "Nenhuma impressora informada no job nem configurada como padrão (impressora_padrao)."
-        )
     if win32print is None:
         raise RuntimeError("pywin32 não instalado nesta máquina — rode 'pip install pywin32'.")
+
+    # Cascata de resolução da impressora — pedido explícito do usuário
+    # 2026-08-26 ("a conta na impressora padrão"): (1) impressora que veio
+    # explícita no job (ex.: ticket de cozinha, roteado pra uma impressora
+    # específica); (2) `impressora_padrao` do config.json desta estação
+    # (override manual, se alguém quiser fixar uma impressora diferente da
+    # padrão do Windows); (3) a impressora PADRÃO do próprio Windows
+    # (`GetDefaultPrinter`) — é isso que resolve "a conta" sem precisar
+    # digitar nome nenhum, a mesma impressora que já aparece marcada
+    # "Padrão" em Configurações > Impressoras e scanners.
+    nome_impressora = item.get("impressora") or cfg.get("impressora_padrao")
+    if not nome_impressora:
+        try:
+            nome_impressora = win32print.GetDefaultPrinter()
+        except Exception:
+            nome_impressora = None
+    if not nome_impressora:
+        raise RuntimeError(
+            "Nenhuma impressora informada no job, configurada como padrão (impressora_padrao) "
+            "nem definida como impressora padrão do Windows nesta máquina."
+        )
 
     # cp850 é a mesma codepage já usada pelo backend em enviar_rede
     # (impressoras térmicas ESC/POS, acentuação PT-BR) — mantém os dois

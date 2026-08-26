@@ -52,6 +52,20 @@ acompanhado, não escondido dentro do raciocínio interno.
   papel logo abaixo ("Papel Kelvin — Especialista Tributário").
 - Thomé só implementa depois de Kelvin validar; Krause só desenha depois
   de Carlos definir a regra de negócio — não pular hierarquia.
+- Em rastreio de fonte VB6, Carlos (regra de negócio geral) e/ou Kelvin
+  (regra fiscal) são donos de resolver toda ramificação condicional até
+  a raiz antes de fechar um achado — nunca deixar "conforme o modo"/
+  "depende de configuração" sem a variável resolvida (especificação
+  completa em "Toda ramificação condicional da fonte VB6 tem que ser
+  rastreada até a raiz" mais abaixo). Thomé só implementa depois desse
+  rastreio estar fechado, e audita achado-por-achado contra o próprio
+  código antes de declarar a feature pronta — nunca implementar em cima
+  de achado com ramificação em aberto. **Kontacto supervisiona**: a
+  linha de abertura do protocolo (obrigatória em toda resposta
+  substantiva, ver acima) é onde essa checagem fica visível — se a
+  tarefa envolveu rastreio de fonte VB6 com ramificação condicional,
+  declarar explicitamente que ela foi resolvida (ou registrar como
+  pendência explícita, nunca como omissão silenciosa).
 - Apoio Fisco só entra em jogo quando a tarefa envolve texto/UI de
   educação fiscal voltado ao usuário final (tooltip, modal de ajuda,
   alerta contextual sobre Reforma Tributária/IBS-CBS) — e só depois de
@@ -680,6 +694,113 @@ below, and the Controle do Sistema screen work).
   set once at app startup and read everywhere afterward as an in-memory global for
   the lifetime of that VB6 process.
 
+### Toda ramificação condicional da fonte VB6 tem que ser rastreada até a raiz — nunca resumida como "conforme o modo"/"depende de configuração" `[GLOBAL]`
+
+**Adicionado 2026-08-21, user-directed** ("o que podemos fazer para a
+análise de tela pegar esses tipos de falha... isso tem que ser levantado
+na análise da migração. se isso não for feito na análise, toda a
+migração corre risco de ter furo de regras de negócios"). Caso concreto
+que motivou a regra: no rastreio de "Recebimento de Mercadoria"
+(`FrmtraRec.frm:7290-7311`), o achado documentado no plano original já
+tinha capturado corretamente que a atualização de preço de venda seguia
+**dois caminhos possíveis** ("gated por `Altera_Venda` + `atualiza_
+preco='Sim'` por item **OU** `politica_preco='E'` global **conforme o
+modo**") — mas a frase "conforme o modo" nunca foi resolvida: não foi
+rastreada a origem da variável `Altera_preco_venda_tela` (é
+`controle_aux.Altera_preco_venda_tela`, uma configuração real por
+instalação) nem os dois valores possíveis dela. A implementação seguinte
+silenciosamente só cobriu UM dos dois caminhos (o "por item"), sem
+registrar isso como decisão de escopo em lugar nenhum — nem no código,
+nem no PENDENCIAS.md, nem pro usuário. O gap só foi descoberto porque o
+usuário perguntou diretamente se o campo "Tipo Preço" do Cadastro de
+Produtos realmente disparava a atualização — e as DUAS instalações de
+teste conhecidas (GERDELL/BARESTELA e ARGEN-TESTE) rodam exatamente no
+modo que tinha ficado de fora, ou seja, a funcionalidade estava
+100% inoperante pra elas, silenciosamente, mesmo com todos os testes
+unitários passando (porque os testes cobriam só o caminho implementado,
+não o achado completo).
+
+**Regra 1 — resolver a variável de controle na hora, nunca depois.**
+Ao encontrar uma ramificação do tipo `If <Variável> = <Valor> Then ...
+Else ...` onde `<Variável>` não é óbvia no trecho já lido (não é
+parâmetro da função, não é campo de tela already-traced), parar e
+rastrear a origem dela ANTES de fechar o achado — `grep` pelo nome da
+variável no mesmo `.frm` (declaração `Dim`, atribuição em `Form_Load` ou
+evento equivalente) e, se vier de leitura de banco (`tbt.Open "select
+... from controle_aux"` ou similar), confirmar coluna+tabela reais via
+`INFORMATION_SCHEMA.COLUMNS` (mesmo processo já usado o resto desta
+migração). Nunca escrever o achado com "conforme o modo"/"depende de
+configuração"/"a definir" sem já ter respondido: qual configuração,
+onde ela mora (tabela.coluna real), e o que cada valor possível dela
+significa.
+
+**Regra 2 — achado com múltiplos caminhos exige código (e teste) pra
+cada caminho, ou uma decisão de escopo explícita.** Se o achado
+documentado descreve "X ou Y conforme Z", a implementação tem que cobrir
+os dois — nunca implementar só um silenciosamente. Se por decisão
+consciente (aprovada pelo usuário) só um caminho entrar nesta rodada,
+isso precisa aparecer escrito no plano/PENDENCIAS.md como "Fora de
+escopo: caminho Y, motivo X" — não pode ser uma omissão que só aparece
+como ausência de código. Mesmo princípio de "Regras Importantes" já
+existente mais abaixo neste arquivo ("nunca implementar em cima de
+suposição, listar dúvidas antes"), aqui aplicado especificamente a
+ramificações de código já lidas mas não totalmente resolvidas — a
+lacuna não é "não sei a regra", é "sei que existem 2 regras e só portei
+uma".
+
+**Regra 3 — sinal de alerta a procurar ativamente na leitura da
+fonte**: blocos com a forma `If <Modo> = <valor> Then ... Else ...`
+onde os dois ramos fazem quase a mesma coisa de formas ligeiramente
+diferentes (mesmo `UPDATE`, condição `WHERE` diferente) são um indício
+forte de regra de negócio real escondida no fork, não uma diferença
+cosmética — tratar como prioridade alta de rastreio completo, nunca
+"pegar o ramo que parece mais comum e seguir".
+
+**Regra 4 — checklist de auditoria achado-por-achado antes de declarar
+a migração pronta.** Ao terminar de implementar uma tela/feature a
+partir de um plano com "Achados da fonte" numerados (mesmo formato já
+usado nesta migração), reler cada achado numerado e confirmar NO CÓDIGO
+(não de memória) que ele foi implementado por completo, ramo por ramo —
+não só "algo equivalente"/"a ideia geral". Toda configuração real
+(`controle`/`controle_aux`/`controle_configuracao`/módulo `.bas` global)
+citada em um achado como "gate" de uma regra entra numa lista explícita
+de "Configurações que alteram o comportamento" dentro do achado —
+checklist obrigatório, cada uma com tabela+coluna real e, quando
+possível, o valor confirmado ao vivo nas instalações de teste
+conhecidas (mesmo mínimo já feito pra `Altera_preco_venda_tela`/
+`valor_libera_critica` no Recebimento).
+
+**Vale retroativamente pra qualquer achado já documentado com frase do
+tipo "conforme o modo"/"depende de configuração" sem a variável
+resolvida** — revisitar com este processo antes de assumir que a
+implementação já existente está completa, se a tela for retomada por
+outro motivo.
+
+**Papel dentro do Protocolo Gauntlet, adicionado 2026-08-21, user-
+directed** ("envolva sempre a equipe nisso com a supervisão da
+Kontacto") — este rastreio nunca é um passo solto fora do protocolo já
+documentado no topo deste arquivo, é dever explícito de papel:
+
+- **Carlos** (regra de negócio geral) e/ou **Kelvin** (regra fiscal,
+  quando a tela for fiscal/fiscal-adjacente) são donos das Regras 1-3
+  acima — resolver a variável de controle, cobrir os dois caminhos (ou
+  registrar exclusão de escopo explícita), reconhecer o sinal de alerta
+  do fork quase-espelhado. Nunca delegar esse rastreio pro Thomé "de
+  passagem" durante a implementação — é trabalho de análise, acontece
+  ANTES de qualquer código.
+- **Thomé** só implementa depois desse rastreio estar fechado (mesma
+  hierarquia já existente "Thomé só implementa depois de Kelvin
+  validar", aqui estendida pra cobrir também Carlos em tarefa não-
+  fiscal), e é quem roda a Regra 4 (auditoria achado-por-achado contra o
+  código) antes de reportar a feature como pronta.
+- **Kontacto supervisiona** — a linha de abertura obrigatória do
+  protocolo ("Protocolo Gauntlet: acionado...") é onde essa checagem
+  fica visível: se a tarefa envolveu rastreio de fonte VB6 com
+  ramificação condicional, a resposta declara explicitamente que ela
+  foi resolvida por completo, ou registra a ramificação não-resolvida
+  como pendência explícita (PENDENCIAS.md) — nunca uma omissão
+  silenciosa que só aparece como ausência de código depois.
+
 ### Sempre checar regras reais de `controle`/`controle_aux`/`controle_configuracao` antes de criar/alterar campo nessas tabelas `[GLOBAL]`
 
 **Adicionado 2026-08-20, user-directed** ("SEMPRE VERIFICAR NA TABELA QUE
@@ -731,6 +852,55 @@ rodando em paralelo sobre o mesmo banco.
   NFSe) e prospectivamente pra qualquer campo novo dessas 3 tabelas daqui
   pra frente — nunca criar coluna nova nelas nem reaproveitar uma
   existente sem esse rastreio primeiro.
+
+### Uma query que lê `controle`/`controle_aux`/`controle_configuracao` errado derruba a função INTEIRA, não só o campo errado — sempre isolar `[GLOBAL]`
+
+**Adicionado 2026-08-26, user-directed** ("precisamos prevê e corrigir
+sempre isso"). Complementa a regra acima ("antes de criar/alterar
+campo") — esta cobre o caso de uma query já escrita, lendo um campo de
+uma tabela ERRADA (não uma coluna nova mal-classificada, um SELECT já
+existente com a tabela trocada). Caso real que motivou:
+`controle_service._get_empresa_sync` lia `PERGUNTA_EMITE_NFCE`/
+`ESCOLHE_NFE_NFCE`/`IMPRIME_NFCE_NAO_FISCAL` de `FROM controle`, mas
+`CAMPOS_CONTROLE_AUX` (`controle_sistema_service.py` — a lista
+autoritativa campo→tabela, extraída do `.frm`) sempre classificou essas
+3 colunas como `controle_aux`. Numa instalação onde elas não existem
+redundantemente nas duas tabelas (achado ao vivo: "Baixo Brisa Remoto",
+SQL Server 2014 SP1), a query batia em "Invalid column name" e
+**derrubava a função inteira** (`success: False`) — levando junto
+fantasia/endereço/telefone/CNPJ, campos que nada tinham a ver com o
+erro. O recibo do Pedido Bar e o cabeçalho da O.S. saíam completamente
+em branco por causa de 3 campos que ninguém tinha pedido pra exibir ali.
+
+- **`CAMPOS_CONTROLE`/`CAMPOS_CONTROLE_AUX`** (`controle_sistema_
+  service.py`) são a fonte autoritativa de qual campo pertence a qual
+  tabela — extraída do `.frm` real, não de suposição. Antes de escrever
+  ou revisar QUALQUER query `SELECT ... FROM controle`/`FROM
+  controle_aux` em QUALQUER service (não só `controle_sistema_
+  service.py` — o bug real estava em `controle_service.py`, um arquivo
+  diferente), conferir cada coluna contra essas duas listas.
+- **Toda função que agrega dados de MÚLTIPLAS fontes/tabelas pro mesmo
+  request (`controle`+`controle_aux`, ou qualquer combinação parecida)
+  deve isolar cada sub-query em seu próprio `try/except`**, não deixar
+  todas dentro do mesmo bloco `try` da função inteira — uma falha
+  pontual (coluna que só existe nessa instalação específica, migração
+  que não rodou ainda por algum motivo) não pode derrubar dados de OUTRA
+  fonte que nem tem relação com o campo que falhou. Ver `_get_empresa_
+  sync` como referência já corrigida (`try/except` isolado ao redor da
+  leitura da logo — se essa falhar, fantasia/endereço continuam vindo
+  normalmente).
+- **Ao investigar "campo/cabeçalho não aparece" sem uma causa óbvia no
+  frontend**, testar a função backend DIRETO contra a API real (`curl
+  ".../endpoint?servidor=X&banco=Y"`), sem passar pelo frontend — foi
+  assim que este bug real foi isolado rapidamente, em vez de adivinhar
+  a partir de sintoma na tela. Ver também "Telas Fiscais — Fonte VB6 em
+  Evolução Contínua" (seção 12) e o padrão já usado no resto do arquivo
+  de nunca assumir, sempre verificar contra a fonte real.
+- Vale retroativamente — se outra função algum dia apresentar o mesmo
+  sintoma ("sucesso vira tudo-ou-nada quando um campo específico
+  falha"), aplicar o mesmo tratamento (isolar sub-query + conferir
+  tabela contra `CAMPOS_CONTROLE`/`CAMPOS_CONTROLE_AUX`) antes de supor
+  outra causa.
 
 ### Nunca marcar uma rotina como "não implementada" sem checar o `.vbp` + módulos globais `[GLOBAL]`
 

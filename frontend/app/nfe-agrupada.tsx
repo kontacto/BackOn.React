@@ -22,6 +22,7 @@ import AccordionSection from "@/src/components/pedido/AccordionSection";
 import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
 import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
+import SelectField, { SelectOption } from "@/src/components/SelectField";
 import { ClienteRow } from "@/src/components/pedido/types";
 
 import { usePermissions } from "@/src/permissions";
@@ -33,6 +34,9 @@ import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
 import { formatBRL } from "@/src/utils/format";
+import { fetchEmpresaHeader } from "@/src/utils/print-report-header";
+import { printFullHtml } from "@/src/utils/printHtml";
+import { buildDanfeHtml } from "@/src/utils/danfeFacsimile";
 
 function brDate(iso: string | null): string {
   if (!iso) return "";
@@ -45,8 +49,10 @@ type ComandaAgrupavel = {
   data: string | null;
   valor_venda: number;
   tem_nfce: boolean;
-  ja_agrupada: boolean;
+  ja_tem_nfe: boolean;
+  ja_tem_nfse: boolean;
   tem_item_produto: boolean;
+  tem_item_servico: boolean;
 };
 
 const NFE_AGRUPADA_AJUDA_ITENS: HelpItem[] = [
@@ -78,11 +84,29 @@ const NFE_AGRUPADA_AJUDA_ITENS: HelpItem[] = [
     cor: colors.warning,
   },
   {
-    titulo: "Emitir NF-e",
-    texto: "Emite a NF-e real junto ao SEFAZ cobrindo todas as comandas marcadas. Ação irreversível — para desfazer depois, é preciso cancelar o documento fiscal.",
+    titulo: "Emitir NF-e de Produtos / Emitir NFS-e de Serviços",
+    texto: "São 2 ações fiscais independentes sobre a mesma seleção de comandas — marque uma, outra, ou as duas. A NF-e cobre só os itens de PRODUTO das comandas marcadas; a NFS-e cobre só os itens de SERVIÇO. Uma comanda com produto e serviço pode entrar nas duas emissões ao mesmo tempo, cada documento pegando só a parte que é dele. Ação irreversível — para desfazer depois, é preciso cancelar o documento fiscal.",
     icon: { lib: "ion", name: "receipt-outline" },
     cor: colors.brandPrimary,
   },
+  {
+    titulo: "Frete por Conta",
+    texto: "Define quem é responsável pelo transporte da mercadoria — vai direto no XML da NF-e (campo obrigatório do SEFAZ). Só se aplica à NF-e de produtos. Se não escolher nada, a nota sai como \"Emitente (CIF)\".",
+    icon: { lib: "ion", name: "car-outline" },
+  },
+];
+
+// "Frete por conta" — grava em n_fiscal.paga_frete (smallint), traduzido
+// pro código real <modFrete> na emissão (ver
+// nfe_emissao_service._resolver_mod_frete). Réplica do seletor real do
+// legado (`opFrete`, FrmTraImpNFE.frm) — achado 2026-08-21.
+const OPCOES_PAGA_FRETE: SelectOption[] = [
+  { value: "1", label: "Emitente (CIF)" },
+  { value: "2", label: "Destinatário (FOB)" },
+  { value: "3", label: "Terceiros" },
+  { value: "4", label: "Próprio Remetente" },
+  { value: "5", label: "Próprio Destinatário" },
+  { value: "6", label: "Sem Transporte" },
 ];
 
 export default function NfeAgrupadaScreen() {
@@ -105,7 +129,18 @@ export default function NfeAgrupadaScreen() {
   const [itens, setItens] = useState<ComandaAgrupavel[]>([]);
   const [selecionados, setSelecionados] = useState<Set<number>>(new Set());
   const [ajudaVisivel, setAjudaVisivel] = useState(false);
-  const [resultado, setResultado] = useState<{ chave_acesso: string; protocolo_sefaz: string; nota_fisc: number } | null>(null);
+  const [pagaFrete, setPagaFrete] = useState<string | null>(null);
+  // 2 ações fiscais independentes — decisão direta do usuário (Leandro,
+  // 2026-08-21): "emitir NF-e de produtos" e "emitir NFS-e de serviços"
+  // são escolhas separadas, o usuário marca uma, outra, as duas, ou
+  // nenhuma (nenhuma = simplesmente não clicar em Emitir).
+  const [desejaNfe, setDesejaNfe] = useState(true);
+  const [desejaNfse, setDesejaNfse] = useState(false);
+  type ResultadoDoc = { chave_acesso: string; protocolo_sefaz: string | null; nota_fisc: number } | null;
+  const [resultadoNfe, setResultadoNfe] = useState<ResultadoDoc>(null);
+  const [resultadoNfse, setResultadoNfse] = useState<ResultadoDoc>(null);
+  const resultado = resultadoNfe || resultadoNfse; // usado só pra decidir se o modal abre
+  const [baixandoDanfe, setBaixandoDanfe] = useState(false);
 
   const [clienteSearchOpen, setClienteSearchOpen] = useState(false);
   const [clienteSearchTerm, setClienteSearchTerm] = useState("");
@@ -173,7 +208,11 @@ export default function NfeAgrupadaScreen() {
     carregarComandas(c);
   };
 
-  const elegivel = (it: ComandaAgrupavel) => it.tem_item_produto && !it.ja_agrupada;
+  const elegivel = (it: ComandaAgrupavel) => {
+    const okProduto = desejaNfe && it.tem_item_produto && !it.ja_tem_nfe;
+    const okServico = desejaNfse && it.tem_item_servico && !it.ja_tem_nfse;
+    return okProduto || okServico;
+  };
 
   const toggleSelecionado = (comanda: number) => {
     setSelecionados((cur) => {
@@ -195,27 +234,58 @@ export default function NfeAgrupadaScreen() {
 
   const emitir = async () => {
     if (!conn || !cliente || selecionados.size === 0) return;
+    if (!desejaNfe && !desejaNfse) {
+      fb.showError("Marque ao menos uma ação: Emitir NF-e de Produtos e/ou Emitir NFS-e de Serviços.");
+      return;
+    }
     setEmitindo(true);
     try {
       const body = {
         servidor: conn.servidor, banco: conn.banco, comandas: Array.from(selecionados),
         usuario_alteracao: usuarioCodigo, classe, plataforma: "web", master: isMaster,
+        paga_frete: pagaFrete ? Number(pagaFrete) : null,
+        emitir_nfe: desejaNfe, emitir_nfse: desejaNfse,
       };
       const r = await fetch(apiUrl("/api/nfe-agrupada/emitir"), {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       });
       const j = await r.json();
+      const rNfe = j?.resultado_nfe;
+      const rNfse = j?.resultado_nfse;
+      if (rNfe?.success) setResultadoNfe({ chave_acesso: rNfe.chave_acesso, protocolo_sefaz: rNfe.protocolo_sefaz, nota_fisc: rNfe.nota_fisc });
+      if (rNfse?.success) setResultadoNfse({ chave_acesso: rNfse.chave_acesso, protocolo_sefaz: rNfse.protocolo_sefaz, nota_fisc: rNfse.nota_fisc });
       if (j?.success) {
-        fb.showSuccess(j.message || "NF-e agrupada emitida.", undefined, 5000);
-        setResultado({ chave_acesso: j.chave_acesso, protocolo_sefaz: j.protocolo_sefaz, nota_fisc: j.nota_fisc });
-        carregarComandas(cliente);
+        fb.showSuccess(j.message || "Documento(s) fiscal(is) emitido(s).", undefined, 5000);
+      } else if (rNfe?.success || rNfse?.success) {
+        // sucesso parcial — uma das 2 ações deu certo, a outra não; nada
+        // foi perdido (cada emissão roda em transação própria), mas o
+        // usuário precisa saber qual falhou.
+        fb.showWarning(j?.message || "Uma das ações não foi concluída — confira o resultado.", undefined, 5000);
       } else {
-        fb.showError(friendlyApiError(j, "Não foi possível emitir a NF-e."), undefined, 5000);
+        fb.showError(friendlyApiError(j, "Não foi possível emitir."), undefined, 5000);
       }
+      if (rNfe?.success || rNfse?.success) carregarComandas(cliente);
     } catch (e) {
       fb.showError(friendlyCatchError(e));
     } finally {
       setEmitindo(false);
+    }
+  };
+
+  const baixarDanfe = async () => {
+    if (!conn || !resultadoNfe?.nota_fisc) return;
+    setBaixandoDanfe(true);
+    try {
+      const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`;
+      const r = await fetch(apiUrl(`/api/notas-fiscais/${resultadoNfe.nota_fisc}/danfe?${qs}`));
+      const j = await r.json();
+      if (!j?.success) { fb.showWarning(friendlyApiError(j, "Não foi possível gerar o DANFE.")); return; }
+      const empresa = await fetchEmpresaHeader(conn.api, conn.servidor, conn.banco);
+      printFullHtml(buildDanfeHtml(empresa, j.detalhe, j.modelo_danfe));
+    } catch (e) {
+      fb.showError(friendlyCatchError(e));
+    } finally {
+      setBaixandoDanfe(false);
     }
   };
 
@@ -292,8 +362,9 @@ export default function NfeAgrupadaScreen() {
                             CMD #{it.comanda} · {brDate(it.data)} · <Text style={{ fontWeight: "700" }}>{formatBRL(it.valor_venda)}</Text>
                           </Text>
                           <Text style={styles.hint}>
-                            {!it.tem_item_produto ? "Sem item de produto — não elegível" : null}
-                            {it.ja_agrupada ? "Já vinculada a uma nota fiscal — não elegível" : null}
+                            {it.tem_item_produto ? (it.ja_tem_nfe ? "Já tem NF-e" : "Tem produto") : "Sem produto"}
+                            {" · "}
+                            {it.tem_item_servico ? (it.ja_tem_nfse ? "Já tem NFS-e" : "Tem serviço") : "Sem serviço"}
                             {it.tem_nfce ? " · Já tem NFC-e emitida (agrupar gera duplicidade de imposto)" : null}
                           </Text>
                         </View>
@@ -305,16 +376,42 @@ export default function NfeAgrupadaScreen() {
             </View>
           ) : null}
 
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>O que emitir</Text>
+            <Text style={styles.hint}>São 2 ações fiscais independentes — marque uma, outra, ou as duas.</Text>
+            <View style={{ flexDirection: "row", gap: spacing.lg, marginTop: spacing.sm, flexWrap: "wrap" }}>
+              <Pressable onPress={() => setDesejaNfe((v) => !v)} style={styles.checkOptionRow} testID="nfe-agrupada-check-nfe">
+                <Ionicons name={desejaNfe ? "checkbox" : "square-outline"} size={20} color={colors.brandPrimary} />
+                <Text style={styles.checkLabel}>Emitir NF-e de Produtos</Text>
+              </Pressable>
+              <Pressable onPress={() => setDesejaNfse((v) => !v)} style={styles.checkOptionRow} testID="nfe-agrupada-check-nfse">
+                <Ionicons name={desejaNfse ? "checkbox" : "square-outline"} size={20} color={colors.brandPrimary} />
+                <Text style={styles.checkLabel}>Emitir NFS-e de Serviços</Text>
+              </Pressable>
+            </View>
+          </View>
+
           {selecionados.size > 0 ? (
             <View style={styles.bulkBar} testID="nfe-agrupada-bulk-bar">
               <View>
                 <Text style={styles.bulkBarLabel}>{selecionados.size} comanda{selecionados.size === 1 ? "" : "s"} selecionada{selecionados.size === 1 ? "" : "s"}</Text>
                 <Text style={styles.hint}>Total: {formatBRL(valorTotalSelecionado)}</Text>
               </View>
+              {desejaNfe ? (
+                <View style={{ minWidth: 180 }}>
+                  <Text style={styles.fieldLabel}>Frete por Conta (NF-e)</Text>
+                  <SelectField
+                    value={pagaFrete} onChange={(v) => setPagaFrete(v as string)} options={OPCOES_PAGA_FRETE}
+                    compactWeb placeholder="Emitente (CIF)" testID="nfe-agrupada-paga-frete"
+                  />
+                </View>
+              ) : null}
               {canGravar ? (
-                <Pressable onPress={emitir} disabled={emitindo} style={styles.bulkBtn} testID="nfe-agrupada-emitir">
+                <Pressable onPress={emitir} disabled={emitindo || (!desejaNfe && !desejaNfse)} style={styles.bulkBtn} testID="nfe-agrupada-emitir">
                   {emitindo ? <ActivityIndicator color="#fff" size="small" /> : (
-                    <><Ionicons name="receipt-outline" size={16} color="#fff" /><Text style={styles.bulkBtnText}>Emitir NF-e</Text></>
+                    <><Ionicons name="receipt-outline" size={16} color="#fff" /><Text style={styles.bulkBtnText}>
+                      {desejaNfe && desejaNfse ? "Emitir NF-e + NFS-e" : desejaNfse ? "Emitir NFS-e" : "Emitir NF-e"}
+                    </Text></>
                   )}
                 </Pressable>
               ) : null}
@@ -323,19 +420,35 @@ export default function NfeAgrupadaScreen() {
         </View>
       </ScrollView>
 
-      <AppModal visible={!!resultado} transparent animationType="fade" onRequestClose={() => setResultado(null)}>
-        <Pressable style={styles.modalBg} onPress={() => setResultado(null)}>
+      <AppModal visible={!!resultado} transparent animationType="fade" onRequestClose={() => { setResultadoNfe(null); setResultadoNfse(null); }}>
+        <Pressable style={styles.modalBg} onPress={() => { setResultadoNfe(null); setResultadoNfse(null); }}>
           <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>NF-e emitida</Text>
-              <Pressable onPress={() => setResultado(null)} hitSlop={8}>
+              <Text style={styles.modalTitle}>Documento(s) fiscal(is) emitido(s)</Text>
+              <Pressable onPress={() => { setResultadoNfe(null); setResultadoNfse(null); }} hitSlop={8}>
                 <Ionicons name="close" size={22} color={colors.muted} />
               </Pressable>
             </View>
-            <Text style={styles.hint}>Nota fiscal nº {resultado?.nota_fisc}</Text>
-            <Text style={styles.hint}>Protocolo SEFAZ: {resultado?.protocolo_sefaz}</Text>
-            <Text style={[styles.hint, { marginTop: spacing.sm }]}>Chave de acesso:</Text>
-            <Text selectable style={styles.chaveAcesso}>{resultado?.chave_acesso}</Text>
+            {resultadoNfe ? (
+              <View style={{ marginBottom: spacing.md }}>
+                <Text style={styles.sectionTitle}>NF-e de Produtos</Text>
+                <Text style={styles.hint}>Nota fiscal nº {resultadoNfe.nota_fisc}</Text>
+                <Text style={styles.hint}>Protocolo SEFAZ: {resultadoNfe.protocolo_sefaz}</Text>
+                <Text style={[styles.hint, { marginTop: spacing.sm }]}>Chave de acesso:</Text>
+                <Text selectable style={styles.chaveAcesso}>{resultadoNfe.chave_acesso}</Text>
+                <Pressable onPress={baixarDanfe} disabled={baixandoDanfe} style={[styles.bulkBtn, { marginTop: spacing.md, alignSelf: "flex-start" }, baixandoDanfe && { opacity: 0.7 }]} testID="nfe-agrupada-danfe">
+                  {baixandoDanfe ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.bulkBtnText}>Baixar DANFE</Text>}
+                </Pressable>
+              </View>
+            ) : null}
+            {resultadoNfse ? (
+              <View>
+                <Text style={styles.sectionTitle}>NFS-e de Serviços</Text>
+                <Text style={styles.hint}>Nota fiscal nº {resultadoNfse.nota_fisc}</Text>
+                <Text style={[styles.hint, { marginTop: spacing.sm }]}>Chave de acesso:</Text>
+                <Text selectable style={styles.chaveAcesso}>{resultadoNfse.chave_acesso}</Text>
+              </View>
+            ) : null}
           </Pressable>
         </Pressable>
       </AppModal>
@@ -374,7 +487,10 @@ const styles = StyleSheet.create({
   selecionarClienteBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: colors.brandPrimary, borderRadius: radius.md, paddingVertical: 12, alignSelf: "flex-start", paddingHorizontal: spacing.lg },
   selecionarClienteText: { color: "#fff", fontWeight: "700", fontSize: 14 },
 
+  fieldLabel: { fontSize: 11, color: colors.muted, marginBottom: 4 },
+  sectionTitle: { fontSize: 13, fontWeight: "700", color: colors.onSurface, marginBottom: 2 },
   checkLabel: { fontSize: 13, color: colors.onSurface },
+  checkOptionRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   selectAllRow: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border, marginBottom: 4 },
 
   itemRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },

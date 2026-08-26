@@ -1,8 +1,8 @@
 // Hub "Contratos" (2026-07-19, user-directed) — aberto pelo Card
 // "Contratos" em app/(tabs)/transacoes.tsx. Fase A da migração de
-// FrmManTPC/FrmManRea/FrmManInd/FrmConPDI/FrmManContra.frm — Faturar
-// Contratos e Envio de Cobrança ficam de fora desta fase, ver
-// PENDENCIAS.md > "Contratos". Mesmo padrão de app/movimentacoes.tsx.
+// FrmManTPC/FrmManRea/FrmManInd/FrmConPDI/FrmManContra.frm. Faturar
+// Contratos (2026-07-20) e Envio de Cobrança (2026-08-25) já implementados
+// — ver PENDENCIAS.md > "Contratos". Mesmo padrão de app/movimentacoes.tsx.
 import { useMemo } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -64,6 +64,14 @@ export default function ContratosScreen() {
         icon: "cash-outline",
         route: "/contrato-faturar",
         visible: can("FATURAR_CONTR.ABRIR"),
+      },
+      {
+        key: "envio-cobranca",
+        label: "Envio de Cobrança",
+        hint: "Enviar e-mail de cobrança das mensalidades já faturadas",
+        icon: "mail-outline",
+        route: "/contrato-envio-cobranca",
+        visible: can("ENVIO_COBRANCA.ABRIR"),
       },
       {
         key: "produtos-disponiveis",

@@ -22,6 +22,8 @@ import WebDateField from "@/src/components/WebDateField";
 import AccordionSection from "@/src/components/pedido/AccordionSection";
 import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
+import { useClienteSearchModal } from "@/src/hooks/useClienteSearchModal";
 
 import { usePermissions } from "@/src/permissions";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
@@ -216,6 +218,7 @@ export default function GestorNfceScreen() {
   const [comandaNum, setComandaNum] = useState("");
   const [numNfceNum, setNumNfceNum] = useState("");
   const [clienteCodigo, setClienteCodigo] = useState("");
+  const clienteSearch = useClienteSearchModal(conn);
   const [situacoes, setSituacoes] = useState<string[]>([]);
   const [incluirSemNfce, setIncluirSemNfce] = useState(true);
   const [somenteGaps, setSomenteGaps] = useState(false);
@@ -556,9 +559,18 @@ export default function GestorNfceScreen() {
                   <Text style={styles.label}>Nº NFCe</Text>
                   <TextInput value={numNfceNum} onChangeText={(v) => setNumNfceNum(v.replace(/\D/g, ""))} style={styles.input} keyboardType="number-pad" testID="gestor-nfce-num-nfce" />
                 </View>
-                <View style={styles.colTiny}>
+                <View style={styles.colNarrow}>
                   <Text style={styles.label}>Cód. Cliente</Text>
-                  <TextInput value={clienteCodigo} onChangeText={(v) => setClienteCodigo(v.replace(/\D/g, ""))} style={styles.input} keyboardType="number-pad" testID="gestor-nfce-cliente" />
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+                    <TextInput
+                      value={clienteCodigo} onChangeText={(v) => setClienteCodigo(v.replace(/\D/g, ""))}
+                      style={[styles.input, { flex: 1, minWidth: 0 }]} keyboardType="number-pad" testID="gestor-nfce-cliente"
+                    />
+                    <IconButtonWithTooltip
+                      icon="search-outline" label="Buscar Cliente" onPress={clienteSearch.openModal}
+                      size={18} color={colors.brandPrimary} testID="gestor-nfce-cliente-buscar"
+                    />
+                  </View>
                 </View>
               </View>
 
@@ -895,6 +907,17 @@ export default function GestorNfceScreen() {
       </AppModal>
 
       <AjudaPedidoModal visible={ajudaVisivel} onClose={() => setAjudaVisivel(false)} titulo="Gestor NFCe" itens={GESTOR_NFCE_AJUDA_ITENS} />
+
+      <ClientSearchModal
+        visible={clienteSearch.open}
+        onClose={clienteSearch.closeModal}
+        term={clienteSearch.term}
+        setTerm={clienteSearch.setTerm}
+        loading={clienteSearch.loading}
+        results={clienteSearch.results}
+        onPick={(c) => { setClienteCodigo(String(c.codigo)); clienteSearch.closeModal(); }}
+        onCreate={clienteSearch.closeModal}
+      />
     </SafeAreaView>
   );
 }

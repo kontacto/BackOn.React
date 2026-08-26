@@ -12,6 +12,7 @@ import { Ionicons } from "@/src/components/Ionicons";
 import DateField from "@/src/components/DateField";
 import WebDateField from "@/src/components/WebDateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
+import AccordionSection from "@/src/components/pedido/AccordionSection";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
@@ -161,6 +162,7 @@ export default function RelatorioMovimentacaoItensScreen() {
       <ScrollView contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]} keyboardShouldPersistTaps="handled">
         <View style={isWeb ? styles.webShell : undefined}>
           <View style={[styles.filters, isWeb && styles.filtersWeb]}>
+          <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="relmi-filtros">
             <View style={styles.dateRow}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.fieldLabel}>Inicial</Text>
@@ -251,6 +253,7 @@ export default function RelatorioMovimentacaoItensScreen() {
                 </>
               ) : null}
             </View>
+          </AccordionSection>
           </View>
 
           {resultado ? (

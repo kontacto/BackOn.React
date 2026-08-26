@@ -75,20 +75,26 @@ class TestSaveCabecalhoValidacoes:
 
 
 class TestSaveCabecalhoComMock:
+    # Toda lista `one=[...]` ganhou um `None` a mais na frente — achado
+    # real da reauditoria 2026-08-21 (`Valida_Data`, `FrmManRec.frm:9162-
+    # 9174`): nova checagem de fechamento de Livro/Contabilidade consome
+    # a 1ª posição da fila antes do restante da função rodar. `None`
+    # aqui = "sem data de fechamento configurada" (não bloqueia).
+
     def test_tipo_mov_nao_cadastrado(self, monkeypatch):
-        cur = FakeCursor(one=[None])
+        cur = FakeCursor(one=[None, None])
         _patch(monkeypatch, cur)
         r = svc._save_cabecalho_sync("srv", "bd", None, DADOS_MIN)
         assert r["success"] is False and "Movimentação não cadastrado" in r["message"]
 
     def test_duplicidade_bloqueia_nova_nota(self, monkeypatch):
-        cur = FakeCursor(one=[{"codigo": "S01"}, {"codigo": 77}])
+        cur = FakeCursor(one=[None, {"codigo": "S01"}, {"codigo": 77}])
         _patch(monkeypatch, cur)
         r = svc._save_cabecalho_sync("srv", "bd", None, DADOS_MIN)
         assert r["success"] is False and "Já existe uma Nota Fiscal" in r["message"]
 
     def test_cria_nova_nota_com_sucesso(self, monkeypatch):
-        cur = FakeCursor(one=[{"codigo": "S01"}, None, {"codigo": 42}])
+        cur = FakeCursor(one=[None, {"codigo": "S01"}, None, {"codigo": 42}])
         conn = _patch(monkeypatch, cur)
         r = svc._save_cabecalho_sync("srv", "bd", None, DADOS_MIN)
         assert r["success"] is True and r["codigo"] == 42
@@ -96,7 +102,7 @@ class TestSaveCabecalhoComMock:
         assert any("INSERT INTO n_fiscal" in q for q, _ in cur.queries)
 
     def test_edita_nota_existente_com_sucesso(self, monkeypatch):
-        cur = FakeCursor(one=[{"codigo": "S01"}, None, {"situacao": "A"}])
+        cur = FakeCursor(one=[None, {"codigo": "S01"}, None, {"situacao": "A"}])
         conn = _patch(monkeypatch, cur)
         r = svc._save_cabecalho_sync("srv", "bd", 10, DADOS_MIN)
         assert r["success"] is True and r["codigo"] == 10
@@ -104,10 +110,26 @@ class TestSaveCabecalhoComMock:
         assert any("UPDATE n_fiscal" in q for q, _ in cur.queries)
 
     def test_bloqueia_edicao_de_nota_cancelada(self, monkeypatch):
-        cur = FakeCursor(one=[{"codigo": "S01"}, None, {"situacao": "C"}])
+        cur = FakeCursor(one=[None, {"codigo": "S01"}, None, {"situacao": "C"}])
         conn = _patch(monkeypatch, cur)
         r = svc._save_cabecalho_sync("srv", "bd", 10, DADOS_MIN)
         assert r["success"] is False and "canceladas" in r["message"]
+        assert conn.committed is False
+
+    def test_bloqueia_data_anterior_ao_fechamento_do_livro(self, monkeypatch):
+        cur = FakeCursor(one=[{"data_fecha_livro": "2026-07-31", "data_fecha_cont": None}])
+        conn = _patch(monkeypatch, cur)
+        r = svc._save_cabecalho_sync("srv", "bd", None, {**DADOS_MIN, "data_mov": "2026-07-13"})
+        assert r["success"] is False
+        assert "fechamento" in r["message"].lower()
+        assert conn.committed is False
+
+    def test_bloqueia_data_anterior_ao_fechamento_contabil(self, monkeypatch):
+        cur = FakeCursor(one=[{"data_fecha_livro": None, "data_fecha_cont": "2026-07-31"}])
+        conn = _patch(monkeypatch, cur)
+        r = svc._save_cabecalho_sync("srv", "bd", None, {**DADOS_MIN, "data_mov": "2026-07-13"})
+        assert r["success"] is False
+        assert "fechamento" in r["message"].lower()
         assert conn.committed is False
 
 
@@ -212,6 +234,45 @@ class TestCancelar:
         assert any("DELETE FROM comanda_nf" in q for q, _ in cur.queries)
         assert any("situacao='C'" in q for q, _ in cur.queries)
 
+    def test_cancela_reverte_baixa_de_pedido_de_compra(self, monkeypatch):
+        """Achado real da reauditoria 2026-08-21 (`FrmManRec.frm:5461-
+        5474`, "'refaz pedidos de compra"): cancelar uma NF que veio de
+        um Recebimento com baixa de Pedido de Compra reverte
+        `qtd_recebida`, reabre o pedido, e — se `controle_aux.
+        baixa_pedido_compra` estiver ligado — apaga o vínculo de
+        rastreio (`nf_recebimento_pedido`)."""
+        cur = FakeCursor(
+            one=[
+                {"situacao": "A", "mov": "S01"},
+                {"baixa_pedido_compra": True},
+            ],
+            many=[
+                [],  # consignacao vazia
+                [],  # movimentacao vazia
+                [{"pedido": 900, "item": "P001", "quant": 3.0, "recebimento": 55}],  # baixas
+            ],
+        )
+        conn = _patch(monkeypatch, cur)
+        r = svc._cancelar_sync("srv", "bd", 10)
+        assert r["success"] is True
+        assert conn.committed is True
+        upd_item = next((q, p) for q, p in cur.queries if q.startswith("UPDATE pedido_itens"))
+        assert upd_item[1] == (3.0, 900, "P001")
+        upd_pedido = next((q, p) for q, p in cur.queries if q.startswith("UPDATE pedido SET situacao"))
+        assert upd_pedido[1] == (900,)
+        assert any(q.startswith("DELETE nfrp FROM nf_recebimento_pedido") for q, _ in cur.queries)
+
+    def test_cancela_sem_baixa_de_pedido_nao_mexe_em_pedido(self, monkeypatch):
+        cur = FakeCursor(
+            one=[{"situacao": "A", "mov": "S01"}],
+            many=[[], [], []],  # consignacao, movimentacao, baixas (nenhuma)
+        )
+        conn = _patch(monkeypatch, cur)
+        r = svc._cancelar_sync("srv", "bd", 10)
+        assert r["success"] is True
+        assert conn.committed is True
+        assert not any(q.startswith("UPDATE pedido_itens") for q, _ in cur.queries)
+
 
 class TestExcluir:
     def test_nota_nao_encontrada(self, monkeypatch):
@@ -295,3 +356,175 @@ class TestBuscarProduto:
         _patch(monkeypatch, cur)
         r = svc._buscar_produto_sync("srv", "bd", "XXXX")
         assert r["success"] is True and r["found"] is False
+
+
+class TestGetDanfeSync:
+    def test_nota_nao_encontrada(self, monkeypatch):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        r = svc._get_danfe_sync("srv", "bd", 999)
+        assert r["success"] is False
+        assert "não encontrada" in r["message"].lower()
+
+    def test_sem_xml_bloqueia_com_mensagem_clara(self, monkeypatch):
+        cur = FakeCursor(one=[{"xml": None, "protocolo_sefaz": None, "chave_acesso": None, "dhRecbto": None, "situacao": "D"}])
+        _patch(monkeypatch, cur)
+        r = svc._get_danfe_sync("srv", "bd", 1)
+        assert r["success"] is False
+        assert "ainda não foi emitida" in r["message"].lower()
+
+    def test_xml_invalido_bloqueia(self, monkeypatch):
+        cur = FakeCursor(one=[{"xml": "<not-xml", "protocolo_sefaz": "123", "chave_acesso": "3" * 44, "dhRecbto": None, "situacao": "A"}])
+        _patch(monkeypatch, cur)
+        r = svc._get_danfe_sync("srv", "bd", 1)
+        assert r["success"] is False
+        assert "não foi possível ler" in r["message"].lower()
+
+    def test_sucesso_colunas_do_cabecalho_sobrepoe_o_xml(self, monkeypatch):
+        # O XML assinado nunca é reescrito com o protocolo pós-autorização
+        # (mesmo princípio de parse_nfce_xml_para_exibicao) — as colunas de
+        # n_fiscal são sempre a fonte de verdade sobre protocolo/chave/
+        # situação, mesmo que o parser devolva algo diferente.
+        monkeypatch.setattr(
+            svc.nfe_emissao_service, "parse_nfe_xml_para_exibicao",
+            lambda xml: {"chave_acesso": "0" * 44, "protocolo_sefaz": None, "valor_total": 20.0},
+        )
+        cur = FakeCursor(one=[
+            {"xml": "<NFe/>", "protocolo_sefaz": "135000000000001", "chave_acesso": "3" * 44,
+             "dhRecbto": "2026-08-20T10:00:00", "situacao": "A"},
+            {"modelo_danfe": 1},
+        ])
+        _patch(monkeypatch, cur)
+        r = svc._get_danfe_sync("srv", "bd", 1)
+        assert r["success"] is True
+        assert r["detalhe"]["protocolo_sefaz"] == "135000000000001"
+        assert r["detalhe"]["chave_acesso"] == "3" * 44
+        assert r["detalhe"]["situacao"] == "A"
+        assert r["modelo_danfe"] == 1
+
+    def test_sem_controle_aux_nao_quebra(self, monkeypatch):
+        monkeypatch.setattr(
+            svc.nfe_emissao_service, "parse_nfe_xml_para_exibicao",
+            lambda xml: {"chave_acesso": "3" * 44, "valor_total": 20.0},
+        )
+        cur = FakeCursor(one=[
+            {"xml": "<NFe/>", "protocolo_sefaz": "1", "chave_acesso": "3" * 44, "dhRecbto": None, "situacao": "A"},
+            None,
+        ])
+        _patch(monkeypatch, cur)
+        r = svc._get_danfe_sync("srv", "bd", 1)
+        assert r["success"] is True
+        assert r["modelo_danfe"] is None
+
+
+class TestCartaCorrecaoSync:
+    """Carta de Correção Eletrônica (CC-e) — `_carta_correcao_sync`.
+    `nfe_correcao_service.emitir_carta_correcao_sync` (a peça que fala com
+    o SEFAZ de verdade) é sempre mockada aqui — ver
+    `test_nfe_correcao_service.py` pra cobertura da emissão em si."""
+
+    def test_nota_nao_encontrada(self, monkeypatch):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        r = svc._carta_correcao_sync("srv", "bd", 1, "Motivo válido com bastante texto", "user")
+        assert r["success"] is False
+        assert "não encontrada" in r["message"].lower()
+
+    def test_sem_protocolo_sefaz_bloqueia(self, monkeypatch):
+        cur = FakeCursor(one=[{"protocolo_sefaz": "", "chave_acesso": "1" * 44}])
+        _patch(monkeypatch, cur)
+        r = svc._carta_correcao_sync("srv", "bd", 1, "Motivo válido com bastante texto", "user")
+        assert r["success"] is False
+        assert "protocolo" in r["message"].lower()
+
+    def test_situacao_nfe_zero_nao_bloqueia_mais_com_protocolo_real(self, monkeypatch):
+        # Achado ao vivo 2026-08-23: `situacao_nfe` nunca é gravado pelos
+        # 3 caminhos de emissão modernos (nfe_agrupada_service.py/
+        # nfe_avulsa_service.py/comanda_service.py) — ficava sempre no
+        # DEFAULT 0 do schema mesmo com a nota genuinamente autorizada,
+        # bloqueando incondicionalmente. `protocolo_sefaz` (o sinal real
+        # de autorização nesta migração) é o único gate que resta.
+        cur = FakeCursor(one=[
+            {"situacao_nfe": 0, "protocolo_sefaz": "135000000000001", "chave_acesso": "1" * 44},
+            {"qtd": 0},
+            {"cgc": "12345678000199", "uf": "RJ"},
+        ])
+        conn = _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc.nfe_fiscal_common, "resolver_tp_amb_sync", lambda cur: "2")
+        monkeypatch.setattr(
+            svc.nfe_correcao_service, "emitir_carta_correcao_sync",
+            lambda cur, **kw: {
+                "success": True, "message": "ok", "protocolo": "135260000012345", "cstat": "135",
+                "xmotivo": "Evento registrado e vinculado a NF-e",
+                "data_hora_registro": "2026-08-22T10:00:00-03:00", "xml_evento": "<evento/>",
+            },
+        )
+        r = svc._carta_correcao_sync("srv", "bd", 1, "Motivo válido com bastante texto", "user")
+        assert r["success"] is True
+        assert conn.committed is True
+
+    def test_ja_atingiu_20_cartas_bloqueia_a_21a(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"protocolo_sefaz": "135000000000001", "chave_acesso": "1" * 44},
+            {"qtd": 20},
+        ])
+        _patch(monkeypatch, cur)
+        r = svc._carta_correcao_sync("srv", "bd", 1, "Motivo válido com bastante texto", "user")
+        assert r["success"] is False
+        assert "20" in r["message"]
+
+    def test_sucesso_grava_linha_e_faz_commit(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"protocolo_sefaz": "135000000000001", "chave_acesso": "1" * 44},
+            {"qtd": 0},
+            {"cgc": "12345678000199", "uf": "RJ"},
+        ])
+        conn = _patch(monkeypatch, cur)
+        monkeypatch.setattr(
+            svc.nfe_fiscal_common, "resolver_tp_amb_sync", lambda cur: "2",
+        )
+        monkeypatch.setattr(
+            svc.nfe_correcao_service, "emitir_carta_correcao_sync",
+            lambda cur, **kw: {
+                "success": True, "message": "Carta de Correção autorizada pelo SEFAZ — protocolo 135260000012345.",
+                "protocolo": "135260000012345", "cstat": "135", "xmotivo": "Evento registrado e vinculado a NF-e",
+                "data_hora_registro": "2026-08-22T10:00:00-03:00", "xml_evento": "<evento/>",
+            },
+        )
+        r = svc._carta_correcao_sync("srv", "bd", 1, "Motivo válido com bastante texto", "user")
+        assert r["success"] is True
+        assert r["n_seq_evento"] == 1
+        assert r["protocolo"] == "135260000012345"
+        assert conn.committed is True
+        insert_q = next(q for q, _ in cur.queries if "INSERT INTO n_fiscal_carta_correcao" in q)
+        assert insert_q  # confere que o INSERT realmente foi emitido
+
+    def test_falha_do_sefaz_nao_grava_linha(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"protocolo_sefaz": "135000000000001", "chave_acesso": "1" * 44},
+            {"qtd": 0},
+            {"cgc": "12345678000199", "uf": "RJ"},
+        ])
+        conn = _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc.nfe_fiscal_common, "resolver_tp_amb_sync", lambda cur: "2")
+        monkeypatch.setattr(
+            svc.nfe_correcao_service, "emitir_carta_correcao_sync",
+            lambda cur, **kw: {"success": False, "message": "SEFAZ recusou a Carta de Correção (status 573): Duplicidade."},
+        )
+        r = svc._carta_correcao_sync("srv", "bd", 1, "Motivo válido com bastante texto", "user")
+        assert r["success"] is False
+        assert not any("INSERT INTO n_fiscal_carta_correcao" in q for q, _ in cur.queries)
+        assert conn.committed is False
+
+
+class TestListCartasCorrecaoSync:
+    def test_lista_cartas_ja_emitidas(self, monkeypatch):
+        cartas = [
+            {"codigo": 1, "n_seq_evento": 1, "motivo": "Motivo 1", "protocolo": "135000000000001",
+             "cstat": "135", "xmotivo": "ok", "data_registro": "2026-08-22T10:00:00", "criado_em": "2026-08-22T10:00:00"},
+        ]
+        cur = FakeCursor(many=[cartas])
+        _patch(monkeypatch, cur)
+        r = svc._list_cartas_correcao_sync("srv", "bd", 1)
+        assert r["success"] is True
+        assert r["cartas"] == cartas

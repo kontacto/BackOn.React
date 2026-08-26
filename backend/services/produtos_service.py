@@ -56,8 +56,10 @@ def _list_produtos_servicos_sync(
             cur.execute(
                 f"SELECT 'P' AS tipo, p.codigo_int AS codigo, p.descricao, "
                 f"       p.p_venda AS valor, p.qtd, p.reservado, p.reservado_os, p.codigo_fab, p.uni, "
-                f"       p.controla_num_serie "
-                f"FROM pecas p {where_p} "
+                f"       p.controla_num_serie, pi.codigo AS imagem_codigo "
+                f"FROM pecas p "
+                f"LEFT JOIN produto_imagem pi ON pi.codigo_int = p.codigo_int AND pi.principal = 1 AND pi.situacao = 'A' "
+                f"{where_p} "
                 f"ORDER BY {order_p}",
                 params_p + order_params_p,
             )
@@ -82,6 +84,7 @@ def _list_produtos_servicos_sync(
                     # picker de Produtos ignoram este campo, comportamento
                     # deles inalterado.
                     "controla_num_serie": bool(r.get("controla_num_serie")),
+                    "imagem_codigo": int(r["imagem_codigo"]) if r.get("imagem_codigo") is not None else None,
                 })
 
         if tipo in ("all", "S"):

@@ -17,7 +17,7 @@ from services.constants import SITUACAO_LABEL
 from services.pedido_common import (
     _resolve_produto, _mover_estoque, _modulo_servicos_ativo, _modulo_agenda_ativo,
     _exige_aprovacao_itens_os_ativo, _exige_expedicao_itens_os_ativo,
-    _ensure_agenda_os_table,
+    _ensure_agenda_os_table, _checklist_veiculo_pendente_bloqueia,
 )
 
 
@@ -192,6 +192,10 @@ def _add_item_sync(req: OSItemSaveRequest, codigo: int) -> dict:
         if sit != "A":
             conn.close()
             return {"success": False, "message": f"OS '{SITUACAO_LABEL.get(sit, sit)}' não pode ser alterada."}
+        bloqueio_checklist = _checklist_veiculo_pendente_bloqueia(cur, codigo, req.classe)
+        if bloqueio_checklist:
+            conn.close()
+            return {"success": False, "message": bloqueio_checklist}
 
         prod_cod = (req.produto or "").strip()
         if not prod_cod:

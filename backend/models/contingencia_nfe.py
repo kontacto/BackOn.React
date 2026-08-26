@@ -17,3 +17,10 @@ class ContingenciaNfeFecharRequest(AuditFields):
     servidor: str
     banco: str
     master: Optional[bool] = False
+
+
+class ContingenciaNfeValidarRequest(AuditFields):
+    servidor: str
+    banco: str
+    notas: list[int]
+    master: Optional[bool] = False

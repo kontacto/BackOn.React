@@ -7,7 +7,9 @@ import { AppModal } from "@/src/components/AppModal";
 
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import WebDateField from "@/src/components/WebDateField";
+import AccordionSection from "@/src/components/pedido/AccordionSection";
 import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
 import { ClienteRow } from "@/src/components/pedido/types";
 import { usePermissions } from "@/src/permissions";
 import { useAuditContext } from "@/src/hooks/useAuditContext";
@@ -18,6 +20,7 @@ import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { clienteSearchParams } from "@/src/hooks/useClienteForm";
+import { useClienteSearchModal } from "@/src/hooks/useClienteSearchModal";
 
 type Conn = Connection;
 
@@ -90,6 +93,7 @@ export default function ContatosScreen() {
   const [prevDe, setPrevDe] = useState("");
   const [prevAte, setPrevAte] = useState("");
   const [fCliente, setFCliente] = useState("");
+  const filtroClienteSearch = useClienteSearchModal(conn);
   const [fContato, setFContato] = useState("");
   const [fTelefone, setFTelefone] = useState("");
   const [fTipoCliente, setFTipoCliente] = useState<number | null>(null);
@@ -362,6 +366,7 @@ export default function ContatosScreen() {
 
       <View style={styles.webShell}>
         <View style={styles.filterBox}>
+          <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="contatos-filtros">
           <View style={styles.filterRow}>
             <View style={styles.colNarrow}>
               <Text style={styles.label}>Período de</Text>
@@ -403,7 +408,20 @@ export default function ContatosScreen() {
           <View style={styles.filterRow}>
             <View style={styles.colFlex}>
               <Text style={styles.label}>Cliente</Text>
-              <TextInput value={fCliente} onChangeText={setFCliente} style={styles.input} placeholder="Nome do cliente" placeholderTextColor={colors.muted} testID="filtro-cliente" />
+              <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+                <TextInput
+                  value={fCliente}
+                  onChangeText={setFCliente}
+                  style={[styles.input, { flex: 1, minWidth: 0 }]}
+                  placeholder="Nome do cliente"
+                  placeholderTextColor={colors.muted}
+                  testID="filtro-cliente"
+                />
+                <IconButtonWithTooltip
+                  icon="search-outline" label="Buscar Cliente" onPress={filtroClienteSearch.openModal}
+                  size={20} color={colors.brandPrimary} testID="filtro-cliente-buscar"
+                />
+              </View>
             </View>
             <View style={styles.colFlex}>
               <Text style={styles.label}>Contato</Text>
@@ -434,6 +452,7 @@ export default function ContatosScreen() {
               </Pressable>
             ) : null}
           </View>
+          </AccordionSection>
         </View>
 
         <ScrollView contentContainerStyle={[styles.scroll, styles.scrollWeb]}>
@@ -603,6 +622,16 @@ export default function ContatosScreen() {
           setSearchOpen(false);
           router.push({ pathname: "/cliente-form", params: clienteSearchParams(searchTerm) });
         }}
+      />
+      <ClientSearchModal
+        visible={filtroClienteSearch.open}
+        onClose={filtroClienteSearch.closeModal}
+        term={filtroClienteSearch.term}
+        setTerm={filtroClienteSearch.setTerm}
+        loading={filtroClienteSearch.loading}
+        results={filtroClienteSearch.results}
+        onPick={(c) => { if (c) setFCliente(c.nome); filtroClienteSearch.closeModal(); }}
+        onCreate={filtroClienteSearch.closeModal}
       />
     </SafeAreaView>
   );

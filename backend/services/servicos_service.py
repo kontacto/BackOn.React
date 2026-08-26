@@ -303,6 +303,72 @@ def _delete_servico_sync(servidor: str, banco: str, codigo: str) -> dict:
         conn.close()
 
 
+def _tributacao_municipio_existe_sync(cur) -> bool:
+    cur.execute("SELECT 1 FROM sys.tables WHERE name = 'Tributacao_MUnicipio'")
+    return cur.fetchone() is not None
+
+
+def _list_tributacao_municipio_sync(servidor: str, banco: str, *, search: str, cod_lista_servico: str) -> dict:
+    """Busca em `Tributacao_MUnicipio` — tabela oficial real herdada do
+    legado (1071 linhas confirmadas em ARGEN TESTE, crosswalk item LC116 →
+    código complementar municipal), pra sugerir/buscar o valor de "Código
+    Complementar Municipal" (`servicos.cod_servico_municipio`) em vez de
+    digitação livre — mesmo princípio de "Campos de Identidade Precisam de
+    Mecanismo de Busca" já aplicado a Fabricante/Fornecedor.
+
+    Rastreada até a raiz em `DAO_NFE.vb:1118-1128` (ver
+    `nfse_emissao_service.py` e PENDENCIAS.md > "NFS-e (DPS Nacional)"):
+    o legado usa essa tabela como SUGESTÃO — casando `cTribNac` (6 dígitos,
+    mesmo valor de `cod_lista_servico`) — nunca como preenchimento
+    automático incondicional, porque um mesmo item LC116 sempre tem VÁRIOS
+    códigos complementares possíveis (ex.: item 14.01 tem "Manutenção de
+    aparelhos"/"015", "Manutenção de equipamentos"/"032", etc.) — só o
+    usuário sabe qual bate com o serviço real sendo cadastrado. Por isso
+    isto é um MODAL DE BUSCA (o usuário escolhe), não um autofill.
+
+    Nem toda instalação tem essa tabela carregada (depende de quando o
+    legado foi provisionado) — degrada graciosamente pra lista vazia em
+    vez de erro, nunca bloqueia o cadastro de Serviços por causa dela."""
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        if not _tributacao_municipio_existe_sync(cur):
+            return {"success": True, "items": []}
+        termo = (search or "").strip()
+        cod = (cod_lista_servico or "").strip()
+        if termo:
+            cur.execute(
+                "SELECT TOP 50 cTribNacMun, cTribNac, cTribMun, Descricao FROM Tributacao_MUnicipio "
+                "WHERE Descricao LIKE %s ORDER BY cTribNacMun",
+                (f"%{termo}%",),
+            )
+        elif cod:
+            cur.execute(
+                "SELECT TOP 50 cTribNacMun, cTribNac, cTribMun, Descricao FROM Tributacao_MUnicipio "
+                "WHERE cTribNac = %s ORDER BY cTribNacMun",
+                (cod,),
+            )
+        else:
+            cur.execute(
+                "SELECT TOP 50 cTribNacMun, cTribNac, cTribMun, Descricao FROM Tributacao_MUnicipio "
+                "ORDER BY cTribNacMun"
+            )
+        items = [{
+            "cod_trib_nac_mun": (r.get("cTribNacMun") or "").strip(),
+            "cod_trib_nac": (r.get("cTribNac") or "").strip(),
+            "cod_trib_mun": (r.get("cTribMun") or "").strip(),
+            "descricao": (r.get("Descricao") or "").strip(),
+        } for r in cur.fetchall()]
+        cur.close()
+        return {"success": True, "items": items}
+    finally:
+        conn.close()
+
+
+async def list_tributacao_municipio(servidor, banco, search, cod_lista_servico):
+    return await asyncio.to_thread(_list_tributacao_municipio_sync, servidor, banco, search=search, cod_lista_servico=cod_lista_servico)
+
+
 async def list_servicos(servidor, banco):
     return await asyncio.to_thread(_list_servicos_sync, servidor, banco)
 

@@ -10,11 +10,13 @@ import LockedView from "@/src/components/LockedView";
 import { AppModal } from "@/src/components/AppModal";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import GestorDocumentosSection, { GESTOR_DOC_GRUPO_PRODUTO } from "@/src/components/GestorDocumentosSection";
+import ProdutoImagensSection from "@/src/components/produto/ProdutoImagensSection";
 import ModificadoresSection from "@/src/components/ModificadoresSection";
 import NiveisModal from "@/src/components/NiveisModal";
 import { buildNivelBreadcrumb } from "@/src/utils/nivelTree";
 import FornecedorSearchModal, { FornecedorRow } from "@/src/components/FornecedorSearchModal";
 import ProdutoSearchModal, { ProdutoRow } from "@/src/components/ProdutoSearchModal";
+import NcmCestSearchModal from "@/src/components/NcmCestSearchModal";
 import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
 import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
@@ -192,7 +194,7 @@ const PRODUTO_AJUDA_ITENS: HelpItem[] = [
   },
   {
     titulo: "Buscar NCM/CEST",
-    texto: "Ícone de lupa ao lado do campo NCM — ainda não disponível nesta versão da tela. Por enquanto, digite o código NCM/CEST diretamente.",
+    texto: "Ícone de lupa ao lado do campo NCM — busca na tabela oficial de códigos. Ao escolher um NCM, o CEST aplicável é sugerido automaticamente quando houver só uma opção; havendo mais de uma, a tela pergunta qual usar.",
     icon: { lib: "ion", name: "search-outline" },
   },
   {
@@ -222,7 +224,7 @@ const PRODUTO_AJUDA_ITENS: HelpItem[] = [
   },
   {
     titulo: "Fotografia",
-    texto: "Anexa fotos do produto. Com o módulo Grade ligado, também permite associar uma cor a cada foto e publicar o produto no site (Tray).",
+    texto: "Envia fotos do produto. A foto marcada com a estrela é a Principal — é ela que aparece na busca de produto, no PDV e no catálogo. Também permite associar uma cor a cada foto (ligada à Grade) e publicar o produto no site (Tray).",
     icon: { lib: "ion", name: "image-outline" },
   },
   {
@@ -315,6 +317,15 @@ export default function ProdutoCompletoScreen() {
     setFornecedorSearchOpen(false);
     setFornecedorSearchTerm("");
     setFornecedorSearchResults([]);
+  };
+
+  // Campos NCM/CEST (Classificações Fiscais) também são identidade — busca
+  // no cadastro NCM/CEST em vez de texto livre. Ver [[project_ncm_cest]].
+  const [ncmCestSearchOpen, setNcmCestSearchOpen] = useState(false);
+  const handleNcmCestPick = (ncm: string, cest: string | null) => {
+    f.setField("codigo_mercosul", ncm);
+    if (cest) f.setField("codigo_cest", cest);
+    setNcmCestSearchOpen(false);
   };
 
   useEffect(() => {
@@ -826,7 +837,7 @@ export default function ProdutoCompletoScreen() {
                     <IconButtonWithTooltip
                       icon="search-outline"
                       label="Buscar NCM/CEST"
-                      onPress={() => f.fb.showInfo("Busca de NCM/CEST ainda não disponível nesta versão da tela.")}
+                      onPress={() => setNcmCestSearchOpen(true)}
                       testID="produto-btn-busca-ncm"
                     />
                   </View>
@@ -1103,6 +1114,12 @@ export default function ProdutoCompletoScreen() {
         results={fornecedorSearchResults}
         onPick={handleFornecedorPick}
       />
+      <NcmCestSearchModal
+        visible={ncmCestSearchOpen}
+        onClose={() => setNcmCestSearchOpen(false)}
+        conn={f.conn}
+        onPick={handleNcmCestPick}
+      />
       <AjudaPedidoModal visible={ajudaOpen} onClose={() => setAjudaOpen(false)} titulo="Cadastro de Produtos" itens={PRODUTO_AJUDA_ITENS} />
     </SafeAreaView>
   );
@@ -1358,10 +1375,13 @@ function FornecedorModal({ visible, onClose, fornecedores, setFornecedores, conn
 }
 
 // ---------------------------------------------------------------------------
-// Fotografia — modal (Command15_Click no legado). Módulo Grade desligado:
-// só o Gestor de Documentos (Imagens). Módulo Grade ligado: FrmAsoFot
-// equivalente — associar cor por foto + enviar/atualizar na Tray (ver
-// backend/services/tray_service.py, "Aviso de teste" na docstring).
+// Fotografia — modal (Command15_Click no legado). Desde a migração pra
+// `produto_imagem` (sistema novo, isolado do Gestor de Documentos — ver
+// PENDENCIAS.md > "Fotos de Produto"), usa `ProdutoImagensSection` em vez
+// de `GestorDocumentosSection`. Módulo Grade ligado: FrmAsoFot
+// equivalente — associar cor por foto (campo real, não mais texto de
+// aviso) + enviar/atualizar na Tray (ver backend/services/tray_service.py,
+// "Aviso de teste" na docstring).
 // ---------------------------------------------------------------------------
 
 function FotografiaModal({ visible, onClose, conn, codigoInt, gradeOn, canEnviarSite, onEnviarSite }: {
@@ -1369,29 +1389,6 @@ function FotografiaModal({ visible, onClose, conn, codigoInt, gradeOn, canEnviar
   codigoInt: string; gradeOn: boolean; canEnviarSite: boolean; onEnviarSite: (idTray?: number) => Promise<boolean>;
 }) {
   const [enviando, setEnviando] = useState(false);
-  // Este modal é só pra fotos — trava o sub-grupo sempre em "Imagens" (não
-  // deixa o usuário escolher outro), pedido explícito do usuário. Resolve/
-  // cria o sub-grupo "Imagens" do grupo Produtos (find-or-create já existe
-  // no backend, mesmo endpoint usado pra criar sub-grupo novo na aba
-  // Anexos) na abertura do modal.
-  const [subGrupoImagens, setSubGrupoImagens] = useState<number | null>(null);
-  useEffect(() => {
-    if (!visible) return;
-    (async () => {
-      try {
-        const base = conn.api.replace(/\/+$/, "");
-        const r = await fetch(`${base}/api/gestor-documentos/sub-grupos`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, cod_grupo: GESTOR_DOC_GRUPO_PRODUTO, descricao: "Imagens" }),
-        });
-        const j = await r.json();
-        if (j?.success) setSubGrupoImagens(j.cod_sub_grupo);
-      } catch {
-        // silencioso — sub-grupo fica livre (comportamento anterior) se a resolução falhar
-      }
-    })();
-  }, [visible, conn]);
   return (
     <AppModal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={[styles.modalBg, styles.modalBgWebCompact]} onPress={onClose}>
@@ -1401,11 +1398,11 @@ function FotografiaModal({ visible, onClose, conn, codigoInt, gradeOn, canEnviar
             <Pressable onPress={onClose} hitSlop={8}><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
           </View>
           <ScrollView style={{ maxHeight: 480 }}>
-            <GestorDocumentosSection api={conn.api} servidor={conn.servidor} banco={conn.banco} codGrupo={GESTOR_DOC_GRUPO_PRODUTO} codigoEntidade={codigoInt} codSubGrupo={subGrupoImagens ?? undefined} />
+            <ProdutoImagensSection api={conn.api} servidor={conn.servidor} banco={conn.banco} codigoInt={codigoInt} />
             {gradeOn ? (
               <Text style={styles.sectionHint}>
-                Depois de anexar as fotos acima, use "Cadastrar/Atualizar no Site" para publicar na Tray — a cor de
-                cada foto é ajustada diretamente no Gestor de Documentos (campo "Cor").
+                Depois de enviar as fotos acima, use "Cadastrar/Atualizar no Site" para publicar na Tray — a cor de
+                cada foto é escolhida no próprio envio, no campo "Cor" acima.
               </Text>
             ) : null}
             {canEnviarSite ? (
@@ -2062,9 +2059,10 @@ const styles = StyleSheet.create({
     width: "100%", maxWidth: 560, alignSelf: "center",
     borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border,
   },
-  // Anexos/Fotografia embutem GestorDocumentosSection (lista + preview lado
-  // a lado) — precisa de mais largura que o tier de "seleção" padrão (560px)
-  // pra não cramped o painel de preview, ver CLAUDE.md > "Padrões de UI".
+  // Anexos (GestorDocumentosSection, lista + preview lado a lado) e
+  // Fotografia (ProdutoImagensSection, grid de miniaturas) precisam de mais
+  // largura que o tier de "seleção" padrão (560px) pra não ficar cramped,
+  // ver CLAUDE.md > "Padrões de UI".
   modalCardWebWide: {
     width: "100%", maxWidth: 960, alignSelf: "center",
     borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border,

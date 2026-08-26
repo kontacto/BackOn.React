@@ -13,6 +13,10 @@ import { Ionicons } from "@/src/components/Ionicons";
 import DateField from "@/src/components/DateField";
 import WebDateField from "@/src/components/WebDateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import AccordionSection from "@/src/components/pedido/AccordionSection";
+import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
+import { useClienteSearchModal } from "@/src/hooks/useClienteSearchModal";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
@@ -56,6 +60,7 @@ export default function RelatorioResumoAtendimentoScreen() {
   const [tecnicoOpts, setTecnicoOpts] = useState<SelectOption[]>([]);
   const [tecnico, setTecnico] = useState<string | number | null>(null);
   const [clienteCodigo, setClienteCodigo] = useState("");
+  const clienteSearch = useClienteSearchModal(conn);
   const [chassi, setChassi] = useState("");
   const [incluirClientePg, setIncluirClientePg] = useState(true);
   const [incluirContrato, setIncluirContrato] = useState(true);
@@ -176,6 +181,7 @@ export default function RelatorioResumoAtendimentoScreen() {
       <ScrollView contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]} keyboardShouldPersistTaps="handled">
         <View style={isWeb ? styles.webShell : undefined}>
           <View style={[styles.filters, isWeb && styles.filtersWeb]}>
+          <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="relra-filtros">
             <View style={styles.dateRow}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.fieldLabel}>Término (de)</Text>
@@ -227,15 +233,21 @@ export default function RelatorioResumoAtendimentoScreen() {
               </View>
               <View style={styles.filterCol}>
                 <Text style={styles.fieldLabel}>Cliente (código, opcional)</Text>
-                <TextInput
-                  value={clienteCodigo}
-                  onChangeText={setClienteCodigo}
-                  keyboardType="number-pad"
-                  placeholder="Código"
-                  placeholderTextColor={colors.muted}
-                  style={styles.input}
-                  testID="relra-cliente"
-                />
+                <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+                  <TextInput
+                    value={clienteCodigo}
+                    onChangeText={setClienteCodigo}
+                    keyboardType="number-pad"
+                    placeholder="Código"
+                    placeholderTextColor={colors.muted}
+                    style={[styles.input, { flex: 1, minWidth: 0 }]}
+                    testID="relra-cliente"
+                  />
+                  <IconButtonWithTooltip
+                    icon="search-outline" label="Buscar Cliente" onPress={clienteSearch.openModal}
+                    size={20} color={colors.brandPrimary} testID="relra-cliente-buscar"
+                  />
+                </View>
               </View>
               <View style={styles.filterCol}>
                 <Text style={styles.fieldLabel}>Chassi/Equip. (opcional)</Text>
@@ -290,6 +302,7 @@ export default function RelatorioResumoAtendimentoScreen() {
                 </>
               ) : null}
             </View>
+          </AccordionSection>
           </View>
 
           {resultado ? (
@@ -364,6 +377,16 @@ export default function RelatorioResumoAtendimentoScreen() {
           ) : null}
         </View>
       </ScrollView>
+      <ClientSearchModal
+        visible={clienteSearch.open}
+        onClose={clienteSearch.closeModal}
+        term={clienteSearch.term}
+        setTerm={clienteSearch.setTerm}
+        loading={clienteSearch.loading}
+        results={clienteSearch.results}
+        onPick={(c) => { setClienteCodigo(String(c.codigo)); clienteSearch.closeModal(); }}
+        onCreate={clienteSearch.closeModal}
+      />
     </SafeAreaView>
   );
 }

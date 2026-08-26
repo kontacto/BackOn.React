@@ -21,6 +21,7 @@ import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import LockedView from "@/src/components/LockedView";
 import WebDateField from "@/src/components/WebDateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
+import AccordionSection from "@/src/components/pedido/AccordionSection";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
@@ -169,6 +170,7 @@ export default function PedidoListaScreen() {
       <View style={styles.shellOuter}>
         <View style={styles.shell}>
           <View style={styles.filterCard}>
+          <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="pedido-lista-filtros">
             <View style={styles.searchWrap}>
               <Ionicons name="search" size={16} color={colors.muted} />
               <TextInput
@@ -224,6 +226,7 @@ export default function PedidoListaScreen() {
                 </View>
               ) : null}
             </View>
+          </AccordionSection>
           </View>
 
           {loading && items.length === 0 ? <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: 24 }} /> : null}

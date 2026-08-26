@@ -10,6 +10,7 @@ from typing import Optional
 
 from db.connection import iso
 from services.constants import STATUS_CLIENTE_LABEL
+from services.permissoes_service import tem_permissao
 
 
 def _check_cliente_ativo(cur, cliente_codigo: int) -> tuple[bool, str]:
@@ -219,6 +220,53 @@ def _resolve_tipo_pedido(fantasia: Optional[str], cliente_forn, tipo_solicitado:
     fantasia_up = (fantasia or "").strip().upper()
     cliente_reservado = any(k in fantasia_up for k in ("MESA", "COMANDA", "BALCÃO", "BALCAO"))
     return cliente_forn if cliente_reservado else tipo_solicitado
+
+
+def _checklist_veiculo_pendente_bloqueia(cur, codigo_os: int, classe: Optional[int]) -> Optional[str]:
+    """Checklist de Entrada de Veículo obrigatório POR PERMISSÃO DE GRUPO
+    — pedido explícito do usuário 2026-08-26 ("O CHECKLIST DEVE SER
+    OBRIGATÓRIO VIA PERMISSÃO. Se na permissão estiver marcado para o
+    grupo de usuário que tem que fazer o checklist, tem que obrigar a
+    fazer"). Diferente das demais regras `_modulo_*_ativo` deste arquivo
+    (que são flags de EMPRESA, `controle_configuracao`/`controle_aux`),
+    esta é uma flag de GRUPO (`permissoes`, botão `OS_COMP.
+    CHECKLIST_OBRIG`) — só bloqueia pra quem o administrador marcou
+    explicitamente, nunca pra empresa inteira.
+
+    Bloqueia quando, SIMULTANEAMENTE: (1) o grupo do usuário tem o botão
+    `CHECKLIST_OBRIG` marcado; (2) a O.S. é de Oficina (tem placa —
+    mesmo critério `is_oficina` usado em `os_completa_pdf_service.py`);
+    (3) o checklist ainda não foi concluído (`os_checklist`, sem linha
+    ativa — ver `os_checklist_veiculo_service._concluir_sync`). Retorna a
+    mensagem de erro pra devolver ao chamador, ou `None` se liberado.
+
+    **Escopo do bloqueio, decidido explicitamente pelo usuário**: só a
+    PROGRESSÃO da O.S. é travada (incluir item, fechar, faturar) — Gravar
+    os campos do próprio cabeçalho (cliente, dados do veículo, "Cliente
+    Descreve") continua sempre liberado ("deixa gravar a OS com os dados
+    do veículo e cliente e cliente descreve. trava o resto."), por isso
+    este helper NUNCA é chamado a partir de `_save_os_completo_sync`.
+
+    Não recebe/verifica `master` — desnecessário: a obrigatoriedade só
+    existe pra um grupo que o administrador marcou explicitamente
+    (`tem_permissao` abaixo já retorna `False` pra qualquer grupo sem
+    essa marcação, inclusive o grupo do usuário master na prática, já que
+    ninguém marcaria essa exigência pro próprio grupo administrativo)."""
+    if classe is None:
+        return None
+    if not tem_permissao(cur, classe, "OS_COMP", "CHECKLIST_OBRIG"):
+        return None
+    cur.execute("SELECT placa FROM os WHERE codigo=%s", (codigo_os,))
+    row = cur.fetchone()
+    if not row or not (row.get("placa") or "").strip():
+        return None
+    cur.execute(
+        "SELECT TOP 1 1 AS ok FROM os_checklist WHERE os=%s AND ISNULL(situacao,'A')<>'C'",
+        (codigo_os,),
+    )
+    if cur.fetchone():
+        return None
+    return "Conclua o Checklist de Entrada do Veículo antes de continuar."
 
 
 def _modulo_servicos_ativo(cur) -> bool:

@@ -28,6 +28,7 @@ import { usePedidoItens } from "@/src/components/pedido/usePedidoItens";
 import AddItemModal from "@/src/components/pedido/AddItemModal";
 import ReciboPedidoModal from "@/src/components/pedido/ReciboPedidoModal";
 import { apiGet } from "@/src/utils/api";
+import { produtoImagemUrl } from "@/src/utils/produtoImagem";
 import { PedidoData, ClienteRow } from "@/src/components/pedido/types";
 
 const isWeb = Platform.OS === "web";
@@ -56,6 +57,10 @@ type Item = {
   estoque_total?: number | null;
   cod_fab?: string;
   unidade?: string;
+  // Foto principal já resolvida pelo backend (produto_imagem, sistema novo
+  // — ver PENDENCIAS.md > "Fotos de Produto"). null/ausente = produto sem
+  // foto migrada ainda, `fotoUrls` cai pro fallback antigo (conn.imagensUrl).
+  imagem_codigo?: number | null;
 };
 
 function formatBRL(v: number): string {
@@ -174,17 +179,22 @@ export default function ProdutosScreen() {
     load(search, next, tipo, true);
   };
 
-  // Imagens dos produtos vêm da URL configurada na conexão (campo "Imagens Produtos").
-  // Nome do arquivo = pecas.codigo_int (que é o item.codigo para produtos).
-  // Tenta extensões em ordem (jpg → jpeg → png → webp); se nenhuma existir, cai no ícone.
-  // Quando a URL não está configurada, retorna [] (ícone padrão direto, sem chamar backend).
+  // 1ª tentativa: foto principal já resolvida pelo backend (produto_imagem,
+  // sistema novo — thumbnail pronto, sem adivinhar extensão). Fallback:
+  // convenção antiga (`conn.imagensUrl` + `<código>.<ext>`, configurada
+  // localmente por dispositivo) — mantém funcionando produto ainda não
+  // migrado pra `produto_imagem` (ver script `migrar_fotos_produto.py`).
   const fotoUrls = useCallback(
     (item: Item): string[] => {
       if (!conn || item.tipo === "S") return [];
+      const urls: string[] = [];
+      if (item.imagem_codigo != null) urls.push(produtoImagemUrl(conn, item.imagem_codigo, "thumb"));
       const base = (conn.imagensUrl || "").trim().replace(/\/+$/, "");
-      if (!base) return [];
-      const cod = encodeURIComponent(item.codigo);
-      return ["jpg", "jpeg", "png", "webp"].map((ext) => `${base}/${cod}.${ext}`);
+      if (base) {
+        const cod = encodeURIComponent(item.codigo);
+        urls.push(...["jpg", "jpeg", "png", "webp"].map((ext) => `${base}/${cod}.${ext}`));
+      }
+      return urls;
     },
     [conn]
   );

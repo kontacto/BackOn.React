@@ -3,9 +3,15 @@
 // CLAUDE.md > "Nunca marcar uma rotina como não implementada..."). Escopo
 // desta tela (confirmado com o usuário 2026-07-20): seleção de contratos
 // do período com cálculo pró-rata + O.S. vinculada, Faturar (grava
-// comanda/Receber/Duplicata_Receber, fiel ao legado) e Gerar Recibo. Nota
-// Fiscal (emissão fiscal real) e Boleto (layout bancário) ficam de fora
-// desta rodada — ver PENDENCIAS.md > "Contratos".
+// comanda/Receber/Duplicata_Receber, fiel ao legado) e Gerar Recibo.
+// **2026-08-24**: contratos do tipo Nota Fiscal/Boleto ganharam botões
+// "Emitir NF-e"/"Emitir NFS-e" — reaproveita o motor de Agrupar Comandas
+// (no legado, os dois tipos de cobrança chamam a mesma rotina `EmiteNF`;
+// o Boleto em si, arquivo CNAB/layout, já é coberto pela tela "Geração de
+// Boletos"). **Nunca automático** — confirmado com o Leandro: "fica a
+// critério do cliente se ele vai emitir a nota de produtos ou nota de
+// serviços ou ambas ou nenhuma", regra que vale pra qualquer comanda com
+// produto+serviço do sistema. Ver PENDENCIAS.md > "Contratos".
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -13,6 +19,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import { usePermissions } from "@/src/permissions";
+import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
 import { useAuditContext } from "@/src/hooks/useAuditContext";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import LockedView from "@/src/components/LockedView";
@@ -33,8 +40,13 @@ type ItemFaturar = {
   tarifa_cobranca: boolean; cobra_iss: boolean; tipo_doc: string; tipo_cobranca: number; descr_nf: string;
 };
 
+type NfEResultado = {
+  success: boolean; message?: string; numero?: number; chave_acesso?: string; nota_fisc?: number;
+};
+
 type ResultadoFaturar = {
   codigo: number; success: boolean; message?: string; comanda?: number; descreve_os?: string; vencimento?: string | null;
+  tipo_doc?: string;
 };
 
 const TIPOS_COBRANCA = [
@@ -49,7 +61,7 @@ function hojeIso(): string {
 
 export default function ContratoFaturarScreen() {
   const router = useRouter();
-  const { can, moduleOn } = usePermissions();
+  const { can, moduleOn, isMaster } = usePermissions();
   const auditCtx = useAuditContext();
   const fb = useFeedback();
   const isWeb = Platform.OS === "web";
@@ -93,6 +105,12 @@ export default function ContratoFaturarScreen() {
   const [buscando, setBuscando] = useState(false);
   const [faturando, setFaturando] = useState(false);
   const [resultados, setResultados] = useState<ResultadoFaturar[]>([]);
+  // Emissão de NF-e/NFS-e — ação SEPARADA e opcional (nunca automática ao
+  // faturar, ver comentário no topo do arquivo). Chave = `${codigo}-nfe`
+  // ou `${codigo}-nfse` (um contrato pode emitir os dois, um só, ou
+  // nenhum — critério do usuário).
+  const [emissoes, setEmissoes] = useState<Record<string, NfEResultado>>({});
+  const [emitindo, setEmitindo] = useState<string | null>(null);
 
   // Tooltip dos botões que são só ícone (sem texto ao lado) — hover no web,
   // um só de cada vez. Mesmo padrão de PainelPedidoCard.tsx (`hoverBtn` +
@@ -170,30 +188,32 @@ export default function ContratoFaturarScreen() {
         const base = conn.api.replace(/\/+$/, "");
         const itens = items
           .filter((i) => selecionados.has(i.codigo))
-          .map((i) => ({ codigo: i.codigo, valor_total: i.valor_total, vencimento: i.vencimento }));
+          .map((i) => ({ codigo: i.codigo, valor_total: i.valor_total, vencimento: i.vencimento, tipo_doc: i.tipo_doc }));
         const r = await fetch(`${base}/api/contratos/faturar`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...auditCtx, ano: Number(ano), mes: Number(mes), itens }),
+          body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...auditCtx, ano: Number(ano), mes: Number(mes), itens, master: isMaster }),
         });
         const j = await r.json();
         if (j?.success) {
-          setResultados(j.resultados || []);
-          const ok = (j.resultados || []).filter((x: ResultadoFaturar) => x.success).length;
-          const falhas = (j.resultados || []).length - ok;
+          const resultados: ResultadoFaturar[] = j.resultados || [];
+          setResultados(resultados);
+          setEmissoes({});
+          const ok = resultados.filter((x) => x.success).length;
+          const falhas = resultados.length - ok;
           if (falhas > 0) fb.showError(`${ok} contrato(s) faturado(s), ${falhas} com falha — veja o detalhe na lista.`);
           else fb.showSuccess(`${ok} contrato(s) faturado(s) com sucesso.`);
           await selecionar();
         } else {
-          fb.showError(j?.message || "Falha ao faturar.");
+          fb.showError(friendlyApiError(j, "Falha ao faturar."));
         }
       } catch (e) {
-        fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
+        fb.showError(friendlyCatchError(e, "Falha ao faturar."));
       } finally {
         setFaturando(false);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conn, selecionados, items, ano, mes, auditCtx, totalSelecionado, fb, selecionar]);
+  }, [conn, selecionados, items, ano, mes, auditCtx, totalSelecionado, fb, selecionar, isMaster]);
 
   const [reciboGerando, setReciboGerando] = useState<number | null>(null);
 
@@ -228,6 +248,32 @@ export default function ContratoFaturarScreen() {
       setReciboGerando(null);
     }
   }, [conn, ano, mes, auditCtx, fb]);
+
+  // Emitir NF-e (produto) ou NFS-e (serviço) — ação sempre separada e
+  // opcional (nunca automática, confirmado com o Leandro: "fica a
+  // critério do cliente se ele vai emitir a nota de produtos ou nota de
+  // serviços ou ambas ou nenhuma"). Reaproveita o mesmo motor de Agrupar
+  // Comandas já usado em Gestor Fiscal.
+  const emitirDocumento = useCallback(async (res: ResultadoFaturar, tipo: "nfe" | "nfse") => {
+    if (!conn || !res.comanda) return;
+    const chave = `${res.codigo}-${tipo}`;
+    setEmitindo(chave);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const r = await fetch(`${base}/api/contratos/faturar/emitir`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...auditCtx, tipo, comanda: res.comanda, master: isMaster }),
+      });
+      const j = await r.json();
+      setEmissoes((cur) => ({ ...cur, [chave]: j }));
+      if (j?.success) fb.showSuccess(`${tipo === "nfe" ? "NF-e" : "NFS-e"} nº ${j.numero} emitida.`);
+      else fb.showError(friendlyApiError(j, `Falha ao emitir ${tipo === "nfe" ? "NF-e" : "NFS-e"}.`));
+    } catch (e) {
+      fb.showError(friendlyCatchError(e, `Falha ao emitir ${tipo === "nfe" ? "NF-e" : "NFS-e"}.`));
+    } finally {
+      setEmitindo(null);
+    }
+  }, [conn, auditCtx, isMaster, fb]);
 
   if (loadingConn) {
     return (
@@ -395,25 +441,55 @@ export default function ContratoFaturarScreen() {
               <Text style={styles.sectionTitle}>Resultado do Faturamento</Text>
               <Text style={styles.helpText}>
                 Contratos com erro não foram lançados — corrija o motivo indicado e fature esse
-                contrato de novo depois. "Gerar Recibo" imprime o comprovante do contrato já faturado
-                com sucesso; Nota Fiscal e Boleto ainda não são emitidos por esta tela.
+                contrato de novo depois. "Gerar Recibo" imprime o comprovante de contratos do tipo
+                Recibo. Contratos Nota Fiscal/Boleto NÃO emitem nada automaticamente — use os botões
+                "Emitir NF-e"/"Emitir NFS-e" pra decidir se emite a nota de produtos, a de serviços,
+                as duas, ou nenhuma; o faturamento (dinheiro em Contas a Receber) já ficou lançado
+                independente dessa escolha.
               </Text>
-              {resultados.map((r) => (
-                <View key={r.codigo} style={styles.gridRow} testID={`cf-resultado-${r.codigo}`}>
-                  <Ionicons name={r.success ? "checkmark-circle" : "close-circle"} size={20} color={r.success ? colors.success : colors.error} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.gridRowTitle}>Contrato #{r.codigo}</Text>
-                    <Text style={[styles.gridRowSub, !r.success && { color: colors.error }]}>
-                      {r.success ? `Faturado — comanda ${r.comanda}` : r.message}
-                    </Text>
+              {resultados.map((r) => {
+                const podeEmitir = r.success && (r.tipo_doc === "N" || r.tipo_doc === "B");
+                const nfe = emissoes[`${r.codigo}-nfe`];
+                const nfse = emissoes[`${r.codigo}-nfse`];
+                return (
+                  <View key={r.codigo} style={styles.gridRow} testID={`cf-resultado-${r.codigo}`}>
+                    <Ionicons name={r.success ? "checkmark-circle" : "close-circle"} size={20} color={r.success ? colors.success : colors.error} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.gridRowTitle}>Contrato #{r.codigo}</Text>
+                      <Text style={[styles.gridRowSub, !r.success && { color: colors.error }]}>
+                        {r.success ? `Faturado — comanda ${r.comanda}` : r.message}
+                      </Text>
+                      {nfe ? (
+                        <Text style={[styles.gridRowSub, { color: nfe.success ? colors.success : colors.error }]}>
+                          {nfe.success ? `NF-e emitida — nº ${nfe.numero}` : `Falha ao emitir NF-e: ${nfe.message || "erro desconhecido"}`}
+                        </Text>
+                      ) : null}
+                      {nfse ? (
+                        <Text style={[styles.gridRowSub, { color: nfse.success ? colors.success : colors.error }]}>
+                          {nfse.success ? `NFS-e emitida — nº ${nfse.numero}` : `Falha ao emitir NFS-e: ${nfse.message || "erro desconhecido"}`}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <View style={{ flexDirection: "row", gap: spacing.xs }}>
+                      {r.success && r.tipo_doc === "R" && can("FATURAR_CONTR.RECIBO") ? (
+                        <Pressable onPress={() => gerarRecibo(r)} disabled={reciboGerando === r.codigo} style={styles.linkBtn} testID={`cf-recibo-${r.codigo}`}>
+                          {reciboGerando === r.codigo ? <ActivityIndicator size="small" /> : <Text style={styles.linkBtnText}>Gerar Recibo</Text>}
+                        </Pressable>
+                      ) : null}
+                      {podeEmitir && can("FATURAR_CONTR.EMITIR_NF") ? (
+                        <>
+                          <Pressable onPress={() => emitirDocumento(r, "nfe")} disabled={emitindo === `${r.codigo}-nfe` || nfe?.success} style={styles.linkBtn} testID={`cf-emitir-nfe-${r.codigo}`}>
+                            {emitindo === `${r.codigo}-nfe` ? <ActivityIndicator size="small" /> : <Text style={styles.linkBtnText}>{nfe?.success ? "NF-e emitida" : "Emitir NF-e"}</Text>}
+                          </Pressable>
+                          <Pressable onPress={() => emitirDocumento(r, "nfse")} disabled={emitindo === `${r.codigo}-nfse` || nfse?.success} style={styles.linkBtn} testID={`cf-emitir-nfse-${r.codigo}`}>
+                            {emitindo === `${r.codigo}-nfse` ? <ActivityIndicator size="small" /> : <Text style={styles.linkBtnText}>{nfse?.success ? "NFS-e emitida" : "Emitir NFS-e"}</Text>}
+                          </Pressable>
+                        </>
+                      ) : null}
+                    </View>
                   </View>
-                  {r.success && can("FATURAR_CONTR.RECIBO") ? (
-                    <Pressable onPress={() => gerarRecibo(r)} disabled={reciboGerando === r.codigo} style={styles.linkBtn} testID={`cf-recibo-${r.codigo}`}>
-                      {reciboGerando === r.codigo ? <ActivityIndicator size="small" /> : <Text style={styles.linkBtnText}>Gerar Recibo</Text>}
-                    </Pressable>
-                  ) : null}
-                </View>
-              ))}
+                );
+              })}
             </View>
           )}
         </View>

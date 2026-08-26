@@ -270,6 +270,21 @@ ACOES_OS_COMP = [
     # Adicionado 2026-08-12, user-directed.
     ("EQUIP_ADD", "Adicionar Equipamento"),
     ("EQUIP_CANC", "Cancelar Equipamento"),
+    # Checklist de Entrada de Veículo (O.S. Oficina, tabela nova
+    # `os_checklist_veiculo`) — pedido explícito do usuário 2026-08-26,
+    # sem precedente no legado. Sem PUT/editar, só incluir/cancelar
+    # marcação, mesmo padrão de Equipamento acima.
+    ("CHECKLIST_ADD", "Adicionar Marcação no Checklist de Veículo"),
+    ("CHECKLIST_CANC", "Cancelar Marcação no Checklist de Veículo"),
+    # Obrigatoriedade do Checklist POR GRUPO — pedido explícito do usuário
+    # 2026-08-26 ("se na permissão estiver marcado para o grupo de
+    # usuário que tem que fazer o checklist, tem que obrigar a fazer").
+    # Diferente de CHECKLIST_ADD/CHECKLIST_CANC acima (que permitem FAZER
+    # o checklist) — este botão FORÇA fazer: com ele marcado, o grupo não
+    # consegue incluir item/fechar/faturar a O.S. de Oficina sem antes
+    # concluir o checklist (`pedido_common._checklist_veiculo_pendente_
+    # bloqueia`). Gravar os campos do cabeçalho continua sempre liberado.
+    ("CHECKLIST_OBRIG", "Exigir Checklist de Entrada do Veículo"),
 ]
 
 # Envio de Equipamentos para Terceiros (migração de `FrmManRet.frm`,
@@ -330,6 +345,32 @@ ACOES_GESTOR_NFCE = [
     ("CONTINGENCIA", "Abrir/fechar contingência"),
 ]
 
+# MDF-e (migração de Kontacto\FrmTraMDF.frm) — Fase A (cadastro) usava
+# ACOES_PADRAO; Fase B (2026-08-22, emissão real/encerrar/cancelar/
+# consultar/gerar XML) troca por uma lista própria, mesmo padrão de
+# ACOES_GESTOR_NFCE (tela com ações fiscais reais ganha ações dedicadas
+# em vez do genérico GRAVAR/EXCLUIR). "IMPRIMIR" cobre o DAMDFE.
+ACOES_MDFE = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Gravar cabeçalho / anexar-remover nota"),
+    ("EXCLUIR", "Excluir manifesto em edição"),
+    ("EMITIR", "Emitir MDF-e junto ao SEFAZ"),
+    ("ENCERRAR", "Encerrar MDF-e"),
+    ("CANCELAR", "Cancelar MDF-e (documento fiscal)"),
+    ("CONSULTAR", "Consultar situação no SEFAZ"),
+    ("IMPRIMIR", "Imprimir DAMDFE / Gerar XML"),
+]
+
+# Gestor NFSe — Sefin Nacional/DPS (migração de Geral\FrmManNSeSefin.frm,
+# 2026-08-20). Listagem/consulta em cima da emissão já implementada
+# (Fase 3, comanda_service.py::_emitir_nfse_comanda_sync). Distinta do
+# caminho antigo por RPS municipal (Geral\FrmManNSe.frm, não implementado
+# — user-directed, ver PENDENCIAS.md).
+ACOES_GESTOR_NFSE = [
+    ("ABRIR", "Abrir tela"),
+    ("CONSULTAR", "Consultar situação no ADN (Sefin Nacional)"),
+]
+
 # Agrupar Comandas em NF-e (migração de FrmSelComandas.frm + o caminho de
 # agrupamento de FrmTraImpNFE.frm, 2026-08-19) — ver
 # services/nfe_agrupada_service.py.
@@ -347,12 +388,33 @@ ACOES_NFE_AVULSA = [
     ("GRAVAR", "Emitir NF-e avulsa"),
 ]
 
+# Recebimento de Mercadoria (migração de Geral\FrmtraRec.frm, Fase 1 —
+# digitação manual, 2026-08-21) — ver services/recebimento_service.py.
+ACOES_RECEBIMENTO = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Gravar rascunho / Atualizar (gerar Nota Fiscal)"),
+    ("CRITICAR", "Criticar recebimento"),
+]
+
 # Contingência NFe (migração de Geral\FrmConNFe.frm, 2026-08-20) — ver
 # services/contingencia_nfe_service.py. Tela própria, distinta de
-# Contingência NFCe (já embutida na tela GESTOR_NFCE).
+# Contingência NFCe (já embutida na tela GESTOR_NFCE). "GRAVAR" cobre
+# abrir/fechar E validar (transmitir notas pendentes) — mesmo comando
+# pros 3, reaproveitado ao conectar contingência à emissão de NF-e no
+# mesmo dia (equivalente ao "Validar Contingência" do Gestor NFCe).
 ACOES_CONTINGENCIA_NFE = [
     ("ABRIR", "Abrir tela"),
-    ("GRAVAR", "Abrir/fechar contingência"),
+    ("GRAVAR", "Abrir/fechar contingência e validar notas pendentes"),
+]
+
+# Inutilização de Faixa NFe (migração de Geral\FrmTraINF.frm, lado NFe,
+# 2026-08-20) — ver services/inutilizacao_nfe_service.py. Tela própria,
+# distinta da Inutilização de Faixa NFC-e (já embutida na tela
+# GESTOR_NFCE, ação INUTILIZAR). Nome curto por causa do limite real
+# nvarchar(15) de permissoes.tela ("INUTILIZACAO_NFE" tem 16 chars).
+ACOES_INUTILIZACAO_NFE = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Inutilizar faixa de numeração"),
 ]
 
 # Ações da tela de cadastro de Bancos (Financeiro > Cobranças, FrmManBan.frm).
@@ -376,14 +438,15 @@ ACOES_RETORNO_BANC = [
 ]
 
 # Tela "Geração de Boletos" (frmrelbol4.frm) — filtros+grade de títulos,
-# Gerar Remessa (reaproveita os motores CNAB) e Gerar Planilha. Emissão do
-# PDF do boleto (com código de barras) e envio por e-mail ficam de fora
-# desta fase — motor de desenho visual do boleto ainda não existe, ver
-# PENDENCIAS.md > "Geração de Boletos".
+# Gerar Remessa (reaproveita os motores CNAB), Gerar Planilha, e (2026-08-26)
+# Gerar PDF do boleto (código de barras real, ver boleto_pdf_service.py) +
+# Enviar por Email. Ver PENDENCIAS.md > "Boleto em PDF".
 ACOES_GERACAO_BOLETOS = [
     ("ABRIR", "Abrir tela"),
     ("GERAR_REMESSA", "Gerar arquivo de remessa"),
     ("EXPORTAR", "Exportar planilha"),
+    ("PDF", "Gerar/baixar PDF do boleto"),
+    ("EMAIL", "Enviar boleto por e-mail"),
 ]
 
 
@@ -599,6 +662,13 @@ ACOES_DEVOLUCAO = [
     ("ABRIR", "Abrir tela"),
     ("REGISTRAR", "Registrar devolução"),
     ("EMITIR_VALE", "Emitir Vale de Devolução"),
+    # Adicionada 2026-08-24 — "Emitir Nfe de Devolução do(s) iten(s)
+    # selecionado(s)" (`Command14_Click`, `FrmManDev.frm`): registra a
+    # devolução e leva direto pra NF-e Avulsa pré-carregada. A emissão
+    # fiscal em si continua protegida pela permissão própria de
+    # NFE_AVULSA.GRAVAR — esta aqui só controla se o botão aparece no
+    # Gestor de Devolução.
+    ("EMITIR_NFE", "Emitir NF-e de Devolução"),
     ("CANCELAR", "Cancelar devolução"),
 ]
 
@@ -614,12 +684,15 @@ ACOES_CONTRATO = [
 ]
 
 # Faturar Contratos (2026-07-20) — motor de faturamento (comanda/Receber/
-# Duplicata_Receber, fiel ao legado) + geração de Recibo. Nota Fiscal e
-# Boleto ficam fora desta rodada, ver PENDENCIAS.md > "Contratos".
+# Duplicata_Receber, fiel ao legado) + geração de Recibo. EMITIR_NF
+# (2026-08-24) — emissão de Nota Fiscal/Boleto (NF-e/NFS-e), ação
+# separada e opcional (nunca automática, confirmado com o Leandro — ver
+# PENDENCIAS.md > "Contratos").
 ACOES_FATURAR_CONTR = [
     ("ABRIR", "Abrir tela"),
     ("FATURAR", "Faturar"),
     ("RECIBO", "Gerar Recibo"),
+    ("EMITIR_NF", "Emitir Nota Fiscal/Boleto"),
 ]
 
 # Gestor de Projetos (migração de frmgespro.frm, Fase 1 — núcleo,
@@ -732,6 +805,7 @@ ACOES_TELEMARKETING = ACOES_PADRAO + [
 ACOES_NOTAS_FISCAIS = ACOES_PADRAO + [
     ("CRITICAR", "Criticar"),
     ("CANCELAR", "Cancelar"),
+    ("CARTA_CORRECAO", "Carta de Correção"),
 ]
 
 
@@ -838,6 +912,7 @@ CATALOGO = [
             _tela("MARCAS", "Marcas"),
             _tela("MODELOS", "Modelos"),
             _tela("MODIFICADORES", "Modificadores"),
+            _tela("NCM_CEST", "NCM/CEST"),
             _tela("AREA", "Área"),
             _tela("AREA_ATUACAO", "Área de Atuação"),
             _tela("FORMA_PAGAMENTO", "Forma de Pagamento"),
@@ -914,6 +989,10 @@ CATALOGO = [
         # mínimo de Contingência NFCe embutido. Ver PENDENCIAS.md >
         # "Gestor NFCe" pro rastreio completo.
         _tela("GESTOR_NFCE", "Gestor NFCe", ACOES_GESTOR_NFCE),
+        # "Gestor NFSe" (2026-08-20, user-directed) — migração de
+        # FrmManNSeSefin.frm (lado Sefin Nacional/DPS, não o RPS
+        # municipal). Ver PENDENCIAS.md > "Gestor NFSe" pro rastreio.
+        _tela("GESTOR_NFSE", "Gestor NFSe", ACOES_GESTOR_NFSE),
         # "Agrupar Comandas em NF-e" (2026-08-19, user-directed) — migração
         # de FrmSelComandas.frm + o caminho de agrupamento de
         # FrmTraImpNFE.frm. Ver PENDENCIAS.md > "Agrupar Comandas em NF-e".
@@ -921,9 +1000,29 @@ CATALOGO = [
         # "Gerar NFe" / NF-e Avulsa (2026-08-20, user-directed) — migração
         # de NFe\frmtranfe.frm. Ver PENDENCIAS.md > "NF-e Avulsa".
         _tela("NFE_AVULSA", "Gerar NFe", ACOES_NFE_AVULSA),
+        # "Recebimento de Mercadoria" (2026-08-21, user-directed) — migração
+        # de Geral\FrmtraRec.frm, Fase 1 (digitação manual, sem XML). Ver
+        # PENDENCIAS.md > "Recebimento de Mercadoria".
+        _tela("RECEBIMENTO", "Recebimento", ACOES_RECEBIMENTO),
         # "Contingência NFe" (2026-08-20, user-directed) — migração de
         # Geral\FrmConNFe.frm. Ver PENDENCIAS.md > blueprint item 7.
         _tela("CONT_NFE", "Contingência NFe", ACOES_CONTINGENCIA_NFE),
+        # "Inutilização de Faixa NFe" (2026-08-20, user-directed) — migração
+        # de Geral\FrmTraINF.frm, lado NFe. Ver PENDENCIAS.md > blueprint
+        # item 9 / "Inutilização de Faixa NFe".
+        _tela("INUTIL_NFE", "Inutilização NFe", ACOES_INUTILIZACAO_NFE),
+        # "MDF-e" (2026-08-22, user-directed) — Fase A: cadastro do
+        # manifesto + anexar NF-e/NFC-e. Fase B (mesmo dia): emissão real,
+        # encerrar, cancelar, consultar, gerar XML/DAMDFE — ACOES_MDFE
+        # substitui ACOES_PADRAO. Migração de Kontacto\FrmTraMDF.frm. Ver
+        # PENDENCIAS.md > "MDF-e".
+        _tela("MDFE", "MDF-e", ACOES_MDFE),
+        # "Apuração Fiscal" (2026-08-24, user-directed) — migração de
+        # Geral\FrmCalImp.frm. Relatório item-a-item de PIS/COFINS/ICMS/
+        # FCP/DIFAL por NFC-e/NF-e num período, com exportação pra Excel —
+        # sem Gravar/Excluir, é só consulta. Ver PENDENCIAS.md >
+        # "Apuração Fiscal".
+        _tela("APURACAO_FISCAL", "Apuração Fiscal", [("ABRIR", "Abrir Tela"), ("EXPORTAR", "Exportar Planilha")]),
         # "Movimentações" (2026-07-18, user-directed) — Card novo em
         # Transações que abre um hub com estas duas telas. Só scaffolding
         # de navegação por enquanto (telas reais mostram "Em construção") —
@@ -949,9 +1048,11 @@ CATALOGO = [
         # "Contratos" (2026-07-19, user-directed) — Fase A de
         # FrmManTPC/FrmManRea/FrmManInd/FrmConPDI/FrmManContra.frm, mais o
         # motor de Faturar Contratos (2026-07-20, FrmFatContrato2.frm/
-        # FrmFatContrato.frm — Faturar + Recibo; Nota Fiscal/Boleto ficam
-        # de fora). Envio de Cobrança (remessa bancária/e-mail em massa)
-        # continua fora de escopo — ver PENDENCIAS.md > "Contratos".
+        # FrmFatContrato.frm — Faturar + Recibo + Emitir NF-e/NFS-e
+        # opcional). Envio de Cobrança (e-mail, 2026-08-25 — Fase 1 sem
+        # anexo de PDF, ver PENDENCIAS.md > "Envio de Cobrança de
+        # Contratos") — remessa bancária CNAB continua fora de escopo
+        # (já coberta pra Boletos em geral por "Geração de Boletos").
         _menu("CONTRATOS", "Contratos", [
             _tela("TIPO_CONTRATO", "Tipo de Contrato"),
             _tela("TIPO_REAJUSTE", "Tipo de Reajuste"),
@@ -959,6 +1060,7 @@ CATALOGO = [
             _tela("CONTR_PROD_DISP", "Produtos Disponíveis"),
             _tela("CONTRATO", "Contratos", ACOES_CONTRATO),
             _tela("FATURAR_CONTR", "Faturar Contratos", ACOES_FATURAR_CONTR),
+            _tela("ENVIO_COBRANCA", "Envio de Cobrança", [("ABRIR", "Abrir Tela"), ("ENVIAR", "Enviar")]),
         ]),
         # "Gestor de Devolução" (2026-08-05, user-directed — "no sistema vb6
         # fica também em transações") — Fase 1 enxuta de `Geral\FrmManDev.frm`:
@@ -1234,10 +1336,12 @@ def disabled_telas(flags: dict) -> set:
         if not flags.get(modulo, False):
             disabled.update(telas)
     # Ordem de Serviço (Mobile e Completa): habilitada se Oficina OU
-    # Assistência estiver ligada — nenhuma das duas telas de O.S. deve
-    # aparecer (nem pra grupo, nem pra master) se ambos os módulos
-    # estiverem desligados. [GLOBAL], 2026-07-15, user-directed.
-    if not (flags.get("Oficina", False) or flags.get("Assistencia", False)):
+    # Assistência OU TSO (Ótica, 2026-08-20 user-directed — "TSO é uma
+    # Ordem de Serviço para Ótica") estiver ligada — nenhuma das duas
+    # telas de O.S. deve aparecer (nem pra grupo, nem pra master) se
+    # todos os módulos estiverem desligados. [GLOBAL], 2026-07-15,
+    # user-directed.
+    if not (flags.get("Oficina", False) or flags.get("Assistencia", False) or flags.get("TSO", False)):
         disabled.add("OS")
         disabled.add("OS_COMP")
         # Envio para Terceiros (RETIFICA) é sempre vinculado a uma O.S. —

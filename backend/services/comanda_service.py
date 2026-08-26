@@ -362,6 +362,16 @@ def _get_doc_fiscal_sync(servidor: str, banco: str, comanda: int) -> dict:
         nfce = cur.fetchone()
         if nfce:
             detalhe = nfe_emissao_service.parse_nfce_xml_para_exibicao(nfce.get("xml") or "")
+            # Extrato NFC-e ganhou QR Code real (2026-08-20, ver PENDENCIAS.md
+            # > "Extrato NFC-e — código de barras e QR reais") — desenha a
+            # imagem aqui (servidor) a partir da MESMA URL já embutida no XML
+            # transmitido (`qr_code_url`, conteúdo público, nada novo sendo
+            # decidido aqui), evita round-trip extra no frontend.
+            if detalhe and detalhe.get("qr_code_url"):
+                try:
+                    detalhe["qr_code_png_base64"] = nfe_fiscal_common.gerar_qrcode_png_base64(detalhe["qr_code_url"])
+                except Exception:
+                    pass
             cur.close()
             conn.close()
             return {
@@ -429,18 +439,28 @@ def _get_doc_fiscal_sync(servidor: str, banco: str, comanda: int) -> dict:
                 },
             }
         cur.execute(
-            "SELECT nf.num_nf, nf.serie_nf, nf.situacao, nf.protocolo_sefaz, nf.chave_acesso "
+            "SELECT nf.num_nf, nf.serie_nf, nf.situacao, nf.protocolo_sefaz, nf.chave_acesso, "
+            "nf.xml, nf.dhRecbto "
             "FROM comanda_nf cnf JOIN n_fiscal nf ON nf.codigo = cnf.nota_fisc WHERE cnf.comanda = %s",
             (comanda,),
         )
         nf = cur.fetchone()
         if nf:
+            detalhe = nfe_emissao_service.parse_nfe_xml_para_exibicao(nf.get("xml") or "")
+            if detalhe:
+                detalhe["protocolo_sefaz"] = nf.get("protocolo_sefaz")
+                detalhe["chave_acesso"] = nf.get("chave_acesso") or detalhe.get("chave_acesso")
+                detalhe["dh_recbto"] = nf.get("dhRecbto")
+                detalhe["situacao"] = nf.get("situacao")
+            cur.execute("SELECT TOP 1 modelo_danfe FROM controle_aux")
+            aux = cur.fetchone()
             cur.close()
             conn.close()
             return {
                 "success": True, "tipo": "NF",
                 "numero": nf.get("num_nf"), "serie": nf.get("serie_nf"), "situacao": nf.get("situacao"),
                 "protocolo": nf.get("protocolo_sefaz"), "chave_acesso": nf.get("chave_acesso"),
+                "detalhe": detalhe, "modelo_danfe": (aux or {}).get("modelo_danfe"),
             }
         cur.execute(
             "SELECT num_pdv, num_cupom, coo, situacao FROM comanda_cupom WHERE comanda = %s",
@@ -871,6 +891,62 @@ def _apagar_pagamentos_comanda(cur, comanda: int) -> None:
         cur.execute(f"DELETE FROM {tabela} WHERE comanda = %s", (comanda,))
 
 
+def _ensure_cancelamento_fiscal_cols(cur) -> None:
+    """Migração idempotente: colunas de auditoria do cancelamento fiscal
+    real (`n_fiscal` — NF-e modelo 55; `comanda_nfce` — NFC-e modelo 65).
+
+    Achado ao vivo 2026-08-23 (1º cancelamento real de NF-e/NFC-e desta
+    migração): `_cancelar_comanda_sync` só gravava `situacao='C'` — o
+    protocolo de cancelamento e o XML assinado do evento (devolvidos por
+    `nfe_cancelamento_service.cancelar_nfe_sync`, ver achado irmão lá)
+    eram descartados assim que a função retornava, mesmo o cancelamento
+    tendo acontecido de verdade no SEFAZ. Sem essas colunas, não existe
+    nenhum jeito de provar/consultar depois QUANDO e com QUE protocolo um
+    documento foi cancelado — só um flag binário. Nenhum precedente no
+    legado VB6 pra essas colunas (o legado nunca teve cancelamento
+    eletrônico real integrado nesta parte do fluxo)."""
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='protocolo_cancelamento' AND Object_ID=Object_ID('n_fiscal')) "
+        "ALTER TABLE n_fiscal ADD protocolo_cancelamento VARCHAR(20) NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='dh_cancelamento' AND Object_ID=Object_ID('n_fiscal')) "
+        "ALTER TABLE n_fiscal ADD dh_cancelamento DATETIME NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='motivo_cancelamento' AND Object_ID=Object_ID('n_fiscal')) "
+        "ALTER TABLE n_fiscal ADD motivo_cancelamento NVARCHAR(300) NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='xml_cancelamento' AND Object_ID=Object_ID('n_fiscal')) "
+        "ALTER TABLE n_fiscal ADD xml_cancelamento NVARCHAR(MAX) NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='protocolo_cancelamento' AND Object_ID=Object_ID('comanda_nfce')) "
+        "ALTER TABLE comanda_nfce ADD protocolo_cancelamento VARCHAR(20) NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='dh_cancelamento' AND Object_ID=Object_ID('comanda_nfce')) "
+        "ALTER TABLE comanda_nfce ADD dh_cancelamento DATETIME NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='motivo_cancelamento' AND Object_ID=Object_ID('comanda_nfce')) "
+        "ALTER TABLE comanda_nfce ADD motivo_cancelamento NVARCHAR(300) NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='xml_cancelamento' AND Object_ID=Object_ID('comanda_nfce')) "
+        "ALTER TABLE comanda_nfce ADD xml_cancelamento NVARCHAR(MAX) NULL"
+    )
+
+
 def _cancelar_comanda_sync(req: ComandaCancelarRequest, comanda: int) -> dict:
     """Cancela uma comanda faturada — reversão de estoque, Pedido/O.S.,
     pagamentos e (quando houver protocolo SEFAZ) cancelamento fiscal real,
@@ -940,6 +1016,7 @@ def _cancelar_comanda_sync(req: ComandaCancelarRequest, comanda: int) -> dict:
         if doc_ativo is not None:
             modelo = "65" if doc_ativo is nfce else "55"
             protocolo = (doc_ativo.get("protocolo_sefaz") or "").strip()
+            res_fiscal = None
             if protocolo:
                 cur.execute("SELECT cgc, uf FROM controle")
                 ctrl = cur.fetchone() or {}
@@ -951,7 +1028,7 @@ def _cancelar_comanda_sync(req: ComandaCancelarRequest, comanda: int) -> dict:
                     chave_acesso=(doc_ativo.get("chave_acesso") or "").strip(),
                     protocolo=protocolo,
                     motivo=motivo,
-                    tp_amb="1",
+                    tp_amb=nfe_fiscal_common.resolver_tp_amb_sync(cur),
                 )
                 if not res_fiscal.get("success"):
                     conn.close()
@@ -959,10 +1036,34 @@ def _cancelar_comanda_sync(req: ComandaCancelarRequest, comanda: int) -> dict:
                         "success": False,
                         "message": f"Não foi possível cancelar o documento fiscal junto ao SEFAZ: {res_fiscal.get('message')}",
                     }
+            # Achado ao vivo 2026-08-23 (1º cancelamento real de NF-e/NFC-e
+            # desta migração): antes só `situacao='C'` era gravado — o
+            # protocolo/XML/motivo do cancelamento (`res_fiscal`, quando o
+            # cancelamento passou pelo SEFAZ de verdade) eram descartados
+            # assim que a função retornava, mesmo o cancelamento tendo
+            # acontecido de verdade. Ver `_ensure_cancelamento_fiscal_cols`.
+            if res_fiscal:
+                _ensure_cancelamento_fiscal_cols(cur)
             if modelo == "65":
-                cur.execute("UPDATE comanda_nfce SET situacao = 'C' WHERE comanda = %s", (comanda,))
+                if res_fiscal:
+                    cur.execute(
+                        "UPDATE comanda_nfce SET situacao = 'C', protocolo_cancelamento = %s, "
+                        "dh_cancelamento = GETDATE(), motivo_cancelamento = %s, xml_cancelamento = %s "
+                        "WHERE comanda = %s",
+                        (res_fiscal.get("protocolo_cancelamento"), motivo, res_fiscal.get("xml_evento"), comanda),
+                    )
+                else:
+                    cur.execute("UPDATE comanda_nfce SET situacao = 'C' WHERE comanda = %s", (comanda,))
             else:
-                cur.execute("UPDATE n_fiscal SET situacao = 'C' WHERE codigo = %s", (doc_ativo["codigo"],))
+                if res_fiscal:
+                    cur.execute(
+                        "UPDATE n_fiscal SET situacao = 'C', protocolo_cancelamento = %s, "
+                        "dh_cancelamento = GETDATE(), motivo_cancelamento = %s, xml_cancelamento = %s "
+                        "WHERE codigo = %s",
+                        (res_fiscal.get("protocolo_cancelamento"), motivo, res_fiscal.get("xml_evento"), doc_ativo["codigo"]),
+                    )
+                else:
+                    cur.execute("UPDATE n_fiscal SET situacao = 'C' WHERE codigo = %s", (doc_ativo["codigo"],))
 
         # 3. Reversão financeira — já sabemos que não está bloqueada
         # (checado no passo 1), só apaga os lançamentos agora.
@@ -1109,8 +1210,57 @@ def _emitir_nfce_comanda_sync(req: EmitirNfceRequest, comanda: int) -> dict:
 
         cur.execute("SELECT cgc, uf, rz_social FROM controle")
         controle = cur.fetchone() or {}
-        cur.execute("SELECT numero_nfce, serie_nfce, csc, csc_hash FROM controle_aux")
+        cur.execute(
+            "SELECT numero_nfce, serie_nfce, csc, csc_hash, SERVICO_FRETE_NFCE, TRANSPORTADOR_FRETE_NFCE FROM controle_aux"
+        )
         controle_aux = cur.fetchone() or {}
+
+        # Frete da NFC-e — achado real 2026-08-22 (mesma reauditoria do
+        # "Frete por Conta" da NF-e, ver `nfe_emissao_service._resolver_
+        # mod_frete`): regra DIFERENTE daquela, não um seletor de tipo —
+        # aqui é um item de SERVIÇO na própria comanda (identificado por
+        # `controle_aux.SERVICO_FRETE_NFCE`, já exposto em Controle do
+        # Sistema mas nunca lido na emissão) cuja soma vira `<vFrete>` e
+        # decide `modFrete` (`DAO_NFE.vb:2736-2745`/`5436-5476`, ramo
+        # `ModeloNota="65"`). `modFrete=1` só quando esse item tem valor >
+        # 0 nesta comanda; senão `9` (sem transporte) — mesmo default de
+        # antes, agora resolvido de verdade em vez de hardcoded.
+        frete_valor = 0.0
+        transportador = None
+        servico_frete_cod = (controle_aux.get("SERVICO_FRETE_NFCE") or "").strip()
+        if servico_frete_cod:
+            cur.execute(
+                "SELECT ISNULL(SUM(qtd*p_unit), 0) AS total FROM movimentacao "
+                "WHERE num_nf = %s AND serie_nf = 'CM' AND codigo_int = %s AND ISNULL(Estornado, 0) = 0",
+                (comanda, servico_frete_cod),
+            )
+            frete_valor = float((cur.fetchone() or {}).get("total") or 0)
+            transportador_codigo_int = int(controle_aux.get("TRANSPORTADOR_FRETE_NFCE") or 0)
+            if frete_valor > 0 and transportador_codigo_int > 0:
+                cur.execute(
+                    "SELECT codigo, nome, inscr_est FROM fornecedor WHERE codigo_int = %s",
+                    (transportador_codigo_int,),
+                )
+                forn = cur.fetchone()
+                if forn:
+                    cur.execute(
+                        "SELECT TOP 1 endereco, numero, complemento, bairro, cidade, uf FROM fornecedor_end WHERE codigo = %s",
+                        (transportador_codigo_int,),
+                    )
+                    end = cur.fetchone() or {}
+                    endereco = " ".join(
+                        p for p in [
+                            (end.get("endereco") or "").strip(),
+                            str(end.get("numero")) if end.get("numero") else "",
+                            (end.get("complemento") or "").strip(),
+                            (end.get("bairro") or "").strip(),
+                        ] if p
+                    )
+                    transportador = {
+                        "cgc_cpf": (forn.get("codigo") or "").strip(), "nome": forn.get("nome"),
+                        "ie": forn.get("inscr_est"), "endereco": endereco,
+                        "cidade": end.get("cidade"), "uf": end.get("uf"),
+                    }
 
         uf_sigla = (controle.get("uf") or "").strip().upper()
         cgc_cpf = (cliente.get("cgc_cpf") or "").strip() if cliente else ""
@@ -1157,6 +1307,15 @@ def _emitir_nfce_comanda_sync(req: EmitirNfceRequest, comanda: int) -> dict:
             })
 
         ibs_cbs_totais = ibs_cbs_service.calcular_totais_ibs_cbs(ibs_cbs_calculados)
+        # `valor_total` = soma SÓ dos itens de PRODUTO (+ frete) — achado
+        # ao vivo 2026-08-23 (1ª emissão real de NFC-e com comanda mista
+        # produto+serviço): usar `cab.valor_venda` (valor da comanda
+        # INTEIRA, incluindo serviço) faz `<vNF>` divergir da soma real
+        # dos itens da NFC-e — SEFAZ recusa (rejeição 610, "Total da NF
+        # difere do somatorio dos Valores"). Numa comanda só de produto,
+        # os dois valores coincidiam por acaso, por isso nunca foi pego
+        # antes (nunca testado ao vivo com comanda mista até hoje).
+        valor_total_nfce = sum(float(i.get("valor_total") or 0) for i in itens_resolvidos) + frete_valor
         # Contingência (Gestor NFCe, achado 2026-08-19) — se aberta, a
         # emissão segue um caminho alternativo (tpEmis 5/9, sem
         # transmissão) — ver docstring de `emitir_nfce_sync`.
@@ -1166,9 +1325,11 @@ def _emitir_nfce_comanda_sync(req: EmitirNfceRequest, comanda: int) -> dict:
             uf_sigla=uf_sigla, uf_controle_sigla=uf_sigla,
             proximo_numero=int(controle_aux.get("numero_nfce") or 0) + 1,
             serie=str(controle_aux.get("serie_nfce") or "1"), cliente=cliente, itens_resolvidos=itens_resolvidos,
-            forma_pagamento="01", valor_total=float(cab.get("valor_venda") or 0), tp_amb="1",
+            forma_pagamento="01", valor_total=valor_total_nfce,
+            tp_amb=nfe_fiscal_common.resolver_tp_amb_sync(cur),
             csc_id=str(controle_aux.get("csc") or ""), csc=(controle_aux.get("csc_hash") or ""),
             ibs_cbs_totais_xml=ibs_cbs_totais["xml_totais"], contingencia=contingencia,
+            frete_valor=frete_valor, transportador=transportador,
         )
         if not resultado.get("success"):
             conn.close()
@@ -1176,20 +1337,28 @@ def _emitir_nfce_comanda_sync(req: EmitirNfceRequest, comanda: int) -> dict:
 
         situacao_n_fiscal = resultado.get("situacao") or "A"
         cstat_n_fiscal = resultado.get("cstat") or "100"
+        # `resultado["dh_recbto"]` vem cru do SEFAZ (ISO 8601 com offset,
+        # ex. "-03:00") — gravar direto numa coluna DATETIME quebra a
+        # conversão e derruba a transação DEPOIS do SEFAZ já ter
+        # confirmado sucesso, perdendo o registro local de um documento
+        # genuinamente autorizado (achado ao vivo no MDF-e, 2026-08-23 —
+        # ver `parse_dh_sefaz`). Corrigido aqui 2026-08-24 (mesmo bug,
+        # nunca reproduzido ao vivo pra NFC-e só por sorte de coincidência
+        # de formato de coluna).
         cur.execute(
             "INSERT INTO n_fiscal (num_nf, serie_nf, uf, data_nf, data_mov, valor_total, situacao, "
             "chave_acesso, protocolo_sefaz, dhRecbto, cstat, xml) "
             "OUTPUT INSERTED.codigo "
             "VALUES (%s, %s, %s, CONVERT(date, GETDATE()), CONVERT(date, GETDATE()), %s, %s, %s, %s, %s, %s, %s)",
-            (resultado["numero"], resultado["serie"], uf_sigla, cab.get("valor_venda"), situacao_n_fiscal,
-             resultado["chave_acesso"], resultado["protocolo_sefaz"], resultado.get("dh_recbto"), cstat_n_fiscal, resultado["xml"]),
+            (resultado["numero"], resultado["serie"], uf_sigla, valor_total_nfce, situacao_n_fiscal,
+             resultado["chave_acesso"], resultado["protocolo_sefaz"], nfe_fiscal_common.parse_dh_sefaz(resultado.get("dh_recbto")), cstat_n_fiscal, resultado["xml"]),
         )
         codigo_n_fiscal = int(cur.fetchone()["codigo"])
         cur.execute(
             "INSERT INTO comanda_nfce (comanda, num_nfce, situacao, protocolo_sefaz, chave_acesso, dhemi, vnf, xml) "
             "VALUES (%s, %s, %s, %s, %s, GETDATE(), %s, %s)",
             (comanda, resultado["numero"], ("G" if situacao_n_fiscal == "G" else "F"), resultado["protocolo_sefaz"],
-             resultado["chave_acesso"], cab.get("valor_venda"), resultado["xml"]),
+             resultado["chave_acesso"], valor_total_nfce, resultado["xml"]),
         )
         cur.execute("INSERT INTO comanda_nf (comanda, nota_fisc, tipo, situacao) VALUES (%s, %s, 1, %s)", (comanda, codigo_n_fiscal, situacao_n_fiscal))
         cur.execute("UPDATE controle_aux SET numero_nfce = %s", (resultado["numero"],))
@@ -1275,7 +1444,8 @@ def _emitir_nfse_comanda_sync(req: EmitirNfseRequest, comanda: int) -> dict:
             return {"success": False, "message": "Esta comanda já tem uma NFS-e emitida."}
 
         cur.execute(
-            "SELECT m.codigo_int, s.descricao, s.cod_lista_servico, s.cod_icms, m.qtd, m.p_unit "
+            "SELECT m.codigo_int, s.descricao, s.cod_lista_servico, s.cod_icms, s.cod_servico_municipio, "
+            "m.qtd, m.p_unit "
             "FROM movimentacao m JOIN servicos s ON s.codigo = m.codigo_int "
             "WHERE m.serie_nf = 'CM' AND m.num_nf = %s AND ISNULL(m.Estornado, 0) = 0",
             (comanda,),
@@ -1285,10 +1455,10 @@ def _emitir_nfse_comanda_sync(req: EmitirNfseRequest, comanda: int) -> dict:
             conn.close()
             return {"success": False, "message": "Comanda sem itens de serviço — nada a emitir."}
 
-        cur.execute("SELECT cgc, cidade, uf FROM controle")
+        cur.execute("SELECT cgc, cidade, uf, simples_servico FROM controle")
         controle = cur.fetchone() or {}
         cur.execute(
-            "SELECT numero_DPS, serie_DPS, opcao_simples, RegimeEspecialTributacao FROM controle_aux"
+            "SELECT numero_DPS, serie_DPS, opcao_simples, RegimeEspecialTributacao, codigo_nbs FROM controle_aux"
         )
         controle_aux = cur.fetchone() or {}
 
@@ -1341,6 +1511,7 @@ def _emitir_nfse_comanda_sync(req: EmitirNfseRequest, comanda: int) -> dict:
                 "codigo_int": (item.get("codigo_int") or "").strip(),
                 "descricao": (item.get("descricao") or "").strip(),
                 "cod_lista_servico": (item.get("cod_lista_servico") or "").strip(),
+                "cod_servico_municipio": (item.get("cod_servico_municipio") or "").strip(),
                 "valor": round(float(item.get("qtd") or 0) * float(item.get("p_unit") or 0), 2),
             }
             for item in itens_mov
@@ -1351,8 +1522,11 @@ def _emitir_nfse_comanda_sync(req: EmitirNfseRequest, comanda: int) -> dict:
             opcao_simples_nacional=bool(controle_aux.get("opcao_simples")),
             regime_especial_tributacao=int(controle_aux.get("RegimeEspecialTributacao") or 0),
             proximo_numero=int(controle_aux.get("numero_DPS") or 0) + 1,
-            serie=str(controle_aux.get("serie_DPS") or "1"), tomador=tomador, itens=itens, tp_amb="1",
+            serie=str(controle_aux.get("serie_DPS") or "1"), tomador=tomador, itens=itens,
+            tp_amb=nfe_fiscal_common.resolver_tp_amb_sync(cur),
             ibs_cbs_cst=ibs_cbs_cst, ibs_cbs_classtrib=ibs_cbs_classtrib,
+            codigo_nbs=(controle_aux.get("codigo_nbs") or ""),
+            simples_servico_pct=float(controle.get("simples_servico") or 0),
         )
         if not resultado.get("success"):
             conn.close()

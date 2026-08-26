@@ -48,6 +48,18 @@ CAMPOS = [
     ("sped", "SPED"),
     ("emite_mdfe", "Emite MDF-e"),
     ("sefin_nacional", "SEFIN Nacional"),
+    # Rastreado 2026-08-20 (`Geral\FrmGerKon.frm:113,546,624,658,691,796`)
+    # — NÃO é campo fiscal: `Caption = "O.S. TSO"`, texto de e-mail de
+    # auditoria "TSO Ótica" (`Msgemail`) — é uma 3ª variante de Ordem de
+    # Serviço (junto com Oficina/Assistência), pro segmento Ótica —
+    # confirmado pelo usuário mesmo dia ("TSO é uma Ordem de Serviço para
+    # Ótica"). Fica agrupado com Oficina/Assistência no grupo "Ordem de
+    # Serviço" (frontend, grupo próprio desde 2026-08-24 — antes era um
+    # subgrupo dentro de "Pré Venda"), não mais na lista alfabética
+    # genérica. Rótulo encurtado de "Ordem de Serviço TSO" pra só "TSO"
+    # em 2026-08-24, user-directed — o grupo que o cerca já deixa claro
+    # que é uma Ordem de Serviço, repetir isso no rótulo do campo ficou
+    # redundante.
     ("TSO", "TSO"),
     # **Correção 2026-08-20, user-directed**: uma tentativa anterior, no
     # mesmo dia, reaproveitou esta coluna como módulo "NFCe" — ERRADO,
@@ -105,6 +117,16 @@ _CAMPOS_CONTROLE_AUX_SET = {c for c, _ in CAMPOS_CONTROLE_AUX}
 # interativamente (marcar um desmarca os outros quatro), ver
 # modulos-recursos.tsx.
 SEGMENTOS_PEDIDO_EXCLUSIVOS = ["Bar", "Cilindro", "Pedido_venda", "metro_quadrado", "CLINICA"]
+
+# Oficina/Assistência/TSO são 3 variações diferentes da mesma Ordem de
+# Serviço — mutuamente exclusivas, mesmo princípio de
+# SEGMENTOS_PEDIDO_EXCLUSIVOS acima, mas um grupo à parte (Pedido e O.S.
+# não são exclusivos ENTRE si — uma empresa pode ter os dois ligados ao
+# mesmo tempo, só não duas variações do mesmo grupo). "TSO" adicionado
+# 2026-08-20, user-directed ("TSO é uma Ordem de Serviço para Ótica") —
+# antes só Oficina/Assistência existiam nesse papel (ver `disabled_telas`
+# em permissoes_service.py, "Ordem de Serviço (Oficina OU Assistência)").
+SEGMENTOS_OS_EXCLUSIVOS = ["Oficina", "Assistencia", "TSO"]
 
 # Mapa: módulo (coluna) -> telas do catálogo de permissões que ele controla.
 # Conforme novos módulos forem desenvolvidos, adicionar aqui.
@@ -224,6 +246,13 @@ def _save_config_sync(servidor: str, banco: str, valores: dict) -> dict:
             "success": False,
             "message": "Bar, Cilindro, Pedido de Venda, Metro Quadrado e Clínica são segmentos "
                        "diferentes da mesma tela de Pedido de Venda — só um pode ficar ativo por vez.",
+        }
+    ligados_os = [c for c, v in campos if v and c in SEGMENTOS_OS_EXCLUSIVOS]
+    if len(ligados_os) > 1:
+        return {
+            "success": False,
+            "message": "Oficina, Assistência e TSO são variações diferentes da mesma Ordem de "
+                       "Serviço — só uma pode ficar ativa por vez.",
         }
     try:
         conn = _open_conn(servidor, banco)

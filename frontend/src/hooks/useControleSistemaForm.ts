@@ -5,6 +5,7 @@ import { useAuditContext } from "@/src/hooks/useAuditContext";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
+import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
 
 // Controle do Sistema (Configurações > Geral) — tabelas `controle`/`controle_aux`
 // (linha única, mono-empresa por ora). Legado: FrmGerCon.frm ("Dados para
@@ -152,6 +153,8 @@ export function useControleSistemaForm() {
   const [seriesNf, setSeriesNf] = useState<SerieNfItem[]>([]);
   const [turnoHorario, setTurnoHorario] = useState<TurnoHorarioItem[]>([]);
   const [certificados, setCertificados] = useState<CertificadoItem[]>([]);
+  const [logoBase64, setLogoBase64] = useState<string | null>(null);
+  const [logoMime, setLogoMime] = useState<string | null>(null);
   const [direcionamentoImpressora, setDirecionamentoImpressora] = useState<DirecionamentoImpressoraItem[]>([]);
   const [simplesRemessa, setSimplesRemessa] = useState<{ tipo_mov: string; uf: string; dentro: CfopIcmsPar[]; fora: CfopIcmsPar[] }>({ tipo_mov: "", uf: "", dentro: [], fora: [] });
 
@@ -186,18 +189,24 @@ export function useControleSistemaForm() {
   const loadGrids = useCallback(async (c: Conn) => {
     const b = c.api.replace(/\/+$/, "");
     const qs = `servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`;
-    const [rSeries, rTurno, rCert, rImpr, rRemessa] = await Promise.all([
+    const [rSeries, rTurno, rCert, rImpr, rRemessa, rEmpresa] = await Promise.all([
       fetch(`${b}/api/controle-sistema/series-nf?${qs}`).then((r) => r.json()).catch(() => null),
       fetch(`${b}/api/controle-sistema/turno-horario?${qs}`).then((r) => r.json()).catch(() => null),
       fetch(`${b}/api/controle-sistema/certificados?${qs}`).then((r) => r.json()).catch(() => null),
       fetch(`${b}/api/controle-sistema/direcionamento-impressora?${qs}`).then((r) => r.json()).catch(() => null),
       fetch(`${b}/api/controle-sistema/simples-remessa?${qs}`).then((r) => r.json()).catch(() => null),
+      // Logo da empresa mora em `controle` (mesma tabela), mas é lida via
+      // `/api/controle/empresa` (controle_service.py) — endpoint já usado
+      // por todo fluxo de impressão, não duplicado aqui, só reaproveitado
+      // pra alimentar o preview desta tela.
+      fetch(`${b}/api/controle/empresa?${qs}`).then((r) => r.json()).catch(() => null),
     ]);
     if (rSeries?.success) setSeriesNf(rSeries.items || []);
     if (rTurno?.success) setTurnoHorario(rTurno.items || []);
     if (rCert?.success) setCertificados(rCert.items || []);
     if (rImpr?.success) setDirecionamentoImpressora(rImpr.items || []);
     if (rRemessa?.success) setSimplesRemessa({ tipo_mov: rRemessa.tipo_mov || "", uf: rRemessa.uf || "", dentro: rRemessa.dentro || [], fora: rRemessa.fora || [] });
+    if (rEmpresa?.success) { setLogoBase64(rEmpresa.logo_base64 || null); setLogoMime(rEmpresa.logo_mime || null); }
   }, []);
 
   const loadLookups = useCallback(async (c: Conn) => {
@@ -381,6 +390,38 @@ export function useControleSistemaForm() {
     } catch (e) { fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`); }
   };
 
+  // ---- Logo da Empresa (2026-08-26) — gravada direto em controle.logo_empresa,
+  // mesmo padrão de upload multipart do Certificado Digital acima. ----
+  const uploadLogoEmpresa = async (arquivo: File | Blob, nomeArquivo: string) => {
+    if (!conn) return false;
+    try {
+      const fd = new FormData();
+      fd.append("servidor", conn.servidor);
+      fd.append("banco", conn.banco);
+      if (auditCtx.usuario_alteracao != null) fd.append("usuario_alteracao", String(auditCtx.usuario_alteracao));
+      if (auditCtx.classe != null) fd.append("classe", String(auditCtx.classe));
+      fd.append("plataforma", auditCtx.plataforma);
+      fd.append("arquivo", arquivo, nomeArquivo);
+      const r = await fetch(`${base}/api/controle-sistema/logo`, { method: "POST", body: fd });
+      const j = await r.json().catch(() => null);
+      if (j?.success) { fb.showSuccess(j.message || "Logo cadastrada."); await reloadGrids(); return true; }
+      fb.showError(!r.ok && !j ? `Falha ao cadastrar a logo (HTTP ${r.status}).` : friendlyApiError(j, "Falha ao cadastrar a logo."));
+      return false;
+    } catch (e) { fb.showError(friendlyCatchError(e, "Falha ao cadastrar a logo.")); return false; }
+  };
+  const removerLogoEmpresa = async () => {
+    if (!conn) return;
+    try {
+      const r = await fetch(`${base}/api/controle-sistema/logo/remover`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...auditCtx }),
+      });
+      const j = await r.json();
+      if (j?.success) { fb.showSuccess(j.message || "Logo removida."); await reloadGrids(); }
+      else fb.showError(friendlyApiError(j, "Falha ao remover a logo."));
+    } catch (e) { fb.showError(friendlyCatchError(e, "Falha ao remover a logo.")); }
+  };
+
   // ---- Modal: Direcionamento de Impressão por Grupo ----
   const saveDirecionamentoImpressora = async (computador: string, tipo: number, impressora: string, automatica: boolean) => {
     if (!conn) return false;
@@ -428,6 +469,7 @@ export function useControleSistemaForm() {
     seriesNf, turnoHorario, certificados, direcionamentoImpressora, simplesRemessa,
     saveSerieNf, deleteSerieNf, saveTurnoHorario, deleteTurnoHorario,
     uploadCertificado, deleteCertificado,
+    logoBase64, logoMime, uploadLogoEmpresa, removerLogoEmpresa,
     saveDirecionamentoImpressora, deleteDirecionamentoImpressora, saveSimplesRemessa,
   };
 }

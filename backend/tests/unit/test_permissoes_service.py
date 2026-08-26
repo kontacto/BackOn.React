@@ -6,14 +6,14 @@ import services.permissoes_service as ps
 def _flags(**over):
     base = {c: False for c, _ in [
         ("Pedido_venda", ""), ("Bar", ""), ("Cilindro", ""), ("Clientes", ""),
-        ("servicos", ""), ("Posto", ""), ("Oficina", ""), ("Assistencia", ""),
+        ("servicos", ""), ("Posto", ""), ("Oficina", ""), ("Assistencia", ""), ("TSO", ""),
     ]}
     base.update(over)
     return base
 
 
 class TestOrdemDeServicoOficinaOuAssistencia:
-    def test_os_e_os_comp_ocultas_se_ambos_desligados(self):
+    def test_os_e_os_comp_ocultas_se_todos_desligados(self):
         disabled = ps.disabled_telas(_flags())
         assert "OS" in disabled and "OS_COMP" in disabled
 
@@ -25,8 +25,14 @@ class TestOrdemDeServicoOficinaOuAssistencia:
         disabled = ps.disabled_telas(_flags(Assistencia=True))
         assert "OS" not in disabled and "OS_COMP" not in disabled
 
-    def test_os_e_os_comp_visiveis_se_ambos_ligados(self):
-        disabled = ps.disabled_telas(_flags(Oficina=True, Assistencia=True))
+    def test_os_e_os_comp_visiveis_se_tso_ligado(self):
+        # TSO (Ordem de Serviço pro segmento Ótica) — 2026-08-20,
+        # user-directed, 3ª variação de O.S. junto com Oficina/Assistência.
+        disabled = ps.disabled_telas(_flags(TSO=True))
+        assert "OS" not in disabled and "OS_COMP" not in disabled
+
+    def test_os_e_os_comp_visiveis_se_todos_ligados(self):
+        disabled = ps.disabled_telas(_flags(Oficina=True, Assistencia=True, TSO=True))
         assert "OS" not in disabled and "OS_COMP" not in disabled
 
 

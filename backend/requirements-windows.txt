@@ -1,9 +1,45 @@
-# Dependências MÍNIMAS para rodar o backend BackOn no Windows
-# (sem pacotes Emergent que não estão no PyPI público)
-# Versões com piso (>=) — pega o mais recente disponível.
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-python-dotenv>=1.0.0
-pydantic>=2.7.0
-pymssql>=2.3.0
-azure-storage-blob>=12.19.0
+# Dependências para rodar o backend Back-On num Windows de cliente
+# (sem os pacotes internos da Emergent que existem em requirements.txt —
+# aqueles não estão no PyPI público e não são usados por este backend de
+# verdade; confirmado 2026-08-26 por grep de todo `import`/`from` real em
+# server.py/db//models//routes//services/, excluindo .venv/testes).
+#
+# ATUALIZADO 2026-08-26 — a versão anterior deste arquivo (9 pacotes) tinha
+# ficado defasada: faltavam reportlab (Boleto/Recibo em PDF), cryptography/
+# lxml/signxml/qrcode/pillow (assinatura e emissão fiscal NF-e/NFC-e/NFS-e/
+# MDF-e), requests (integrações HTTP — Tray, BACEN, CEP), python-multipart
+# (upload de anexo/certificado digital) e anthropic (Importar Formulário,
+# Sugerir com IA — feature opcional, só usada se `controle.ANTHROPIC_API_KEY`
+# estiver configurada, mas precisa estar instalada pra essas 2 telas não
+# quebrarem). Manter esta lista em dia sempre que uma dependência nova for
+# adicionada ao projeto — nunca presumir que `pip install -r
+# requirements-windows.txt` já cobre tudo sem checar de novo.
+fastapi==0.110.1
+starlette==0.37.2
+uvicorn[standard]==0.25.0
+pydantic==2.13.4
+python-dotenv==1.2.2
+python-multipart==0.0.30
+
+# Banco de dados (SQL Server)
+pymssql==2.3.13
+
+# Fiscal (assinatura XML, código de barras/QR Code de documentos fiscais)
+cryptography==48.0.0
+lxml==6.1.1
+signxml==5.1.0
+qrcode==8.2
+pillow==12.2.0
+
+# Boleto/Recibo em PDF (Financeiro > Cobranças, Contratos)
+reportlab==5.0.1
+
+# Integrações HTTP (Tray, BACEN, ViaCEP, etc.)
+requests==2.34.2
+
+# Anexos (Gestor de Documentos) — Azure Blob Storage
+azure-storage-blob==12.30.0
+
+# IA (Importar Formulário / Sugerir com IA — opcional, só ativa com
+# controle.ANTHROPIC_API_KEY configurada em Controle do Sistema)
+anthropic==0.121.0

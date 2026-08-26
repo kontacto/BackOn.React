@@ -29,6 +29,7 @@ export default function TabelasAuxiliaresScreen() {
     { key: "marcas", label: "Marcas", hint: "Marcas de veículos e produtos", icon: "pricetag-outline" as const, route: "/marcas", visible: can("MARCAS.ABRIR") },
     { key: "modelos", label: "Modelos", hint: "Modelos por marca", icon: "car-outline" as const, route: "/modelos", visible: can("MODELOS.ABRIR") },
     { key: "modificadores", label: "Modificadores", hint: "Categorias de modificador (ex.: Ponto da Carne) associáveis a Produtos e Serviços", icon: "options-outline" as const, route: "/modificadores", visible: moduleOn("Bar") && can("MODIFICADORES.ABRIR") },
+    { key: "ncm-cest", label: "NCM/CEST", hint: "Consulta e cadastro de códigos NCM e CEST", icon: "barcode-outline" as const, route: "/ncm-cest", visible: can("NCM_CEST.ABRIR") },
     { key: "forma-pagamento", label: "Forma de Pagamento", hint: "Formas de pagamento e condições de recebimento", icon: "card-outline" as const, route: "/forma-pagamento", visible: can("FORMA_PAGAMENTO.ABRIR") },
     { key: "grupo-usuario", label: "Grupo de Usuário", hint: "Grupos/funções de usuário e permissões de cadastro", icon: "people-circle-outline" as const, route: "/grupo-usuario", visible: can("GRUPO_USUARIO.ABRIR") },
     { key: "grupo-mercadologico", label: "Grupo Mercadológico", hint: "Árvore de níveis para classificar produtos e serviços", icon: "git-commit-outline" as const, route: "/grupo-mercadologico", visible: can("GRUPO_MERCAD.ABRIR") },

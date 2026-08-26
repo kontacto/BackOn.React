@@ -144,9 +144,14 @@ export default function CurvaAbcScreen() {
   const [conn, setConn] = useState<Connection | null>(null);
 
   // Seção 1 — Gerar Curva ABC
-  const [g1DataIni, setG1DataIni] = useState<string | null>(null);
-  const [g1DataFim, setG1DataFim] = useState<string | null>(null);
-  const [g1Preset, setG1Preset] = useState<number | null>(null);
+  // Período padrão 12 meses (achado 2026-08-22, varredura de design/UI —
+  // as outras 15 telas de relatório da mesma leva já nascem com período
+  // preenchido; esta e "Reprocessar Estoques" abaixo nasciam em branco,
+  // destoando do padrão). 12 meses = ano cheio, evita viés de sazonalidade
+  // numa análise de Curva ABC.
+  const [g1DataIni, setG1DataIni] = useState<string | null>(() => isoMinusMonths(todayIso(), 12));
+  const [g1DataFim, setG1DataFim] = useState<string | null>(() => todayIso());
+  const [g1Preset, setG1Preset] = useState<number | null>(12);
   const [g1Tipo, setG1Tipo] = useState<"financeira" | "quantidade">("quantidade");
   const [g1Nivel, setG1Nivel] = useState<{ codigo: string; label: string } | null>(null);
   const [g1NivelModalOpen, setG1NivelModalOpen] = useState(false);
@@ -159,10 +164,10 @@ export default function CurvaAbcScreen() {
   const [g1Resultado, setG1Resultado] = useState<GerarResultItem[] | null>(null);
   const [g1TotalGeral, setG1TotalGeral] = useState(0);
 
-  // Seção 2 — Reprocessar Estoques
-  const [r1DataIni, setR1DataIni] = useState<string | null>(null);
-  const [r1DataFim, setR1DataFim] = useState<string | null>(null);
-  const [r1Preset, setR1Preset] = useState<number | null>(null);
+  // Seção 2 — Reprocessar Estoques (mesmo achado da Seção 1 acima)
+  const [r1DataIni, setR1DataIni] = useState<string | null>(() => isoMinusMonths(todayIso(), 12));
+  const [r1DataFim, setR1DataFim] = useState<string | null>(() => todayIso());
+  const [r1Preset, setR1Preset] = useState<number | null>(12);
   const [grauAtendimento, setGrauAtendimento] = useState("100");
   const [r1Nivel, setR1Nivel] = useState<{ codigo: string; label: string } | null>(null);
   const [r1NivelModalOpen, setR1NivelModalOpen] = useState(false);

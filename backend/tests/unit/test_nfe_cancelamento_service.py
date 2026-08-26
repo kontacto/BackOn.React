@@ -16,6 +16,8 @@ from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import NameOID
 from lxml import etree
 from signxml import XMLVerifier
+from signxml.algorithms import DigestAlgorithm, SignatureMethod
+from signxml.verifier import SignatureConfiguration
 
 import services.nfe_cancelamento_service as svc
 
@@ -102,7 +104,17 @@ class TestAssinarEvento:
         # A verificação confirma que a assinatura é criptograficamente válida
         # pro conteúdo do próprio XML — não que o SEFAZ aceitaria (isso só um
         # certificado ICP-Brasil real + o ambiente de homologação confirmam).
-        XMLVerifier().verify(assinado, x509_cert=cert_pem)
+        # `signature_methods`/`digest_algorithms` customizados — achado ao
+        # vivo 2026-08-23: `_assinar_evento` agora assina em SHA-1
+        # (`sha1=True`, exigência real do XSD do SEFAZ), e o `XMLVerifier`
+        # recusa SHA-1 por padrão pela mesma razão de segurança que o
+        # `XMLSigner` (não é insegurança do teste, é a mesma trava —
+        # `InvalidInput: Signature method RSA_SHA1 forbidden`).
+        config = SignatureConfiguration(
+            signature_methods=frozenset({SignatureMethod.RSA_SHA1}),
+            digest_algorithms=frozenset({DigestAlgorithm.SHA1}),
+        )
+        XMLVerifier().verify(assinado, x509_cert=cert_pem, expect_config=config)
 
 
 class TestMontarEnvelopeSoap:
@@ -209,6 +221,27 @@ class TestCancelarNfeSync:
         )
         assert r["success"] is True
         assert r["protocolo_cancelamento"] == "135260000012345"
+
+    def test_le_cstat_do_evento_nao_do_lote(self, monkeypatch):
+        # Mesmo achado ao vivo 2026-08-23 já corrigido em
+        # `nfe_correcao_service.py`/`nfe_emissao_service.py` — `cStat` do
+        # LOTE (nível externo) é neutro/sempre presente, o real fica
+        # dentro de `infEvento`. Aplicado aqui por consistência.
+        key_pem, cert_pem = self._certs()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = (
+            "<retEnvEvento><cStat>128</cStat><xMotivo>Lote de Evento Processado</xMotivo>"
+            "<retEvento><infEvento><cStat>493</cStat>"
+            "<xMotivo>Rejeicao: Evento nao atende o Schema XML especifico</xMotivo>"
+            "</infEvento></retEvento></retEnvEvento>"
+        )
+        monkeypatch.setattr(svc, "_transmitir", lambda envelope, url, k, c: resposta_fake)
+        r = svc.cancelar_nfe_sync(
+            None, cnpj="1", uf_sigla="RJ", modelo="65", chave_acesso="1" * 44,
+            protocolo="123", motivo="Motivo válido com bastante texto", tp_amb="2",
+        )
+        assert r["success"] is False
+        assert "493" in r["message"]
 
     def test_sefaz_recusa_o_cancelamento(self, monkeypatch):
         key_pem, cert_pem = self._certs()

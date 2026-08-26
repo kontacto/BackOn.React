@@ -225,6 +225,37 @@ class TestGetDocFiscalSync:
         assert r["numero"] == 200
         assert r["xml"] == "<xml/>"
 
+    def test_nfce_com_qr_code_url_ganha_imagem_png_base64(self, monkeypatch):
+        # Extrato NFC-e ganhou QR Code real (2026-08-20) — o backend desenha
+        # a imagem a partir da mesma URL já embutida no XML transmitido.
+        monkeypatch.setattr(
+            svc.nfe_emissao_service, "parse_nfce_xml_para_exibicao",
+            lambda xml: {"chave_acesso": "4" * 44, "qr_code_url": "https://sefaz/qrcode?chNFe=123"},
+        )
+        cur = FakeCursor(one=[{
+            "num_nfce": 200, "situacao": "A", "protocolo_sefaz": "123", "chave_acesso": "4" * 44,
+            "dhemi": datetime.datetime(2026, 7, 20, 10, 0, 0), "vnf": 50.0, "xml": "<xml/>",
+        }])
+        _patch(monkeypatch, cur)
+        r = svc._get_doc_fiscal_sync("srv", "bd", 1)
+        assert r["success"] is True
+        assert r["detalhe"]["qr_code_png_base64"]
+        import base64
+        assert base64.b64decode(r["detalhe"]["qr_code_png_base64"])[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_nfce_sem_qr_code_url_nao_gera_imagem(self, monkeypatch):
+        monkeypatch.setattr(
+            svc.nfe_emissao_service, "parse_nfce_xml_para_exibicao",
+            lambda xml: {"chave_acesso": "4" * 44, "qr_code_url": ""},
+        )
+        cur = FakeCursor(one=[{
+            "num_nfce": 200, "situacao": "A", "protocolo_sefaz": "123", "chave_acesso": "4" * 44,
+            "dhemi": datetime.datetime(2026, 7, 20, 10, 0, 0), "vnf": 50.0, "xml": "<xml/>",
+        }])
+        _patch(monkeypatch, cur)
+        r = svc._get_doc_fiscal_sync("srv", "bd", 1)
+        assert "qr_code_png_base64" not in r["detalhe"]
+
     def test_dhemi_como_string_nao_quebra(self, monkeypatch):
         # Achado ao vivo contra BD_PAJE 2026-07-21: `comanda_nfce.dhemi`
         # pode voltar do pymssql como `str`, não `datetime` — não pode
@@ -253,12 +284,34 @@ class TestGetDocFiscalSync:
     def test_encontra_nf_quando_sem_nfce_e_sem_nfse(self, monkeypatch):
         cur = FakeCursor(one=[None, None, {
             "num_nf": 300, "serie_nf": "1", "situacao": "A", "protocolo_sefaz": "456", "chave_acesso": "5" * 44,
-        }])
+            "xml": None, "dhRecbto": None,
+        }, {"modelo_danfe": 0}])
         _patch(monkeypatch, cur)
         r = svc._get_doc_fiscal_sync("srv", "bd", 1)
         assert r["success"] is True
         assert r["tipo"] == "NF"
         assert r["numero"] == 300
+        assert r["detalhe"] is None
+        assert r["modelo_danfe"] == 0
+
+    def test_nf_com_xml_inclui_detalhe_do_danfe(self, monkeypatch):
+        # Extensão 2026-08-20 — ver "DANFE NF-e (modelo 55)": a gestão de
+        # comandas passa a incluir o fac-símile pronto (`detalhe`), mesmo
+        # princípio já usado no branch NFCE.
+        monkeypatch.setattr(
+            svc.nfe_emissao_service, "parse_nfe_xml_para_exibicao",
+            lambda xml: {"chave_acesso": "0" * 44, "protocolo_sefaz": None, "valor_total": 20.0},
+        )
+        cur = FakeCursor(one=[None, None, {
+            "num_nf": 300, "serie_nf": "1", "situacao": "A", "protocolo_sefaz": "456", "chave_acesso": "5" * 44,
+            "xml": "<NFe/>", "dhRecbto": "2026-08-20T10:00:00",
+        }, {"modelo_danfe": 1}])
+        _patch(monkeypatch, cur)
+        r = svc._get_doc_fiscal_sync("srv", "bd", 1)
+        assert r["success"] is True
+        assert r["detalhe"]["chave_acesso"] == "5" * 44  # coluna sobrepõe o que o parser devolveu
+        assert r["detalhe"]["protocolo_sefaz"] == "456"
+        assert r["modelo_danfe"] == 1
 
     def test_encontra_cupom_quando_sem_nenhum_documento_anterior(self, monkeypatch):
         cur = FakeCursor(one=[None, None, None, {"num_pdv": 1, "num_cupom": 100, "coo": "5", "situacao": "A"}])
@@ -692,6 +745,34 @@ class TestCancelarComandaSync:
         assert chamado["protocolo"] == "123456"
         assert any("UPDATE comanda_nfce SET situacao = 'C'" in q[0] for q in cur.queries)
 
+    def test_cancelamento_fiscal_persiste_protocolo_e_xml(self, monkeypatch):
+        # Achado ao vivo 2026-08-23 (1º cancelamento real de NF-e/NFC-e
+        # desta migração): antes só `situacao='C'` era gravado — o
+        # protocolo/motivo/XML assinado do cancelamento real eram
+        # descartados. Trava que os valores retornados por
+        # `cancelar_nfe_sync` realmente chegam nos parâmetros do UPDATE.
+        header = {"comanda": 1, "situacao": "PG"}
+        nfce = {"num_nfce": 200, "situacao": "A", "protocolo_sefaz": "123456", "chave_acesso": "1" * 44}
+        controle = {"cgc": "12345678000199", "uf": "RJ"}
+        ones = _ones_cancelar(header, nfce=nfce, nf_incluido=False, controle=controle)
+        cur = FakeCursor(one=ones, many=[[], []])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(
+            svc.nfe_cancelamento_service, "cancelar_nfe_sync",
+            lambda *a, **k: {
+                "success": True, "protocolo_cancelamento": "135260000099999",
+                "xml_evento": "<evento>cancelado</evento>",
+            },
+        )
+        r = svc._cancelar_comanda_sync(_cancelar_req(), 1)
+        assert r["success"] is True
+        update_q = next(q for q in cur.queries if q[0].strip().startswith("UPDATE comanda_nfce") and "protocolo_cancelamento" in q[0])
+        assert "135260000099999" in update_q[1]
+        assert "<evento>cancelado</evento>" in update_q[1]
+        # A migração idempotente de colunas foi chamada (só quando há
+        # cancelamento fiscal real, não em toda comanda cancelada).
+        assert any("ALTER TABLE comanda_nfce ADD protocolo_cancelamento" in q[0] for q in cur.queries)
+
     def test_sefaz_recusa_bloqueia_cancelamento_inteiro(self, monkeypatch):
         header = {"comanda": 1, "situacao": "PG"}
         nfce = {"num_nfce": 200, "situacao": "A", "protocolo_sefaz": "123456", "chave_acesso": "1" * 44}
@@ -745,6 +826,14 @@ class TestEmitirNfceComandaSync:
         # padrão pra não exigir mais uma linha no FakeCursor de cada teste
         # já existente (nenhum deles testa o módulo desligado).
         monkeypatch.setattr(svc.nfe_fiscal_common, "modulo_nfce_ativo_sync", lambda cur: True)
+
+    @pytest.fixture(autouse=True)
+    def _tp_amb_producao(self, monkeypatch):
+        # Ambiente NFe/NFCe (controle_aux.ambiente_nfe, 2026-08-20) — antes
+        # hardcodado "1" (produção) em todo lugar; agora resolvido em
+        # runtime. Mockado "1" por padrão pra não exigir mais uma linha no
+        # FakeCursor de cada teste já existente.
+        monkeypatch.setattr(svc.nfe_fiscal_common, "resolver_tp_amb_sync", lambda cur: "1")
 
     def _item_mov(self):
         return {"codigo_int": "P001", "descricao": "Produto Teste", "qtd": 1.0, "p_unit": 50.0,
@@ -828,7 +917,121 @@ class TestEmitirNfceComandaSync:
         assert any(q[0].strip().upper().startswith("INSERT INTO N_FISCAL") for q in cur.queries)
         assert any("INSERT INTO comanda_nfce" in q[0] for q in cur.queries)
         assert any("INSERT INTO comanda_nf" in q[0] for q in cur.queries)
+        # Achado 2026-08-24 (mesmo bug já corrigido no MDF-e 2026-08-23):
+        # `dh_recbto` cru do SEFAZ (com offset "-03:00") quebra numa coluna
+        # DATETIME — precisa chegar como `datetime` NAIVE já convertido,
+        # nunca a string crua, no parâmetro do INSERT.
+        insert_nf = next(q for q in cur.queries if q[0].strip().upper().startswith("INSERT INTO N_FISCAL"))
+        import datetime as _dt
+        dh_param = next(p for p in insert_nf[1] if isinstance(p, _dt.datetime))
+        assert dh_param == _dt.datetime(2026, 7, 21, 10, 0, 0)
         assert any("UPDATE controle_aux SET numero_nfce" in q[0] for q in cur.queries)
+
+    def test_sem_servico_frete_configurado_nao_resolve_frete(self, monkeypatch):
+        # Achado real 2026-08-22: `controle_aux.SERVICO_FRETE_NFCE` já era
+        # exposto em Controle do Sistema mas nunca lido na emissão — sem
+        # essa config, o comportamento tem que continuar exatamente igual
+        # a antes (frete_valor=0, sem transportador, sem query extra).
+        ones = [
+            {"comanda": 1, "situacao": "PG", "cliente": None, "valor_venda": 50.0}, None,
+            {"cgc": "12345678000199", "uf": "RJ", "rz_social": "EMPRESA TESTE"},
+            {"numero_nfce": 10, "serie_nfce": "1", "csc": "1", "csc_hash": "h"},  # sem SERVICO_FRETE_NFCE
+            None,  # PECAS_PROTOCOLO_ST
+            {},  # taxas_nfce
+            None,  # contingencia_aberta_sync
+            {"codigo": 999},
+        ]
+        cur = FakeCursor(one=ones, many=[[self._item_mov()]])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc.nfe_emissao_service, "_resolver_tributacao_sync", lambda *a, **k: {"cfop_livro": "5102"})
+        capturado = {}
+
+        def _fake_emitir(cur_, **kw):
+            capturado.update(kw)
+            return {
+                "success": True, "chave_acesso": "3" * 44, "protocolo_sefaz": "1", "dh_recbto": None,
+                "xml": "<NFe/>", "numero": 11, "serie": "1", "url_qrcode": "https://x",
+            }
+
+        monkeypatch.setattr(svc.nfe_emissao_service, "emitir_nfce_sync", _fake_emitir)
+        r = svc._emitir_nfce_comanda_sync(_emitir_nfce_req(), 1)
+        assert r["success"] is True
+        assert capturado["frete_valor"] == 0
+        assert capturado["transportador"] is None
+        assert not any("Fornecedor_End" in q[0] for q in cur.queries if isinstance(q[0], str))
+
+    def test_com_servico_frete_resolve_valor_e_transportador(self, monkeypatch):
+        # Achado real 2026-08-22 (DAO_NFE.vb:2736-2745/5436-5476): o frete
+        # da NFC-e é um item de SERVIÇO na própria comanda, cujo código é
+        # configurável (`SERVICO_FRETE_NFCE`) — a soma dele vira <vFrete>
+        # e decide modFrete=1 (com transportadora) ou 9.
+        ones = [
+            {"comanda": 1, "situacao": "PG", "cliente": None, "valor_venda": 150.0}, None,
+            {"cgc": "12345678000199", "uf": "RJ", "rz_social": "EMPRESA TESTE"},
+            {
+                "numero_nfce": 10, "serie_nfce": "1", "csc": "1", "csc_hash": "h",
+                "SERVICO_FRETE_NFCE": "S-FRETE", "TRANSPORTADOR_FRETE_NFCE": 55,
+            },
+            {"total": 20.0},  # SUM(qtd*p_unit) do item de frete
+            {"codigo": "12345678000100", "nome": "TRANSPORTADORA X", "inscr_est": "ISENTO"},
+            {"endereco": "RUA DO FRETE", "numero": 10, "complemento": "", "bairro": "CENTRO", "cidade": "RIO DE JANEIRO", "uf": "RJ"},
+            None,  # PECAS_PROTOCOLO_ST
+            {},  # taxas_nfce
+            None,  # contingencia_aberta_sync
+            {"codigo": 999},
+        ]
+        cur = FakeCursor(one=ones, many=[[self._item_mov()]])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc.nfe_emissao_service, "_resolver_tributacao_sync", lambda *a, **k: {"cfop_livro": "5102"})
+        capturado = {}
+
+        def _fake_emitir(cur_, **kw):
+            capturado.update(kw)
+            return {
+                "success": True, "chave_acesso": "3" * 44, "protocolo_sefaz": "1", "dh_recbto": None,
+                "xml": "<NFe/>", "numero": 11, "serie": "1", "url_qrcode": "https://x",
+            }
+
+        monkeypatch.setattr(svc.nfe_emissao_service, "emitir_nfce_sync", _fake_emitir)
+        r = svc._emitir_nfce_comanda_sync(_emitir_nfce_req(), 1)
+        assert r["success"] is True
+        assert capturado["frete_valor"] == 20.0
+        assert capturado["transportador"]["cgc_cpf"] == "12345678000100"
+        assert capturado["transportador"]["nome"] == "TRANSPORTADORA X"
+        assert capturado["transportador"]["cidade"] == "RIO DE JANEIRO"
+
+    def test_servico_frete_sem_valor_na_comanda_nao_busca_transportador(self, monkeypatch):
+        ones = [
+            {"comanda": 1, "situacao": "PG", "cliente": None, "valor_venda": 50.0}, None,
+            {"cgc": "12345678000199", "uf": "RJ", "rz_social": "EMPRESA TESTE"},
+            {
+                "numero_nfce": 10, "serie_nfce": "1", "csc": "1", "csc_hash": "h",
+                "SERVICO_FRETE_NFCE": "S-FRETE", "TRANSPORTADOR_FRETE_NFCE": 55,
+            },
+            {"total": 0},  # nenhum item de frete nesta comanda
+            None,  # PECAS_PROTOCOLO_ST
+            {},  # taxas_nfce
+            None,  # contingencia_aberta_sync
+            {"codigo": 999},
+        ]
+        cur = FakeCursor(one=ones, many=[[self._item_mov()]])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc.nfe_emissao_service, "_resolver_tributacao_sync", lambda *a, **k: {"cfop_livro": "5102"})
+        capturado = {}
+
+        def _fake_emitir(cur_, **kw):
+            capturado.update(kw)
+            return {
+                "success": True, "chave_acesso": "3" * 44, "protocolo_sefaz": "1", "dh_recbto": None,
+                "xml": "<NFe/>", "numero": 11, "serie": "1", "url_qrcode": "https://x",
+            }
+
+        monkeypatch.setattr(svc.nfe_emissao_service, "emitir_nfce_sync", _fake_emitir)
+        r = svc._emitir_nfce_comanda_sync(_emitir_nfce_req(), 1)
+        assert r["success"] is True
+        assert capturado["frete_valor"] == 0
+        assert capturado["transportador"] is None
+        assert not any("FROM fornecedor WHERE" in q[0] for q in cur.queries if isinstance(q[0], str))
 
     def test_ibs_cbs_resolve_de_taxas_nfce_nao_de_taxas(self, monkeypatch):
         # Achado 2026-08-19: IBS/CBS usa `taxas_nfce` (por cod_icms), NÃO a
@@ -916,14 +1119,28 @@ class TestEmitirNfseComandaSync:
     Ativo) e a resolução do item de SERVIÇO (join com `servicos`, não
     `pecas`)."""
 
+    @pytest.fixture(autouse=True)
+    def _tp_amb_producao(self, monkeypatch):
+        # Ambiente NFe/NFSe (controle_aux.ambiente_nfe, 2026-08-20) — antes
+        # hardcodado "1" (produção); agora resolvido em runtime. Mockado
+        # "1" por padrão pra não exigir mais uma linha no FakeCursor de
+        # cada teste já existente.
+        monkeypatch.setattr(svc.nfe_fiscal_common, "resolver_tp_amb_sync", lambda cur: "1")
+
     def _item_mov(self):
-        return {"codigo_int": "SALD", "descricao": "Alinhamento Dianteiro", "cod_lista_servico": "140101", "qtd": 1.0, "p_unit": 100.0}
+        return {
+            "codigo_int": "SALD", "descricao": "Alinhamento Dianteiro", "cod_lista_servico": "140101",
+            "cod_servico_municipio": "015", "qtd": 1.0, "p_unit": 100.0,
+        }
 
     def _controle_row(self):
-        return {"cgc": "12345678000199", "cidade": "RIO DE JANEIRO", "uf": "RJ"}
+        return {"cgc": "12345678000199", "cidade": "RIO DE JANEIRO", "uf": "RJ", "simples_servico": 13.8}
 
     def _controle_aux_row(self):
-        return {"numero_DPS": 10, "serie_DPS": "1", "opcao_simples": 1, "RegimeEspecialTributacao": 0}
+        return {
+            "numero_DPS": 10, "serie_DPS": "1", "opcao_simples": 1, "RegimeEspecialTributacao": 0,
+            "codigo_nbs": "120018900",
+        }
 
     def test_sem_permissao_bloqueia(self, monkeypatch):
         cur = FakeCursor(one=[None])
@@ -1057,6 +1274,36 @@ class TestEmitirNfseComandaSync:
         r = svc._emitir_nfse_comanda_sync(_emitir_nfse_req(), 1)
         assert r["success"] is False
         assert conn.committed is False
+
+    def test_cod_servico_municipio_e_codigo_nbs_e_simples_servico_repassados(self, monkeypatch):
+        # Achado 2026-08-24 (rastreio até a raiz de `DAO_NFE.vb`): `cTribMun`
+        # é `servicos.cod_servico_municipio` (por serviço), `cNBS` é
+        # `controle_aux.codigo_nbs` (por empresa), e o percentual real do
+        # `pTotTribSN` vem de `controle.simples_servico` — os 3 precisam
+        # chegar intactos em `nfse_emissao_service.emitir_nfse_sync`.
+        ones = [
+            {"sefin_nacional": 1}, {"comanda": 1, "situacao": "PG", "cliente": None, "valor_venda": 100.0}, None,
+            self._controle_row(), self._controle_aux_row(),
+            {"codigo": 999},  # OUTPUT INSERTED.codigo do INSERT n_fiscal
+        ]
+        cur = FakeCursor(one=ones, many=[[self._item_mov()]])
+        _patch(monkeypatch, cur)
+
+        kwargs_capturados = {}
+
+        def _emitir_fake(cur_, **kw):
+            kwargs_capturados.update(kw)
+            return {
+                "success": True, "message": "ok", "chave_acesso": "3" * 50, "id_dps": "DPS" + "0" * 42,
+                "xml_dps": "<DPS/>", "xml_nfse": "<NFse/>", "numero": 11, "serie": "1",
+            }
+
+        monkeypatch.setattr(svc.nfse_emissao_service, "emitir_nfse_sync", _emitir_fake)
+        r = svc._emitir_nfse_comanda_sync(_emitir_nfse_req(), 1)
+        assert r["success"] is True
+        assert kwargs_capturados["codigo_nbs"] == "120018900"
+        assert kwargs_capturados["simples_servico_pct"] == 13.8
+        assert kwargs_capturados["itens"][0]["cod_servico_municipio"] == "015"
 
     def test_falha_conexao(self, monkeypatch):
         def _falha(*a, **k):

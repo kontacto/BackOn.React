@@ -500,6 +500,25 @@ class OSEquipamentoSaveRequest(BaseModel):
     usuario_alteracao: Optional[int] = None
     classe: Optional[int] = None
     plataforma: Optional[str] = None
+
+
+class OSChecklistVeiculoSaveRequest(BaseModel):
+    """Marcação de avaria no Checklist de Entrada de Veículo (O.S.
+    Oficina, `os_checklist_veiculo`) — pedido explícito do usuário
+    2026-08-26, sem precedente no legado. Cada marcação é um toque no
+    diagrama do veículo (frontend web-only), não um checklist estático
+    de perguntas fixas. `pos_x`/`pos_y` são frações 0-1 relativas ao
+    diagrama. Sem PUT/editar — errou a marcação, cancela e marca de
+    novo."""
+    servidor: str
+    banco: str
+    tipo_avaria: str               # AMASSADO/ARRANHAO/QUEBRADO/FALTANDO/OUTRO
+    pos_x: float
+    pos_y: float
+    descricao: Optional[str] = ""
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
     # Só usado pela tela de Atendimento de Campo, fluxo do Auxiliar (regra
     # 11) — ver `OSCheckinRequest.via_auxiliar`. Ignorado por `os-geral.tsx`.
     via_auxiliar: Optional[int] = None

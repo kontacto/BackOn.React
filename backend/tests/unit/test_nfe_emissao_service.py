@@ -5,6 +5,7 @@ service.py`: certificado sempre autoassinado gerado em memória,
 de verdade nem o certificado real de nenhuma empresa."""
 import datetime
 
+import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -137,15 +138,82 @@ class TestMontarChaveAcesso:
         assert chave.startswith("33")  # cUF
         assert chave[2:6] == "2607"  # AAMM
 
+    def test_cnf_nunca_igual_ao_numero_mesmo_com_seed_igual(self):
+        # Achado ao vivo 2026-08-23 (rejeição 897, "Código numérico em
+        # formato inválido"): `emitir_nfe_sync` passava `codigo_numerico`
+        # literalmente igual a `numero` — colidia 100% das vezes.
+        # `_gerar_cnf_valido` nunca deixa isso acontecer, seja qual for o
+        # seed recebido.
+        for numero in (100, 1387, 999999999):
+            chave = svc.montar_chave_acesso(
+                uf_ibge="33", data_emissao=datetime.date(2026, 7, 21), cnpj="12345678000199",
+                modelo="55", serie="1", numero=numero, tp_emis="1", codigo_numerico=str(numero),
+            )
+            cnf = chave[35:43]
+            assert int(cnf) != int(numero)
+
+    def test_cnf_nunca_e_sequencia_de_digito_repetido(self):
+        for _ in range(50):
+            cnf = svc._gerar_cnf_valido("0", 0)
+            assert len(set(cnf)) > 1
+
+
+class TestGerarCnfValido:
+    def test_evita_colisao_com_numero_repetidamente(self):
+        for numero in range(1, 30):
+            cnf = svc._gerar_cnf_valido(str(numero), numero)
+            assert int(cnf) != numero
+            assert len(set(cnf)) > 1
+            assert len(cnf) == 8
+
 
 class TestMontarUrlQrcode:
-    def test_url_contem_chave_e_hash(self):
+    def test_url_contem_chave_versao_tpamb_cscid_e_hash(self):
+        """Formato QR Code V2 real (`?p={chave}|2|{tpAmb}|{cscId}|{hash}`)
+        — achado ao vivo 2026-08-23, ver docstring de `montar_url_qrcode`."""
         url = svc.montar_url_qrcode(
             chave_acesso="3" * 44, tp_amb="2", csc_id="000001", csc="segredo-teste", uf_sigla="RJ",
         )
-        assert "chNFe=" + "3" * 44 in url
-        assert "cHashQRCode=" in url
-        assert "tpAmb=2" in url
+        assert "?p=" + "3" * 44 + "|2|2|1|" in url
+        # cscId sem zeros à esquerda (int("000001") == 1).
+        assert url.count("|") == 4
+
+    def test_hash_bate_formula_sha1_maiuscula(self):
+        import hashlib
+        chave = "3" * 44
+        url = svc.montar_url_qrcode(chave_acesso=chave, tp_amb="2", csc_id="000001", csc="segredo-teste", uf_sigla="RJ")
+        seq = f"{chave}|2|2|1"
+        esperado = hashlib.sha1((seq + "segredo-teste").encode("utf-8")).hexdigest().upper()
+        assert url.endswith(f"|{esperado}")
+
+    def test_contingencia_tp_emis_9_usa_formula_offline(self):
+        """Achado real, teste ao vivo 2026-08-26 (1º teste ponta a ponta
+        de Contingência NFC-e): SEFAZ recusa a fórmula ONLINE quando
+        `tpEmis=9` ("Falha no Schema XML... infNFeSupl/qrCode") — o XSD
+        real exige o formato OFFLINE (`chave|2|tpAmb|dia|valor|digHex|
+        cscId|hash`), confirmado contra `nfephp-org/sped-nfe`'s
+        `QRCode::get200`, ramo `tpEmis==9`."""
+        import hashlib
+        chave = "3" * 44
+        dh_emi = datetime.datetime(2026, 8, 26, 14, 30, 0)
+        digest_b64 = "wU8Vkwyurvt9a3yqo6IRyYNfYis="  # 28 chars base64 -> 56 hex chars
+        url = svc.montar_url_qrcode(
+            chave_acesso=chave, tp_amb="1", csc_id="000001", csc="segredo-teste", uf_sigla="RJ",
+            tp_emis="9", dh_emi=dh_emi, valor_total=1.0, digest_value_b64=digest_b64,
+        )
+        dig_hex = "".join(f"{ord(c):02x}" for c in digest_b64)
+        assert len(dig_hex) == 56
+        seq = f"{chave}|2|1|26|1.00|{dig_hex}|1"
+        esperado_hash = hashlib.sha1((seq + "segredo-teste").encode("utf-8")).hexdigest().upper()
+        assert f"?p={seq}|{esperado_hash}" in url
+
+    def test_contingencia_sem_tp_emis_continua_online(self):
+        """`tp_emis` default ("1") preserva o comportamento online já
+        validado ao vivo — nenhuma regressão pros call sites existentes
+        que não passam `tp_emis`."""
+        chave = "3" * 44
+        url = svc.montar_url_qrcode(chave_acesso=chave, tp_amb="2", csc_id="000001", csc="segredo-teste", uf_sigla="RJ")
+        assert url.count("|") == 4
 
 
 class TestMontarXmlNfce:
@@ -167,7 +235,11 @@ class TestMontarXmlNfce:
         assert "<cProd>P001</cProd>" in xml
         assert "<xProd>Produto Teste</xProd>" in xml
         assert "<vNF>20.00</vNF>" in xml
-        assert "<qrCode>https://exemplo/qrcode?x=1</qrCode>" in xml
+        # `infNFeSupl`/qrCode NÃO entra aqui — achado ao vivo 2026-08-23:
+        # é montado depois de assinar, via splice em `emitir_nfce_sync`
+        # (é IRMÃO de `infNFe`, não filho — ver docstring de
+        # `_montar_xml_nfce`), não faz parte do XML pré-assinatura.
+        assert "infNFeSupl" not in xml
         # É XML bem-formado.
         etree.fromstring(xml_bytes)
 
@@ -207,6 +279,53 @@ class TestMontarXmlNfce:
         )
         assert "<CNPJ>12345678000199</CNPJ>" in xml_bytes.decode("utf-8")
 
+    def test_sem_frete_modfrete_9_e_vfrete_zero(self):
+        # Achado real 2026-08-22: default sem frete_valor continua modFrete=9
+        # (mesmo comportamento de antes), mas agora com <vFrete> explícito.
+        xml_bytes, _ = svc._montar_xml_nfce(
+            chave_acesso="4" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", cliente=None, itens=[],
+            forma_pagamento="01", valor_total=50.0, tp_amb="2", numero=1, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), url_qrcode="",
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert "<modFrete>9</modFrete>" in xml
+        assert "<vFrete>0.00</vFrete>" in xml
+        assert "<transporta>" not in xml
+        etree.fromstring(xml_bytes)
+
+    def test_com_frete_e_transportador_modfrete_1_com_dados_reais(self):
+        # DAO_NFE.vb:5436-5476 (ModeloNota="65") — modFrete=1 só quando
+        # frete_valor>0, e <transporta> só entra quando o transportador foi
+        # resolvido pelo chamador (via controle_aux.TRANSPORTADOR_FRETE_NFCE).
+        xml_bytes, _ = svc._montar_xml_nfce(
+            chave_acesso="4" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", cliente=None, itens=[],
+            forma_pagamento="01", valor_total=70.0, tp_amb="2", numero=1, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), url_qrcode="",
+            frete_valor=20.0,
+            transportador={
+                "cgc_cpf": "12345678000100", "nome": "TRANSPORTADORA X", "ie": "ISENTO",
+                "endereco": "RUA DO FRETE 10 CENTRO", "cidade": "RIO DE JANEIRO", "uf": "RJ",
+            },
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert "<modFrete>1</modFrete>" in xml
+        assert "<vFrete>20.00</vFrete>" in xml
+        assert "<transporta><CNPJ>12345678000100</CNPJ><xNome>TRANSPORTADORA X</xNome><IE>ISENTO</IE>" in xml
+        assert "<xMun>RIO DE JANEIRO</xMun><UF>RJ</UF></transporta>" in xml
+        etree.fromstring(xml_bytes)
+
+    def test_com_frete_sem_transportador_modfrete_1_sem_bloco_transporta(self):
+        xml_bytes, _ = svc._montar_xml_nfce(
+            chave_acesso="4" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", cliente=None, itens=[],
+            forma_pagamento="01", valor_total=70.0, tp_amb="2", numero=1, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), url_qrcode="",
+            frete_valor=20.0, transportador=None,
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert "<modFrete>1</modFrete>" in xml
+        assert "<transporta>" not in xml
+        etree.fromstring(xml_bytes)
+
 
 class TestParseNfceXmlParaExibicao:
     def _xml(self):
@@ -219,6 +338,12 @@ class TestParseNfceXmlParaExibicao:
             }], forma_pagamento="01", valor_total=20.0, tp_amb="2", numero=100, serie="1",
             data_emissao=datetime.datetime.now(datetime.timezone.utc), url_qrcode="https://x?a=1&b=2",
         )
+        # `infNFeSupl` é montado fora de `_montar_xml_nfce` (splice pós-
+        # -assinatura em `emitir_nfce_sync`, ver docstring da função) —
+        # simulado aqui pra este teste continuar exercitando o parser
+        # contra um XML no formato real que a produção de fato salva.
+        inf_supl = "<infNFeSupl><qrCode><![CDATA[https://x?a=1&b=2]]></qrCode><urlChave>x</urlChave></infNFeSupl>"
+        xml_bytes = xml_bytes.replace(b"</infNFe>", f"</infNFe>{inf_supl}".encode("utf-8"), 1)
         return xml_bytes.decode("utf-8")
 
     def test_extrai_campos_e_itens(self):
@@ -238,6 +363,94 @@ class TestParseNfceXmlParaExibicao:
         assert svc.parse_nfce_xml_para_exibicao("<not-xml") is None
 
 
+class TestParseNfeXmlParaExibicao:
+    def _xml(self, ibs_cbs_totais_xml="", tp_emis="1", dh_cont=None, x_just=None,
+             paga_frete=None, transportador=None, veiculo=None, volumes=None):
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="12345678000199", nome_emit="EMPRESA TESTE",
+            uf_emit_sigla="RJ",
+            destinatario={
+                "cgc_cpf": "98765432100", "nome": "CLIENTE TESTE", "endereco": "RUA A", "numero": 100,
+                "bairro": "CENTRO", "cod_municipio_ibge": "3300100", "cidade": "RIO DE JANEIRO",
+                "uf": "RJ", "cep": "20000-000", "indIEDest": "9",
+            },
+            itens=[{
+                "codigo_int": "P1", "descricao": "Produto X", "ncm": "12345678", "cfop": "5102", "unidade": "UN",
+                "qtd": 2.0, "valor_unitario": 10.0, "valor_total": 20.0, "origem": 0, "csosn": "102",
+                "cst_pis": "07", "cst_cofins": "07",
+            }], valor_total=20.0, tp_amb="2", numero=100, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), natureza_operacao="Venda",
+            ibs_cbs_totais_xml=ibs_cbs_totais_xml, tp_emis=tp_emis, dh_cont=dh_cont, x_just=x_just,
+            paga_frete=paga_frete, transportador=transportador, veiculo=veiculo, volumes=volumes,
+        )
+        return xml_bytes.decode("utf-8")
+
+    def test_extrai_campos_emitente_destinatario_e_itens(self):
+        r = svc.parse_nfe_xml_para_exibicao(self._xml())
+        assert r["chave_acesso"] == "3" * 44
+        assert r["tp_amb"] == "2"
+        assert r["natureza_operacao"] == "Venda"
+        assert r["tp_nf"] == "1"
+        assert r["emit_nome"] == "EMPRESA TESTE"
+        assert r["dest_doc"] == "98765432100"
+        assert r["dest_nome"] == "CLIENTE TESTE"
+        assert r["dest_endereco"] == "RUA A"
+        assert r["dest_cidade"] == "RIO DE JANEIRO"
+        assert r["dest_uf"] == "RJ"
+        assert r["valor_total"] == 20.0
+        assert r["itens"] == [{
+            "codigo": "P1", "descricao": "Produto X", "ncm": "12345678", "cfop": "5102", "unidade": "UN",
+            "qtd": 2.0, "valor_unitario": 10.0, "valor_total": 20.0,
+        }]
+        assert r["ibs_cbs_totais"] is None
+        assert r["mod_frete"] == "0"
+        assert r["transportador"] is None
+        assert r["veiculo"] is None
+        assert r["volumes"] is None
+
+    def test_transportador_veiculo_volumes_extraidos_quando_presentes(self):
+        # Achado 2026-08-22 (varredura de simplificações): DANFE precisa
+        # conseguir extrair o que `_montar_xml_nfe` agora monta.
+        r = svc.parse_nfe_xml_para_exibicao(self._xml(
+            paga_frete=2,  # -> modFrete=1 (Destinatário/FOB), ver _resolver_mod_frete
+            transportador={"cgc_cpf": "12345678000100", "nome": "TRANSPORTADORA X", "ie": "ISENTO", "uf": "RJ"},
+            veiculo={"placa": "ABC1234", "uf": "RJ"},
+            volumes={"qtd": 2, "especie": "CAIXA", "marca": "MARCA X", "numero": "001", "peso_bruto": 10.5, "peso_liquido": 9.8},
+        ))
+        assert r["mod_frete"] == "1"
+        assert r["transportador"] == {"cgc_cpf": "12345678000100", "nome": "TRANSPORTADORA X", "ie": "ISENTO", "uf": "RJ"}
+        assert r["veiculo"] == {"placa": "ABC1234", "uf": "RJ"}
+        assert r["volumes"] == {
+            "qtd": "2", "especie": "CAIXA", "marca": "MARCA X", "numero": "001",
+            "peso_liquido": "9.800", "peso_bruto": "10.500",
+        }
+
+    def test_ibs_cbs_totais_extraidos_quando_presentes(self):
+        ibs_cbs_xml = (
+            "<IBSCBSTot><vBCIBSCBS>20.00</vBCIBSCBS>"
+            "<gIBS><vDif>0.00</vDif><vDevTrib>0.00</vDevTrib>"
+            "<gIBSUF><vDif>0.00</vDif><vDevTrib>0.00</vDevTrib><vIBSUF>1.00</vIBSUF></gIBSUF>"
+            "<gIBSMun><vDif>0.00</vDif><vDevTrib>0.00</vDevTrib><vIBSMun>0.50</vIBSMun></gIBSMun>"
+            "<vIBS>1.50</vIBS><vCredPres>0.00</vCredPres><vCredPresCondSus>0.00</vCredPresCondSus></gIBS>"
+            "<gCBS><vDif>0.00</vDif><vDevTrib>0.00</vDevTrib><vCBS>1.80</vCBS>"
+            "<vCredPres>0.00</vCredPres><vCredPresCondSus>0.00</vCredPresCondSus></gCBS></IBSCBSTot>"
+        )
+        r = svc.parse_nfe_xml_para_exibicao(self._xml(ibs_cbs_totais_xml=ibs_cbs_xml))
+        assert r["ibs_cbs_totais"] == {"base": "20.00", "valor_ibs": "1.50", "valor_cbs": "1.80"}
+
+    def test_contingencia_extrai_tp_emis_e_justificativa(self):
+        r = svc.parse_nfe_xml_para_exibicao(self._xml(tp_emis="9", dh_cont="2026-08-20T10:00:00-03:00", x_just="Falha na internet do estabelecimento"))
+        assert r["tp_emis"] == "9"
+        assert r["x_just"] == "Falha na internet do estabelecimento"
+        assert r["dh_cont"] == "2026-08-20T10:00:00-03:00"
+
+    def test_xml_vazio_retorna_none(self):
+        assert svc.parse_nfe_xml_para_exibicao("") is None
+
+    def test_xml_invalido_retorna_none(self):
+        assert svc.parse_nfe_xml_para_exibicao("<not-xml") is None
+
+
 class TestMontarEnvelopeAutorizacao:
     def test_envelope_embrulha_em_envinfe_com_indsinc(self):
         xml_nfce = b'<?xml version="1.0" encoding="UTF-8"?><NFe xmlns="http://www.portalfiscal.inf.br/nfe"><infNFe/></NFe>'
@@ -250,6 +463,18 @@ class TestMontarEnvelopeAutorizacao:
 
 def _patch_certificado(monkeypatch, key_pem, cert_pem):
     monkeypatch.setattr(svc.nfe_fiscal_common, "carregar_certificado_sync", lambda cur: (key_pem, cert_pem))
+    # `_montar_emit_xml`/`enderEmit` — achado ao vivo 2026-08-23, ver
+    # docstring de `nfe_fiscal_common.resolver_endereco_emitente_sync`.
+    # `cur=None` nesses testes, então a resolução real (que faria
+    # `cur.execute`) precisa ser mockada também.
+    monkeypatch.setattr(
+        svc.nfe_fiscal_common, "resolver_endereco_emitente_sync",
+        lambda cur: {
+            "inscr_est": "123456", "endereco": "RUA TESTE", "numero": "10", "complemento": "",
+            "bairro": "CENTRO", "cep": "20000000", "cidade": "Rio de Janeiro", "uf": "RJ",
+            "telefone": "2130000000", "cod_municipio": 3304557,
+        },
+    )
 
 
 class TestEmitirNfceSync:
@@ -438,6 +663,85 @@ class TestMontarXmlNfe:
         xml = xml_bytes.decode("utf-8")
         assert "<IBSCBS><CST>000</CST></IBSCBS>" in xml
         assert "<IBSCBSTot><vBCIBSCBS>50.00</vBCIBSCBS></IBSCBSTot>" in xml
+
+    def test_mod_frete_ausente_usa_emitente_nao_sem_transporte(self):
+        """Achado real 2026-08-21 (reauditoria): o hardcode anterior era
+        <modFrete>9</modFrete> sempre — errado. Sem paga_frete informado
+        (caso de frmtranfe.frm, que não tem seletor de frete), o
+        comportamento correto (réplica do branch Else de DAO_NFE.vb) é
+        modFrete=0 (Emitente/CIF), não 9."""
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(), itens=[self._item()], valor_total=50.0, tp_amb="2", numero=1, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), natureza_operacao="Venda",
+        )
+        assert "<modFrete>0</modFrete>" in xml_bytes.decode("utf-8")
+
+    @pytest.mark.parametrize(
+        "paga_frete, mod_frete_esperado",
+        [
+            (0, "0"), (1, "0"),   # Emitente/CIF
+            (2, "1"),             # Destinatário/FOB
+            (3, "2"),             # Terceiros
+            (4, "3"),             # Próprio Remetente
+            (5, "4"),             # Próprio Destinatário
+            (6, "9"),             # Sem transporte
+        ],
+    )
+    def test_mod_frete_traduzido_conforme_paga_frete(self, paga_frete, mod_frete_esperado):
+        """Réplica exata da tabela de `DAO_NFE.vb:5478-5491` (motor
+        compartilhado de emissão do legado) — ver
+        `nfe_emissao_service._resolver_mod_frete`."""
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(), itens=[self._item()], valor_total=50.0, tp_amb="2", numero=1, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), natureza_operacao="Venda",
+            paga_frete=paga_frete,
+        )
+        assert f"<modFrete>{mod_frete_esperado}</modFrete>" in xml_bytes.decode("utf-8")
+        etree.fromstring(xml_bytes)
+
+    def test_sem_transportador_veiculo_volumes_transp_so_com_modfrete(self):
+        # Achado 2026-08-22: default sem nenhum dado de transporte continua
+        # <transp> mínimo (só modFrete), sem sub-blocos vazios no XML.
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(), itens=[self._item()], valor_total=50.0, tp_amb="2", numero=1, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), natureza_operacao="Venda",
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert "<transp><modFrete>0</modFrete></transp>" in xml
+        etree.fromstring(xml_bytes)
+
+    def test_com_transportador_veiculo_volumes_monta_blocos_completos(self):
+        # Achado real 2026-08-22 (varredura de simplificações pendentes):
+        # `nf_aux` já capturava cnpj_transportadora/placa/volumes/
+        # especie_volume/peso_bruto/peso_liquido desde 2026-08-20, mas
+        # nunca chegava ao XML transmitido — corrigido.
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(), itens=[self._item()], valor_total=50.0, tp_amb="2", numero=1, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), natureza_operacao="Venda",
+            paga_frete=1,
+            transportador={"cgc_cpf": "12345678000100", "nome": "TRANSPORTADORA X", "ie": "ISENTO", "uf": "RJ"},
+            veiculo={"placa": "ABC1234", "uf": "RJ"},
+            volumes={"qtd": 2, "especie": "CAIXA", "marca": "MARCA X", "numero": "001", "peso_bruto": 10.5, "peso_liquido": 9.8},
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert "<transporta><CNPJ>12345678000100</CNPJ><xNome>TRANSPORTADORA X</xNome><IE>ISENTO</IE><UF>RJ</UF></transporta>" in xml
+        assert "<veicTransp><placa>ABC1234</placa><UF>RJ</UF></veicTransp>" in xml
+        assert "<vol><qVol>2</qVol><esp>CAIXA</esp><marca>MARCA X</marca><nVol>001</nVol><pesoL>9.800</pesoL><pesoB>10.500</pesoB></vol>" in xml
+        etree.fromstring(xml_bytes)
+
+    def test_volumes_parcial_so_inclui_campos_presentes(self):
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(), itens=[self._item()], valor_total=50.0, tp_amb="2", numero=1, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), natureza_operacao="Venda",
+            volumes={"qtd": 3, "especie": None, "marca": None, "numero": None, "peso_bruto": None, "peso_liquido": None},
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert "<vol><qVol>3</qVol></vol>" in xml
         etree.fromstring(xml_bytes)
 
 

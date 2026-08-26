@@ -10,6 +10,10 @@ import { Ionicons } from "@/src/components/Ionicons";
 
 import DateField from "@/src/components/DateField";
 import WebDateField from "@/src/components/WebDateField";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import AccordionSection from "@/src/components/pedido/AccordionSection";
+import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
+import { useClienteSearchModal } from "@/src/hooks/useClienteSearchModal";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
@@ -52,6 +56,7 @@ export default function RelatorioDescontosConcedidosScreen() {
   const [dataFim, setDataFim] = useState<string | null>(todayISO());
   const [tipo, setTipo] = useState<Tipo>("todos");
   const [clienteFiltro, setClienteFiltro] = useState("");
+  const clienteSearch = useClienteSearchModal(conn);
 
   const [loading, setLoading] = useState(false);
   const [resultado, setResultado] = useState<DescontosConcedidosPayload | null>(null);
@@ -139,6 +144,7 @@ export default function RelatorioDescontosConcedidosScreen() {
       <ScrollView contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]} keyboardShouldPersistTaps="handled">
         <View style={isWeb ? styles.webShell : undefined}>
           <View style={[styles.filters, isWeb && styles.filtersWeb]}>
+          <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="reldc-filtros">
             <Text style={styles.fieldLabel}>Origem</Text>
             <View style={styles.chipRow}>
               {([
@@ -191,14 +197,20 @@ export default function RelatorioDescontosConcedidosScreen() {
             </View>
 
             <Text style={styles.fieldLabel}>Cliente (nome contém — opcional)</Text>
-            <TextInput
-              value={clienteFiltro}
-              onChangeText={setClienteFiltro}
-              placeholder="Ex.: João, Mercado…"
-              placeholderTextColor={colors.muted}
-              style={styles.input}
-              testID="reldc-cliente"
-            />
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+              <TextInput
+                value={clienteFiltro}
+                onChangeText={setClienteFiltro}
+                placeholder="Ex.: João, Mercado…"
+                placeholderTextColor={colors.muted}
+                style={[styles.input, { flex: 1, minWidth: 0 }]}
+                testID="reldc-cliente"
+              />
+              <IconButtonWithTooltip
+                icon="search-outline" label="Buscar Cliente" onPress={clienteSearch.openModal}
+                size={20} color={colors.brandPrimary} testID="reldc-cliente-buscar"
+              />
+            </View>
 
             <View style={styles.actionsRow}>
               <Pressable
@@ -228,6 +240,7 @@ export default function RelatorioDescontosConcedidosScreen() {
                 </>
               ) : null}
             </View>
+          </AccordionSection>
           </View>
 
           {resultado ? (
@@ -285,6 +298,16 @@ export default function RelatorioDescontosConcedidosScreen() {
           ) : null}
         </View>
       </ScrollView>
+      <ClientSearchModal
+        visible={clienteSearch.open}
+        onClose={clienteSearch.closeModal}
+        term={clienteSearch.term}
+        setTerm={clienteSearch.setTerm}
+        loading={clienteSearch.loading}
+        results={clienteSearch.results}
+        onPick={(c) => { setClienteFiltro(c.nome); clienteSearch.closeModal(); }}
+        onCreate={clienteSearch.closeModal}
+      />
     </SafeAreaView>
   );
 }

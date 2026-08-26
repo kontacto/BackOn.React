@@ -31,6 +31,15 @@ type StatusContingencia = {
   tipo_contingencia?: number;
 };
 
+type NotaPendente = {
+  codigo: number;
+  num_nf: number;
+  serie_nf: string;
+  chave_acesso: string;
+  valor_total: number;
+  data_nf: string;
+};
+
 const CONTINGENCIA_AJUDA_ITENS: HelpItem[] = [
   {
     titulo: "O que é contingência",
@@ -44,9 +53,14 @@ const CONTINGENCIA_AJUDA_ITENS: HelpItem[] = [
   },
   {
     titulo: "Fechar contingência",
-    texto: "Assim que o SEFAZ voltar, feche a contingência aqui — isso não retransmite nada automaticamente ainda, é só o registro de quando o período terminou.",
+    texto: "Registra quando o período de indisponibilidade do SEFAZ terminou — não retransmite nada sozinho.",
     icon: { lib: "ion", name: "checkmark-circle-outline" },
     cor: colors.warning,
+  },
+  {
+    titulo: "Validar notas pendentes",
+    texto: "NF-e emitidas durante a contingência ficam \"aguardando\" até você validar — isso transmite de verdade ao SEFAZ, usando a mesma nota já assinada. Pode ser feito antes ou depois de fechar a contingência.",
+    icon: { lib: "ion", name: "cloud-upload-outline" },
   },
 ];
 
@@ -66,8 +80,10 @@ export default function ContingenciaNfeScreen() {
   const [conn, setConn] = useState<Connection | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [processando, setProcessando] = useState(false);
+  const [validandoCodigo, setValidandoCodigo] = useState<number | "todas" | null>(null);
   const [ajudaVisivel, setAjudaVisivel] = useState(false);
   const [status, setStatus] = useState<StatusContingencia>({ aberta: false });
+  const [pendentes, setPendentes] = useState<NotaPendente[]>([]);
 
   const [motivo, setMotivo] = useState("");
   const [tipo, setTipo] = useState<2 | 5>(2);
@@ -86,11 +102,17 @@ export default function ContingenciaNfeScreen() {
     if (!c) return;
     setCarregando(true);
     try {
+      const base = c.api.replace(/\/+$/, "");
       const qs = `servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`;
-      const r = await fetch(`${c.api.replace(/\/+$/, "")}/api/contingencia-nfe/status?${qs}`);
-      const j = await r.json();
-      if (j?.success) setStatus(j);
-      else fb.showError(friendlyApiError(j, "Não foi possível consultar a contingência."));
+      const [rStatus, rPendentes] = await Promise.all([
+        fetch(`${base}/api/contingencia-nfe/status?${qs}`),
+        fetch(`${base}/api/contingencia-nfe/pendentes?${qs}`),
+      ]);
+      const jStatus = await rStatus.json();
+      const jPendentes = await rPendentes.json();
+      if (jStatus?.success) setStatus(jStatus);
+      else fb.showError(friendlyApiError(jStatus, "Não foi possível consultar a contingência."));
+      if (jPendentes?.success) setPendentes(jPendentes.pendentes || []);
     } catch (e) {
       fb.showError(friendlyCatchError(e));
     } finally {
@@ -102,6 +124,33 @@ export default function ContingenciaNfeScreen() {
     carregarStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const validarPendentes = async (notas: number[], marcador: number | "todas") => {
+    const c = await ensureConn();
+    if (!c || notas.length === 0) return;
+    setValidandoCodigo(marcador);
+    try {
+      const body = {
+        servidor: c.servidor, banco: c.banco, notas,
+        usuario_alteracao: usuarioCodigo, classe, plataforma: "web", master: isMaster,
+      };
+      const r = await fetch(`${c.api.replace(/\/+$/, "")}/api/contingencia-nfe/validar`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (j?.success) {
+        fb.showSuccess("Nota(s) validada(s) e transmitida(s) ao SEFAZ.", undefined, 5000);
+      } else {
+        const falha = (j?.resultados || []).find((x: any) => !x.success);
+        fb.showError(falha?.message || friendlyApiError(j, "Não foi possível validar as notas pendentes."), undefined, 5000);
+      }
+      carregarStatus();
+    } catch (e) {
+      fb.showError(friendlyCatchError(e));
+    } finally {
+      setValidandoCodigo(null);
+    }
+  };
 
   const abrir = async () => {
     if (motivo.trim().length < 15) { fb.showWarning("Informe um motivo com pelo menos 15 caracteres."); return; }
@@ -223,6 +272,50 @@ export default function ContingenciaNfeScreen() {
                 ) : null}
               </View>
             )}
+
+            {pendentes.length > 0 ? (
+              <View style={styles.card} testID="contingencia-nfe-pendentes">
+                <View style={styles.statusRow}>
+                  <Ionicons name="cloud-upload-outline" size={22} color={colors.brandPrimary} />
+                  <Text style={styles.statusTitulo}>Notas pendentes de validação ({pendentes.length})</Text>
+                </View>
+                <Text style={styles.hint}>Emitidas em contingência, ainda não transmitidas de verdade ao SEFAZ.</Text>
+
+                {canGravar ? (
+                  <Pressable
+                    onPress={() => validarPendentes(pendentes.map((p) => p.codigo), "todas")}
+                    disabled={validandoCodigo !== null}
+                    style={styles.primaryBtn}
+                    testID="contingencia-nfe-validar-todas"
+                  >
+                    {validandoCodigo === "todas" ? <ActivityIndicator color="#fff" size="small" /> : (
+                      <><Ionicons name="cloud-upload-outline" size={16} color="#fff" /><Text style={styles.primaryBtnText}>Validar Todas</Text></>
+                    )}
+                  </Pressable>
+                ) : null}
+
+                {pendentes.map((p) => (
+                  <View key={p.codigo} style={styles.pendenteRow} testID={`contingencia-nfe-pendente-${p.codigo}`}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.pendenteTitulo}>NF-e {p.num_nf}/{p.serie_nf}</Text>
+                      <Text style={styles.hint}>{p.data_nf} · R$ {Number(p.valor_total || 0).toFixed(2)}</Text>
+                    </View>
+                    {canGravar ? (
+                      <Pressable
+                        onPress={() => validarPendentes([p.codigo], p.codigo)}
+                        disabled={validandoCodigo !== null}
+                        style={styles.secondaryBtn}
+                        testID={`contingencia-nfe-validar-${p.codigo}`}
+                      >
+                        {validandoCodigo === p.codigo ? <ActivityIndicator color={colors.brandPrimary} size="small" /> : (
+                          <Text style={styles.secondaryBtnText}>Validar</Text>
+                        )}
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
         </ScrollView>
       )}
@@ -259,4 +352,9 @@ const styles = StyleSheet.create({
 
   primaryBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: colors.brandPrimary, borderRadius: radius.sm, paddingVertical: 12, marginTop: spacing.lg },
   primaryBtnText: { color: "#fff", fontWeight: "600", fontSize: 14 },
+
+  pendenteRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border, paddingVertical: spacing.sm, marginTop: spacing.sm },
+  pendenteTitulo: { fontSize: 13, fontWeight: "600", color: colors.onSurface },
+  secondaryBtn: { borderWidth: 1, borderColor: colors.brandPrimary, borderRadius: radius.sm, paddingHorizontal: spacing.md, paddingVertical: 8, minWidth: 80, alignItems: "center" },
+  secondaryBtnText: { color: colors.brandPrimary, fontWeight: "600", fontSize: 13 },
 });

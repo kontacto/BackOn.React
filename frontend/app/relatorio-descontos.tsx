@@ -6,6 +6,10 @@ import { Ionicons } from "@/src/components/Ionicons";
 
 import DateField from "@/src/components/DateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import AccordionSection from "@/src/components/pedido/AccordionSection";
+import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
+import { useClienteSearchModal } from "@/src/hooks/useClienteSearchModal";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { exportReportPdf } from "@/src/utils/export-report";
@@ -114,6 +118,7 @@ export default function RelatorioDescontosScreen() {
   const [vendedorOpts, setVendedorOpts] = useState<SelectOption[]>([]);
   const [vendedor, setVendedor] = useState<string | number | null>(null);
   const [clienteFiltro, setClienteFiltro] = useState<string>("");
+  const clienteSearch = useClienteSearchModal(conn);
   const [codigoFiltro, setCodigoFiltro] = useState<string>(pedidoParam ? String(pedidoParam) : "");
   // Filtro "Projeto" — Gestor de Projetos Fase 4 (recurso extra, sem
   // equivalente no legado). Só filtra a origem Pedido (`/api/relatorios/
@@ -281,6 +286,7 @@ export default function RelatorioDescontosScreen() {
         <View style={isWeb ? styles.webShell : undefined}>
         {!pedidoParam ? (
           <View style={[styles.filters, isWeb && styles.filtersWeb]}>
+          <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="rel-filtros">
             <Text style={styles.fieldLabel}>Origem</Text>
             <View style={styles.origemRow}>
               {([
@@ -322,15 +328,21 @@ export default function RelatorioDescontosScreen() {
               testID="rel-vendedor"
             />
             <Text style={styles.fieldLabel}>Cliente (nome contém — opcional)</Text>
-            <TextInput
-              value={clienteFiltro}
-              onChangeText={setClienteFiltro}
-              placeholder="Ex.: João, Mercado…"
-              placeholderTextColor={colors.muted}
-              style={styles.input}
-              autoCapitalize="characters"
-              testID="rel-cliente"
-            />
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+              <TextInput
+                value={clienteFiltro}
+                onChangeText={setClienteFiltro}
+                placeholder="Ex.: João, Mercado…"
+                placeholderTextColor={colors.muted}
+                style={[styles.input, { flex: 1, minWidth: 0 }]}
+                autoCapitalize="characters"
+                testID="rel-cliente"
+              />
+              <IconButtonWithTooltip
+                icon="search-outline" label="Buscar Cliente" onPress={clienteSearch.openModal}
+                size={20} color={colors.brandPrimary} testID="rel-cliente-buscar"
+              />
+            </View>
             <Text style={styles.fieldLabel}>Código (Pedido / OS) (opcional)</Text>
             <TextInput
               value={codigoFiltro}
@@ -364,6 +376,7 @@ export default function RelatorioDescontosScreen() {
                 </>
               )}
             </Pressable>
+          </AccordionSection>
           </View>
         ) : loading ? (
           <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 24 }} />
@@ -442,6 +455,16 @@ export default function RelatorioDescontosScreen() {
         ) : null}
         </View>
       </ScrollView>
+      <ClientSearchModal
+        visible={clienteSearch.open}
+        onClose={clienteSearch.closeModal}
+        term={clienteSearch.term}
+        setTerm={clienteSearch.setTerm}
+        loading={clienteSearch.loading}
+        results={clienteSearch.results}
+        onPick={(c) => { setClienteFiltro(c.nome); clienteSearch.closeModal(); }}
+        onCreate={clienteSearch.closeModal}
+      />
     </SafeAreaView>
   );
 }

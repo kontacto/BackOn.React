@@ -139,7 +139,6 @@ export default function PedidosTable({ movimento, dashLoading, totalMovimento, s
             <AccordionSection
               key={g.tipo}
               title={`${g.label} (${g.itens.length}) · ${formatBRL(g.subtotal)}`}
-              defaultExpanded
               testID={`mov-grupo-${g.tipo}`}
             >
               {g.itens.map(renderRow)}

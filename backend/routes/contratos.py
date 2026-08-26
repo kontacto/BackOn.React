@@ -383,6 +383,12 @@ class ItemFaturarRequest(BaseModel):
     codigo: int
     valor_total: float
     vencimento: Optional[str] = None
+    # "N"/"B"/"R" (Nota Fiscal/Boleto/Recibo) — vem de `tipo_doc` já
+    # resolvido por `GET /contratos/faturar/listar`. Só informa o
+    # frontend se este contrato é elegível pra mostrar os botões de
+    # emissão (Nota Fiscal/Boleto) — nunca dispara emissão automática
+    # (ver `POST /contratos/faturar/emitir` abaixo).
+    tipo_doc: Optional[str] = None
 
 
 class FaturarContratosRequest(AuditFields):
@@ -391,12 +397,16 @@ class FaturarContratosRequest(AuditFields):
     ano: int
     mes: int
     itens: list[ItemFaturarRequest]
+    master: Optional[bool] = False
 
 
 @router.post("/contratos/faturar")
 async def faturar_contratos(req: FaturarContratosRequest, request: Request):
     itens = [i.model_dump() for i in req.itens]
-    result = await contratos_service.faturar_contratos(req.servidor, req.banco, req.ano, req.mes, itens, req.usuario_alteracao)
+    result = await contratos_service.faturar_contratos(
+        req.servidor, req.banco, req.ano, req.mes, itens, req.usuario_alteracao,
+        classe=req.classe, master=bool(req.master),
+    )
     if result.get("success"):
         ok = [r for r in result.get("resultados", []) if r.get("success")]
         for r in ok:
@@ -405,6 +415,32 @@ async def faturar_contratos(req: FaturarContratosRequest, request: Request):
                 referencia=r.get("comanda"),
                 descricao=f"Contrato {r.get('codigo')} faturado (comanda {r.get('comanda')}, ref. {req.mes}/{req.ano})",
             )
+    return result
+
+
+class EmitirDocumentoContratoRequest(AuditFields):
+    servidor: str
+    banco: str
+    tipo: str  # "nfe" (produto) ou "nfse" (serviço)
+    comanda: int
+    master: Optional[bool] = False
+
+
+@router.post("/contratos/faturar/emitir")
+async def emitir_documento_contrato(req: EmitirDocumentoContratoRequest, request: Request):
+    """Ação separada e opcional (nunca automática — ver `contratos_
+    service._emitir_documento_contrato_sync`). Reaproveita os mesmos
+    motores de Agrupar Comandas (NF-e/NFS-e) já usados em outras telas."""
+    result = await contratos_service.emitir_documento_contrato(
+        req.servidor, req.banco, req.tipo, req.comanda, req.usuario_alteracao,
+        classe=req.classe, master=bool(req.master),
+    )
+    if result.get("success"):
+        await _log(
+            req, request, tela="FATURAR_CONTR", comando="EMITIR_NF",
+            referencia=req.comanda,
+            descricao=f"{'NF-e' if req.tipo == 'nfe' else 'NFS-e'} emitida pra comanda {req.comanda}",
+        )
     return result
 
 
@@ -423,4 +459,39 @@ async def gerar_recibo(req: GerarReciboRequest, request: Request):
     result = await contratos_service.gerar_recibo(req.servidor, req.banco, req.contrato, req.comanda, req.ano_ref, req.mes_ref, req.descreve_os)
     if result.get("success"):
         await _log(req, request, tela="FATURAR_CONTR", comando="RECIBO", referencia=req.comanda, descricao=f"Recibo {result.get('numero')} gerado para a comanda {req.comanda}")
+    return result
+
+
+# ==================== Envio de Cobrança (Geral\FrmEnvCob.frm) ====================
+
+@router.get("/contratos/cobrancas")
+async def listar_cobrancas(
+    servidor: str, banco: str,
+    ano: Optional[int] = None, mes: Optional[int] = None,
+    data_ini: Optional[str] = None, data_fim: Optional[str] = None,
+    status: Optional[str] = None,
+):
+    status_lista = [s for s in (status or "").split(",") if s.strip()] if status else None
+    return await contratos_service.listar_cobrancas(servidor, banco, ano, mes, data_ini, data_fim, status_lista)
+
+
+class EnviarCobrancasRequest(AuditFields):
+    servidor: str
+    banco: str
+    ids: list[int]
+
+
+@router.post("/contratos/cobrancas/enviar")
+async def enviar_cobrancas(req: EnviarCobrancasRequest, request: Request):
+    """Envio real de e-mail (Fase 1, sem anexo — ver `contratos_service.
+    py` > "Envio de Cobrança" pro escopo confirmado). Nunca dispara
+    sozinho — só quando o usuário seleciona e confirma na tela."""
+    result = await contratos_service.enviar_cobrancas(req.servidor, req.banco, req.ids)
+    if result.get("success"):
+        ok = [r for r in result.get("resultados", []) if r.get("success")]
+        for r in ok:
+            await _log(
+                req, request, tela="ENVIO_COBRANCA", comando="ENVIAR",
+                referencia=r.get("codigo"), descricao=f"E-mail de cobrança {r.get('codigo')} enviado",
+            )
     return result

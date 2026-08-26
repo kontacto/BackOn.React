@@ -8,11 +8,10 @@
 // retorno-bancario.tsx foi removida, seu conteúdo virou a aba "Importação
 // Retorno" abaixo.
 //
-// Fase 1 da aba Geração/Envio (ver PENDENCIAS.md > "Geração de Boletos"):
-// filtros + grade de títulos + Gerar Remessa (reaproveita os motores CNAB
-// já prontos) + Gerar Planilha (Excel). Emissão do PDF do boleto (com
-// código de barras) e envio por e-mail ficam de fora — motor de desenho
-// visual do boleto ainda não existe neste projeto.
+// Aba Geração/Envio (ver PENDENCIAS.md > "Boleto em PDF"): filtros + grade
+// de títulos + Gerar Remessa (reaproveita os motores CNAB já prontos) +
+// Gerar Planilha (Excel) + (2026-08-26) Baixar PDF/Enviar por Email —
+// código de barras real, ver backend/services/boleto_pdf_service.py.
 //
 // Simplificação deliberada: "Gerar Remessa" chama o MESMO endpoint
 // genérico já usado em bancos.tsx (todos os títulos pendentes do banco,
@@ -45,7 +44,7 @@ import { usePermissions } from "@/src/permissions";
 import { useAuditContext } from "@/src/hooks/useAuditContext";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import LockedView from "@/src/components/LockedView";
-import { apiGet, apiSend, friendlyApiError, friendlyCatchError } from "@/src/utils/api";
+import { apiBase, apiGet, apiSend, friendlyApiError, friendlyCatchError } from "@/src/utils/api";
 import { exportSheetsToXlsx } from "@/src/utils/export-xlsx";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
@@ -67,6 +66,7 @@ type ItemBaixa = {
   data_pag: string | null; valor_pago: number; juros: number; desconto: number; ja_baixado: boolean;
   encontrado: boolean;
 };
+type ResultadoEnvioBoleto = { codigo: number; success: boolean; message: string | null };
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -96,6 +96,8 @@ export default function GeracaoBoletosScreen() {
   const canRemessa = can("GERACAO_BOLETOS.GERAR_REMESSA") || isMaster;
   const canExportar = can("GERACAO_BOLETOS.EXPORTAR") || isMaster;
   const canBaixar = can("RETORNO_BANC.BAIXAR") || isMaster;
+  const canPdf = can("GERACAO_BOLETOS.PDF") || isMaster;
+  const canEmail = can("GERACAO_BOLETOS.EMAIL") || isMaster;
 
   const [aba, setAba] = useState<"geracao" | "retorno">(canAbrirGeracao ? "geracao" : "retorno");
 
@@ -132,6 +134,9 @@ export default function GeracaoBoletosScreen() {
   const [selecionadosGeracao, setSelecionadosGeracao] = useState<Set<number>>(new Set());
   const [carregando, setCarregando] = useState(false);
   const [remessaSaving, setRemessaSaving] = useState(false);
+  const [pdfSaving, setPdfSaving] = useState(false);
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [resultadosEmail, setResultadosEmail] = useState<ResultadoEnvioBoleto[] | null>(null);
   const [ajudaOpen, setAjudaOpen] = useState(false);
 
   // Aba Importação Retorno
@@ -327,6 +332,84 @@ export default function GeracaoBoletosScreen() {
       Registrado: it.registrado ? "Sim" : "Não", Parcela: it.parcela_info,
     }));
     exportSheetsToXlsx(`boletos_${new Date().toISOString().slice(0, 10)}.xlsx`, [{ name: "Boletos", rows: linhas }]);
+  };
+
+  const titulosSelecionadosParaAcao = (): number[] | null => {
+    if (itens.length === 0) { fb.showWarning("Selecione os títulos na grade primeiro (clique em \"Selecionar\")."); return null; }
+    const sel = Array.from(selecionadosGeracao);
+    if (sel.length === 0) { fb.showWarning("Selecione ao menos um título."); return null; }
+    return sel;
+  };
+
+  // Gera o PDF dos boletos marcados na grade — registra cada título no
+  // banco escolhido (idempotente, ver boleto_pdf_service.py) e baixa um
+  // único PDF multi-página com o código de barras real.
+  const baixarPdf = async () => {
+    if (!conn || !bancoCod) return;
+    const titulos = titulosSelecionadosParaAcao();
+    if (!titulos) return;
+    setPdfSaving(true);
+    try {
+      const resp = await fetch(`${apiBase(conn)}/api/geracao-boletos/${bancoCod}/pdf`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...auditCtx, servidor: conn.servidor, banco: conn.banco, titulos }),
+      });
+      const contentType = resp.headers.get("content-type") || "";
+      if (!resp.ok || !contentType.includes("application/pdf")) {
+        const j = await resp.json().catch(() => null);
+        fb.showError(friendlyApiError(j, "Falha ao gerar o PDF do boleto."));
+        return;
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "boletos.pdf"; a.click();
+      URL.revokeObjectURL(url);
+      fb.showSuccess(`PDF gerado com ${titulos.length} boleto(s).`);
+      selecionar();
+    } catch (e) {
+      fb.showError(friendlyCatchError(e, "Falha ao gerar o PDF do boleto."));
+    } finally {
+      setPdfSaving(false);
+    }
+  };
+
+  // Envia por e-mail (com o boleto em PDF anexado) os títulos marcados —
+  // pra cada um: registra o título no banco (mesma gravação do PDF),
+  // resolve o e-mail do cliente e dispara via email_cobranca_service.
+  const executarEnvioEmail = async (titulos: number[]) => {
+    if (!conn || !bancoCod) return;
+    setEmailSaving(true);
+    setResultadosEmail(null);
+    try {
+      const j = await apiSend(conn, `/api/geracao-boletos/${bancoCod}/enviar-email`, "POST", {
+        ...auditCtx, servidor: conn.servidor, banco: conn.banco, titulos,
+      });
+      if (j?.success) {
+        const resultados: ResultadoEnvioBoleto[] = j.resultados || [];
+        setResultadosEmail(resultados);
+        const sucessos = resultados.filter((r) => r.success).length;
+        fb.showSuccess(`${sucessos} de ${resultados.length} boleto(s) enviado(s) com sucesso.`, undefined, 5000);
+        selecionar();
+      } else {
+        fb.showError(friendlyApiError(j, "Falha ao enviar boletos por e-mail."));
+      }
+    } catch (e) {
+      fb.showError(friendlyCatchError(e, "Falha ao enviar boletos por e-mail."));
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
+  const enviarEmailBoletos = () => {
+    const titulos = titulosSelecionadosParaAcao();
+    if (!titulos) return;
+    fb.showConfirm(
+      `Enviar o boleto por e-mail para ${titulos.length} cliente(s) selecionado(s)?`,
+      () => executarEnvioEmail(titulos),
+      { confirmText: "Enviar", cancelText: "Cancelar" }
+    );
   };
 
   // --- Aba Importação Retorno ---
@@ -553,8 +636,36 @@ export default function GeracaoBoletosScreen() {
                       <Text style={styles.secondaryBtnText}>Gerar Planilha</Text>
                     </Pressable>
                   ) : null}
+                  {canPdf ? (
+                    <Pressable onPress={baixarPdf} disabled={pdfSaving || !bancoCod} style={({ pressed }) => [styles.secondaryBtn, (pressed || pdfSaving) && { opacity: 0.8 }]} testID="geracao-boletos-baixar-pdf">
+                      {pdfSaving ? (
+                        <><ActivityIndicator size="small" color={colors.brandPrimary} /><Text style={styles.secondaryBtnText}>Gerando PDF…</Text></>
+                      ) : (
+                        <><Ionicons name="document-outline" size={16} color={colors.brandPrimary} /><Text style={styles.secondaryBtnText}>Baixar PDF</Text></>
+                      )}
+                    </Pressable>
+                  ) : null}
+                  {canEmail ? (
+                    <Pressable onPress={enviarEmailBoletos} disabled={emailSaving || !bancoCod} style={({ pressed }) => [styles.secondaryBtn, (pressed || emailSaving) && { opacity: 0.8 }]} testID="geracao-boletos-enviar-email">
+                      {emailSaving ? (
+                        <><ActivityIndicator size="small" color={colors.brandPrimary} /><Text style={styles.secondaryBtnText}>Enviando…</Text></>
+                      ) : (
+                        <><Ionicons name="mail-outline" size={16} color={colors.brandPrimary} /><Text style={styles.secondaryBtnText}>Enviar por Email</Text></>
+                      )}
+                    </Pressable>
+                  ) : null}
                 </View>
               </View>
+
+              {resultadosEmail && resultadosEmail.length > 0 ? (
+                <View style={styles.resumoCard}>
+                  {resultadosEmail.map((r) => (
+                    <Text key={r.codigo} style={[styles.resumoTexto, !r.success && { color: colors.error }]}>
+                      {r.success ? "✓" : "✗"} Título #{r.codigo}: {r.message || (r.success ? "Enviado com sucesso" : "Falha ao enviar")}
+                    </Text>
+                  ))}
+                </View>
+              ) : null}
 
               {itens.length > 0 ? (
                 <View style={styles.gridCard}>
@@ -760,6 +871,14 @@ export default function GeracaoBoletosScreen() {
             <Text style={styles.helpItem}>
               <Text style={styles.helpItemTitle}>Aba Geração/Envio — Taxa Bancária / Multa{"\n"}</Text>
               Valores estimados a partir da configuração do banco (tarifa de cobrança, % de multa e mora) — só informativos nesta tela, não emitem boleto.
+            </Text>
+            <Text style={styles.helpItem}>
+              <Text style={styles.helpItemTitle}>Aba Geração/Envio — Baixar PDF{"\n"}</Text>
+              Gera um PDF com o boleto (código de barras e linha digitável reais, layout padrão de todos os bancos) dos títulos marcados na grade — se algum ainda não tinha sido registrado no banco escolhido, isso acontece automaticamente agora, do mesmo jeito que "Gerar Remessa" já faz.
+            </Text>
+            <Text style={styles.helpItem}>
+              <Text style={styles.helpItemTitle}>Aba Geração/Envio — Enviar por Email{"\n"}</Text>
+              Envia o boleto em PDF por e-mail pra cada cliente selecionado na grade, usando o e-mail de cobrança cadastrado no cliente. Sem e-mail cadastrado, o título aparece na lista de resultado com "Sem e-mail cadastrado" e não é enviado.
             </Text>
             <Text style={styles.helpItem}>
               <Text style={styles.helpItemTitle}>Aba Importação Retorno — Selecionar Arquivo{"\n"}</Text>

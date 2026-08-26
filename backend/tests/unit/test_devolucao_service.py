@@ -117,6 +117,17 @@ class TestListItensVenda:
         assert result["success"] is False
         assert result["items"] == []
 
+    def test_bloqueia_data_final_no_futuro(self, monkeypatch):
+        """Achado real (`Critica`, `FrmManDev.frm:1054-1058`): "A Data
+        Final deve ter Valor Máximo: DATESIST"."""
+        import datetime
+        amanha = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        cur = FakeCursor(one=[{"devolucao": 1}])
+        _patch(monkeypatch, cur)
+        result = svc._list_itens_venda_sync(_buscar_req(data_fim=amanha))
+        assert result["success"] is False
+        assert "data final" in result["message"].lower()
+
 
 class TestRegistrarDevolucao:
     def test_registra_sem_vale(self, monkeypatch):
@@ -139,7 +150,7 @@ class TestRegistrarDevolucao:
         cur = FakeCursor(
             one=[
                 {"devolucao": 1},
-                {"id_mov": 10, "qtd": 5.0, "p_unit": 20.0, "situacao": "PG", "estornado": 0},
+                {"id_mov": 10, "qtd": 5.0, "p_unit": 20.0, "situacao": "PG", "estornado": 0, "cliente_venda": 123},
                 {"qtd": 0},
                 {"id_devolucao": 900},
                 {"codvale": 55},
@@ -155,6 +166,56 @@ class TestRegistrarDevolucao:
         assert conn.committed is True
         assert any("INSERT INTO vale_devolucao" in q for q, _ in cur.queries)
         assert any("UPDATE devolucao_itens SET vale_devolucao" in q for q, _ in cur.queries)
+        # Achado real (`FrmManDev.frm:1537-1540`): mesmo cliente da venda —
+        # não precisa consultar `cliente.cgc_cpf` (caminho rápido).
+        assert not any("cgc_cpf" in q for q, _ in cur.queries)
+
+    def test_registra_com_vale_para_cliente_da_propria_empresa(self, monkeypatch):
+        """Achado real (`FrmManDev.frm:1537-1540` + `Form_Load:2271-2287`,
+        `ClienteControle`): Vale também é permitido pra um cliente
+        cadastrado com o CNPJ da própria empresa, mesmo não sendo o
+        cliente da venda original."""
+        cur = FakeCursor(
+            one=[
+                {"devolucao": 1},
+                {"id_mov": 10, "qtd": 5.0, "p_unit": 20.0, "situacao": "PG", "estornado": 0, "cliente_venda": 1},
+                {"ok": 1},  # cliente 999 tem cgc_cpf = controle.cgc
+                {"qtd": 0},
+                {"id_devolucao": 900},
+                {"codvale": 55},
+            ],
+        )
+        conn = _patch(monkeypatch, cur)
+        req = _registrar_req(
+            [DevolucaoItemRegistrar(id_mov=10, qtd_devolvida=2, motivo=1)],
+            emitir_vale=True, cliente=999,
+        )
+        result = svc._registrar_devolucao_sync(req)
+        assert result["success"] is True
+        assert conn.committed is True
+
+    def test_bloqueia_vale_para_cliente_nao_relacionado_a_venda(self, monkeypatch):
+        """Achado real (`FrmManDev.frm:1537-1540`): "Devolução permitida
+        somente para o proprio cliente da venda ou em nome da propria
+        empresa!" — cliente do Vale sem relação com a venda nem com o
+        CNPJ da empresa é bloqueado."""
+        cur = FakeCursor(
+            one=[
+                {"devolucao": 1},
+                {"id_mov": 10, "qtd": 5.0, "p_unit": 20.0, "situacao": "PG", "estornado": 0, "cliente_venda": 1},
+                None,  # cliente 999 NÃO tem cgc_cpf = controle.cgc
+            ],
+        )
+        conn = _patch(monkeypatch, cur)
+        req = _registrar_req(
+            [DevolucaoItemRegistrar(id_mov=10, qtd_devolvida=2, motivo=1)],
+            emitir_vale=True, cliente=999,
+        )
+        result = svc._registrar_devolucao_sync(req)
+        assert result["success"] is False
+        assert "próprio cliente" in result["message"].lower()
+        assert conn.committed is False
+        assert conn.rolled is True
 
     def test_bloqueia_vale_sem_cliente(self, monkeypatch):
         cur = FakeCursor(one=[{"devolucao": 1}])

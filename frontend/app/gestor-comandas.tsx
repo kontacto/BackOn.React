@@ -21,6 +21,8 @@ import WebDateField from "@/src/components/WebDateField";
 import AccordionSection from "@/src/components/pedido/AccordionSection";
 import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
+import { useClienteSearchModal } from "@/src/hooks/useClienteSearchModal";
 
 import { usePermissions } from "@/src/permissions";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
@@ -30,9 +32,9 @@ import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { exportSheetsToXlsx } from "@/src/utils/export-xlsx";
-import { printHtml, escHtml } from "@/src/utils/printHtml";
+import { printHtml, printFullHtml, escHtml } from "@/src/utils/printHtml";
 import { fetchEmpresaHeader, buildReportHeaderHtml, REPORT_HEADER_CSS } from "@/src/utils/print-report-header";
-import { buildDanfceHtml, buildDanfseHtml } from "@/src/utils/danfeFacsimile";
+import { buildDanfceHtml, buildDanfseHtml, buildDanfeHtml } from "@/src/utils/danfeFacsimile";
 import { friendlyApiError } from "@/src/utils/api";
 import { formatBRL } from "@/src/utils/format";
 import { comandasFiltrosKey, loadComandasFiltros, saveComandasFiltros } from "@/src/utils/storage/comandasFilters";
@@ -137,6 +139,7 @@ export default function GestorComandasScreen() {
   const [dataFim, setDataFim] = useState<string | null>(todayIso());
   const [comandaNum, setComandaNum] = useState("");
   const [clienteTermo, setClienteTermo] = useState("");
+  const clienteSearch = useClienteSearchModal(conn);
   const [cupom, setCupom] = useState("");
   const [nfce, setNfce] = useState("");
   const [nf, setNf] = useState("");
@@ -317,6 +320,11 @@ export default function GestorComandasScreen() {
         printHtml(buildDanfseHtml(j.chave_acesso, j.numero_dps, j.serie_dps, j.data_emissao, j.valor, j.detalhe), "DANFSe");
         return;
       }
+      if (j.tipo === "NF" && j.detalhe) {
+        const empresaNf = await fetchEmpresaHeader(conn.api, conn.servidor, conn.banco);
+        printFullHtml(buildDanfeHtml(empresaNf, j.detalhe, j.modelo_danfe));
+        return;
+      }
       const empresa = await fetchEmpresaHeader(conn.api, conn.servidor, conn.banco);
       const tituloDoc = j.tipo === "NF" ? "Nota Fiscal" : "Cupom Fiscal";
       const linhas: string[] = [];
@@ -405,7 +413,16 @@ export default function GestorComandasScreen() {
               </View>
               <View style={styles.colFlex}>
                 <Text style={styles.label}>Cliente (código, CGC/CPF ou nome)</Text>
-                <TextInput value={clienteTermo} onChangeText={setClienteTermo} style={styles.input} testID="gestor-comandas-cliente" />
+                <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+                  <TextInput
+                    value={clienteTermo} onChangeText={setClienteTermo}
+                    style={[styles.input, { flex: 1, minWidth: 0 }]} testID="gestor-comandas-cliente"
+                  />
+                  <IconButtonWithTooltip
+                    icon="search-outline" label="Buscar Cliente" onPress={clienteSearch.openModal}
+                    size={20} color={colors.brandPrimary} testID="gestor-comandas-cliente-buscar"
+                  />
+                </View>
               </View>
             </View>
 
@@ -565,6 +582,17 @@ export default function GestorComandasScreen() {
         onClose={() => setAjudaVisivel(false)}
         titulo="Gestor de Comandas"
         itens={GESTOR_COMANDAS_AJUDA_ITENS}
+      />
+
+      <ClientSearchModal
+        visible={clienteSearch.open}
+        onClose={clienteSearch.closeModal}
+        term={clienteSearch.term}
+        setTerm={clienteSearch.setTerm}
+        loading={clienteSearch.loading}
+        results={clienteSearch.results}
+        onPick={(c) => { setClienteTermo(c.nome); clienteSearch.closeModal(); }}
+        onCreate={clienteSearch.closeModal}
       />
     </SafeAreaView>
   );

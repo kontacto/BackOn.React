@@ -30,6 +30,7 @@ opções, os campos ficam como código numérico simples aqui (sem dropdown de
 rótulo amigável). Ver PENDENCIAS.md para o registro desse gap.
 """
 import asyncio
+import base64
 from typing import Optional
 
 from db.connection import _open_conn, _get_col_sizes, _trunc
@@ -156,10 +157,21 @@ def _get_banco_sync(servidor: str, banco: str, cod: int) -> dict:
         cur = conn.cursor(as_dict=True)
         cur.execute(f"SELECT {_SELECT_COLS} FROM bancos WHERE cod=%s", (cod,))
         row = cur.fetchone()
-        cur.close()
         if not row:
+            cur.close()
             return {"success": False, "message": "Banco não encontrado."}
-        return {"success": True, **_to_item(row)}
+        # Consulta separada, nunca misturada na SELECT acima — a coluna é
+        # VARBINARY; `_to_json_safe`/serialização genérica em bytes assume
+        # texto UTF-8 e corromperia o binário da imagem (achado real,
+        # mesmo cuidado de `gestor_nfse_service._obter_danfe_pdf_base64_sync`).
+        cur.execute("SELECT logo_banco, logo_banco_mime FROM bancos WHERE cod=%s", (cod,))
+        logo_row = cur.fetchone() or {}
+        cur.close()
+        logo_bytes = logo_row.get("logo_banco")
+        item = {"success": True, **_to_item(row)}
+        item["logo_base64"] = base64.b64encode(bytes(logo_bytes)).decode("ascii") if logo_bytes else None
+        item["logo_mime"] = (logo_row.get("logo_banco_mime") or None) if logo_bytes else None
+        return item
     except Exception as e:
         return {"success": False, "message": f"Erro: {e}"}
     finally:
@@ -323,3 +335,82 @@ async def save_banco(servidor: str, banco: str, dados: dict) -> dict:
 
 async def delete_banco(servidor: str, banco: str, cod: int) -> dict:
     return await asyncio.to_thread(_delete_banco_sync, servidor, banco, cod)
+
+
+# =====================================================================
+# Logo do Banco — pro layout do Boleto em PDF (`boleto_pdf_service.py`).
+# 1º `_ensure_*` real desta tabela (`bancos` é schema legado puro, ver
+# docstring do módulo) — campo genuinamente novo, sem precedente no VB6
+# (que usava um arquivo fixo na raiz da instalação). Decisão explícita
+# do usuário 2026-08-26: gravar direto no banco (mesmo padrão de
+# `certificado_digital.certificado_digital`), não Azure Blob.
+# =====================================================================
+
+def _ensure_banco_logo_cols(cur) -> None:
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='logo_banco' AND Object_ID=Object_ID('bancos')) "
+        "ALTER TABLE bancos ADD logo_banco VARBINARY(MAX) NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='logo_banco_mime' AND Object_ID=Object_ID('bancos')) "
+        "ALTER TABLE bancos ADD logo_banco_mime NVARCHAR(50) NULL"
+    )
+
+
+def _upload_logo_banco_sync(servidor: str, banco: str, cod: int, conteudo: bytes, mime: str) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT TOP 1 1 AS ok FROM bancos WHERE cod=%s", (cod,))
+        if not cur.fetchone():
+            cur.close()
+            return {"success": False, "message": "Banco não encontrado."}
+        cur.execute(
+            "UPDATE bancos SET logo_banco=%s, logo_banco_mime=%s WHERE cod=%s",
+            (conteudo, (mime or "")[:50] or None, cod),
+        )
+        conn.commit()
+        cur.close()
+        return {"success": True, "message": "Logo do banco cadastrada."}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao gravar logo: {e}"}
+    finally:
+        conn.close()
+
+
+def _remover_logo_banco_sync(servidor: str, banco: str, cod: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("UPDATE bancos SET logo_banco=NULL, logo_banco_mime=NULL WHERE cod=%s", (cod,))
+        conn.commit()
+        cur.close()
+        return {"success": True, "message": "Logo do banco removida."}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao remover logo: {e}"}
+    finally:
+        conn.close()
+
+
+async def upload_logo_banco(servidor: str, banco: str, cod: int, conteudo: bytes, mime: str) -> dict:
+    return await asyncio.to_thread(_upload_logo_banco_sync, servidor, banco, cod, conteudo, mime)
+
+
+async def remover_logo_banco(servidor: str, banco: str, cod: int) -> dict:
+    return await asyncio.to_thread(_remover_logo_banco_sync, servidor, banco, cod)

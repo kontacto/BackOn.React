@@ -9,8 +9,9 @@ import services.servicos_service as svc
 
 
 class FakeCursor:
-    def __init__(self, one=None):
+    def __init__(self, one=None, many=None):
         self._one = list(one or [])
+        self._many = list(many or [])
         self.queries = []
 
     def execute(self, q, p=None):
@@ -20,7 +21,7 @@ class FakeCursor:
         return self._one.pop(0) if self._one else None
 
     def fetchall(self):
-        return []
+        return self._many.pop(0) if self._many else []
 
     def close(self):
         pass
@@ -94,3 +95,52 @@ class TestValidacaoCodIcms:
         assert result["success"] is False
         assert "desativado" in result["message"].lower()
         assert not any("dscr_icms" in q for q, _ in cur.queries)
+
+
+class TestListTributacaoMunicipioSync:
+    """Busca em `Tributacao_MUnicipio` — tabela oficial real herdada do
+    legado, usada pelo modal de busca do "Código Complementar Municipal"
+    em Cadastro de Serviços (achado 2026-08-24, rastreando `DAO_NFE.vb`
+    até a raiz — ver `nfse_emissao_service.py`/PENDENCIAS.md)."""
+
+    def _row(self, cod_trib_mun="015", descricao="Manutenção de aparelhos.", cod_trib_nac_mun="14.01.01.015", cod_trib_nac="140101"):
+        return {
+            "cTribNacMun": cod_trib_nac_mun, "cTribNac": cod_trib_nac,
+            "cTribMun": cod_trib_mun, "Descricao": descricao,
+        }
+
+    def test_tabela_ausente_devolve_lista_vazia_sem_erro(self, monkeypatch):
+        # Nem toda instalação tem essa tabela carregada — degrada
+        # graciosamente em vez de bloquear o cadastro de Serviços.
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        r = svc._list_tributacao_municipio_sync("srv", "bd", search="", cod_lista_servico="")
+        assert r["success"] is True
+        assert r["items"] == []
+
+    def test_busca_por_termo_usa_descricao_like(self, monkeypatch):
+        cur = FakeCursor(one=[{"ok": 1}], many=[[self._row()]])
+        _patch(monkeypatch, cur)
+        r = svc._list_tributacao_municipio_sync("srv", "bd", search="manuten", cod_lista_servico="140101")
+        assert r["success"] is True
+        assert len(r["items"]) == 1
+        assert r["items"][0]["cod_trib_mun"] == "015"
+        assert r["items"][0]["descricao"] == "Manutenção de aparelhos."
+        busca_q = next(q for q in cur.queries if "Descricao LIKE" in q[0])
+        assert busca_q[1] == ("%manuten%",)
+
+    def test_sem_termo_usa_cod_lista_servico_cttribnac(self, monkeypatch):
+        cur = FakeCursor(one=[{"ok": 1}], many=[[self._row(), self._row(cod_trib_mun="032", descricao="Manutenção de equipamentos.")]])
+        _patch(monkeypatch, cur)
+        r = svc._list_tributacao_municipio_sync("srv", "bd", search="", cod_lista_servico="140101")
+        assert r["success"] is True
+        assert len(r["items"]) == 2
+        cod_q = next(q for q in cur.queries if "cTribNac = " in q[0])
+        assert cod_q[1] == ("140101",)
+
+    def test_sem_termo_e_sem_codigo_lista_tudo(self, monkeypatch):
+        cur = FakeCursor(one=[{"ok": 1}], many=[[self._row()]])
+        _patch(monkeypatch, cur)
+        r = svc._list_tributacao_municipio_sync("srv", "bd", search="", cod_lista_servico="")
+        assert r["success"] is True
+        assert any("ORDER BY cTribNacMun" in q[0] and "WHERE" not in q[0] for q in cur.queries)

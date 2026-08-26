@@ -4,7 +4,7 @@ Banco do Brasil/001 e Itaú/341 só retorno, remessa pendente de arquivo real)
 — ver services/cnab_*_service.py de cada banco."""
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, File, Form, Request, UploadFile
 
 from models.bancos import (
     AplicarBaixasRequest,
@@ -82,6 +82,38 @@ async def delete_banco(cod: int, req: BancoDeleteRequest, request: Request):
             usuario=req.usuario_alteracao, classe=req.classe, referencia=cod,
             descricao="Exclusão de banco.",
             ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/bancos/{cod}/logo")
+async def upload_logo_banco(
+    cod: int,
+    request: Request,
+    servidor: str = Form(...),
+    banco: str = Form(...),
+    usuario_alteracao: Optional[int] = Form(None),
+    classe: Optional[int] = Form(None),
+    plataforma: Optional[str] = Form(None),
+    arquivo: UploadFile = File(...),
+):
+    conteudo = await arquivo.read()
+    result = await bancos_service.upload_logo_banco(servidor, banco, cod, conteudo, arquivo.content_type or "")
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            servidor, banco, tela="BANCOS", comando="GRAVAR_LOGO", usuario=usuario_alteracao, classe=classe,
+            referencia=cod, descricao="Logo do banco cadastrada.", ip_origem=_ip(request), plataforma=plataforma,
+        )
+    return result
+
+
+@router.post("/bancos/{cod}/logo/remover")
+async def remover_logo_banco(cod: int, req: BancoDeleteRequest, request: Request):
+    result = await bancos_service.remover_logo_banco(req.servidor, req.banco, cod)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="BANCOS", comando="REMOVER_LOGO", usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=cod, descricao="Logo do banco removida.", ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result
 

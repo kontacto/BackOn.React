@@ -6,6 +6,7 @@ import { Ionicons } from "@/src/components/Ionicons";
 
 import DateField from "@/src/components/DateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
+import AccordionSection from "@/src/components/pedido/AccordionSection";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
@@ -124,10 +125,16 @@ export default function RelatorioOSScreen() {
       <ScrollView contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]} keyboardShouldPersistTaps="handled">
         <View style={isWeb ? styles.webShell : undefined}>
         <View style={[styles.filters, isWeb && styles.filtersWeb]}>
+        <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="relos-filtros">
           <View style={styles.dateRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.fieldLabel}>De</Text>
-              <DateField value={dataIni} onChange={setDataIni} allowClear={false} testID="relos-data-ini" />
+              <DateField
+                value={dataIni}
+                onChange={(v) => { setDataIni(v); if (v) setDataFim(v); }}
+                allowClear={false}
+                testID="relos-data-ini"
+              />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.fieldLabel}>Até</Text>
@@ -167,6 +174,7 @@ export default function RelatorioOSScreen() {
               </>
             )}
           </Pressable>
+        </AccordionSection>
         </View>
 
         {!loading && totais && osList.length === 0 ? (

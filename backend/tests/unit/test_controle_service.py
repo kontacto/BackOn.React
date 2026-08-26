@@ -96,7 +96,10 @@ class TestGetEmpresaSync:
     def test_flags_fiscais_da_arvore_de_decisao_kpdv(self, monkeypatch):
         # Parte C do ecossistema fiscal (2026-08-19) — ver ibs_cbs_service.py
         # e VendaViewModel.cs (KPDV). 2 queries em sequência: `controle`
-        # (3 flags + emite_nf_comanda) e `controle_aux` (emite_nfce/emite_nfse).
+        # (emite_nf_comanda) e `controle_aux` (emite_nfce/emite_nfse + os 3
+        # campos PERGUNTA_EMITE_NFCE/ESCOLHE_NFE_NFCE/IMPRIME_NFCE_NAO_
+        # FISCAL — movidos de `controle` pra `controle_aux` 2026-08-26,
+        # bug real achado ao vivo, ver TestGetEmpresaSyncTabelaCorreta).
         row_controle = {
             "empresa": "Loja Central", "fantasia": "Kontacto", "rz_social": "Kontacto Ltda",
             "uf": "RJ", "endereco": "Rua X", "numero": 10, "complemento": "",
@@ -104,9 +107,11 @@ class TestGetEmpresaSync:
             "telefone": "12345678", "CELULAR": "", "cgc": "123", "inscr_est": "",
             "cod_rel": "F", "exige_cpf_cliente": False, "aceita_duplicar_cnpj": False,
             "exige_chassi_os": True, "emite_nf_comanda": True,
+        }
+        row_controle_aux = {
+            "emite_nfce": True, "emite_nfse": False,
             "PERGUNTA_EMITE_NFCE": True, "ESCOLHE_NFE_NFCE": False, "IMPRIME_NFCE_NAO_FISCAL": True,
         }
-        row_controle_aux = {"emite_nfce": True, "emite_nfse": False}
         _patch(monkeypatch, rows=[row_controle, row_controle_aux])
         r = svc._get_empresa_sync("srv", "bd")
         assert r["success"] is True
@@ -128,3 +133,140 @@ class TestGetEmpresaSync:
         monkeypatch.setattr(svc, "_open_conn", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
         r = svc._get_empresa_sync("srv", "bd")
         assert r["success"] is False
+
+
+class TestGetEmpresaSyncTabelaCorreta:
+    """Bug real achado ao vivo 2026-08-26 na conexão "Baixo Brisa Remoto"
+    (`DESKTOP-TDK482U`/`BD_BAIXOBRISA`, SQL Server 2014 SP1) — recibo do
+    Pedido Bar e O.S. de Oficina saindo sem cabeçalho NENHUM (nem fantasia/
+    endereço, não só sem logo). Causa raiz: `PERGUNTA_EMITE_NFCE`/
+    `ESCOLHE_NFE_NFCE`/`IMPRIME_NFCE_NAO_FISCAL` eram lidos de `FROM
+    controle`, mas `CAMPOS_CONTROLE_AUX` (controle_sistema_service.py)
+    sempre os classificou como colunas de `controle_aux` — em instalações
+    onde essas 3 colunas não existem redundantemente também em `controle`
+    (caso real de `BD_BAIXOBRISA`), a query batia em "Invalid column
+    name" e derrubava a função INTEIRA (`success: False`), levando junto
+    fantasia/endereço/telefone/CNPJ. Query corrigida pra ler da tabela
+    certa (`controle_aux`, junto com `emite_nfce`/`emite_nfse` que já
+    liam de lá)."""
+
+    def test_campos_fiscais_sao_lidos_de_controle_aux_nao_controle(self, monkeypatch):
+        _patch(monkeypatch, rows=[
+            {"empresa": "Loja", "fantasia": "Kontacto"},
+            {"emite_nfce": False, "emite_nfse": False, "PERGUNTA_EMITE_NFCE": True, "ESCOLHE_NFE_NFCE": True, "IMPRIME_NFCE_NAO_FISCAL": False},
+            {},
+        ])
+        r = svc._get_empresa_sync("srv", "bd")
+        assert r["success"] is True
+        assert r["pergunta_emite_nfce"] is True
+        assert r["escolhe_nfe_nfce"] is True
+        assert r["imprime_nfce_nao_fiscal"] is False
+
+    def test_replica_o_bug_real_coluna_so_existe_em_controle_aux(self, monkeypatch):
+        """Réplica do erro real reportado pelo SQL Server: se essas 3
+        colunas fossem lidas de `FROM controle` (bug antigo) numa base
+        onde elas só existem em `controle_aux`, a 1ª query já falharia —
+        confirma que a query de `controle` (`r`) não depende mais delas."""
+
+        class CursorSemColunasFiscaisEmControle:
+            def __init__(self):
+                self._calls = 0
+
+            def execute(self, q, p=None):
+                self._calls += 1
+                # A 1ª query (controle) NUNCA pode pedir essas 3 colunas —
+                # nesta base elas só existem em controle_aux.
+                if self._calls == 1:
+                    for col in ("PERGUNTA_EMITE_NFCE", "ESCOLHE_NFE_NFCE", "IMPRIME_NFCE_NAO_FISCAL"):
+                        assert col not in q, f"{col} não deveria estar na query de `controle`"
+
+            def fetchone(self):
+                return {"fantasia": "Kontacto"}
+
+            def close(self):
+                pass
+
+        class ConnFake:
+            def cursor(self, as_dict=False):
+                return CursorSemColunasFiscaisEmControle()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(svc, "_open_conn", lambda *a, **k: ConnFake())
+        r = svc._get_empresa_sync("srv", "bd")
+        assert r["success"] is True
+        assert r["fantasia"] == "Kontacto"
+
+
+class TestGetEmpresaSyncLogo:
+    """Bug real corrigido 2026-08-26 (achado ao vivo pelo usuário — O.S. de
+    Oficina e recibo do Pedido Bar saindo sem cabeçalho nenhum, não só sem
+    logo): `logo_bytes` era lido da 3ª query mas nunca codificado/devolvido
+    no dict de resposta (dead code), e essa query ficava dentro do mesmo
+    try/except do resto da função — se falhasse, derrubava TODO o
+    cabeçalho da empresa, não só a logo."""
+
+    _ROW_BASE = {
+        "empresa": "Loja Central", "fantasia": "Kontacto", "rz_social": "Kontacto Ltda",
+        "uf": "RJ", "endereco": "Rua X", "numero": 10, "complemento": "",
+        "bairro": "Centro", "cidade": "Rio", "cep": "20000000", "ddd": "21",
+        "telefone": "12345678", "CELULAR": "", "cgc": "123", "inscr_est": "",
+        "cod_rel": "F", "exige_cpf_cliente": False, "aceita_duplicar_cnpj": False,
+    }
+
+    def test_logo_presente_e_codificada_em_base64(self, monkeypatch):
+        rows = [dict(self._ROW_BASE), {"emite_nfce": False, "emite_nfse": False}, {"logo_empresa": b"\x89PNG\r\n", "logo_empresa_mime": "image/png"}]
+        _patch(monkeypatch, rows=rows)
+        r = svc._get_empresa_sync("srv", "bd")
+        assert r["success"] is True
+        assert r["logo_mime"] == "image/png"
+        import base64
+        assert base64.b64decode(r["logo_base64"]) == b"\x89PNG\r\n"
+
+    def test_logo_ausente_fica_none_sem_quebrar(self, monkeypatch):
+        rows = [dict(self._ROW_BASE), {"emite_nfce": False, "emite_nfse": False}, {"logo_empresa": None, "logo_empresa_mime": None}]
+        _patch(monkeypatch, rows=rows)
+        r = svc._get_empresa_sync("srv", "bd")
+        assert r["success"] is True
+        assert r["logo_base64"] is None
+        assert r["logo_mime"] is None
+
+    def test_query_da_logo_falhando_nao_derruba_o_resto_do_cabecalho(self, monkeypatch):
+        """Réplica exata do bug relatado: se a 3ª query (logo) lançar
+        exceção — coluna ainda não migrada num banco específico, por
+        exemplo — o resto do cabeçalho (fantasia/endereço/telefone/CNPJ)
+        continua vindo normalmente, não é mais tudo-ou-nada."""
+
+        class CursorQueLogoQuebra:
+            def __init__(self):
+                self._calls = 0
+
+            def execute(self, q, p=None):
+                self._calls += 1
+                if self._calls == 3:
+                    raise RuntimeError("Invalid column name 'logo_empresa'.")
+
+            def fetchone(self):
+                if self._calls == 1:
+                    return dict(TestGetEmpresaSyncLogo._ROW_BASE)
+                if self._calls == 2:
+                    return {"emite_nfce": False, "emite_nfse": False}
+                return None
+
+            def close(self):
+                pass
+
+        class ConnQueLogoQuebra:
+            def cursor(self, as_dict=False):
+                return CursorQueLogoQuebra()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(svc, "_open_conn", lambda *a, **k: ConnQueLogoQuebra())
+        r = svc._get_empresa_sync("srv", "bd")
+        assert r["success"] is True
+        assert r["fantasia"] == "Kontacto"
+        assert r["cgc"] == "123"
+        assert r["logo_base64"] is None

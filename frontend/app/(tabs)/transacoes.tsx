@@ -147,8 +147,9 @@ export default function TransacoesScreen() {
         // (mesmo padrão de "Movimentações" acima — OR entre as
         // sub-permissões/módulos).
         visible:
-          (moduleOn("nfe_ws") && (can("NFE_AGRUPADA.ABRIR") || can("NFE_AVULSA.ABRIR") || can("CONT_NFE.ABRIR"))) ||
+          (moduleOn("nfe_ws") && (can("NFE_AGRUPADA.ABRIR") || can("NFE_AVULSA.ABRIR") || can("CONT_NFE.ABRIR") || can("INUTIL_NFE.ABRIR"))) ||
           (moduleOn("emite_nfce") && can("GESTOR_NFCE.ABRIR")) ||
+          can("GESTOR_NFSE.ABRIR") ||
           can("NOTAS_FISCAIS.ABRIR"),
       },
       {

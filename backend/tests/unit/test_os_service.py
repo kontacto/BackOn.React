@@ -50,6 +50,12 @@ class FakeConn:
 def _patch(monkeypatch, cursor):
     conn = FakeConn(cursor)
     monkeypatch.setattr(svc, "_open_conn", lambda *a, **k: conn)
+    # Bypass do gate de Checklist de Entrada de Veículo obrigatório
+    # (`_checklist_veiculo_pendente_bloqueia`, pedido_common.py,
+    # 2026-08-26) — orthogonal à maioria destes testes de Fechar/Faturar,
+    # que não simulam a query extra que essa checagem faz. Testado à
+    # parte em TestChecklistObrigatorioBloqueiaFecharFaturar, sem bypass.
+    monkeypatch.setattr(svc, "_checklist_veiculo_pendente_bloqueia", lambda *a, **k: None)
     return conn
 
 
@@ -599,3 +605,80 @@ class TestSalvarOSChassiObrigatorio:
         _patch(monkeypatch, cur)
         r = svc._save_os_sync(self._os_req(chassi=""), None)
         assert r["success"] is True
+
+
+class TestChecklistObrigatorioBloqueiaFecharFaturar:
+    """Checklist de Entrada de Veículo obrigatório por permissão de grupo
+    (`OS_COMP.CHECKLIST_OBRIG`, 2026-08-26 user-directed) — cobre o gate
+    REAL em `_fechar_os_sync`/`_faturar_os_sync`, sem o bypass que o
+    resto deste arquivo usa via `_patch`. Gravar o cabeçalho da O.S.
+    (`_save_os_sync`, ver `TestSalvarOSChassiObrigatorio` acima) nunca
+    chama esse gate — decisão explícita do usuário ("deixa gravar a OS
+    com os dados do veículo e cliente e cliente descreve. trava o
+    resto."), por isso não há teste equivalente pra `_save_os_sync` aqui."""
+
+    def _patch_sem_bypass(self, monkeypatch, cursor):
+        conn = FakeConn(cursor)
+        monkeypatch.setattr(svc, "_open_conn", lambda *a, **k: conn)
+        return conn
+
+    def _fechar_req(self, **over):
+        base = dict(servidor="srv", banco="bd", classe=5, master=False, usuario_alteracao=1, plataforma="web")
+        base.update(over)
+        return FecharRequest(**base)
+
+    def test_fechar_bloqueia_com_checklist_pendente(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A", "valor": 100.0, "forma_pagamento": "01"},
+            {"ok": 1},          # tem_permissao SITUACAO
+            {"ok": 1},          # tem_permissao CHECKLIST_OBRIG
+            {"placa": "ABC1234"},
+            None,               # os_checklist — sem conclusão ativa
+        ])
+        self._patch_sem_bypass(monkeypatch, cur)
+        r = svc._fechar_os_sync(self._fechar_req(), 55, tela="OS_COMP")
+        assert r["success"] is False
+        assert "Checklist de Entrada" in r["message"]
+        assert not any(q.strip().startswith("UPDATE os SET situacao='F'") for q, _ in cur.queries)
+
+    def test_fechar_libera_quando_checklist_concluido(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "A", "valor": 0.0, "forma_pagamento": "01"},
+            {"ok": 1}, {"ok": 1}, {"placa": "ABC1234"}, {"ok": 1},  # concluído
+            {"ok": 1},          # existe item não-cancelado
+            {"valor": 0.0},     # _recalc_os_total
+            {"total_lancado": 0.0},  # _qtd_formas via _fecha_fpag_dav (aprox)
+        ], many=[[]])
+        conn = self._patch_sem_bypass(monkeypatch, cur)
+        r = svc._fechar_os_sync(self._fechar_req(), 55, tela="OS_COMP")
+        assert r["success"] is True
+        assert conn.committed is True
+
+    def test_fechar_tela_os_mobile_nao_e_afetado(self, monkeypatch):
+        """O gate só existe pro fluxo OS_COMP — tela="OS" (mobile) nunca
+        chama `_checklist_veiculo_pendente_bloqueia`, mesmo que o grupo
+        (por engano de configuração) tenha o botão marcado."""
+        cur = FakeCursor(one=[
+            {"situacao": "A", "valor": 0.0, "forma_pagamento": "01"},
+            {"ok": 1},          # tem_permissao SITUACAO (tela="OS")
+            {"ok": 1},          # existe item não-cancelado
+            {"valor": 0.0},
+            {"total_lancado": 0.0},
+        ], many=[[]])
+        conn = self._patch_sem_bypass(monkeypatch, cur)
+        r = svc._fechar_os_sync(self._fechar_req(), 55, tela="OS")
+        assert r["success"] is True
+        assert conn.committed is True
+
+    def test_faturar_bloqueia_com_checklist_pendente(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"situacao": "F", "cliente": 10, "valor": 100.0, "area_atuacao": 2, "forma_pagamento_garantia": ""},
+            {"ok": 1},          # tem_permissao FATURAR
+            {"ok": 1},          # tem_permissao CHECKLIST_OBRIG
+            {"placa": "ABC1234"},
+            None,               # os_checklist — sem conclusão ativa
+        ])
+        self._patch_sem_bypass(monkeypatch, cur)
+        r = svc._faturar_os_sync(FaturarOSRequest(servidor="srv", banco="bd", classe=5, master=False, usuario_alteracao=1, plataforma="web"), 55, tela="OS_COMP")
+        assert r["success"] is False
+        assert "Checklist de Entrada" in r["message"]

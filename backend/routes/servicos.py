@@ -70,6 +70,11 @@ class ServicoDeleteRequest(AuditFields):
     banco: str
 
 
+@router.get("/servicos/tributacao-municipio")
+async def list_tributacao_municipio(servidor: str, banco: str, search: str = "", cod_lista_servico: str = ""):
+    return await servicos_service.list_tributacao_municipio(servidor, banco, search, cod_lista_servico)
+
+
 @router.get("/servicos")
 async def list_servicos(servidor: str, banco: str):
     return await servicos_service.list_servicos(servidor, banco)

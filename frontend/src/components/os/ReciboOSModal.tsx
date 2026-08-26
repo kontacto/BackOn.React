@@ -94,6 +94,18 @@ export default function ReciboOSModal({ visible, onClose, conn, os, cliente, cli
     bold(`O.S. nº ${os.codigo}`);
     hr();
 
+    // Dados do veículo (O.S. Oficina) — gap confirmado 2026-08-26 contra
+    // modelo real de impressão do legado (RJ PNEUS): mostra Placa/Marca
+    // antes da lista de serviços. Só aparece quando a O.S. tem placa
+    // preenchida (critério já usado no resto do projeto pra distinguir
+    // Oficina de Assistência Técnica nesta mesma tela compartilhada).
+    if (os.placa) {
+      line("Dados do veículo:");
+      line(`Placa: ${os.placa}`);
+      if (os.marca || os.modelo) line(`Marca: ${[os.marca, os.modelo].filter(Boolean).join(" / ")}`);
+      hr();
+    }
+
     itens.forEach((it) => {
       itemRow(
         it.descricao + (it.complemento ? ` — ${it.complemento}` : "") + ` [${osSituacaoItemLabel(it.situacao ?? 0)}]`,
@@ -156,6 +168,17 @@ export default function ReciboOSModal({ visible, onClose, conn, os, cliente, cli
               <View style={rs.hr} />
               <Text style={rs.bold}>O.S. nº {os.codigo}</Text>
               <View style={rs.hr} />
+
+              {os.placa ? (
+                <>
+                  <Text style={rs.mono}>Dados do veículo:</Text>
+                  <Text style={rs.mono}>Placa: {os.placa}</Text>
+                  {os.marca || os.modelo ? (
+                    <Text style={rs.mono}>Marca: {[os.marca, os.modelo].filter(Boolean).join(" / ")}</Text>
+                  ) : null}
+                  <View style={rs.hr} />
+                </>
+              ) : null}
 
               {itens.map((it) => (
                 <View key={it.cod_os_prod} style={{ marginBottom: 4 }}>

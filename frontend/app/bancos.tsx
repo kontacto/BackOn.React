@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -10,11 +10,14 @@ import { usePermissions } from "@/src/permissions";
 import { useAuditContext } from "@/src/hooks/useAuditContext";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import LockedView from "@/src/components/LockedView";
-import { apiGet, apiSend, friendlyApiError } from "@/src/utils/api";
+import { apiBase, apiGet, apiSend, friendlyApiError, friendlyCatchError } from "@/src/utils/api";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
+import {
+  LOGO_ALTURA_MINIMA, LOGO_LARGURA_MINIMA, LOGO_ORIENTACAO_TEXTO, LOGO_TAMANHO_MAXIMO_BYTES, lerResolucaoImagem,
+} from "@/src/utils/imageResolution";
 
 const isWeb = Platform.OS === "web";
 
@@ -127,6 +130,14 @@ export default function BancosScreen() {
   const [saving, setSaving] = useState(false);
   const [ajudaOpen, setAjudaOpen] = useState(false);
 
+  // Logo do Banco (`bancos.logo_banco`, VARBINARY) — 2026-08-26, pro
+  // layout do Boleto em PDF. Mesmo padrão de gravação direto no banco já
+  // decidido pra Logo da Empresa (não Azure Blob).
+  const [logoBase64, setLogoBase64] = useState<string | null>(null);
+  const [logoMime, setLogoMime] = useState<string | null>(null);
+  const [logoArquivo, setLogoArquivo] = useState<File | null>(null);
+  const [logoSaving, setLogoSaving] = useState(false);
+
   // Fase 2a — motor CNAB, Bradesco (237) e Inter (077) nesta rodada. Ver
   // PENDENCIAS.md > "Bancos (Cadastro de Cobrança / Boleto / CNAB)".
   const [remessaSaving, setRemessaSaving] = useState(false);
@@ -167,6 +178,8 @@ export default function BancosScreen() {
   const openNew = () => {
     setEditingCod(null);
     setForm(FORM_VAZIO);
+    setLogoBase64(null);
+    setLogoMime(null);
     setFormOpen(true);
   };
 
@@ -202,9 +215,61 @@ export default function BancosScreen() {
         chaveApi1: d.chave_api_1 || "", chaveApi2: d.chave_api_2 || "",
         chaveApi3: d.chave_api_3 || "", chaveApi4: d.chave_api_4 || "",
       });
+      setLogoBase64(d.logo_base64 || null);
+      setLogoMime(d.logo_mime || null);
     } catch (e) {
       fb.showError(`Erro: ${e instanceof Error ? e.message : String(e)}`);
       setFormOpen(false);
+    }
+  };
+
+  const uploadLogoBanco = async () => {
+    if (!conn || !editingCod || !logoArquivo) { fb.showWarning("Selecione um arquivo de imagem."); return; }
+    if (logoArquivo.size > LOGO_TAMANHO_MAXIMO_BYTES) {
+      fb.showWarning(`Arquivo muito grande (${(logoArquivo.size / 1024 / 1024).toFixed(1)} MB) — o recomendado é até 1 MB.`);
+    }
+    const resolucao = await lerResolucaoImagem(logoArquivo);
+    if (resolucao && (resolucao.largura < LOGO_LARGURA_MINIMA || resolucao.altura < LOGO_ALTURA_MINIMA)) {
+      fb.showWarning(
+        `Imagem com resolução baixa (${resolucao.largura}×${resolucao.altura}px) — pode sair borrada na impressão. ` +
+        `Recomendado: pelo menos ${LOGO_LARGURA_MINIMA}×${LOGO_ALTURA_MINIMA}px. Enviando mesmo assim…`,
+        undefined, 5000,
+      );
+    }
+    setLogoSaving(true);
+    try {
+      const fd = new FormData();
+      fd.append("servidor", conn.servidor);
+      fd.append("banco", conn.banco);
+      if (auditCtx.usuario_alteracao != null) fd.append("usuario_alteracao", String(auditCtx.usuario_alteracao));
+      if (auditCtx.classe != null) fd.append("classe", String(auditCtx.classe));
+      fd.append("plataforma", auditCtx.plataforma);
+      fd.append("arquivo", logoArquivo, logoArquivo.name);
+      const r = await fetch(`${apiBase(conn)}/api/bancos/${editingCod}/logo`, { method: "POST", body: fd });
+      const j = await r.json().catch(() => null);
+      if (j?.success) {
+        fb.showSuccess(j.message || "Logo cadastrada.");
+        setLogoArquivo(null);
+        const jd = await apiGet(conn, `/api/bancos/${editingCod}`);
+        if (jd?.success) { setLogoBase64(jd.logo_base64 || null); setLogoMime(jd.logo_mime || null); }
+      } else {
+        fb.showError(!r.ok && !j ? `Falha ao cadastrar a logo (HTTP ${r.status}).` : friendlyApiError(j, "Falha ao cadastrar a logo."));
+      }
+    } catch (e) {
+      fb.showError(friendlyCatchError(e, "Falha ao cadastrar a logo."));
+    } finally {
+      setLogoSaving(false);
+    }
+  };
+
+  const removerLogoBanco = async () => {
+    if (!conn || !editingCod) return;
+    try {
+      const j = await apiSend(conn, `/api/bancos/${editingCod}/logo/remover`, "POST", { ...auditCtx });
+      if (j?.success) { fb.showSuccess(j.message || "Logo removida."); setLogoBase64(null); setLogoMime(null); }
+      else fb.showError(friendlyApiError(j, "Falha ao remover a logo."));
+    } catch (e) {
+      fb.showError(friendlyCatchError(e, "Falha ao remover a logo."));
     }
   };
 
@@ -633,6 +698,53 @@ export default function BancosScreen() {
               <TextInput value={form.mensagemBoleto2} onChangeText={(v) => setField("mensagemBoleto2", v)} style={styles.input} testID="bancos-msg-2" />
               <Text style={styles.label}>Mensagem do Boleto (linha 3)</Text>
               <TextInput value={form.mensagemBoleto3} onChangeText={(v) => setField("mensagemBoleto3", v)} style={styles.input} testID="bancos-msg-3" />
+
+              <Text style={[styles.label, { marginTop: spacing.md }]}>Logo do Banco</Text>
+              {!editingCod ? (
+                <Text style={styles.hint}>Grave o banco primeiro para poder enviar a logo.</Text>
+              ) : (
+                <View>
+                  {logoBase64 ? (
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, marginBottom: spacing.sm }}>
+                      <Image
+                        source={{ uri: `data:${logoMime || "image/png"};base64,${logoBase64}` }}
+                        style={{ width: 100, height: 60, resizeMode: "contain", borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm }}
+                      />
+                      <Pressable onPress={removerLogoBanco} style={styles.secondaryBtn} testID="bancos-logo-remover">
+                        <Text style={styles.secondaryBtnText}>Remover Logo</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <Text style={styles.hint}>Nenhuma logo cadastrada.</Text>
+                  )}
+                  <View style={styles.rowFields}>
+                    <View style={styles.colNarrow}>
+                      <Text style={styles.label}>Arquivo (.png/.jpg)</Text>
+                      {isWeb ? (
+                        <input
+                          type="file" accept="image/png,image/jpeg"
+                          onChange={(e) => setLogoArquivo((e.target as HTMLInputElement).files?.[0] || null)}
+                          style={{
+                            height: 36, boxSizing: "border-box", padding: "0 8px", fontSize: 13,
+                            border: `1px solid ${colors.border}`, borderRadius: radius.sm,
+                            backgroundColor: colors.surface, color: colors.onSurface,
+                          }}
+                        />
+                      ) : null}
+                    </View>
+                    <View style={[styles.colNarrow, { justifyContent: "flex-end" }]}>
+                      <Pressable onPress={uploadLogoBanco} disabled={logoSaving} style={[styles.secondaryBtn, logoSaving && { opacity: 0.8 }]} testID="bancos-logo-upload">
+                        {logoSaving ? (
+                          <><ActivityIndicator size="small" color={colors.brandPrimary} /><Text style={styles.secondaryBtnText}>Enviando…</Text></>
+                        ) : (
+                          <Text style={styles.secondaryBtnText}>Enviar Logo</Text>
+                        )}
+                      </Pressable>
+                    </View>
+                  </View>
+                  <Text style={styles.hint}>{LOGO_ORIENTACAO_TEXTO}</Text>
+                </View>
+              )}
             </View>
 
           </View>

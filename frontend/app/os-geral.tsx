@@ -18,12 +18,13 @@ import { Ionicons } from "@/src/components/Ionicons";
 
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
-import { apiGet, apiSend, friendlyCatchError } from "@/src/utils/api";
+import { apiBase, apiGet, apiSend, friendlyApiError, friendlyCatchError } from "@/src/utils/api";
 import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import WebDateField from "@/src/components/WebDateField";
 import InfoTooltip from "@/src/components/InfoTooltip";
+import WhatsappButton from "@/src/components/WhatsappButton";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { formatDateBR, todayISO } from "@/src/utils/format";
@@ -47,6 +48,9 @@ import { OSData } from "@/src/components/os/types";
 import { useOSItens } from "@/src/components/os/useOSItens";
 import { useOSEquipamentos } from "@/src/components/os/useOSEquipamentos";
 import OSEquipamentoCard from "@/src/components/os/OSEquipamentoCard";
+import { useOSChecklistVeiculo } from "@/src/components/os/useOSChecklistVeiculo";
+import ChecklistVeiculoDiagrama from "@/src/components/os/ChecklistVeiculoDiagrama";
+import ChecklistMarcacaoModal from "@/src/components/os/ChecklistMarcacaoModal";
 import OSItemModal from "@/src/components/os/OSItemModal";
 import OSTotaisResumo from "@/src/components/os/OSTotaisResumo";
 import PontuacaoModal from "@/src/components/os/PontuacaoModal";
@@ -160,6 +164,11 @@ const AJUDA_OS_ITENS: HelpItem[] = [
     titulo: "Formulários (Layouts)",
     texto: "Abre os checklists/formulários dinâmicos disponíveis para esta O.S. (ex.: um relatório de visita técnica cadastrado em Configurações > Cadastro de Layout) — permite preencher um novo ou consultar preenchimentos anteriores. Só aparece com a O.S. já gravada.",
     icon: { lib: "ion", name: "document-text-outline" },
+  },
+  {
+    titulo: "Checklist de Entrada",
+    texto: "Toque no diagrama do carro para marcar um amassado, arranhão ou outro problema encontrado na entrada do veículo. Depois de revisar o veículo (com ou sem avaria encontrada), toque em \"Concluir Checklist\" — isso registra quem revisou e quando, e aparece impresso na O.S. Se o seu grupo de usuário exigir esse checklist, não é possível incluir item, fechar ou faturar a O.S. sem concluí-lo antes (gravar os dados do veículo e do cliente continua sempre liberado). Só disponível para O.S. de Oficina, enquanto ela estiver Aberta.",
+    icon: { lib: "ion", name: "car-outline" },
   },
 ];
 
@@ -319,6 +328,8 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
 
   const [usuarioCod, setUsuarioCod] = useState<number>(-2);
   const [funcaoCod, setFuncaoCod] = useState<number>(1);
+  const [waCompany, setWaCompany] = useState<string | null>(null);
+  const [waEnabled, setWaEnabled] = useState<boolean | null>(null);
 
   const sit = (os?.situacao || "A").toUpperCase();
   const isAberto = !editing || sit === "A";
@@ -332,6 +343,9 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
     servicosOn: moduleOn("servicos"), onAgendamentoAlterado: handleAgendamentoItemChanged,
   });
   const eq = useOSEquipamentos({ conn, editing, osId, usuarioCod, classe, showToast });
+  const checklistVeiculo = useOSChecklistVeiculo({ conn, editing, osId, usuarioCod, classe, showToast });
+  const [checklistMarcacaoModalOpen, setChecklistMarcacaoModalOpen] = useState(false);
+  const [checklistPosPendente, setChecklistPosPendente] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -339,6 +353,7 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
       const cs = await listConnections();
       const c = cs.find((x) => x.empresa === s?.empresa) || null;
       setConn(c);
+      setWaCompany(s?.empresa ?? null);
       const func = (s?.funcionario as Record<string, unknown> | null) || null;
       const fid = func?.codigo_int ?? func?.codigo;
       const uid = fid != null ? parseInt(String(fid), 10) : null;
@@ -622,6 +637,54 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
 
   const [faturando, setFaturando] = useState(false);
   const [reciboOpen, setReciboOpen] = useState(false);
+  const [imprimindoCompleto, setImprimindoCompleto] = useState(false);
+  const [enviandoEmail, setEnviandoEmail] = useState(false);
+
+  // "Imprimir O.S. Completa (A4)" — abre o PDF (motor
+  // `os_completa_pdf_service.py`) numa nova aba; o visualizador nativo do
+  // navegador cobre imprimir/salvar, mesmo padrão já usado pra "Baixar
+  // PDF" de Boleto (blob + object URL), só que abrindo em vez de baixar
+  // direto — a intenção aqui é "ver/imprimir", não "arquivar".
+  const handleImprimirCompleto = async () => {
+    if (!conn || !osId) return;
+    setImprimindoCompleto(true);
+    try {
+      const resp = await fetch(
+        `${apiBase(conn)}/api/os-completo/${osId}/pdf?servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`
+      );
+      const contentType = resp.headers.get("content-type") || "";
+      if (!resp.ok || !contentType.includes("application/pdf")) {
+        const j = await resp.json().catch(() => null);
+        showToast(friendlyApiError(j, "Falha ao gerar o PDF da O.S."), "error");
+        return;
+      }
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      showToast(friendlyCatchError(e, "Falha ao gerar o PDF da O.S."), "error");
+    } finally {
+      setImprimindoCompleto(false);
+    }
+  };
+
+  const handleEnviarEmail = async () => {
+    if (!conn || !osId) return;
+    setEnviandoEmail(true);
+    try {
+      const j = await apiSend(conn, `/api/os-completo/${osId}/enviar-email`, "POST", {
+        servidor: conn.servidor, banco: conn.banco,
+        usuario_alteracao: usuarioCod, classe, plataforma: Platform.OS,
+      });
+      if (j?.success) showToast("O.S. enviada por e-mail.", "success");
+      else showToast(j?.message || "Falha ao enviar por e-mail.", "error");
+    } catch (e) {
+      showToast(friendlyCatchError(e, "Falha ao enviar por e-mail."), "error");
+    } finally {
+      setEnviandoEmail(false);
+    }
+  };
   // Bifurcação de faturamento Garantia×Cliente: quando a O.S. tem os 2
   // blocos pendentes (Cliente paga + Garantia/Interno/Contrato), o backend
   // devolve `needs_choice` em vez de faturar — abre o modal de escolha em
@@ -859,6 +922,10 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
         canSave={can("OS_COMP.GRAVAR") && !camposTravados}
         onAnexos={editing && osId && cliente ? () => setAnexosOpen(true) : undefined}
         onFormularios={editing && osId && can("OS_COMP.FORMULARIOS") ? () => setFormulariosOpen(true) : undefined}
+        onImprimirCompleto={editing && osId && can("OS_COMP.IMPRIMIR") ? handleImprimirCompleto : undefined}
+        imprimindoCompleto={imprimindoCompleto}
+        onEnviarEmail={editing && osId && cliente && can("OS_COMP.IMPRIMIR") ? handleEnviarEmail : undefined}
+        enviandoEmail={enviandoEmail}
         onHelp={() => setAjudaOpen(true)}
         vinculoProjeto={vinculoProjeto ? { codigo: vinculoProjeto.codigo, onPress: () => router.push({ pathname: "/projeto-form", params: { codigo: String(vinculoProjeto.codigo) } } as never) } : undefined}
       />
@@ -1259,6 +1326,60 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
             </View>
           ) : null}
 
+          {/* Checklist de Entrada de Veículo (O.S. Oficina) — pedido
+              explícito do usuário 2026-08-26, sem precedente no legado.
+              Cada toque no diagrama marca uma avaria dinâmica, não uma
+              lista fixa de perguntas. Só faz sentido na entrada do
+              veículo (O.S. Aberta) e só depois do primeiro Gravar
+              (precisa do código da OS). Aparece impresso no final do PDF
+              da O.S. (`os_completa_pdf_service.py`) nas mesmas condições. */}
+          {cliente && isOficina && !isAssist && isAberto && editing && osId ? (
+            <View style={styles.card} testID="os-geral-checklist-veiculo">
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.sm }}>
+                <Text style={styles.sectionTitle}>Checklist de Entrada</Text>
+                {can("OS_COMP.CHECKLIST_ADD") && isAberto ? (
+                  <Pressable
+                    onPress={() => checklistVeiculo.handleConcluir()}
+                    disabled={checklistVeiculo.concluindo}
+                    style={{ flexDirection: "row", alignItems: "center", gap: 4, opacity: checklistVeiculo.concluindo ? 0.6 : 1 }}
+                    testID="os-geral-checklist-concluir"
+                  >
+                    {checklistVeiculo.concluindo ? (
+                      <ActivityIndicator color={colors.brandPrimary} size="small" />
+                    ) : (
+                      <Ionicons name="checkmark-done-outline" size={16} color={colors.brandPrimary} />
+                    )}
+                    <Text style={{ fontSize: 12, color: colors.brandPrimary, fontWeight: "600" }}>
+                      {checklistVeiculo.concluindo ? "Concluindo…" : "Concluir Checklist"}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+              {checklistVeiculo.conclusao.concluido ? (
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: spacing.sm }}>
+                  <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+                  <Text style={{ fontSize: 12, color: colors.muted, flex: 1 }}>
+                    {checklistVeiculo.conclusao.semAvaria ? "Sem avarias — " : ""}
+                    Vistoriado por {checklistVeiculo.conclusao.concluidoPor || "—"}
+                    {checklistVeiculo.conclusao.concluidoData ? ` em ${checklistVeiculo.conclusao.concluidoData.split("-").reverse().join("/")}` : ""}
+                    {checklistVeiculo.conclusao.concluidoHora ? ` às ${checklistVeiculo.conclusao.concluidoHora}` : ""}
+                  </Text>
+                </View>
+              ) : null}
+              {checklistVeiculo.checklistLoading ? (
+                <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: spacing.sm }} />
+              ) : (
+                <ChecklistVeiculoDiagrama
+                  marcacoes={checklistVeiculo.checklist}
+                  editavel={can("OS_COMP.CHECKLIST_ADD") && isAberto}
+                  onMarcar={(x, y) => { setChecklistPosPendente({ x, y }); setChecklistMarcacaoModalOpen(true); }}
+                  onCancelar={(codigo) => { if (can("OS_COMP.CHECKLIST_CANC")) checklistVeiculo.handleCancelar(codigo); }}
+                  cancelingCodigo={checklistVeiculo.cancelingCodigo}
+                />
+              )}
+            </View>
+          ) : null}
+
           {/* Equipamentos vinculados à O.S. (Assistência Técnica — uma OS
               pode ter vários equipamentos, ver AssistenciaTecnicaCampo.md
               seção 5/regra 14). Vincular um novo é exclusivo desta tela
@@ -1430,7 +1551,25 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
                   setTempoGastoPreselect(item.produto);
                   setTempoModalOpen(true);
                 }}
+                footerRight={
+                  can("OS_COMP.WHATSAPP") ? (
+                    <WhatsappButton
+                      conn={conn}
+                      documentType="OS"
+                      documentId={osId}
+                      userId={usuarioCod}
+                      companyId={waCompany}
+                      pill
+                      onStatusChange={setWaEnabled}
+                    />
+                  ) : undefined
+                }
               />
+              {waEnabled === false ? (
+                <Text style={pedidoStyles.whatsappDisabledHint}>
+                  O envio por WhatsApp está desativado em Configurações.
+                </Text>
+              ) : null}
               {comandaFaturadaCliente ? (
                 <NotaFiscalCard
                   docFiscal={notaFiscalCliente.docFiscal} emitindoNfce={notaFiscalCliente.emitindoNfce} emitindoNfse={notaFiscalCliente.emitindoNfse}
@@ -1656,6 +1795,17 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
         onPick={(e) => {
           setEquipModalOpen(false);
           eq.handleAdd(e);
+        }}
+      />
+      <ChecklistMarcacaoModal
+        visible={checklistMarcacaoModalOpen}
+        onClose={() => { setChecklistMarcacaoModalOpen(false); setChecklistPosPendente(null); }}
+        saving={checklistVeiculo.adding}
+        onConfirmar={(tipo, descricao) => {
+          if (!checklistPosPendente) return;
+          checklistVeiculo.handleAdd(tipo, checklistPosPendente.x, checklistPosPendente.y, descricao);
+          setChecklistMarcacaoModalOpen(false);
+          setChecklistPosPendente(null);
         }}
       />
       {cliente && osId ? (

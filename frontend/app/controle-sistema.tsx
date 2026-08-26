@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ActivityIndicator, Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
@@ -14,6 +14,11 @@ import {
 } from "@/src/hooks/useControleSistemaForm";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
+import {
+  LOGO_ALTURA_MINIMA, LOGO_LARGURA_MINIMA, LOGO_ORIENTACAO_TEXTO, LOGO_TAMANHO_MAXIMO_BYTES, lerResolucaoImagem,
+} from "@/src/utils/imageResolution";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 
 // Cadastro/Configurações > Geral > Controle do Sistema (tabelas `controle` +
 // `controle_aux`, linha única — mono-empresa por ora). Legado: FrmGerCon.frm
@@ -49,6 +54,45 @@ const TABS: { key: TabKey; label: string; comando: string }[] = [
 // alimenta a barra de abas incondicionalmente) e é adicionada condicionalmente
 // no render.
 const TAB_KONTACTO: { key: TabKey; label: string; comando: string } = { key: "kontacto", label: "Kontacto", comando: "" };
+
+// Modo Didático (CLAUDE.md > "Padrões de UI" > seção 4-5) — pedido
+// explícito do usuário 2026-08-26 ("controle não possui o modo
+// educativo"). Tela complexa (7 abas, dezenas de campos), então o foco
+// aqui é explicar o que NÃO é óbvio (comportamento de cada aba, botões
+// de gravação dedicados, campos com efeito colateral) — não documentar
+// campo a campo.
+const AJUDA_CONTROLE_ITENS: HelpItem[] = [
+  {
+    titulo: "O que é esta tela",
+    texto: "Configurações gerais do sistema (dados da empresa, numeração fiscal, regras de venda, financeiro, integrações). Fica dividida em abas — só as abas que o seu grupo de usuário tem permissão de ver aparecem na lista no topo.",
+    icon: { lib: "ion", name: "settings-outline" },
+  },
+  {
+    titulo: "Botão Gravar (canto superior direito)",
+    texto: "Salva todos os campos de todas as abas de uma vez, exceto os que têm botão de gravação próprio (ver abaixo) — não precisa gravar aba por aba.",
+    icon: { lib: "ion", name: "save-outline" },
+  },
+  {
+    titulo: "Logo da Empresa",
+    texto: "Aparece nos documentos impressos (recibo do Pedido Bar, O.S., Boleto). Diferente do resto da tela: enviar ou remover a logo já salva na hora, sem precisar clicar em Gravar.",
+    icon: { lib: "ion", name: "image-outline" },
+  },
+  {
+    titulo: "Botões de gravação próprios (Nº de NF/NFC-e/MDF-e)",
+    texto: "A numeração de Nota Fiscal, NFC-e e MDF-e tem botão de gravar separado do Gravar geral da tela — muda um número tão sensível que o sistema registra essa alteração específica no histórico, separado das demais.",
+    icon: { lib: "ion", name: "document-text-outline" },
+  },
+  {
+    titulo: "Aba Contratos",
+    texto: "Só aparece pra quem tem permissão nessa aba — configura regras específicas de faturamento de contrato (produto/serviço padrão, forma de pagamento).",
+    icon: { lib: "ion", name: "reader-outline" },
+  },
+  {
+    titulo: "Aba Kontacto",
+    texto: "Visível só pro usuário Master — área de suporte interno, equivalente à tela protegida por senha oculta do sistema antigo.",
+    icon: { lib: "ion", name: "shield-checkmark-outline" },
+  },
+];
 
 const UF_OPTS: SelectOption[] = [
   "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG",
@@ -270,6 +314,76 @@ function CertificadoGrid({ f, canSave }: { f: FormApi; canSave: boolean }) {
           </View>
         </View>
       ) : null}
+    </View>
+  );
+}
+
+// Logo da Empresa (`controle.logo_empresa`, VARBINARY) — 2026-08-26,
+// decisão explícita do usuário: gravar direto no banco, não Azure Blob
+// (ver `useControleSistemaForm.uploadLogoEmpresa`). Mesmo padrão de
+// `<input type="file">` web-only já usado em `CertificadoGrid` acima.
+function LogoEmpresaSection({ f, canSave }: { f: FormApi; canSave: boolean }) {
+  const [arquivo, setArquivo] = useState<File | null>(null);
+  const fb = useFeedback();
+
+  const upload = async () => {
+    if (!arquivo) { fb.showWarning("Selecione um arquivo de imagem."); return; }
+    if (arquivo.size > LOGO_TAMANHO_MAXIMO_BYTES) {
+      fb.showWarning(`Arquivo muito grande (${(arquivo.size / 1024 / 1024).toFixed(1)} MB) — o recomendado é até 1 MB.`);
+    }
+    const resolucao = await lerResolucaoImagem(arquivo);
+    if (resolucao && (resolucao.largura < LOGO_LARGURA_MINIMA || resolucao.altura < LOGO_ALTURA_MINIMA)) {
+      fb.showWarning(
+        `Imagem com resolução baixa (${resolucao.largura}×${resolucao.altura}px) — pode sair borrada na impressão. ` +
+        `Recomendado: pelo menos ${LOGO_LARGURA_MINIMA}×${LOGO_ALTURA_MINIMA}px. Enviando mesmo assim…`,
+        undefined, 5000,
+      );
+    }
+    const ok = await f.uploadLogoEmpresa(arquivo, arquivo.name);
+    if (ok) setArquivo(null);
+  };
+
+  return (
+    <View>
+      {f.logoBase64 ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, marginBottom: spacing.sm }}>
+          <Image
+            source={{ uri: `data:${f.logoMime || "image/png"};base64,${f.logoBase64}` }}
+            style={{ width: 100, height: 60, resizeMode: "contain", borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm }}
+          />
+          {canSave ? (
+            <Pressable onPress={() => f.removerLogoEmpresa()} style={styles.secondaryBtn} testID="ctrl-logo-remover">
+              <Text style={styles.secondaryBtnText}>Remover Logo</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : (
+        <Text style={styles.helperText}>Nenhuma logo cadastrada.</Text>
+      )}
+      {canSave ? (
+        <View style={styles.rowFields}>
+          <View style={styles.colThird}>
+            <Text style={styles.label}>Arquivo (.png/.jpg)</Text>
+            {Platform.OS === "web" ? (
+              <input
+                type="file" accept="image/png,image/jpeg"
+                onChange={(e) => setArquivo((e.target as HTMLInputElement).files?.[0] || null)}
+                style={{
+                  height: 36, boxSizing: "border-box", padding: "0 8px", fontSize: 13,
+                  border: `1px solid ${colors.border}`, borderRadius: radius.sm,
+                  backgroundColor: colors.surface, color: colors.onSurface,
+                }}
+              />
+            ) : null}
+          </View>
+          <View style={[styles.colThird, { justifyContent: "flex-end" }]}>
+            <Pressable onPress={upload} style={styles.secondaryBtn} testID="ctrl-logo-upload">
+              <Text style={styles.secondaryBtnText}>Enviar Logo</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+      {canSave ? <Text style={styles.helperText}>{LOGO_ORIENTACAO_TEXTO}</Text> : null}
     </View>
   );
 }
@@ -568,6 +682,7 @@ export default function ControleSistemaScreen() {
   const [tab, setTab] = useState<TabKey>(allTabs[0]?.key ?? "empresarial");
   const canSave = can("CTRL_SISTEMA.GRAVAR") || isMaster;
   const [modal, setModal] = useState<null | "email" | "cep" | "tray" | "impressora" | "remessa">(null);
+  const [ajudaOpen, setAjudaOpen] = useState(false);
 
   const planoContasFiltrado = (tipo: "R" | "D") => f.planoContas.filter((c) => c.tipo === tipo);
   const subClassesDe = (classes: typeof f.planoContas, classeCodigo: string | boolean) => {
@@ -604,6 +719,14 @@ export default function ControleSistemaScreen() {
           <Ionicons name="chevron-back" size={24} color={colors.onBrandPrimary} />
         </Pressable>
         <Text style={styles.headerTitle}>Controle do Sistema</Text>
+        <IconButtonWithTooltip
+          icon="information-circle-outline"
+          label="Ajuda"
+          onPress={() => setAjudaOpen(true)}
+          color={colors.onBrandPrimary}
+          style={{ marginRight: canSave ? spacing.sm : 0 }}
+          testID="controle-sistema-ajuda"
+        />
         {canSave ? (
           <Pressable onPress={handleSave} disabled={f.saving} style={styles.saveBtn} testID="controle-sistema-salvar">
             {f.saving ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.saveBtnText}>Gravar</Text>}
@@ -632,6 +755,8 @@ export default function ControleSistemaScreen() {
 
           {tab === "empresarial" && allTabs.some((t) => t.key === "empresarial") ? (
             <View style={styles.card}>
+              <SubSectionTitle>Logo da Empresa</SubSectionTitle>
+              <LogoEmpresaSection f={f} canSave={canSave} />
               <SectionTitle>Dados Cadastrais</SectionTitle>
               <View style={styles.rowFields}>
                 <Txt form={f.form} setField={f.setField} campo="cgc" label="CNPJ" maxLength={14} keyboardType="number-pad" />
@@ -945,11 +1070,23 @@ export default function ControleSistemaScreen() {
                 <Txt form={f.form} setField={f.setField} campo="serie_DPS" label="Série" />
                 <Txt form={f.form} setField={f.setField} campo="codigo_nbs" label="Código NBS" />
               </View>
+              <Text style={styles.helperText}>
+                "Código NBS" identifica, pra todas as NFS-e desta empresa, a que tipo de serviço ela
+                pertence dentro da Nomenclatura Brasileira de Serviços — é um código único por empresa
+                (não muda por serviço vendido). Obrigatório: sem ele preenchido, nenhuma NFS-e é emitida
+                (o sistema bloqueia com aviso claro). Em caso de dúvida sobre qual código usar, verifique
+                com seu contador.
+              </Text>
               <Chk form={f.form} setField={f.setField} campo="ISS_Retido" label="Iss Retido" />
               <View style={styles.rowFields}>
                 <Num form={f.form} setField={f.setField} campo="iss" label="ISS" />
                 <Num form={f.form} setField={f.setField} campo="Simples_Servico" label="Aliquota Simples Nacional" />
               </View>
+              <Text style={styles.helperText}>
+                "Alíquota Simples Nacional" é usada na NFS-e como percentual aproximado de tributos
+                (informação da Lei da Transparência ao consumidor) — nunca altera o valor do ISS
+                realmente cobrado, só o texto informativo da nota.
+              </Text>
               <SubSectionTitle>PIS / Cofins</SubSectionTitle>
               <View style={styles.rowFields}>
                 <Txt form={f.form} setField={f.setField} campo="cst_pis_cofins_dps" label="CST" />
@@ -1179,6 +1316,39 @@ export default function ControleSistemaScreen() {
                 <DateField label="Início Paf" value={(f.form.data_inicio_paf as string) || null} onChange={(v) => f.setField("data_inicio_paf", v || "")} />
               </View>
 
+              <SubSectionTitle>Ambiente Fiscal</SubSectionTitle>
+              <Text style={styles.helperText}>
+                Controla se NF-e/NFS-e são emitidas em Homologação (teste, sem valor fiscal) ou Produção
+                (documento fiscal real, vale contra o SEFAZ/prefeitura) — vale pros dois, o legado grava com o
+                mesmo campo. Sem esta configuração, o sistema emite sempre em Homologação por segurança.
+              </Text>
+              <View style={styles.rowFields}>
+                <View style={styles.colThird}>
+                  <Text style={styles.label}>Ambiente NFe/NFSe</Text>
+                  <SelectField
+                    value={String(f.form.ambiente_nfe ?? "2")}
+                    onChange={(v) => f.setField("ambiente_nfe", v != null ? String(v) : "2")}
+                    options={[
+                      { value: "2", label: "Homologação" },
+                      { value: "1", label: "Produção" },
+                    ]}
+                    compactWeb testID="ctrl-ambiente-nfe"
+                  />
+                </View>
+                <View style={styles.colThird}>
+                  <Text style={styles.label}>Modelo Danfe</Text>
+                  <SelectField
+                    value={String(f.form.modelo_danfe ?? "0")}
+                    onChange={(v) => f.setField("modelo_danfe", v != null ? String(v) : "0")}
+                    options={[
+                      { value: "0", label: "Retrato" },
+                      { value: "1", label: "Paisagem" },
+                    ]}
+                    compactWeb testID="ctrl-modelo-danfe"
+                  />
+                </View>
+              </View>
+
               <Chk form={f.form} setField={f.setField} campo="exige_cpf_cliente" label="Exige CPF/CNPJ no Cadastro de Clientes" />
               <Chk form={f.form} setField={f.setField} campo="aceita_duplicar_cnpj" label="Aceita Duplicar CPF/CNPJ no Cadastro de Clientes" />
               <Chk form={f.form} setField={f.setField} campo="inc_prod_os" label="Inc Produto Os" />
@@ -1190,6 +1360,15 @@ export default function ControleSistemaScreen() {
               <Txt form={f.form} setField={f.setField} campo="Path_importacao_venda_externa" label="Importação Venda Externa" />
               <Txt form={f.form} setField={f.setField} campo="Path_backup_sql" label="Path Backup Banco de Dados" />
               <Txt form={f.form} setField={f.setField} campo="path_gestor_documentos" label="Path Gestor de Documentos" />
+              <Txt form={f.form} setField={f.setField} campo="path_produto_imagem" label="Armazenamento de Fotos de Produto" />
+              <Text style={styles.helperText}>
+                Define onde as fotos dos produtos são gravadas — independente do Gestor de Documentos acima
+                (que continua servindo documentos do produto: manual, certificado, ficha técnica). Aceita um
+                caminho de pasta local do servidor (ex.: "C:\\fotos_produtos") ou a URL de um container Azure
+                Blob Storage (ex.: "https://minhaconta.blob.core.windows.net/produtos-imagens") — nesse
+                segundo caso, usa a mesma Connection String do Azure já configurada acima. Sem esta
+                configuração, o upload de fotos fica bloqueado.
+              </Text>
               <Txt form={f.form} setField={f.setField} campo="PATH_LOGO_EMAIL_COBRANCA" label="Path Logo Assinatura Email Cobrança" />
               <Txt form={f.form} setField={f.setField} campo="TEXTO_CORPO_EMAIL_COBRANCA" label="Mensagem Corpo Email Cobrança" />
             </View>
@@ -1210,6 +1389,12 @@ export default function ControleSistemaScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+      <AjudaPedidoModal
+        visible={ajudaOpen}
+        onClose={() => setAjudaOpen(false)}
+        titulo="Controle do Sistema"
+        itens={AJUDA_CONTROLE_ITENS}
+      />
     </SafeAreaView>
   );
 }

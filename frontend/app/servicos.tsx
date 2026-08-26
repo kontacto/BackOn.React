@@ -17,6 +17,7 @@ import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import NiveisModal from "@/src/components/NiveisModal";
+import TributacaoMunicipioSearchModal, { TributacaoMunicipioRow } from "@/src/components/TributacaoMunicipioSearchModal";
 import { buildNivelBreadcrumb } from "@/src/utils/nivelTree";
 import PrevisaoProdutosModal from "@/src/components/PrevisaoProdutosModal";
 import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
@@ -89,6 +90,11 @@ const SERVICO_AJUDA_ITENS: HelpItem[] = [
     titulo: "Código ICMS",
     texto: "Precisa ser um código já cadastrado na tabela de ICMS do sistema — se digitar/escolher um código que não existe lá, o Gravar bloqueia com aviso.",
     icon: { lib: "ion", name: "pricetags-outline" },
+  },
+  {
+    titulo: "Buscar Código Complementar Municipal",
+    texto: "O ícone de lupa ao lado do campo abre uma busca na tabela oficial de Códigos de Tributação Municipal — mostra a descrição de cada código (ex.: \"Manutenção de aparelhos\") em vez de exigir que você já saiba o número certo de cor.",
+    icon: { lib: "ion", name: "search-outline" },
   },
   {
     titulo: "Indicador de Operação (IBS/CBS)",
@@ -237,6 +243,7 @@ export default function ServicosScreen() {
   const [nivelSegments, setNivelSegments] = useState<string[]>(["", "", "", "", ""]);
   const [nivelLabel, setNivelLabel] = useState("");
   const [nivelModalOpen, setNivelModalOpen] = useState(false);
+  const [tribMunModalOpen, setTribMunModalOpen] = useState(false);
   const [nivelList, setNivelList] = useState<NivelFlat[]>([]);
 
   const [prevProdutosOpen, setPrevProdutosOpen] = useState(false);
@@ -642,9 +649,26 @@ export default function ServicosScreen() {
                   </View>
                   <View style={styles.colHalf}>
                     <Text style={styles.label}>Código Complementar Municipal</Text>
-                    <TextInput value={codServicoMunicipio} onChangeText={setCodServicoMunicipio} style={styles.input} maxLength={15} testID="servicos-cod-servico-municipio" />
+                    <View style={styles.inputWithBtn}>
+                      <TextInput
+                        value={codServicoMunicipio}
+                        onChangeText={setCodServicoMunicipio}
+                        style={[styles.input, { flex: 1, minWidth: 0 }]}
+                        maxLength={15}
+                        testID="servicos-cod-servico-municipio"
+                      />
+                      <Pressable onPress={() => setTribMunModalOpen(true)} style={styles.searchBtn} testID="servicos-buscar-cod-servico-municipio">
+                        <Ionicons name="search" size={16} color={colors.onBrandPrimary} />
+                      </Pressable>
+                    </View>
                   </View>
                 </View>
+                <Text style={styles.sectionHint}>
+                  Esses 2 códigos dizem à Prefeitura qual é exatamente este serviço, na Nota Fiscal de
+                  Serviço eletrônica (NFS-e). Sem os dois preenchidos, a NFS-e deste serviço não pode ser
+                  emitida — o sistema bloqueia com um aviso claro em vez de adivinhar. Em caso de dúvida
+                  sobre o código certo, verifique com seu contador.
+                </Text>
                 <View style={styles.rowFields}>
                   <View style={styles.colHalf}>
                     <Text style={styles.label}>Código Mercosul</Text>
@@ -823,6 +847,17 @@ export default function ServicosScreen() {
 
         <NiveisModal visible={nivelModalOpen} conn={conn} onClose={() => setNivelModalOpen(false)} onPick={handleNivelPick} />
 
+        <TributacaoMunicipioSearchModal
+          visible={tribMunModalOpen}
+          conn={conn}
+          codListaServico={codListaServico}
+          onClose={() => setTribMunModalOpen(false)}
+          onPick={(item: TributacaoMunicipioRow) => {
+            setCodServicoMunicipio(item.cod_trib_mun);
+            setTribMunModalOpen(false);
+          }}
+        />
+
         <PrevisaoProdutosModal
           visible={prevProdutosOpen}
           conn={conn}
@@ -906,6 +941,8 @@ const styles = StyleSheet.create({
   // (container agora 1600px); flexWrap acrescentado no rowFields pra não
   // forçar campos a dividir a linha inteira sempre em partes iguais.
   colHalf: { flex: 1, minWidth: 220, maxWidth: 420 },
+  inputWithBtn: { flexDirection: "row", alignItems: "center", minWidth: 0 },
+  searchBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: radius.sm, backgroundColor: colors.brandPrimary, marginLeft: 8 },
   colThird: { flex: 1, minWidth: 160, maxWidth: 320 },
   colFlex: { flex: 1, minWidth: 220, maxWidth: 420 },
   colNarrow: { width: 140 },

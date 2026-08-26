@@ -12,6 +12,7 @@ sync` são sempre mockados (mesmo padrão de `test_nfe_emissao_service.py`/
 `comanda_service._emitir_nfce_comanda_sync`) mockam esse service
 diretamente, sem duplicar a lógica interna dele aqui."""
 import datetime
+import re
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -30,6 +31,15 @@ def _modulo_nfce_ativo(monkeypatch):
     # runtime; mockado True por padrão pra não exigir mais uma linha no
     # FakeCursor de todo teste já existente (nenhum testa módulo desligado).
     monkeypatch.setattr(svc.nfe_fiscal_common, "modulo_nfce_ativo_sync", lambda cur: True)
+
+
+@pytest.fixture(autouse=True)
+def _tp_amb_producao(monkeypatch):
+    # Ambiente NFe/NFCe (controle_aux.ambiente_nfe, 2026-08-20) — antes
+    # hardcodado "1" (produção) em todo lugar; agora resolvido em runtime.
+    # Mockado "1" por padrão pra não exigir mais uma linha no FakeCursor
+    # de todo teste já existente.
+    monkeypatch.setattr(svc.nfe_fiscal_common, "resolver_tp_amb_sync", lambda cur: "1")
 
 
 def _gerar_certificado_teste():
@@ -318,7 +328,7 @@ class TestConsultarSituacaoSync:
             f'<nProt>135260000012345</nProt></infProt></protNFe>'
             f'</retConsSitNFe>'
         )
-        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c, **kw: resposta_fake)
         chave = "3" * 44
         cur = FakeCursor(one=[{"chave_acesso": chave}])
         _patch(monkeypatch, cur)
@@ -331,7 +341,7 @@ class TestConsultarSituacaoSync:
         _sem_contingencia(monkeypatch)
         _patch_certificado(monkeypatch, b"key", b"cert")
         resposta_fake = f'<retConsSitNFe xmlns="{NFE_NS}"><cStat>108</cStat><xMotivo>Serviço Paralisado</xMotivo></retConsSitNFe>'
-        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c, **kw: resposta_fake)
         chave = "3" * 44
         cur = FakeCursor(one=[{"chave_acesso": chave}])
         _patch(monkeypatch, cur)
@@ -346,7 +356,7 @@ class TestConsultarSituacaoSync:
 # ---------------------------------------------------------------------------
 
 def _fake_transmitir_inutilizacao(*, consulta_resposta=None, inut_resposta=None):
-    def _fn(envelope, url, k, c):
+    def _fn(envelope, url, k, c, **kw):
         if "NfeConsulta" in url:
             return consulta_resposta
         return inut_resposta
@@ -366,6 +376,24 @@ class TestMontarXmlInutilizacao:
         assert id_inut.endswith("001" + "000000010" + "000000010")
         assert 'Id="' + id_inut + '"' in xml.decode("utf-8")
         etree.fromstring(xml)
+
+    def test_serie_e_numeros_sem_zero_a_esquerda_no_xml(self):
+        # Achado ao vivo 2026-08-24: o `Id` (atributo) usa largura fixa
+        # (serie(3)/nNF(9), zero à esquerda), mas os ELEMENTOS `<serie>`/
+        # `<nNFIni>`/`<nNFFin>` do XML em si NUNCA podem ter zero à
+        # esquerda (rejeição real "Falha no schema XML [inutNFe/infInut/
+        # serie]", confirmado contra o XSD oficial — `TSerie`: `0|
+        # [1-9]{1}[0-9]{0,2}`, `TNF`: `[1-9]{1}[0-9]{0,8}`).
+        xml, _ = svc._montar_xml_inutilizacao(
+            cod_ibge="33", cnpj="12345678000199", serie="1", numero_inicial=9000, numero_final=9000,
+            motivo="Erro de digitação no valor total", tp_amb="1",
+        )
+        texto = xml.decode("utf-8")
+        assert "<serie>1</serie>" in texto
+        assert "<nNFIni>9000</nNFIni>" in texto
+        assert "<nNFFin>9000</nNFFin>" in texto
+        assert "<serie>001</serie>" not in texto
+        assert "<nNFIni>000009000</nNFIni>" not in texto
 
 
 class TestInutilizarFaixaSync:
@@ -521,8 +549,15 @@ class TestRetransmitirSync:
 # ---------------------------------------------------------------------------
 
 class TestValidarContingenciaSync:
-    def _xml_guardado(self, num_nfce):
-        return f'<NFe xmlns="{NFE_NS}"><infNFe Id="NFe{num_nfce}" versao="4.00"><ide><nNF>{num_nfce}</nNF></ide></infNFe></NFe>'
+    def _xml_guardado(self, num_nfce, chave_acesso="3" * 44):
+        # Achado real (teste ao vivo, 2026-08-26): o `Id` do XML gravado é
+        # sempre `NFe<chave_acesso>` (44 dígitos, mesmo formato usado na
+        # emissão original — `nfe_emissao_service._montar_xml_nfce`), NUNCA
+        # `NFe<num_nfce>` — usar o número sequencial aqui mascarava
+        # justamente o bug que corrigiu `id_nfe` em `_validar_contingencia_
+        # sync` (o teste antigo usava o MESMO valor errado nos dois
+        # lugares, "acertando" por coincidência).
+        return f'<NFe xmlns="{NFE_NS}"><infNFe Id="NFe{chave_acesso}" versao="4.00"><ide><nNF>{num_nfce}</nNF></ide></infNFe></NFe>'
 
     def test_sem_permissao(self, monkeypatch):
         cur = FakeCursor()
@@ -560,7 +595,7 @@ class TestValidarContingenciaSync:
         assert "xml da nfc-e não encontrado" in r["resultados"][0]["message"].lower()
 
     def test_endpoint_nao_disponivel(self, monkeypatch):
-        linha = {"comanda": 1, "num_nfce": 10, "situacao": "G", "xml": self._xml_guardado(10)}
+        linha = {"comanda": 1, "num_nfce": 10, "situacao": "G", "xml": self._xml_guardado(10), "chave_acesso": "3" * 44}
         cur = FakeCursor(one=[linha, {"uf": "MG"}])
         _patch(monkeypatch, cur)
         key_pem, cert_pem = _gerar_certificado_teste()
@@ -568,6 +603,77 @@ class TestValidarContingenciaSync:
         r = svc._validar_contingencia_sync("srv", "bd", comandas=[1], master=True)
         assert r["success"] is False
         assert "endpoint sefaz não disponível" in r["resultados"][0]["message"].lower()
+
+    def test_id_nfe_usa_chave_acesso_nao_num_nfce(self, monkeypatch):
+        """Achado real, teste ao vivo 2026-08-26: SEFAZ (na verdade o
+        assinador local, antes mesmo de sair pra rede) rejeitava com
+        "Unable to resolve reference URI: #NFe2002" porque `id_nfe` era
+        montado com `num_nfce` (número curto) em vez de `chave_acesso` (44
+        dígitos, o mesmo Id usado na assinatura ORIGINAL) — o Id referenciado
+        na assinatura não existia de verdade no XML gravado."""
+        chave = "3" * 44
+        linha = {"comanda": 1, "num_nfce": 2002, "situacao": "G", "xml": self._xml_guardado(2002, chave), "chave_acesso": chave}
+        cur = FakeCursor(one=[linha, {"uf": "RJ"}])
+        _patch(monkeypatch, cur)
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        capturado = {}
+        real_assinar = svc.nfe_fiscal_common.assinar_xml
+
+        def _spy_assinar(xml_bytes, id_nfe, key, cert, **kw):
+            capturado["id_nfe"] = id_nfe
+            return real_assinar(xml_bytes, id_nfe, key, cert, **kw)
+
+        monkeypatch.setattr(svc.nfe_fiscal_common, "assinar_xml", _spy_assinar)
+        resposta_fake = "<retEnviNFe><infProt><cStat>100</cStat><nProt>1</nProt><dhRecbto>2026-08-26T10:00:00-03:00</dhRecbto></infProt></retEnviNFe>"
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c, **kw: resposta_fake)
+
+        r = svc._validar_contingencia_sync("srv", "bd", comandas=[1], master=True)
+        assert capturado["id_nfe"] == f"NFe{chave}"
+        assert capturado["id_nfe"] != "NFe2002"
+        assert r["success"] is True
+
+    def test_xml_guardado_ja_assinado_com_supl_e_relimpo_antes_de_reassinar(self, monkeypatch):
+        """Achado real, teste ao vivo 2026-08-26 (2ª rejeição, depois de
+        corrigir o id_nfe acima): `xml_guardado` é o documento FINAL —
+        já assinado E já com `<infNFeSupl>` grudado, mesmo formato
+        persistido por `emitir_nfce_sync`. Reassinar isso do jeito que
+        está corrompe o QR Code (SEFAZ: "Falha no Schema XML...
+        infNFeSupl/qrCode"). O envelope final tem que ter EXATAMENTE 1
+        `infNFeSupl` (o mesmo conteúdo, preservado) e nenhuma assinatura
+        duplicada."""
+        chave = "3" * 44
+        xml_ja_processado = (
+            f'<NFe xmlns="{NFE_NS}"><infNFe Id="NFe{chave}" versao="4.00"><ide><nNF>2002</nNF></ide></infNFe>'
+            '<infNFeSupl><qrCode><![CDATA[https://consulta.exemplo/QRCode?p=chaveoriginal]]></qrCode>'
+            '<urlChave>https://consulta.exemplo/nfce</urlChave></infNFeSupl>'
+            '<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#">'
+            '<ds:SignedInfo><ds:Reference URI="#antiga"/></ds:SignedInfo>'
+            '<ds:SignatureValue>ASSINATURA-ANTIGA-INVALIDA</ds:SignatureValue></ds:Signature>'
+            "</NFe>"
+        )
+        linha = {"comanda": 1, "num_nfce": 2002, "situacao": "G", "xml": xml_ja_processado, "chave_acesso": chave}
+        cur = FakeCursor(one=[linha, {"uf": "RJ"}])
+        _patch(monkeypatch, cur)
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        capturado = {}
+
+        def _fake_envelope(xml_assinado, tp_amb):
+            capturado["xml_assinado"] = xml_assinado
+            return "<envelope/>"
+
+        monkeypatch.setattr(svc.nfe_emissao_service, "_montar_envelope_autorizacao", _fake_envelope)
+        resposta_fake = "<retEnviNFe><infProt><cStat>100</cStat><nProt>1</nProt><dhRecbto>2026-08-26T10:00:00-03:00</dhRecbto></infProt></retEnviNFe>"
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c, **kw: resposta_fake)
+
+        r = svc._validar_contingencia_sync("srv", "bd", comandas=[1], master=True)
+        assert r["success"] is True
+        xml_final = capturado["xml_assinado"].decode("utf-8")
+        assert xml_final.count("<infNFeSupl>") == 1
+        assert "consulta.exemplo/QRCode?p=chaveoriginal" in xml_final  # QR original preservado
+        assert "ASSINATURA-ANTIGA-INVALIDA" not in xml_final  # assinatura velha removida, não duplicada
+        assert len(re.findall(r"<ds:Signature[ >]", xml_final)) == 1  # só a assinatura NOVA, sem duplicar
 
     def test_sucesso_transmite_e_marca_situacao_f(self, monkeypatch):
         linha = {"comanda": 1, "num_nfce": 10, "situacao": "G", "xml": self._xml_guardado(10), "chave_acesso": "3" * 44}
@@ -579,13 +685,46 @@ class TestValidarContingenciaSync:
             "<retEnviNFe><infProt><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo>"
             "<nProt>555</nProt><dhRecbto>2026-08-19T10:00:00-03:00</dhRecbto></infProt></retEnviNFe>"
         )
-        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c, **kw: resposta_fake)
         r = svc._validar_contingencia_sync("srv", "bd", comandas=[1], master=True)
         assert r["success"] is True
         assert r["resultados"][0]["protocolo_sefaz"] == "555"
         assert conn.committed is True
+        # `chave_acesso` real no WHERE (achado 2026-08-26: antes nem era
+        # selecionado, o UPDATE de n_fiscal rodava com WHERE chave_acesso=NULL).
+        update_nf = next(q for q in cur.queries if "UPDATE n_fiscal SET situacao = 'A'" in q[0])
+        assert "3" * 44 in update_nf[1]
         assert any("UPDATE comanda_nfce SET situacao = 'F'" in q[0] for q in cur.queries)
         assert any("UPDATE n_fiscal SET situacao = 'A'" in q[0] for q in cur.queries)
+        # Achado 2026-08-24 (mesmo bug já corrigido no MDF-e 2026-08-23):
+        # `dh_recbto` cru do SEFAZ (com offset "-03:00") quebra numa coluna
+        # DATETIME — precisa chegar como `datetime` NAIVE já convertido.
+        update_nf = next(q for q in cur.queries if "UPDATE n_fiscal SET situacao = 'A'" in q[0])
+        import datetime as _dt
+        dh_param = next(p for p in update_nf[1] if isinstance(p, _dt.datetime))
+        assert dh_param == _dt.datetime(2026, 8, 19, 10, 0, 0)
+
+    def test_cstat_do_lote_nao_confunde_com_cstat_do_documento(self, monkeypatch):
+        # Achado 2026-08-24: mesmo bug já corrigido em `emitir_nfce_sync`/
+        # `emitir_nfe_sync` 2026-08-23 (o `cStat` do LOTE, nível externo,
+        # sempre vem ANTES do `cStat` do DOCUMENTO dentro de `infProt` na
+        # resposta real do SEFAZ) — aqui replicado com um `cStat` de lote
+        # (104, neutro) que NÃO deve ser confundido com o 100 real.
+        linha = {"comanda": 1, "num_nfce": 10, "situacao": "G", "xml": self._xml_guardado(10), "chave_acesso": "3" * 44}
+        cur = FakeCursor(one=[linha, {"uf": "RJ"}])
+        conn = _patch(monkeypatch, cur)
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = (
+            "<retEnviNFe><cStat>104</cStat><xMotivo>Lote processado</xMotivo>"
+            "<protNFe><infProt><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo>"
+            "<nProt>777</nProt><dhRecbto>2026-08-24T10:00:00-03:00</dhRecbto></infProt></protNFe></retEnviNFe>"
+        )
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c, **kw: resposta_fake)
+        r = svc._validar_contingencia_sync("srv", "bd", comandas=[1], master=True)
+        assert r["success"] is True
+        assert r["resultados"][0]["protocolo_sefaz"] == "777"
+        assert conn.committed is True
 
     def test_sefaz_recusa_nao_atualiza_situacao(self, monkeypatch):
         linha = {"comanda": 1, "num_nfce": 10, "situacao": "G", "xml": self._xml_guardado(10), "chave_acesso": "3" * 44}
@@ -594,7 +733,7 @@ class TestValidarContingenciaSync:
         key_pem, cert_pem = _gerar_certificado_teste()
         _patch_certificado(monkeypatch, key_pem, cert_pem)
         resposta_fake = "<retEnviNFe><infProt><cStat>539</cStat><xMotivo>Duplicidade</xMotivo></infProt></retEnviNFe>"
-        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c, **kw: resposta_fake)
         r = svc._validar_contingencia_sync("srv", "bd", comandas=[1], master=True)
         assert r["success"] is False
         assert not any("UPDATE comanda_nfce SET situacao = 'F'" in q[0] for q in cur.queries)

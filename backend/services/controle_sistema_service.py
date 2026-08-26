@@ -185,7 +185,19 @@ CAMPOS_CONTROLE_AUX = [
     "consulta_por_descricao_paf", "imprime_nfse",
     "PERGUNTA_EMITE_NFCE", "USA_PRECO_BASE_NFCE", "IMPRIME_NFCE_NAO_FISCAL", "ESCOLHE_NFE_NFCE",
     "data_inicio_nfe", "data_inicio_nfse", "data_inicio_paf",
+    # Ambiente NFe/Danfe (2026-08-20) — achado ao rastrear `FrmGerKon.frm`
+    # (`Option11`/`Option12`, "Homologação"/"Produção", linhas 353-368,
+    # 858-862; `Option13`, "Retrato", linha 377 — único modelo de Danfe
+    # com controle vivo nesta variante do form, "Paisagem"/`Option14`
+    # nunca chegou a ser implementado, código morto comentado). `ambiente_
+    # nfe` passou a ser lido de verdade por todo o pacote de emissão desta
+    # migração (`nfe_fiscal_common.resolver_tp_amb_sync`) — antes disso,
+    # tudo hardcodava produção. `modelo_danfe` só é capturado/exibido por
+    # enquanto — não existe gerador de DANFE em PDF nesta migração ainda
+    # pra consumir esse valor.
+    "ambiente_nfe", "modelo_danfe",
     "path_padrao_xml", "Path_importacao_venda_externa", "Path_backup_sql", "path_gestor_documentos",
+    "path_produto_imagem",
     "PATH_LOGO_EMAIL_COBRANCA", "TEXTO_CORPO_EMAIL_COBRANCA",
     # Integração TRAY (aba Outros, botão próprio) — escopo reduzido aos campos
     # de credencial/ativação (`FrmIntTray.frm`, achado via .frm real). Os
@@ -265,9 +277,81 @@ _CONTROLE_AUX_TEXT_FIELDS = {
     "identificacao_remetente_contrato",
     "tipo_mov_garantia",
     "path_padrao_xml", "Path_importacao_venda_externa", "Path_backup_sql", "path_gestor_documentos",
+    "path_produto_imagem",
     "PATH_LOGO_EMAIL_COBRANCA", "TEXTO_CORPO_EMAIL_COBRANCA",
     "TRAY_ID_LOJA", "TRAY_url_api", "TRAY_Consumer_Key", "TRAY_Consumer_Secret", "TRAY_code",
 }
+
+
+def _ensure_logo_empresa_cols(cur) -> None:
+    """Migração idempotente: `controle.logo_empresa` (VARBINARY, o arquivo
+    de imagem em si) + `logo_empresa_mime` (tipo, ex. "image/png") — campo
+    genuinamente novo, sem precedente no legado (que usava um arquivo fixo
+    `App.Path & "\\LOGO.bmp"` na raiz da instalação, inviável numa
+    arquitetura multi-empresa/web). Decisão explícita do usuário
+    2026-08-26: gravar direto no banco, na própria tabela `controle` — não
+    Azure Blob (mesmo padrão já usado por `certificado_digital.
+    certificado_digital`, ver `certificado_digital_service.py`)."""
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='logo_empresa' AND Object_ID=Object_ID('controle')) "
+        "ALTER TABLE controle ADD logo_empresa VARBINARY(MAX) NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns "
+        "WHERE Name='logo_empresa_mime' AND Object_ID=Object_ID('controle')) "
+        "ALTER TABLE controle ADD logo_empresa_mime NVARCHAR(50) NULL"
+    )
+
+
+def _upload_logo_empresa_sync(servidor: str, banco: str, conteudo: bytes, mime: str) -> dict:
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "UPDATE controle SET logo_empresa=%s, logo_empresa_mime=%s WHERE empresa=%s",
+            (conteudo, (mime or "")[:50] or None, EMPRESA),
+        )
+        conn.commit()
+        cur.close()
+        return {"success": True, "message": "Logo da empresa cadastrada."}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao gravar logo: {e}"}
+    finally:
+        conn.close()
+
+
+def _remover_logo_empresa_sync(servidor: str, banco: str) -> dict:
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "UPDATE controle SET logo_empresa=NULL, logo_empresa_mime=NULL WHERE empresa=%s",
+            (EMPRESA,),
+        )
+        conn.commit()
+        cur.close()
+        return {"success": True, "message": "Logo da empresa removida."}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao remover logo: {e}"}
+    finally:
+        conn.close()
+
+
+async def upload_logo_empresa(servidor, banco, conteudo, mime):
+    return await asyncio.to_thread(_upload_logo_empresa_sync, servidor, banco, conteudo, mime)
+
+
+async def remover_logo_empresa(servidor, banco):
+    return await asyncio.to_thread(_remover_logo_empresa_sync, servidor, banco)
 
 
 def _coerce_vals(dados: dict, campos: list, bool_fields: set, text_fields: set) -> dict:

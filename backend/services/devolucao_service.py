@@ -25,7 +25,19 @@ Defeito"), escolhido por item ao registrar.
 Simplificação registrada (ver PENDENCIAS.md > "Gestor de Devolução"): o
 valor do item devolvido é `qtd_devolvida * p_unit`, sem o rateio de
 frete/outras despesas/desconto que o legado aplica — `devolucao_itens`
-grava `frete`/`outras`/`descontos` sempre 0 nesta fase."""
+grava `frete`/`outras`/`descontos` sempre 0 nesta fase.
+
+**Reauditoria 2026-08-21** (ver PENDENCIAS.md > "🔴 FRENTE ATIVA" e
+CLAUDE.md > "Toda ramificação condicional...") — 2 achados reais
+corrigidos nesta rodada, ambos rastreados até a linha exata:
+1. `_cliente_permitido_para_vale_sync` — "Devolução permitida somente
+   para o proprio cliente da venda ou em nome da propria empresa!"
+   (`FrmManDev.frm:1537-1540`) não estava implementada; o cliente do
+   Vale era um campo livre sem validação nenhuma contra o cliente real
+   da venda ou a lista `ClienteControle` (`Form_Load:2271-2287` —
+   clientes cadastrados com o CNPJ da própria empresa).
+2. Validação de "Data Final não pode ser maior que hoje" (`Critica`,
+   `FrmManDev.frm:1054-1058`) não estava implementada na busca de itens."""
 import asyncio
 from datetime import date
 from typing import Optional
@@ -84,6 +96,13 @@ def _list_itens_venda_sync(req) -> dict:
         if not _modulo_devolucao_ativo(cur):
             conn.close()
             return {"success": False, "message": MODULO_DESATIVADO_MSG, "items": []}
+
+        # Achado real (`Critica`, `FrmManDev.frm:1054-1058`): "A Data Final
+        # deve ter Valor Máximo: DATESIST" — bloqueia buscar com Data Final
+        # no futuro.
+        if req.data_fim and req.data_fim > date.today().isoformat():
+            conn.close()
+            return {"success": False, "message": "A Data Final não pode ser maior que a data de hoje.", "items": []}
 
         where: list[str] = ["c.situacao = 'PG'", "m.serie_nf = 'CM'", "ISNULL(m.Estornado,0) = 0"]
         params: list = []
@@ -177,6 +196,27 @@ def _list_itens_venda_sync(req) -> dict:
         return {"success": False, "message": f"Erro: {e}", "items": []}
 
 
+def _cliente_permitido_para_vale_sync(cur, cliente_destino: int, cliente_venda) -> bool:
+    """Achado real, `FrmManDev.frm:1537-1540` (`Command14_Click`) —
+    "Devolução permitida somente para o proprio cliente da venda ou em
+    nome da propria empresa!". `ClienteControle` (`Form_Load:2271-2287`)
+    é a lista de `cliente.codigo` cujo `cgc_cpf` bate com `controle.cgc`
+    (registros de cliente cadastrados com o CNPJ da própria empresa —
+    usados quando a devolução é feita "em nome da empresa", não do
+    cliente final). Reaproveitado aqui pro Vale de Devolução (a fonte só
+    aplicava essa checagem dentro do fluxo combinado Vale+NFe, mas a
+    regra em si — não deixar um Vale ir pra um cliente qualquer sem
+    relação com a venda original — é de negócio real, não amarrada à
+    emissão de NF em si)."""
+    if cliente_venda is not None and int(cliente_destino) == int(cliente_venda):
+        return True
+    cur.execute(
+        "SELECT 1 AS ok FROM cliente WHERE codigo=%s AND cgc_cpf = (SELECT TOP 1 cgc FROM controle)",
+        (cliente_destino,),
+    )
+    return cur.fetchone() is not None
+
+
 def _registrar_devolucao_sync(req) -> dict:
     """Registra a devolução de 1+ itens (`devolucao_itens`) e, se pedido,
     emite um Vale de Devolução agregando o valor total — réplica do fluxo
@@ -206,7 +246,8 @@ def _registrar_devolucao_sync(req) -> dict:
         valor_total = 0.0
         for it in req.itens:
             cur.execute(
-                "SELECT m.id_mov, m.qtd, m.p_unit, c.situacao, ISNULL(m.Estornado,0) AS estornado "
+                "SELECT m.id_mov, m.qtd, m.p_unit, c.situacao, c.cliente AS cliente_venda, "
+                "ISNULL(m.Estornado,0) AS estornado "
                 "FROM movimentacao m JOIN comanda c ON c.comanda = m.num_nf "
                 "WHERE m.id_mov=%s AND m.serie_nf='CM'",
                 (it.id_mov,),
@@ -218,6 +259,13 @@ def _registrar_devolucao_sync(req) -> dict:
             if (row.get("situacao") or "").strip().upper() != "PG" or row.get("estornado"):
                 conn.rollback(); conn.close()
                 return {"success": False, "message": f"Item {it.id_mov} não está mais elegível para devolução."}
+            if req.emitir_vale and not _cliente_permitido_para_vale_sync(cur, req.cliente, row.get("cliente_venda")):
+                conn.rollback(); conn.close()
+                return {
+                    "success": False,
+                    "message": "O Vale de Devolução só pode ser emitido para o próprio cliente da venda "
+                               "ou em nome da própria empresa.",
+                }
             cur.execute("SELECT ISNULL(SUM(Qtd_Devolvida),0) AS qtd FROM devolucao_itens WHERE CodMov=%s", (it.id_mov,))
             qtd_ja_dev = float(cur.fetchone()["qtd"] or 0)
             qtd_disponivel = float(row["qtd"] or 0) - qtd_ja_dev

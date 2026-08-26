@@ -24,15 +24,26 @@ async def listar_comandas_agrupaveis(req: ListarComandasAgrupaveisRequest):
 
 @router.post("/nfe-agrupada/emitir")
 async def emitir_nfe_agrupada(req: EmitirNfeAgrupadaRequest, request: Request):
-    result = await nfe_agrupada_service.emitir_nfe_agrupada(
-        req.servidor, req.banco, req.comandas, usuario=req.usuario_alteracao, classe=req.classe, master=bool(req.master),
+    result = await nfe_agrupada_service.emitir_agrupado(
+        req.servidor, req.banco, req.comandas, emitir_nfe=req.emitir_nfe, emitir_nfse=req.emitir_nfse,
+        usuario=req.usuario_alteracao, classe=req.classe, master=bool(req.master), paga_frete=req.paga_frete,
     )
-    if result.get("success"):
+    resultado_nfe = result.get("resultado_nfe")
+    resultado_nfse = result.get("resultado_nfse")
+    if resultado_nfe and resultado_nfe.get("success"):
         await log_auditoria_service.registrar_log(
             req.servidor, req.banco, tela="NFE_AGRUPADA", comando="GRAVAR",
             usuario=req.usuario_alteracao, classe=req.classe,
             referencia=",".join(str(c) for c in req.comandas),
-            descricao=f"NF-e agrupada emitida — comandas {req.comandas} — nota {result.get('nota_fisc')}",
+            descricao=f"NF-e agrupada emitida — comandas {req.comandas} — nota {resultado_nfe.get('nota_fisc')}",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    if resultado_nfse and resultado_nfse.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="NFE_AGRUPADA", comando="GRAVAR",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=",".join(str(c) for c in req.comandas),
+            descricao=f"NFS-e agrupada emitida — comandas {req.comandas} — nota {resultado_nfse.get('nota_fisc')}",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

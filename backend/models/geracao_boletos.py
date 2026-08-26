@@ -1,8 +1,11 @@
 """Geração de Boletos (Financeiro > Cobranças) — ver
-services/geracao_boletos_service.py, PENDENCIAS.md > "Geração de Boletos"."""
+services/geracao_boletos_service.py, services/boleto_pdf_service.py,
+PENDENCIAS.md > "Boleto em PDF"."""
 from typing import Optional
 
 from pydantic import BaseModel
+
+from models.log_auditoria import AuditFields
 
 
 class ListarTitulosRequest(BaseModel):
@@ -17,3 +20,9 @@ class ListarTitulosRequest(BaseModel):
     cliente_codigo: Optional[int] = None  # resolvido pelo campo de busca de cliente ([GLOBAL], ver CLAUDE.md)
     so_sem_boleto: bool = False
     somente_registrados: bool = False
+
+
+class TitulosBoletoRequest(AuditFields):
+    servidor: str
+    banco: str
+    titulos: list[int]

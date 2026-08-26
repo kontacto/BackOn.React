@@ -71,6 +71,31 @@ export type OSEquipamentoRow = {
   modelo_descricao: string | null;
 };
 
+// Checklist de Entrada de Veículo (O.S. Oficina, `os_checklist_veiculo`) —
+// pedido explícito do usuário 2026-08-26, sem precedente no legado. Cada
+// marcação é um toque no diagrama do veículo (ChecklistVeiculoDiagrama.tsx),
+// não uma pergunta fixa Sim/Não/Reparar — `pos_x`/`pos_y` são frações 0-1
+// relativas ao diagrama.
+export type OSChecklistVeiculoRow = {
+  codigo: number;
+  tipo_avaria: string;
+  pos_x: number;
+  pos_y: number;
+  descricao: string;
+};
+
+export const TIPO_AVARIA_OPTIONS: { value: string; label: string }[] = [
+  { value: "AMASSADO", label: "Amassado" },
+  { value: "ARRANHAO", label: "Arranhão" },
+  { value: "QUEBRADO", label: "Quebrado" },
+  { value: "FALTANDO", label: "Faltando" },
+  { value: "OUTRO", label: "Outro" },
+];
+
+export function tipoAvariaLabel(v: string): string {
+  return TIPO_AVARIA_OPTIONS.find((o) => o.value === v)?.label || v;
+}
+
 export type OSData = {
   codigo: number; cliente: number | null; cliente_nome: string; cliente_cgc: string;
   data: string | null; hora: string; situacao: string; situacao_label: string; total: number;

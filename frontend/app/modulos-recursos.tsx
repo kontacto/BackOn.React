@@ -12,7 +12,14 @@ import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 type Campo = { campo: string; label: string };
-type Grupo = { chave: string; titulo: string; hint?: string; campos: string[]; exclusivo?: boolean };
+type Grupo = {
+  chave: string; titulo: string; hint?: string; campos: string[]; exclusivo?: boolean;
+  // Subconjuntos mutuamente exclusivos DENTRO do mesmo grupo visual —
+  // diferente de `exclusivo` (que trata TODO `campos` como uma única
+  // exclusividade). Ver grupo "Pré Venda" abaixo: Pedido e O.S. são dois
+  // subgrupos exclusivos independentes, mas convivem no mesmo cabeçalho.
+  subgruposExclusivos?: string[][];
+};
 
 // "Bar", "Cilindro", "Pedido de Venda", "Metro Quadrado" e "Clínica" são 5
 // versões/segmentos diferentes da mesma tela de Pedido de Venda — mutuamente
@@ -20,23 +27,49 @@ type Grupo = { chave: string; titulo: string; hint?: string; campos: string[]; e
 // user-directed (Metro Quadrado e Clínica adicionados 2026-07-27 — ver
 // PENDENCIAS.md > "Transações" > "Pedido Geral — Metro Quadrado / Clínica"
 // pro rastreio de campo-a-campo do `frmmanpedfor.frm`, ainda não
-// implementado, só o registro do módulo). Ficam agrupados sob "Pedidos" no
-// topo da lista, quebrando a ordem alfabética só nesse caso (mesma exceção
-// já aplicada ao Painel Posto de Combustível — ver CLAUDE.md > "Card List
-// Ordering").
+// implementado, só o registro do módulo).
 const SEGMENTOS_PEDIDO_EXCLUSIVOS = ["Bar", "Cilindro", "Pedido_venda", "metro_quadrado", "CLINICA"];
 
+// Oficina/Assistência/TSO são 3 variações diferentes da mesma Ordem de
+// Serviço — mutuamente exclusivas entre si, mas NÃO exclusivas com o
+// grupo "Pré Venda" (uma empresa pode ter os dois grupos ligados ao
+// mesmo tempo). Grupo próprio "Ordem de Serviço" desde 2026-08-24
+// (antes era um subgrupo dentro de "Pré Venda"). "TSO" adicionado
+// 2026-08-20, user-directed ("TSO é uma Ordem de Serviço para Ótica") —
+// mesmo espelho de `SEGMENTOS_OS_EXCLUSIVOS` em
+// `controle_config_service.py` (backend).
+const SEGMENTOS_OS_EXCLUSIVOS = ["Oficina", "Assistencia", "TSO"];
+
 // Grupos nomeados exibidos no topo da lista (nesta ordem), cada um quebrando
-// a ordem alfabética igual ao grupo "Pedidos" já existente. Generalizado
+// a ordem alfabética igual ao grupo "Pré Venda" já existente. Generalizado
 // 2026-08-10 (user-directed — grupo "Automação Comercial" novo) a partir do
 // único grupo hardcoded que existia antes (só "Pedidos") — campos fora de
 // todo grupo continuam na lista alfabética normal ("outrosCampos" abaixo).
 const GRUPOS: Grupo[] = [
+  // Grupo "Pré Venda" (renomeado de "Pedidos", 2026-08-20, user-directed
+  // — "TEM QUE FICAR NO GRUPO pré venda junto com Pedidos e OS"). Reunia
+  // Pedido de Venda E Ordem de Serviço num único cabeçalho até
+  // 2026-08-24, quando o usuário pediu pra separar Ordem de Serviço num
+  // grupo próprio (ver "Ordem de Serviço" logo abaixo) — agora só cobre
+  // as variações de Pedido de Venda, todas mutuamente exclusivas entre
+  // si (`exclusivo: true`).
   {
-    chave: "pedidos",
-    titulo: "Pedidos",
-    hint: "Bar, Cilindro, Pedido de Venda, Metro Quadrado e Clínica são versões diferentes da mesma tela — só uma pode ficar ativa.",
+    chave: "pre_venda",
+    titulo: "Pré Venda",
+    hint: "Bar, Cilindro, Pedido de Venda, Metro Quadrado e Clínica são 5 versões diferentes da mesma tela de Pedido de Venda — só uma pode ficar ativa por vez.",
     campos: SEGMENTOS_PEDIDO_EXCLUSIVOS,
+    exclusivo: true,
+  },
+  // Grupo "Ordem de Serviço" (separado do grupo "Pré Venda" acima,
+  // 2026-08-24, user-directed) — Oficina/Assistência/TSO são 3 variações
+  // diferentes da mesma tela de Ordem de Serviço, mutuamente exclusivas
+  // entre si (`exclusivo: true`) mas independentes do grupo "Pré Venda"
+  // (uma empresa pode ter os dois grupos ligados ao mesmo tempo).
+  {
+    chave: "ordem_servico",
+    titulo: "Ordem de Serviço",
+    hint: "Oficina, Assistência e TSO (Ótica) são 3 versões diferentes da mesma tela de Ordem de Serviço — só uma pode ficar ativa por vez.",
+    campos: SEGMENTOS_OS_EXCLUSIVOS,
     exclusivo: true,
   },
   {
@@ -51,8 +84,11 @@ const GRUPOS: Grupo[] = [
   // — tabela `controle_aux`, expostos aqui pela 1ª vez nesta migração,
   // achado 2026-08-20 depois de uma tentativa anterior errada ter criado
   // colunas novas por engano; ver CLAUDE.md). "DMC" NÃO entra aqui — não é
-  // campo fiscal, é "Exportação do DMC Combustíveis" (Posto). TSO ficou de
-  // fora — nome ambíguo, não confirmado como fiscal.
+  // campo fiscal, é "Exportação do DMC Combustíveis" (Posto), confirmado
+  // extinto pelo usuário. "TSO" também NÃO entra — confirmado pelo
+  // usuário como uma Ordem de Serviço pro segmento Ótica, sem relação
+  // com fiscal; fica no grupo "Ordem de Serviço" acima, junto de
+  // Oficina/Assistência.
   {
     chave: "fiscal",
     titulo: "Fiscal",
@@ -113,11 +149,25 @@ export default function ModulosRecursosScreen() {
   const toggle = (campo: string) => {
     setValores((v) => {
       const novo = !v[campo];
+      // Subgrupo exclusivo (mais granular que `exclusivo` — permite 2+
+      // conjuntos mutuamente exclusivos DENTRO do mesmo grupo visual,
+      // cada um independente dos outros) checado antes do grupo inteiro.
+      // Nenhum grupo usa isso hoje (Pré Venda/Ordem de Serviço viraram
+      // grupos próprios, cada um só com `exclusivo: true`, 2026-08-24) —
+      // mecanismo mantido pronto pro próximo grupo que precisar dele.
+      for (const g of GRUPOS) {
+        const sub = g.subgruposExclusivos?.find((s) => s.includes(campo));
+        if (novo && sub) {
+          const next = { ...v };
+          sub.forEach((c) => { next[c] = c === campo; });
+          return next;
+        }
+      }
       const grupoExclusivo = GRUPOS.find((g) => g.exclusivo && g.campos.includes(campo));
       if (novo && grupoExclusivo) {
         // Ligar um campo de um grupo exclusivo desliga os outros do mesmo
         // grupo automaticamente — mesma regra de sempre, generalizada pra
-        // qualquer grupo marcado `exclusivo`, não só "Pedidos".
+        // qualquer grupo marcado `exclusivo`.
         const next = { ...v };
         grupoExclusivo.campos.forEach((c) => { next[c] = c === campo; });
         return next;

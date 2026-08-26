@@ -17,8 +17,20 @@ motor de remessa bancária CNAB/e-mail em massa, pendência separada.
   período com cálculo pró-rata, faturamento (grava comanda/Receber/
   Duplicata_Receber — o modelo de faturamento REAL do legado, decisão
   explícita do usuário 2026-07-20 de manter fidelidade em vez de migrar
-  pra pedido_venda) e geração de Recibo. Nota Fiscal (emissão fiscal real)
-  e Boleto (layout bancário) ficam fora desta rodada — ver PENDENCIAS.md.
+  pra pedido_venda) e geração de Recibo. **Nota Fiscal e Boleto
+  (2026-08-24)**: no legado (`FrmFatContrato2.frm:1005-1011`), tipo
+  "Boleto" chama exatamente a mesma rotina `EmiteNF` de tipo "Nota
+  Fiscal" — não existe motor de boleto próprio aqui; o boleto em si
+  (remessa CNAB/layout) já é coberto pela tela "Geração de Boletos"
+  (Financeiro > Cobranças), que lê genericamente de `Duplicata_Receber`/
+  `Duplicata_Rec_Venc` (já postados por `_transf_receber_sync`,
+  independente do tipo). O que faltava era só emitir a NF de verdade —
+  implementado reaproveitando `nfe_agrupada_service._emitir_nfse_
+  agrupada_sync` (NFS-e, DPS Nacional) pro item de serviço do contrato,
+  que sempre existe. **Caso misto** (contrato com `fatura_os` trazendo
+  peça de O.S. junto) fica de fora desta rodada — pergunta enviada ao
+  Leandro sobre se dois documentos separados (NFS-e do contrato + NF-e
+  da O.S.) é aceitável ou se precisa ser uma nota só; ver PENDENCIAS.md.
 
 Reajuste automático por índice (IGPM/IPCA) — feature NOVA, sem
 equivalente no VB6 (que só permitia digitar o valor/percentual na mão):
@@ -35,6 +47,7 @@ from typing import Optional
 
 from db.connection import _open_conn, _get_col_sizes, _trunc
 from services.pedido_common import _modulo_contratos_ativo
+from services import nfe_agrupada_service, email_cobranca_service, boleto_pdf_service, recibo_pdf_service
 
 _MODULO_OFF_MSG = "Módulo Contratos está desativado — fale com o administrador em Configurações > Módulos e Recursos."
 
@@ -1549,14 +1562,18 @@ async def listar_contratos_faturar(servidor, banco, ano, mes, contrato_ini, cont
     )
 
 
-def _gerar_comanda_sync(cur, cfg: dict, contrato_codigo: int, valor_total: float, ano_ref: int, mes_ref: int, cod_func: int) -> dict:
+def _gerar_comanda_sync(cur, cfg: dict, contrato_codigo: int, valor_total: float, ano_ref: int, mes_ref: int, cod_func: int, vencimento: Optional[str] = None) -> dict:
     """Réplica de `GeraComanda` — cria a comanda (o "documento" de
     faturamento no modelo legado), a(s) parcela(s) em `comanda_duplicata`
     (usando `forma_pag_prazo` do contrato se existir, senão parcela única
     na forma "CONTRATO"), o vínculo `comanda_contrato` (idempotência de
-    "já faturado" pro mês/ano de referência) e, se o contrato faturar
-    O.S., agrupa as O.S. Fechadas não faturadas do cliente (ou de quem
-    "fatura para" ele) na mesma comanda."""
+    "já faturado" pro mês/ano de referência), um registro em
+    `cobrancas_enviadas` (achado real, 2026-08-25: os 2 `.frm` irmãos de
+    Faturar Contratos gravam essa linha aqui — não em `FrmEnvCob.frm`,
+    "Envio de Cobrança", que só CONSOME as linhas já criadas; ver
+    PENDENCIAS.md > "Envio de Cobrança de Contratos") e, se o contrato
+    faturar O.S., agrupa as O.S. Fechadas não faturadas do cliente (ou de
+    quem "fatura para" ele) na mesma comanda."""
     cur.execute("SELECT * FROM contratos WHERE codigo=%s", (contrato_codigo,))
     contrato = cur.fetchone()
     if not contrato:
@@ -1610,6 +1627,11 @@ def _gerar_comanda_sync(cur, cfg: dict, contrato_codigo: int, valor_total: float
         "INSERT INTO comanda_contrato (comanda, contrato, ano_referencia, mes_referencia) VALUES (%s,%s,%s,%s)",
         (comanda, contrato_codigo, ano_ref, mes_ref),
     )
+    cur.execute(
+        "INSERT INTO cobrancas_enviadas (contrato, comanda, ano_referencia, mes_referencia, vencimento, status_envio, parcela) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+        (contrato_codigo, comanda, ano_ref, mes_ref, vencimento, "Não Enviado", 1),
+    )
 
     descreve_os = ""
     if contrato.get("fatura_os"):
@@ -1648,7 +1670,76 @@ def _gerar_comanda_sync(cur, cfg: dict, contrato_codigo: int, valor_total: float
     return {"success": True, "comanda": comanda, "descreve_os": descreve_os}
 
 
-def _transf_receber_sync(cur, comanda: int, tipo_mov: str) -> Optional[str]:
+def _somar_centro_custo_por_nivel_sync(cur, comanda: int, cod_servico_contrato: str) -> dict:
+    """Query compartilhada pelas 2 rotinas de Centro de Custo do legado
+    (`CentroCustoContrato`/`Clauwan\\FrmFatContrato2.frm:2545-2582` e a
+    variante irmã `Geral\\FrmFatContrato.frm:2473-2497`) — soma o valor
+    da comanda por centro de custo, cruzando peça/serviço por nível mais
+    os lançamentos manuais de `contratos_centro_custo` (Fase A, "Rateio
+    Valor"). Substitui o loop manual de "agrupar linhas consecutivas"
+    (workaround de VB6 sem `GROUP BY` cross-UNION) por um `dict`
+    acumulador — mesmo resultado, sem depender da ordem das linhas. Só
+    difere entre as 2 rotinas na TABELA/CHAVE de destino (`n_fiscal_
+    custo` vs `receber_custo`) — ver as duas chamadoras abaixo."""
+    cur.execute(
+        "SELECT cc.codigo AS centro_custo, SUM(m.qtd*m.p_unit) AS total "
+        "FROM centro_custo cc, niveis n, pecas p, comanda c, movimentacao m "
+        "WHERE n.custo=cc.codigo AND n.nivel1=p.nivel1 AND n.nivel2=p.nivel2 AND n.nivel3=p.nivel3 "
+        "AND n.nivel4=p.nivel4 AND n.nivel5=p.nivel5 AND p.codigo_int=m.codigo_int "
+        "AND c.comanda=m.num_nf AND m.serie_nf='CM' AND c.comanda=%s "
+        "GROUP BY cc.codigo "
+        "UNION ALL "
+        "SELECT cc.codigo AS centro_custo, SUM(m.qtd*m.p_unit) AS total "
+        "FROM centro_custo cc, niveis n, servicos s, comanda c, movimentacao m "
+        "WHERE n.custo=cc.codigo AND n.nivel1=s.nivel1 AND n.nivel2=s.nivel2 AND n.nivel3=s.nivel3 "
+        "AND n.nivel4=s.nivel4 AND n.nivel5=s.nivel5 AND s.codigo=m.codigo_int "
+        "AND m.codigo_int<>%s AND c.comanda=m.num_nf AND m.serie_nf='CM' AND c.comanda=%s "
+        "GROUP BY cc.codigo "
+        "UNION ALL "
+        "SELECT ccc.centro_custo AS centro_custo, ccc.valor AS total "
+        "FROM comanda c, comanda_contrato cco, contratos_centro_custo ccc "
+        "WHERE c.comanda=%s AND c.comanda=cco.comanda AND cco.contrato=ccc.contrato",
+        (comanda, cod_servico_contrato, comanda, comanda),
+    )
+    totais: dict = {}
+    for r in cur.fetchall():
+        cc = r.get("centro_custo")
+        if cc is None:
+            continue
+        totais[cc] = totais.get(cc, 0.0) + float(r.get("total") or 0)
+    return totais
+
+
+def _distribuir_centro_custo_receber_sync(cur, cod_receber: int, comanda: int, cod_servico_contrato: str) -> None:
+    """Réplica de uma 2ª rotina de Centro de Custo achada em
+    `Geral\\FrmFatContrato.frm:2473-2497` (variante irmã de
+    `Clauwan\\FrmFatContrato2.frm`, mesmo modelo de dados) — distribui o
+    valor faturado por centro de custo gravando em `receber_custo (nota,
+    custo, valor)`, chave = `Receber.codigo` (não `n_fiscal.codigo`).
+    **Fecha o gap real registrado em PENDENCIAS.md**: como TODO
+    faturamento passa por `Receber` (Recibo, Nota Fiscal ou Boleto, via
+    `_transf_receber_sync`), esta distribuição roda SEMPRE, no momento do
+    faturamento — não depende de uma NF-e ter sido emitida (diferente de
+    `_distribuir_centro_custo_sync`/`n_fiscal_custo`, que só roda quando
+    o usuário emite NF-e). Cobre inclusive o caso mais comum (contrato
+    100% serviço, sem `fatura_os`), que antes não tinha onde gravar esse
+    rateio. **Sem "+5%"** — esta variante do legado nunca teve esse
+    acréscimo (confirmado real: só a variante `n_fiscal_custo` tinha, e
+    o Leandro já confirmou que pode ser desconsiderado de qualquer
+    forma). Ambas as tabelas (`receber_custo`/`n_fiscal_custo`) têm dado
+    real em produção (8.499/9.683 linhas em ARGEN TESTE) — não são
+    mecanismos concorrentes, coexistem no legado; aqui também coexistem,
+    cada uma gravada no momento certo (faturamento vs. emissão de NF-e)."""
+    totais = _somar_centro_custo_por_nivel_sync(cur, comanda, cod_servico_contrato)
+    for cc, total in totais.items():
+        if round(total, 2) != 0:
+            cur.execute(
+                "INSERT INTO receber_custo (nota, custo, valor) VALUES (%s,%s,%s)",
+                (cod_receber, cc, round(total, 2)),
+            )
+
+
+def _transf_receber_sync(cur, comanda: int, tipo_mov: str, cod_servico_contrato: str = "") -> Optional[str]:
     """Réplica simplificada de `Transf_Receber` — posta a comanda recém-
     gerada em `Receber` (contas a receber) e distribui o valor em
     `Duplicata_Receber`/`Duplicata_Rec_Venc`/`Duplicata_Rec_Nf`, seguindo
@@ -1688,6 +1779,9 @@ def _transf_receber_sync(cur, comanda: int, tipo_mov: str) -> Optional[str]:
     if not r:
         return "Falha ao localizar o lançamento gerado em Receber."
     cod_receber = int(r["codigo"])
+
+    if cod_servico_contrato:
+        _distribuir_centro_custo_receber_sync(cur, cod_receber, comanda, cod_servico_contrato)
 
     if geranum:
         numero_dup += 1
@@ -1750,7 +1844,10 @@ def _transf_receber_sync(cur, comanda: int, tipo_mov: str) -> Optional[str]:
     return None
 
 
-def _faturar_contratos_sync(servidor: str, banco: str, ano: int, mes: int, itens: list, cod_func: int) -> dict:
+def _faturar_contratos_sync(
+    servidor: str, banco: str, ano: int, mes: int, itens: list, cod_func: int,
+    *, classe: Optional[int] = None, master: bool = False,
+) -> dict:
     conn = _open_conn(servidor, banco)
     try:
         cur = conn.cursor(as_dict=True)
@@ -1762,21 +1859,33 @@ def _faturar_contratos_sync(servidor: str, banco: str, ano: int, mes: int, itens
         for item in itens:
             contrato_codigo = int(item["codigo"])
             valor_total = round(float(item["valor_total"] or 0), 2)
+            tipo_doc = (item.get("tipo_doc") or "").strip().upper()
             try:
-                r = _gerar_comanda_sync(cur, cfg, contrato_codigo, valor_total, ano, mes, cod_func or 0)
+                r = _gerar_comanda_sync(cur, cfg, contrato_codigo, valor_total, ano, mes, cod_func or 0, item.get("vencimento"))
                 if not r["success"]:
                     conn.rollback()
                     resultados.append({"codigo": contrato_codigo, "success": False, "message": r["message"]})
                     continue
-                erro = _transf_receber_sync(cur, r["comanda"], cfg["tmov_servico"])
+                erro = _transf_receber_sync(cur, r["comanda"], cfg["tmov_servico"], cfg["cod_servico_contrato"])
                 if erro:
                     conn.rollback()
                     resultados.append({"codigo": contrato_codigo, "success": False, "message": erro})
                     continue
                 conn.commit()
+                # Nota Fiscal/Boleto (2026-08-24, corrigido no mesmo dia
+                # após resposta do Leandro): a emissão NUNCA é automática
+                # aqui — "fica a critério do cliente se ele vai emitir a
+                # nota de produtos ou nota de serviços ou ambas ou
+                # nenhuma", regra que vale pra qualquer comanda com
+                # produto+serviço no sistema, não só Contratos. `tipo_doc`
+                # só informa o frontend se este contrato é elegível pra
+                # mostrar os botões de emissão (Nota Fiscal/Boleto) — a
+                # emissão em si é uma ação separada e opcional
+                # (`POST /contratos/{codigo}/faturar/emitir`, ver abaixo).
                 resultados.append({
                     "codigo": contrato_codigo, "success": True, "comanda": r["comanda"],
                     "descreve_os": r["descreve_os"], "vencimento": item.get("vencimento"),
+                    "tipo_doc": tipo_doc,
                 })
             except Exception as e:
                 conn.rollback()
@@ -1787,8 +1896,89 @@ def _faturar_contratos_sync(servidor: str, banco: str, ano: int, mes: int, itens
         conn.close()
 
 
-async def faturar_contratos(servidor, banco, ano, mes, itens, usuario_codigo):
-    return await asyncio.to_thread(_faturar_contratos_sync, servidor, banco, ano, mes, itens, usuario_codigo)
+async def faturar_contratos(servidor, banco, ano, mes, itens, usuario_codigo, classe=None, master=False):
+    return await asyncio.to_thread(_faturar_contratos_sync, servidor, banco, ano, mes, itens, usuario_codigo, classe=classe, master=master)
+
+
+def _distribuir_centro_custo_sync(cur, nota_fiscal: int, comanda: int, cod_servico_contrato: str) -> None:
+    """Réplica de `CentroCustoContrato(nota, comanda)`
+    (`FrmFatContrato2.frm:2545-2582`) — distribui o valor da NF-e entre os
+    centros de custo mapeados por nível de produto/serviço, mais os
+    lançamentos manuais já feitos em `contratos_centro_custo` (Fase A,
+    "Rateio Valor"). **Sem o "+5%" de ISS do legado** — confirmado com o
+    Leandro (2026-08-24) que pode ser desconsiderado, mantendo só o valor
+    puro. Substitui o loop manual de "agrupar linhas consecutivas por
+    centro de custo" (workaround de VB6 sem `GROUP BY` cross-UNION) por
+    um `dict` acumulador em Python — mesmo resultado, sem depender da
+    ordem das linhas.
+
+    **Só cobre o lado NF-e (produto)** — `n_fiscal_custo` é FK de
+    `n_fiscal.codigo`; NFS-e (serviço) grava em `dps`, que não tem uma
+    tabela de custo equivalente neste schema. **Gap real fechado
+    2026-08-24 por outra via**: achada uma 2ª rotina irmã
+    (`Geral\\FrmFatContrato.frm:2473-2497`) que distribui pra
+    `receber_custo` (chave `Receber.codigo`, não `n_fiscal.codigo`) —
+    roda SEMPRE no momento do faturamento (`_distribuir_centro_custo_
+    receber_sync`, chamada de dentro de `_transf_receber_sync`), cobrindo
+    o caso 100% serviço que esta função (NF-e-only) nunca alcançava.
+    As duas coexistem de propósito — mesmo padrão do legado, que também
+    tinha as duas tabelas ativas em paralelo (confirmado ao vivo: 9.683
+    linhas em `n_fiscal_custo`, 8.499 em `receber_custo`, ambas reais)."""
+    cur.execute("DELETE FROM n_fiscal_custo WHERE n_fiscal=%s", (nota_fiscal,))
+    totais = _somar_centro_custo_por_nivel_sync(cur, comanda, cod_servico_contrato)
+    for cc, total in totais.items():
+        if round(total, 2) != 0:
+            cur.execute(
+                "INSERT INTO n_fiscal_custo (n_fiscal, custo, valor_contabil) VALUES (%s,%s,%s)",
+                (nota_fiscal, cc, round(total, 2)),
+            )
+
+
+def _emitir_documento_contrato_sync(
+    servidor: str, banco: str, *, tipo: str, comanda: int, cod_func: int,
+    classe: Optional[int] = None, master: bool = False,
+) -> dict:
+    """Ação SEPARADA e opcional (nunca automática — confirmado com o
+    Leandro, 2026-08-24: "fica a critério do cliente se ele vai emitir a
+    nota de produtos ou nota de serviços ou ambas ou nenhuma", regra que
+    vale pra qualquer comanda com produto+serviço no sistema). `tipo`:
+    `"nfe"` (produto, `_emitir_nfe_agrupada_sync`) ou `"nfse"` (serviço,
+    `_emitir_nfse_agrupada_sync`) — mesmos motores já usados por Agrupar
+    Comandas, reaproveitados aqui sem duplicar lógica de emissão. Sucesso
+    em `"nfe"` também roda a distribuição por Centro de Custo (ver
+    `_distribuir_centro_custo_sync` acima) — `"nfse"` não tem onde
+    gravar esse rateio ainda (mesma limitação documentada lá)."""
+    tipo_v = (tipo or "").strip().lower()
+    if tipo_v not in ("nfe", "nfse"):
+        return {"success": False, "message": "Tipo de documento inválido — use 'nfe' ou 'nfse'."}
+
+    if tipo_v == "nfe":
+        resultado = nfe_agrupada_service._emitir_nfe_agrupada_sync(
+            servidor, banco, comandas=[comanda], usuario=cod_func or None, classe=classe, master=master,
+        )
+        if resultado.get("success"):
+            conn = _open_conn(servidor, banco)
+            try:
+                cur = conn.cursor(as_dict=True)
+                cfg = _config_faturamento_sync(cur)
+                _distribuir_centro_custo_sync(cur, resultado["nota_fisc"], comanda, cfg["cod_servico_contrato"])
+                conn.commit()
+            except Exception:
+                conn.rollback()  # rateio de centro de custo é best-effort — NF-e já emitida não pode ser desfeita por isso
+            finally:
+                conn.close()
+        return resultado
+
+    return nfe_agrupada_service._emitir_nfse_agrupada_sync(
+        servidor, banco, comandas=[comanda], usuario=cod_func or None, classe=classe, master=master,
+    )
+
+
+async def emitir_documento_contrato(servidor, banco, tipo, comanda, usuario_codigo, classe=None, master=False):
+    return await asyncio.to_thread(
+        _emitir_documento_contrato_sync, servidor, banco, tipo=tipo, comanda=comanda,
+        cod_func=usuario_codigo, classe=classe, master=master,
+    )
 
 
 def _gerar_recibo_sync(servidor: str, banco: str, contrato_codigo: int, comanda: int, ano_ref: int, mes_ref: int, descreve_os: str) -> dict:
@@ -1848,5 +2038,290 @@ def _gerar_recibo_sync(servidor: str, banco: str, contrato_codigo: int, comanda:
         conn.close()
 
 
+def _montar_recibo_para_anexo_sync(cur, contrato_codigo: int, comanda: int, ano_ref: int, mes_ref: int, descreve_os: str) -> dict:
+    """Recibo pra anexo de e-mail (Envio de Cobrança) — variante
+    SOMENTE LEITURA de `_gerar_recibo_sync`: nunca grava em `Recibos`
+    nem avança `Controle.Seq_Recibo`.
+
+    **Resposta de Leandro (2026-08-26)**, sobre como identificar um
+    recibo já emitido pra uma comanda sem coluna nova em `Recibos`:
+    "recibo de contrato é o próprio número da comanda... não precisa
+    criar coluna, pois o controle é o número da comanda, que já é
+    controlado no sistema." Aplicado literalmente: `numero` aqui é o
+    número da COMANDA (já único/controlado), não o `seq/ano` sequencial
+    de `_gerar_recibo_sync` — o que também resolve, de graça, o
+    problema de reenviar o e-mail mintar um Recibo novo a cada vez:
+    esta função é idempotente (mesma leitura, nunca escreve), reenviar
+    o e-mail sempre produz o mesmo PDF. O Recibo NUMERADO oficial
+    (`Recibos`/`Seq_Recibo`) continua sendo só o botão "Gerar Recibo"
+    (Faturar Contratos), sem relação com este anexo."""
+    cur.execute(
+        "SELECT co.descr_nf, cli.nome, cli.fantasia FROM contratos AS co, cliente AS cli "
+        "WHERE co.cliente=cli.codigo AND co.codigo=%s",
+        (contrato_codigo,),
+    )
+    contrato = cur.fetchone()
+    cur.execute("SELECT valor_venda FROM comanda WHERE comanda=%s", (comanda,))
+    com = cur.fetchone()
+    if not contrato or not com:
+        return {"success": False, "message": "Contrato ou comanda não encontrados."}
+    cur.execute("SELECT rz_social FROM controle")
+    ctl = cur.fetchone() or {}
+    valor = float(com["valor_venda"] or 0)
+    meses_pt = ["", "JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO", "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO"]
+    referente = f"{(contrato.get('descr_nf') or '').strip()} Ref: {meses_pt[mes_ref]}/{ano_ref}" + (descreve_os if descreve_os else ".")
+    return {
+        "success": True,
+        "numero": str(comanda),
+        "recebemos": (contrato.get("fantasia") or contrato.get("nome") or "").strip(),
+        "valor": round(valor, 2),
+        "valor_extenso": _valor_por_extenso(valor),
+        "referente": referente,
+        "data": _iso(date.today()),
+        "assinatura": (ctl.get("rz_social") or "").strip(),
+    }
+
+
 async def gerar_recibo(servidor, banco, contrato_codigo, comanda, ano_ref, mes_ref, descreve_os):
     return await asyncio.to_thread(_gerar_recibo_sync, servidor, banco, contrato_codigo, comanda, ano_ref, mes_ref, descreve_os)
+
+
+# ==================== Envio de Cobrança (Geral\FrmEnvCob.frm) ====================
+#
+# Achado real 2026-08-25: as linhas de `cobrancas_enviadas` NÃO são
+# criadas por esta tela — são criadas em `_gerar_comanda_sync` (ver
+# acima), no momento do faturamento. Esta tela só CONSOME/envia o que já
+# foi lançado (status_envio="Não Enviado") e atualiza o status depois.
+#
+# Escopo confirmado com o usuário via `AskUserQuestion` (2026-08-25):
+# **Fase 1, sem anexo de PDF** — nem Recibo nem Boleto têm um arquivo PDF
+# persistido neste projeto hoje (os dois são renderizados sob demanda,
+# nunca salvos em disco) — mesmo bloqueio já registrado em "Geração de
+# Boletos". O e-mail sai com o corpo/assunto (mensalidade de mês/ano),
+# sem anexo. Motor de envio reaproveitado de `email_cobranca_service.py`
+# (já implementado e testado com envio real 2026-07-24).
+#
+# **Não replicado do legado** (`Command3_Click`/"Preparar para Envio",
+# `Visible=0` — botão escondido na própria tela do legado, superado por
+# `Command2_Click`/"Enviar" que já envia direto): dead code, não vale a
+# pena portar. **Também não replicado**: o ramo `Dados_Controle_
+# Configuracao.Cilindro` (textos/logo específicos da Gueren Gases) — fora
+# do escopo desta migração (Cilindros tem seu próprio módulo). **Link de
+# verificação pública de NFS-e** (`URLNFSe`, resolvido por código de
+# município no legado via a tabela antiga `rps`) também fora de escopo —
+# este projeto usa `dps`/DPS Nacional, sem portal de verificação por
+# município mapeado ainda; registrado como pendência menor, não
+# adivinhado.
+
+_MESES_PT = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+
+
+def _listar_cobrancas_sync(
+    servidor: str, banco: str, *, ano: Optional[int], mes: Optional[int],
+    data_ini: Optional[str], data_fim: Optional[str], status: Optional[list],
+) -> dict:
+    """Réplica de `Command1_Click` — 2 variantes de filtro (a fonte tem os
+    2 ramos: por PERÍODO de data da comanda, ou por mês/ano de
+    referência), unificadas aqui como parâmetros opcionais. Lista todas
+    as `status_envio` quando nenhum filtro de status é passado (mesma
+    regra do legado: nenhum checkbox marcado = todos)."""
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        if not _modulo_contratos_ativo(cur):
+            cur.close()
+            return {"success": False, "message": _MODULO_OFF_MSG}
+
+        where = ["c.situacao='PG'", "cb.comanda=c.comanda"]
+        params: list = []
+        if data_ini and data_fim:
+            where.append("c.data >= %s AND c.data <= %s")
+            params += [data_ini, data_fim]
+        elif ano and mes:
+            where.append("cb.ano_referencia=%s AND cb.mes_referencia=%s")
+            params += [ano, mes]
+        else:
+            cur.close()
+            return {"success": False, "message": "Informe o período (De/Até) ou o mês/ano de referência."}
+
+        status_validos = [s for s in (status or []) if s in ("Não Enviado", "Sem Email cadastrado", "Falha ao Enviar", "Enviado com Sucesso")]
+        if status_validos:
+            placeholders = ",".join(["%s"] * len(status_validos))
+            where.append(f"cb.status_envio IN ({placeholders})")
+            params += status_validos
+
+        where_sql = " AND ".join(where)
+        cur.execute(
+            f"SELECT cb.codigo_cobrancas_enviadas, cb.contrato, cb.comanda, cb.ano_referencia, cb.mes_referencia, "
+            f"cb.vencimento, cb.data_envio, cb.hora_envio, cb.e_mail_envio, cb.status_envio, cb.obs_envio, "
+            f"co.contrato AS contrato_texto, cli.codigo AS cliente, cli.nome, cli.fantasia, "
+            f"ISNULL(NULLIF(cli.email_cobranca,''), ISNULL(NULLIF(cli.email_NFE,''), cli.e_mail)) AS email_destino, "
+            f"c.valor_venda "
+            f"FROM cobrancas_enviadas cb, comanda c, contratos co, cliente cli "
+            f"WHERE {where_sql} AND cb.contrato=co.codigo AND co.cliente=cli.codigo "
+            f"ORDER BY cli.nome, cb.vencimento",
+            params,
+        )
+        rows = cur.fetchall()
+        cur.close()
+        items = [{
+            "codigo": int(r["codigo_cobrancas_enviadas"]),
+            "contrato": int(r["contrato"]),
+            "contrato_texto": (r.get("contrato_texto") or "").strip(),
+            "comanda": int(r["comanda"]),
+            "ano_referencia": int(r["ano_referencia"]),
+            "mes_referencia": int(r["mes_referencia"]),
+            "vencimento": _iso(r.get("vencimento")),
+            "cliente": int(r["cliente"]),
+            "cliente_nome": (r.get("fantasia") or r.get("nome") or "").strip(),
+            "email_destino": (r.get("email_destino") or "").strip(),
+            "data_envio": _iso(r.get("data_envio")),
+            "hora_envio": (r.get("hora_envio") or "").strip(),
+            "status_envio": (r.get("status_envio") or "").strip(),
+            "obs_envio": (r.get("obs_envio") or "").strip(),
+            "valor": round(float(r.get("valor_venda") or 0), 2),
+        } for r in rows]
+        return {"success": True, "items": items}
+    finally:
+        conn.close()
+
+
+async def listar_cobrancas(servidor, banco, ano, mes, data_ini, data_fim, status):
+    return await asyncio.to_thread(_listar_cobrancas_sync, servidor, banco, ano=ano, mes=mes, data_ini=data_ini, data_fim=data_fim, status=status)
+
+
+def _enviar_cobrancas_sync(servidor: str, banco: str, ids: list) -> dict:
+    """Réplica simplificada de `Command2_Click`. Pra cada
+    `codigo_cobrancas_enviadas`: sem e-mail cadastrado → marca "Sem Email
+    cadastrado" e pula (nunca tenta enviar); com e-mail → monta assunto/
+    corpo ("Mensalidade de <mês>/<ano>", réplica do texto real do
+    legado), envia via `email_cobranca_service`, grava `status_envio`/
+    `data_envio`/`hora_envio`/`obs_envio` e acrescenta uma linha no
+    histórico do contrato (`contratos.historico`, mesmo padrão já usado
+    por Reajuste de Valor) — nunca lança, cada id roda isolado (lote
+    best-effort, mesmo espírito de `_faturar_contratos_sync`).
+
+    **Anexo em PDF (2026-08-26)**: contrato tipo Boleto (`tipo_cobranca=
+    2`) com título já registrado num banco (via "Geração de Boletos")
+    anexa o boleto real (`boleto_pdf_service`), sem mintar nada novo.
+    Contrato tipo Recibo (`tipo_cobranca=0`) anexa um recibo identificado
+    pelo número da COMANDA (`_montar_recibo_para_anexo_sync` +
+    `recibo_pdf_service`, resposta de Leandro — "o controle já é o
+    número da comanda", sem precisar de coluna nova em `Recibos`) — só
+    leitura, nunca grava nada, reenviar o e-mail produz sempre o mesmo
+    PDF. O Recibo NUMERADO oficial (`Recibos`/`Seq_Recibo`,
+    `_gerar_recibo_sync`) continua sendo só o botão "Gerar Recibo" em
+    Faturar Contratos, sem relação com este anexo. Contrato tipo Nota
+    Fiscal, ou Boleto nunca registrado num banco, segue sem anexo."""
+    if not ids:
+        return {"success": False, "message": "Nenhuma cobrança selecionada."}
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        if not _modulo_contratos_ativo(cur):
+            cur.close()
+            return {"success": False, "message": _MODULO_OFF_MSG}
+        resultados = []
+        for cod in ids:
+            try:
+                cur.execute(
+                    "SELECT cb.codigo_cobrancas_enviadas, cb.contrato, cb.comanda, cb.ano_referencia, cb.mes_referencia, "
+                    "co.tipo_cobranca, "
+                    "ISNULL(NULLIF(cli.email_cobranca,''), ISNULL(NULLIF(cli.email_NFE,''), cli.e_mail)) AS email_destino, "
+                    "cli.nome, cli.fantasia "
+                    "FROM cobrancas_enviadas cb, contratos co, cliente cli "
+                    "WHERE cb.codigo_cobrancas_enviadas=%s AND cb.contrato=co.codigo AND co.cliente=cli.codigo",
+                    (cod,),
+                )
+                row = cur.fetchone()
+                if not row:
+                    resultados.append({"codigo": cod, "success": False, "message": "Cobrança não encontrada."})
+                    continue
+                email_destino = (row.get("email_destino") or "").strip()
+                if not email_destino:
+                    cur.execute(
+                        "UPDATE cobrancas_enviadas SET status_envio='Sem Email cadastrado', obs_envio='Sem Email cadastrado' WHERE codigo_cobrancas_enviadas=%s",
+                        (cod,),
+                    )
+                    conn.commit()
+                    resultados.append({"codigo": cod, "success": False, "message": "Sem e-mail cadastrado."})
+                    continue
+
+                mes_nome = _MESES_PT[int(row["mes_referencia"])] if 1 <= int(row["mes_referencia"]) <= 12 else str(row["mes_referencia"])
+                ano_ref = int(row["ano_referencia"])
+                assunto = f"Mensalidade de {mes_nome} / {ano_ref}"
+                nome_cliente = (row.get("fantasia") or row.get("nome") or "").strip()
+                corpo = (
+                    f'<font face="Arial" size="2">Prezado(a) {nome_cliente},<br><br>'
+                    f"Referente à mensalidade de {mes_nome} de {ano_ref}.<br><br>"
+                    "Atenciosamente,<br></font>"
+                )
+
+                # Anexa o boleto em PDF quando o título já estiver registrado
+                # num banco suportado (achado 2026-08-26: "Geração de Boletos"
+                # é quem faz esse registro — ver boleto_pdf_service.py). Nunca
+                # aloca um banco novo aqui (não há um banco explicitamente
+                # escolhido nesta tela) — contrato tipo Recibo, ou Boleto que
+                # nunca passou por "Geração de Boletos", segue sem anexo,
+                # comportamento de 2026-08-25 preservado.
+                anexos = None
+                cur.execute(
+                    "SELECT drv.codigo FROM Duplicata_Rec_Venc drv "
+                    "JOIN Duplicata_Rec_Nf drn ON drn.duplicata = drv.duplicata "
+                    "JOIN Receber r ON r.codigo = drn.nf_fiscal "
+                    "WHERE r.nota_fiscal = %s AND r.serie = 'CO' AND drv.banco_cedente IS NOT NULL",
+                    (row["comanda"],),
+                )
+                drv_row = cur.fetchone()
+                if drv_row:
+                    pdf_bytes = boleto_pdf_service.gerar_pdf_um_titulo_sync(cur, drv_row["codigo"])
+                    if pdf_bytes:
+                        anexos = [{"conteudo": pdf_bytes, "nome_arquivo": f"boleto_{row['contrato']}_{ano_ref}_{int(row['mes_referencia']):02d}.pdf"}]
+                elif int(row.get("tipo_cobranca") or 0) == 0:
+                    # Contrato tipo Recibo (tipo_cobranca=0) — anexa um
+                    # recibo identificado pelo número da COMANDA (resposta
+                    # de Leandro, 2026-08-26: "recibo de contrato é o
+                    # próprio número da comanda... não precisa criar
+                    # coluna, o controle já é o número da comanda"). Leitura
+                    # pura (`_montar_recibo_para_anexo_sync`), nunca grava
+                    # em `Recibos`/`Seq_Recibo` — reenviar o e-mail sempre
+                    # produz o mesmo PDF, idempotente. O Recibo NUMERADO
+                    # oficial (`_gerar_recibo_sync`) continua sendo só o
+                    # botão "Gerar Recibo" em Faturar Contratos.
+                    recibo = _montar_recibo_para_anexo_sync(cur, row["contrato"], row["comanda"], ano_ref, int(row["mes_referencia"]), "")
+                    if recibo.get("success"):
+                        pdf_bytes = recibo_pdf_service.gerar_recibo_pdf_bytes(recibo)
+                        anexos = [{"conteudo": pdf_bytes, "nome_arquivo": f"recibo_comanda_{row['comanda']}.pdf"}]
+            except Exception as e:
+                resultados.append({"codigo": cod, "success": False, "message": f"Erro ao preparar envio: {e}"})
+                continue
+
+            envio = email_cobranca_service._enviar_email_sync(servidor, banco, email_destino, assunto, corpo, anexos)
+            hoje = date.today()
+            hora = datetime.now().strftime("%H:%M:%S")
+            if envio.get("success"):
+                cur.execute(
+                    "UPDATE cobrancas_enviadas SET data_envio=%s, hora_envio=%s, e_mail_envio=%s, status_envio='Enviado com Sucesso', obs_envio='Enviado com Sucesso' WHERE codigo_cobrancas_enviadas=%s",
+                    (hoje, hora, email_destino, cod),
+                )
+                obs_hist = f"Email da cobrança da mensalidade de {mes_nome} de {ano_ref} enviado com sucesso em {hoje.strftime('%d/%m/%Y')} às {hora}. Para: {email_destino}."
+            else:
+                cur.execute(
+                    "UPDATE cobrancas_enviadas SET data_envio=%s, hora_envio=%s, e_mail_envio=%s, status_envio='Falha ao Enviar', obs_envio=%s WHERE codigo_cobrancas_enviadas=%s",
+                    (hoje, hora, email_destino, (envio.get("message") or "Falha ao Enviar")[:500], cod),
+                )
+                obs_hist = f"Falha ao enviar email de cobrança da mensalidade de {mes_nome} de {ano_ref} em {hoje.strftime('%d/%m/%Y')} às {hora}: {envio.get('message')}"
+            cur.execute(
+                "UPDATE contratos SET historico=historico+%s WHERE codigo=%s",
+                ("\r\n" + obs_hist, int(row["contrato"])),
+            )
+            conn.commit()
+            resultados.append({"codigo": cod, "success": bool(envio.get("success")), "message": envio.get("message")})
+        cur.close()
+        return {"success": True, "resultados": resultados}
+    finally:
+        conn.close()
+
+
+async def enviar_cobrancas(servidor, banco, ids):
+    return await asyncio.to_thread(_enviar_cobrancas_sync, servidor, banco, ids)

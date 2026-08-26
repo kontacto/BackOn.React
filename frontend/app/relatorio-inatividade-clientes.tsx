@@ -13,6 +13,7 @@ import { Ionicons } from "@/src/components/Ionicons";
 import DateField from "@/src/components/DateField";
 import WebDateField from "@/src/components/WebDateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
+import AccordionSection from "@/src/components/pedido/AccordionSection";
 import EnvioMassaModal from "@/src/components/EnvioMassaModal";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
@@ -172,6 +173,7 @@ export default function RelatorioInatividadeClientesScreen() {
       <ScrollView contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]} keyboardShouldPersistTaps="handled">
         <View style={isWeb ? styles.webShell : undefined}>
           <View style={[styles.filters, isWeb && styles.filtersWeb]}>
+          <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="relic-filtros">
             <Text style={styles.sectionTitle}>Período sem compra</Text>
             <View style={styles.dateRow}>
               <View style={{ flex: 1 }}>
@@ -299,6 +301,7 @@ export default function RelatorioInatividadeClientesScreen() {
                 </>
               ) : null}
             </View>
+          </AccordionSection>
           </View>
 
           <View style={styles.card}>

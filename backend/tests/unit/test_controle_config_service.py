@@ -85,3 +85,42 @@ def test_save_ignora_campos_desconhecidos(monkeypatch):
     r = svc._save_config_sync("srv", "bd", valores)
     assert r["success"] is False
     assert "Nenhum campo válido" in r["message"]
+
+
+# Oficina/Assistência/TSO — mesma regra de exclusividade dos segmentos de
+# Pedido acima, mas grupo à parte (2026-08-20, user-directed: "TSO é uma
+# Ordem de Serviço para Ótica").
+def test_save_rejects_dois_segmentos_os_ligados(monkeypatch):
+    conn, cur = _patch(monkeypatch)
+    valores = {"Oficina": True, "Assistencia": True}
+    r = svc._save_config_sync("srv", "bd", valores)
+    assert r["success"] is False
+    assert "só uma pode ficar ativa" in r["message"]
+    assert not conn.committed
+
+
+def test_save_rejects_tres_segmentos_os_ligados(monkeypatch):
+    conn, cur = _patch(monkeypatch)
+    valores = {"Oficina": True, "Assistencia": True, "TSO": True}
+    r = svc._save_config_sync("srv", "bd", valores)
+    assert r["success"] is False
+    assert not conn.committed
+
+
+def test_save_allows_um_segmento_os_ligado(monkeypatch):
+    conn, cur = _patch(monkeypatch)
+    valores = {"TSO": True, "Oficina": False, "Assistencia": False}
+    r = svc._save_config_sync("srv", "bd", valores)
+    assert r["success"] is True
+    assert conn.committed
+
+
+def test_save_allows_um_pedido_e_um_os_juntos(monkeypatch):
+    # Pedido e O.S. NÃO são exclusivos entre si — uma empresa pode ter os
+    # dois grupos ligados ao mesmo tempo, só não duas variações do MESMO
+    # grupo.
+    conn, cur = _patch(monkeypatch)
+    valores = {"Bar": True, "TSO": True}
+    r = svc._save_config_sync("srv", "bd", valores)
+    assert r["success"] is True
+    assert conn.committed

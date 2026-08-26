@@ -8,16 +8,20 @@
 // Só as telas JÁ CONSTRUÍDAS ganham card aqui (mesmo padrão de
 // `movimentacoes.tsx` — nunca placeholder pra tela que não existe ainda):
 // Gerar Nfe Comanda (nfe-agrupada.tsx), Gerar NFe (nfe-avulsa.tsx), Gestor
-// NFCe (gestor-nfce.tsx, já inclui Contingência NFCe embutida). Faltam:
-// Recebimento (FrmtraRec.frm, módulo grande — nf_recebimento*/import XML,
-// ver PENDENCIAS.md > "Recebimento" no Blueprint), Gestor NFSe (RPS
-// municipal, Geral\FrmManNSe.frm — distinto do caminho Sefin Nacional/DPS
-// já implementado via comanda), Contingência NFe (FrmConNFe.frm, própria
-// — não confundir com Contingência NFCe, já embutida em Gestor NFCe),
-// Inutilização de Faixa NFe (a parte NFCe já existe como ação dentro de
-// Gestor NFCe). "Despacho de NF's" (FrmDesNf.frm) NÃO entra nesta lista —
-// equipe VB6 confirmou que nunca foi colocada em uso real (ver
-// PENDENCIAS.md, "Diferenças pra v2").
+// NFCe (gestor-nfce.tsx, já inclui Contingência NFCe embutida),
+// Contingência NFe (contingencia-nfe.tsx, própria — não confundir com
+// Contingência NFCe, já embutida em Gestor NFCe), Inutilização de Faixa
+// NFe (inutilizacao-nfe.tsx, própria — a parte NFCe já existe como ação
+// dentro de Gestor NFCe), Gestor NFSe (gestor-nfse.tsx, 2026-08-20 —
+// lado Sefin Nacional/DPS; migração de `FrmManNSeSefin.frm`, NÃO o RPS
+// municipal legado `FrmManNSe.frm`/Ginfes-ABRASF por prefeitura,
+// decisão explícita do usuário de focar no padrão nacional primeiro).
+// Recebimento (recebimento.tsx, 2026-08-21 — Fase 1, digitação manual,
+// sem XML; migração de `FrmtraRec.frm`) já entra na lista abaixo. Falta
+// só o caminho antigo de NFSe por RPS municipal (fora de escopo por ora).
+// "Despacho de NF's" (FrmDesNf.frm) NÃO entra nesta lista — equipe VB6
+// confirmou que nunca foi colocada em uso real (ver PENDENCIAS.md,
+// "Diferenças pra v2").
 import { useMemo } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -104,6 +108,68 @@ export default function GestorFiscalScreen() {
         icon: "cloud-offline-outline",
         route: "/contingencia-nfe",
         visible: moduleOn("nfe_ws") && can("CONT_NFE.ABRIR"),
+      },
+      {
+        // "Inutilização de Faixa NFe" (2026-08-20, user-directed) —
+        // migração de Geral\FrmTraINF.frm, lado NFe. O lado NFC-e já
+        // existe como ação própria dentro de "Gestor NFCe".
+        key: "inutilizacao-nfe",
+        label: "Inutilização de Faixa NFe",
+        hint: "Inutiliza junto à SEFAZ uma faixa de numeração de NF-e que não vai ser usada",
+        icon: "close-circle-outline",
+        route: "/inutilizacao-nfe",
+        visible: moduleOn("nfe_ws") && can("INUTIL_NFE.ABRIR"),
+      },
+      {
+        // "Gestor NFSe" (2026-08-20, user-directed) — migração de
+        // Geral\FrmManNSeSefin.frm (lado Sefin Nacional/DPS, não o RPS
+        // municipal legado). Sem `moduleOn` — a emissão em si (Alterar
+        // Comandas > Emitir NFS-e) também não tem esse guard no
+        // frontend, o módulo `sefin_nacional` é checado no backend.
+        key: "gestor-nfse",
+        label: "Gestor NFSe",
+        hint: "Consulta a situação de NFS-e (Sefin Nacional) já emitidas junto ao ADN",
+        icon: "document-text-outline",
+        route: "/gestor-nfse",
+        visible: can("GESTOR_NFSE.ABRIR"),
+      },
+      {
+        // "Recebimento de Mercadoria" (2026-08-21, user-directed) —
+        // migração de Geral\FrmtraRec.frm, Fase 1 (digitação manual, sem
+        // XML). Sem `moduleOn` — funciona independente de módulo fiscal
+        // específico (é recebimento de estoque/custo, não emissão).
+        key: "recebimento",
+        label: "Recebimento de Mercadoria",
+        hint: "Lança a nota de entrada de fornecedor — crítica, custo médio, preço, estoque e baixa de Pedido de Compra",
+        icon: "cube-outline",
+        route: "/recebimento",
+        visible: can("RECEBIMENTO.ABRIR"),
+      },
+      {
+        // "MDF-e" (2026-08-22, user-directed) — migração de
+        // Kontacto\FrmTraMDF.frm. Fase A: cadastro do manifesto + anexar
+        // NF-e/NFC-e, sem emissão SEFAZ real ainda (Fase B, rodada
+        // futura). Sem `moduleOn` — não ligado a nenhum módulo fiscal
+        // específico no legado.
+        key: "mdfe",
+        label: "MDF-e",
+        hint: "Cadastra o Manifesto Eletrônico de Documentos Fiscais e anexa as NF-e/NFC-e do transporte",
+        icon: "car-outline",
+        route: "/mdfe",
+        visible: can("MDFE.ABRIR"),
+      },
+      {
+        // "Apuração Fiscal" (2026-08-24, user-directed) — migração de
+        // Geral\FrmCalImp.frm. Relatório item-a-item de PIS/COFINS/ICMS/
+        // FCP/DIFAL por NFC-e/NF-e num período, com exportação pra
+        // Excel. Sem `moduleOn` — o legado não liga esta tela a nenhum
+        // módulo fiscal específico.
+        key: "apuracao-fiscal",
+        label: "Apuração Fiscal",
+        hint: "Relatório item-a-item de PIS/COFINS/ICMS/FCP e rateio de DIFAL por período, com exportação pra Excel",
+        icon: "calculator-outline",
+        route: "/apuracao-fiscal",
+        visible: can("APURACAO_FISCAL.ABRIR"),
       },
     ],
     [can, moduleOn]

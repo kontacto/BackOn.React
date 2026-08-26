@@ -28,22 +28,26 @@ real; corrigido lá e replicado certo aqui desde o início).
 só funciona por `ANSI_NULLS OFF` legado) — a regra em si (só uma
 contingência aberta por vez) é real, portado com `IS NULL` correto.
 
-**Ainda não conectado à emissão real** — diferente de Contingência NFCe
-(já consultada por `comanda_service._emitir_nfce_comanda_sync`),
-`nfe_agrupada_service.py`/`nfe_avulsa_service.py` ainda não chamam
-`contingencia_aberta_sync` nem passam `contingencia=` pro `emitir_nfe_
-sync` — essa tela fica só como registro/CRUD por enquanto, sem "Validar
-Contingência" equivalente ainda. Ver PENDENCIAS.md pra esse gap
-registrado explicitamente, fora do escopo desta rodada.
+**Conectado à emissão real 2026-08-20** — `nfe_agrupada_service.py`/
+`nfe_avulsa_service.py` agora consultam `contingencia_aberta_sync` antes
+de emitir e passam `contingencia=` pro `emitir_nfe_sync` (mesmo padrão já
+usado por `comanda_service._emitir_nfce_comanda_sync` pra NFC-e desde
+2026-08-19). `listar_pendentes`/`validar_pendentes` abaixo (novos, mesmo
+dia) são o equivalente de "Validar Contingência" do Gestor NFCe — aqui
+sem tela de listagem própria (não existe "Gestor NFe"), então viraram
+ações desta MESMA tela Contingência NFe: mostra as NF-e com `n_fiscal.
+situacao='G'` (aguardando) e permite validar (reassinar + transmitir de
+verdade) uma a uma ou em lote.
 
 **NUNCA testado ao vivo contra SEFAZ real** — mesma ressalva de todo o
 resto do pacote fiscal desta migração."""
 import asyncio
+import re
 from datetime import datetime
 from typing import Optional
 
 from db.connection import _open_conn
-from services import nfe_fiscal_common
+from services import nfe_emissao_service, nfe_fiscal_common
 from services.permissoes_service import tem_permissao
 
 _TIPOS_VALIDOS = (2, 5)  # FS-IA, FS-DA
@@ -216,3 +220,174 @@ async def fechar_contingencia(servidor: str, banco: str, classe: Optional[int] =
 
 async def status_contingencia(servidor: str, banco: str) -> dict:
     return await asyncio.to_thread(_status_contingencia_sync, servidor, banco)
+
+
+# ---------------------------------------------------------------------------
+# Listar pendentes / Validar Contingência — equivalente de "Validar
+# Contingência" do Gestor NFCe (`gestor_nfce_service._validar_
+# contingencia_sync`), adaptado pra NF-e: sem uma tela "Gestor NFe" onde
+# embutir a ação, as duas funções abaixo alimentam a própria tela
+# Contingência NFe. Mesmo achado 2026-08-19 (Gestor NFCe) reaproveitado
+# aqui: "Validar Contingência" NÃO é uma operação SEFAZ especial — é a
+# autorização normal (`NFeAutorizacao4`) atrasada, reassinando o MESMO
+# XML já gravado (tpEmis 2/5 preservado, nada recalculado).
+# ---------------------------------------------------------------------------
+
+def _listar_pendentes_sync(servidor: str, banco: str) -> dict:
+    """NF-e emitidas em contingência, ainda aguardando transmissão real
+    (`n_fiscal.situacao='G'`)."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT codigo, num_nf, serie_nf, chave_acesso, valor_total, data_nf "
+            "FROM n_fiscal WHERE situacao = 'G' ORDER BY data_nf DESC, num_nf DESC"
+        )
+        pendentes = cur.fetchall()
+        cur.close()
+        conn.close()
+        return {"success": True, "pendentes": pendentes}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+def _validar_pendentes_sync(
+    servidor: str, banco: str, *, notas: list[int], classe: Optional[int] = None, master: bool = False,
+) -> dict:
+    """Reassina o XML já gravado em `n_fiscal.xml` e transmite pelo mesmo
+    envelope `NFeAutorizacao4` da emissão normal — réplica do mecanismo já
+    confirmado pra NFC-e. Ao suceder: `n_fiscal.situacao='A'` + `comanda_
+    nf.situacao='A'` (a segunda só afeta linhas que existirem — nota vinda
+    de NF-e Avulsa nunca tem `comanda_nf`, UPDATE vira no-op nesse caso,
+    não precisa de branch separado)."""
+    if not notas:
+        return {"success": False, "message": "Selecione ao menos uma nota."}
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        if _sem_permissao(cur, classe=classe, master=master, comando="GRAVAR"):
+            conn.close()
+            return {"success": False, "message": "Sem permissão para validar contingência."}
+        if not nfe_fiscal_common.modulo_nfe_ativo_sync(cur):
+            conn.close()
+            return {"success": False, "message": "Módulo NFe está desativado — fale com o administrador do sistema."}
+
+        cert = nfe_fiscal_common.carregar_certificado_sync(cur)
+        if not cert:
+            conn.close()
+            return {"success": False, "message": "Nenhum certificado digital válido cadastrado."}
+        key_pem, cert_pem = cert
+
+        cur.execute("SELECT uf FROM controle")
+        controle = cur.fetchone() or {}
+        cod_ibge = nfe_fiscal_common.IBGE_POR_UF.get((controle.get("uf") or "").strip().upper())
+        if not cod_ibge:
+            conn.close()
+            return {"success": False, "message": f"UF '{controle.get('uf')}' não reconhecida."}
+        tp_amb = nfe_fiscal_common.resolver_tp_amb_sync(cur)
+        url = nfe_emissao_service._resolver_url_autorizacao(cod_ibge, "55", tp_amb)
+        if not url:
+            conn.close()
+            return {"success": False, "message": "Endpoint SEFAZ não disponível pra essa UF."}
+
+        resultados = []
+        for codigo in notas:
+            cur.execute(
+                "SELECT codigo, situacao, chave_acesso, xml FROM n_fiscal WHERE codigo = %s", (codigo,),
+            )
+            linha = cur.fetchone()
+            if not linha or (linha.get("situacao") or "").strip().upper() != "G":
+                resultados.append({"codigo": codigo, "success": False, "message": "Nota não está aguardando contingência."})
+                continue
+            xml_guardado = linha.get("xml")
+            if not xml_guardado:
+                resultados.append({"codigo": codigo, "success": False, "message": "XML da NF-e não encontrado."})
+                continue
+            try:
+                # Achado real (teste ao vivo, 2026-08-26, NFC-e — corrigido
+                # aqui por analogia/consistência, mesmo padrão do dia
+                # anterior): `xml_guardado` é o documento JÁ ASSINADO
+                # (assinatura da emissão original em contingência, nunca
+                # removida). Reassinar isso do jeito que está deixaria a
+                # assinatura antiga presente junto da nova — mesma classe
+                # de bug confirmada com rejeição real do SEFAZ pro lado
+                # NFC-e ("Falha no Schema XML"). NF-e não tem `infNFeSupl`
+                # (isso é exclusivo de NFC-e/QR Code), só remove a
+                # assinatura antiga antes de reassinar.
+                xml_texto = xml_guardado if isinstance(xml_guardado, str) else xml_guardado.decode("utf-8")
+                xml_texto = re.sub(r"<(?:ds:)?Signature[ >].*?</(?:ds:)?Signature>", "", xml_texto, flags=re.DOTALL)
+                xml_bytes = xml_texto.encode("utf-8")
+                id_nfe = f"NFe{linha.get('chave_acesso')}"
+                # sha1=True — mesmo achado do MDF-e/NFC-e (2026-08-23), ver
+                # `nfe_cancelamento_service._assinar_evento`.
+                xml_assinado = nfe_fiscal_common.assinar_xml(xml_bytes, id_nfe, key_pem, cert_pem, sha1=True)
+                envelope = nfe_emissao_service._montar_envelope_autorizacao(xml_assinado, tp_amb)
+                resposta = nfe_fiscal_common.transmitir(envelope, url, key_pem, cert_pem)
+            except Exception as e:
+                resultados.append({"codigo": codigo, "success": False, "message": f"Falha ao comunicar com o SEFAZ: {e}"})
+                continue
+            # `retEnviNFe`/`retNFe` tem 2 `cStat` aninhados — o do LOTE
+            # (nível externo, neutro, ex. 104 "Lote processado") e o do
+            # DOCUMENTO de verdade, dentro de `infProt` (nível interno).
+            # `extrair_tag` ingênuo pega o PRIMEIRO da string inteira (o
+            # do lote) — mesmo bug já achado e corrigido em
+            # `emitir_nfce_sync`/`emitir_nfe_sync` 2026-08-23, latente
+            # aqui até agora porque "Validar Contingência" nunca tinha
+            # sido exercitado ao vivo (achado+corrigido 2026-08-24, sem
+            # rejeição real ainda — mesma classe de bug, aplicado por
+            # analogia/consistência).
+            inf_prot = nfe_fiscal_common.extrair_bloco(resposta, "infProt") or resposta
+            c_stat = nfe_fiscal_common.extrair_tag(inf_prot, "cStat")
+            n_prot = nfe_fiscal_common.extrair_tag(inf_prot, "nProt")
+            dh_recbto = nfe_fiscal_common.extrair_tag(inf_prot, "dhRecbto")
+            # 100 = "Autorizado o uso da NF-e" (sucesso).
+            if c_stat != "100":
+                x_motivo = nfe_fiscal_common.extrair_tag(inf_prot, "xMotivo")
+                resultados.append({
+                    "codigo": codigo, "success": False,
+                    "message": f"SEFAZ recusou a autorização (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}.",
+                })
+                continue
+            # `dh_recbto` cru do SEFAZ (ISO 8601 com offset) quebra numa
+            # coluna DATETIME e derruba a transação DEPOIS do sucesso já
+            # confirmado — mesmo bug achado ao vivo no MDF-e 2026-08-23,
+            # corrigido aqui 2026-08-24 (ver `nfe_fiscal_common.parse_dh_sefaz`).
+            cur.execute(
+                "UPDATE n_fiscal SET situacao = 'A', cstat = %s, protocolo_sefaz = %s, dhRecbto = %s, xml = %s "
+                "WHERE codigo = %s",
+                (c_stat, n_prot, nfe_fiscal_common.parse_dh_sefaz(dh_recbto), xml_assinado.decode("utf-8"), codigo),
+            )
+            cur.execute("UPDATE comanda_nf SET situacao = 'A' WHERE nota_fisc = %s AND situacao = 'G'", (codigo,))
+            resultados.append({"codigo": codigo, "success": True, "protocolo_sefaz": n_prot})
+        conn.commit()
+        cur.close()
+        conn.close()
+        falhas = [r for r in resultados if not r.get("success")]
+        return {"success": not falhas, "resultados": resultados}
+    except Exception as e:
+        try:
+            conn.rollback()
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+async def listar_pendentes(servidor: str, banco: str) -> dict:
+    return await asyncio.to_thread(_listar_pendentes_sync, servidor, banco)
+
+
+async def validar_pendentes(
+    servidor: str, banco: str, *, notas: list[int], classe: Optional[int] = None, master: bool = False,
+) -> dict:
+    return await asyncio.to_thread(_validar_pendentes_sync, servidor, banco, notas=notas, classe=classe, master=master)

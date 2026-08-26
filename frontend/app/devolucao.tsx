@@ -1,12 +1,16 @@
-// Gestor de Devolução (Transações) — Fase 1 enxuta, migração de
-// Geral\FrmManDev.frm. Busca itens de uma venda já PAGA (mesma base do
-// Gestor de Comandas) elegíveis pra devolução, registra a devolução e
-// opcionalmente emite um Vale de Devolução (crédito ao cliente).
+// Gestor de Devolução (Transações) — migração de Geral\FrmManDev.frm.
+// Busca itens de uma venda já PAGA (mesma base do Gestor de Comandas)
+// elegíveis pra devolução, registra a devolução e opcionalmente emite um
+// Vale de Devolução (crédito ao cliente).
 //
-// Fora de escopo nesta fase (decisão via AskUserQuestion, ver
-// PENDENCIAS.md > "Gestor de Devolução"): emissão de NF de devolução (o
-// próprio legado delega isso a um subsistema fiscal à parte) e reposição
-// física de estoque (o legado também não faz isso por este caminho).
+// Emissão de NF-e de devolução (2026-08-24) — achado real
+// (Command14_Click, FrmManDev.frm: "Emitir Nfe de Devolução do(s)
+// iten(s) selecionado(s)"): registra a devolução e leva direto pra NF-e
+// Avulsa (nfe-avulsa.tsx) já carregada com os dados, sem digitar nada lá
+// — mesmo padrão do legado (Gestor de Devolução chama "Gerar NFe
+// Avulsa" pré-carregada). A reposição física de estoque acontece
+// automaticamente na EMISSÃO da NF-e (tipo_mov.atualiza_est), não
+// aqui — ver `nfe_avulsa_service.py`.
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -18,10 +22,12 @@ import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import LockedView from "@/src/components/LockedView";
 import WebDateField from "@/src/components/WebDateField";
 import SelectField from "@/src/components/SelectField";
+import AccordionSection from "@/src/components/pedido/AccordionSection";
 import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
 import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
 import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 import { ClienteRow } from "@/src/components/pedido/types";
+import { useClienteSearchModal } from "@/src/hooks/useClienteSearchModal";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { apiGet, apiSend, friendlyApiError, friendlyCatchError } from "@/src/utils/api";
@@ -46,7 +52,8 @@ const AJUDA_ITENS: HelpItem[] = [
   { titulo: "Buscar", texto: "Procura itens de vendas já PAGAS que ainda podem ser devolvidos (com saldo disponível). Filtre por data, cupom, NFC-e, NF, comanda, cliente ou produto.", icon: { lib: "ion", name: "search" } },
   { titulo: "Selecionar item", texto: "Marque o item, informe a quantidade a devolver (não pode passar do saldo disponível) e o motivo (Normal ou Defeito).", icon: { lib: "ion", name: "checkbox-outline" } },
   { titulo: "Emitir Vale de Devolução", texto: "Gera um crédito no valor total devolvido, em nome do cliente escolhido — pode ser usado como forma de pagamento numa venda futura.", icon: { lib: "ion", name: "cash-outline" } },
-  { titulo: "Registrar Devolução", texto: "Grava a devolução dos itens marcados. Não emite Nota Fiscal de devolução nem devolve estoque automaticamente — isso continua sendo feito à parte, no Recebimento de Mercadoria.", icon: { lib: "ion", name: "checkmark-done-outline" } },
+  { titulo: "Registrar Devolução", texto: "Grava a devolução dos itens marcados, sem emitir Nota Fiscal — use quando for juntar várias devoluções numa única NF-e mais tarde.", icon: { lib: "ion", name: "checkmark-done-outline" } },
+  { titulo: "Emitir NF-e de Devolução", texto: "Registra a devolução e já abre a tela de Gerar NF-e com os dados carregados, pronta pra revisar e emitir — sem digitar nada lá. Só funciona quando todos os itens marcados são da mesma venda/cliente (a Nota Fiscal só tem 1 destinatário). O estoque é reposto automaticamente quando a NF-e é emitida.", icon: { lib: "ion", name: "receipt-outline" } },
   { titulo: "Consulta", texto: "Lista devoluções já registradas. Cancelar uma devolução também cancela o Vale vinculado, se houver — só é possível enquanto não tiver NF de devolução vinculada.", icon: { lib: "ion", name: "list-outline" } },
 ];
 
@@ -70,6 +77,7 @@ export default function DevolucaoScreen() {
   const [nfce, setNfce] = useState("");
   const [nf, setNf] = useState("");
   const [cliente, setCliente] = useState("");
+  const clienteBuscaSearch = useClienteSearchModal(conn);
   const [produto, setProduto] = useState("");
   const [buscando, setBuscando] = useState(false);
   const [itensEncontrados, setItensEncontrados] = useState<ItemVenda[]>([]);
@@ -82,10 +90,12 @@ export default function DevolucaoScreen() {
   const [searchResults, setSearchResults] = useState<ClienteRow[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [registrando, setRegistrando] = useState(false);
+  const [emitindoNfe, setEmitindoNfe] = useState(false);
 
   const [consultaDataIni, setConsultaDataIni] = useState<string | null>(null);
   const [consultaDataFim, setConsultaDataFim] = useState<string | null>(null);
   const [consultaCliente, setConsultaCliente] = useState("");
+  const clienteConsultaSearch = useClienteSearchModal(conn);
   const [consultaComanda, setConsultaComanda] = useState("");
   const [buscandoConsulta, setBuscandoConsulta] = useState(false);
   const [devolucoes, setDevolucoes] = useState<DevolucaoRow[]>([]);
@@ -171,9 +181,22 @@ export default function DevolucaoScreen() {
     return s + qtd * it.p_unit;
   }, 0);
 
+  const idsSelecionados = Object.keys(selecao).map((k) => parseInt(k, 10));
+
+  const enviarRegistro = useCallback(async () => {
+    if (!conn) return null;
+    const itens = idsSelecionados.map((id_mov) => ({
+      id_mov,
+      qtd_devolvida: parseFloat((selecao[id_mov].qtd || "0").replace(",", ".")) || 0,
+      motivo: selecao[id_mov].motivo,
+    }));
+    return apiSend(conn, "/api/devolucao/registrar", "POST", {
+      itens, emitir_vale: emitirVale, cliente: emitirVale ? clienteVale?.codigo : null,
+      master: masterPerm, classe: classePerm, usuario_alteracao: usuarioCod, plataforma: "web",
+    });
+  }, [conn, idsSelecionados, selecao, emitirVale, clienteVale, masterPerm, classePerm, usuarioCod]);
+
   const registrar = useCallback(async () => {
-    if (!conn) return;
-    const idsSelecionados = Object.keys(selecao).map((k) => parseInt(k, 10));
     if (idsSelecionados.length === 0) {
       feedback.showError("Selecione ao menos um item para devolver.");
       return;
@@ -184,15 +207,7 @@ export default function DevolucaoScreen() {
     }
     setRegistrando(true);
     try {
-      const itens = idsSelecionados.map((id_mov) => ({
-        id_mov,
-        qtd_devolvida: parseFloat((selecao[id_mov].qtd || "0").replace(",", ".")) || 0,
-        motivo: selecao[id_mov].motivo,
-      }));
-      const j = await apiSend(conn, "/api/devolucao/registrar", "POST", {
-        itens, emitir_vale: emitirVale, cliente: emitirVale ? clienteVale?.codigo : null,
-        master: masterPerm, classe: classePerm, usuario_alteracao: usuarioCod, plataforma: "web",
-      });
+      const j = await enviarRegistro();
       if (j?.success) {
         feedback.showSuccess(
           `Devolução registrada — valor total ${formatBRL(j.valor_total)}.`
@@ -211,7 +226,52 @@ export default function DevolucaoScreen() {
     } finally {
       setRegistrando(false);
     }
-  }, [conn, selecao, emitirVale, clienteVale, masterPerm, classePerm, usuarioCod, feedback]);
+  }, [idsSelecionados, emitirVale, clienteVale, enviarRegistro, feedback]);
+
+  // "Emitir NF-e de Devolução" — achado real 2026-08-24
+  // (`Command14_Click`, `FrmManDev.frm`: "Emitir Nfe de Devolução do(s)
+  // iten(s) selecionado(s)"): registra a devolução (mesmo caminho de
+  // "Registrar") e, no mesmo clique, leva pra NF-e Avulsa já carregada
+  // com os dados — sem o usuário digitar nada lá. A NF-e só tem 1
+  // destinatário, então os itens selecionados precisam ser todos do
+  // MESMO cliente da venda original (nunca escolhido automaticamente
+  // pelo sistema — bloqueia com aviso claro em vez de adivinhar).
+  const registrarEEmitirNfe = useCallback(async () => {
+    if (idsSelecionados.length === 0) {
+      feedback.showError("Selecione ao menos um item para devolver.");
+      return;
+    }
+    const clientesDosItens = new Set(
+      idsSelecionados.map((id) => itensEncontrados.find((it) => it.id_mov === id)?.cliente ?? null),
+    );
+    if (clientesDosItens.size > 1 || clientesDosItens.has(null)) {
+      feedback.showError(
+        "Pra emitir a NF-e de devolução, todos os itens selecionados precisam ser da mesma venda/cliente.",
+      );
+      return;
+    }
+    if (emitirVale && !clienteVale) {
+      feedback.showError("Escolha o cliente que vai receber o Vale de Devolução.");
+      return;
+    }
+    setEmitindoNfe(true);
+    try {
+      const j = await enviarRegistro();
+      if (!j?.success || !j.ids_devolucao?.length) {
+        feedback.showError(friendlyApiError(j, "Não foi possível registrar a devolução."));
+        return;
+      }
+      setItensEncontrados([]);
+      setSelecao({});
+      setEmitirVale(false);
+      setClienteVale(null);
+      router.push(`/nfe-avulsa?importar_devolucao_ids=${j.ids_devolucao.join(",")}`);
+    } catch (e) {
+      feedback.showError(friendlyCatchError(e));
+    } finally {
+      setEmitindoNfe(false);
+    }
+  }, [idsSelecionados, itensEncontrados, emitirVale, clienteVale, enviarRegistro, feedback, router]);
 
   const buscarConsulta = useCallback(async () => {
     if (!conn) return;
@@ -295,7 +355,7 @@ export default function DevolucaoScreen() {
           ) : aba === "buscar" ? (
             <View style={{ gap: spacing.md }}>
               <View style={WEB_FILTER_CARD}>
-                <Text style={labelStyle()}>Filtros</Text>
+                <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="devolucao-filtros">
                 <View style={{ flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" }}>
                   <View style={{ width: 160 }}>
                     <Text style={fieldLabel()}>Data De</Text>
@@ -323,7 +383,18 @@ export default function DevolucaoScreen() {
                   </View>
                   <View style={{ width: 200 }}>
                     <Text style={fieldLabel()}>Cliente (código, CNPJ ou nome)</Text>
-                    <TextInput value={cliente} onChangeText={setCliente} style={inputStyle()} testID="devolucao-cliente" />
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+                      <TextInput
+                        value={cliente}
+                        onChangeText={setCliente}
+                        style={[inputStyle(), { flex: 1, minWidth: 0 }]}
+                        testID="devolucao-cliente"
+                      />
+                      <IconButtonWithTooltip
+                        icon="search-outline" label="Buscar Cliente" onPress={clienteBuscaSearch.openModal}
+                        size={20} color={colors.brandPrimary} testID="devolucao-cliente-buscar"
+                      />
+                    </View>
                   </View>
                   <View style={{ width: 200 }}>
                     <Text style={fieldLabel()}>Produto (código ou descrição)</Text>
@@ -338,6 +409,7 @@ export default function DevolucaoScreen() {
                     )}
                   </Pressable>
                 </View>
+                </AccordionSection>
               </View>
 
               {itensEncontrados.length > 0 ? (
@@ -404,28 +476,45 @@ export default function DevolucaoScreen() {
                     </Text>
                   </View>
 
-                  {can("DEVOLUCAO.REGISTRAR") ? (
-                    <Pressable
-                      onPress={registrar}
-                      disabled={registrando || Object.keys(selecao).length === 0}
-                      style={[primaryBtnStyle(), { alignSelf: "flex-start", marginTop: spacing.sm }, Object.keys(selecao).length === 0 && { opacity: 0.5 }]}
-                      testID="devolucao-registrar-btn"
-                    >
-                      {registrando ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : (
-                        <>
-                          <Ionicons name="checkmark-done-outline" size={16} color={colors.onBrandPrimary} />
-                          <Text style={primaryBtnLabelStyle()}>Registrar Devolução</Text>
-                        </>
-                      )}
-                    </Pressable>
-                  ) : null}
+                  <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm, flexWrap: "wrap" }}>
+                    {can("DEVOLUCAO.REGISTRAR") ? (
+                      <Pressable
+                        onPress={registrar}
+                        disabled={registrando || emitindoNfe || Object.keys(selecao).length === 0}
+                        style={[primaryBtnStyle(), { alignSelf: "flex-start" }, Object.keys(selecao).length === 0 && { opacity: 0.5 }]}
+                        testID="devolucao-registrar-btn"
+                      >
+                        {registrando ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : (
+                          <>
+                            <Ionicons name="checkmark-done-outline" size={16} color={colors.onBrandPrimary} />
+                            <Text style={primaryBtnLabelStyle()}>Registrar Devolução</Text>
+                          </>
+                        )}
+                      </Pressable>
+                    ) : null}
+                    {can("DEVOLUCAO.EMITIR_NFE") ? (
+                      <Pressable
+                        onPress={registrarEEmitirNfe}
+                        disabled={registrando || emitindoNfe || Object.keys(selecao).length === 0}
+                        style={[secondaryBtnStyle(), { alignSelf: "flex-start" }, Object.keys(selecao).length === 0 && { opacity: 0.5 }]}
+                        testID="devolucao-emitir-nfe-btn"
+                      >
+                        {emitindoNfe ? <ActivityIndicator color={colors.brandPrimary} size="small" /> : (
+                          <>
+                            <Ionicons name="receipt-outline" size={16} color={colors.brandPrimary} />
+                            <Text style={secondaryBtnLabelStyle()}>Emitir NF-e de Devolução</Text>
+                          </>
+                        )}
+                      </Pressable>
+                    ) : null}
+                  </View>
                 </View>
               ) : null}
             </View>
           ) : (
             <View style={{ gap: spacing.md }}>
               <View style={WEB_FILTER_CARD}>
-                <Text style={labelStyle()}>Filtros</Text>
+                <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="devolucao-consulta-filtros">
                 <View style={{ flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" }}>
                   <View style={{ width: 160 }}>
                     <Text style={fieldLabel()}>Data De</Text>
@@ -441,7 +530,18 @@ export default function DevolucaoScreen() {
                   </View>
                   <View style={{ width: 200 }}>
                     <Text style={fieldLabel()}>Cliente</Text>
-                    <TextInput value={consultaCliente} onChangeText={setConsultaCliente} style={inputStyle()} testID="devolucao-consulta-cliente" />
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+                      <TextInput
+                        value={consultaCliente}
+                        onChangeText={setConsultaCliente}
+                        style={[inputStyle(), { flex: 1, minWidth: 0 }]}
+                        testID="devolucao-consulta-cliente"
+                      />
+                      <IconButtonWithTooltip
+                        icon="search-outline" label="Buscar Cliente" onPress={clienteConsultaSearch.openModal}
+                        size={20} color={colors.brandPrimary} testID="devolucao-consulta-cliente-buscar"
+                      />
+                    </View>
                   </View>
                   <Pressable onPress={buscarConsulta} disabled={buscandoConsulta} style={[primaryBtnStyle(), { alignSelf: "flex-end" }]} testID="devolucao-consulta-buscar-btn">
                     {buscandoConsulta ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : (
@@ -452,6 +552,7 @@ export default function DevolucaoScreen() {
                     )}
                   </Pressable>
                 </View>
+                </AccordionSection>
               </View>
 
               <View style={WEB_FILTER_CARD}>
@@ -494,6 +595,26 @@ export default function DevolucaoScreen() {
         results={searchResults}
         onPick={(c) => { if (c) setClienteVale({ codigo: c.codigo, nome: c.nome }); setBuscarClienteOpen(false); }}
         onCreate={() => setBuscarClienteOpen(false)}
+      />
+      <ClientSearchModal
+        visible={clienteBuscaSearch.open}
+        onClose={clienteBuscaSearch.closeModal}
+        term={clienteBuscaSearch.term}
+        setTerm={clienteBuscaSearch.setTerm}
+        loading={clienteBuscaSearch.loading}
+        results={clienteBuscaSearch.results}
+        onPick={(c) => { if (c) setCliente(c.nome); clienteBuscaSearch.closeModal(); }}
+        onCreate={clienteBuscaSearch.closeModal}
+      />
+      <ClientSearchModal
+        visible={clienteConsultaSearch.open}
+        onClose={clienteConsultaSearch.closeModal}
+        term={clienteConsultaSearch.term}
+        setTerm={clienteConsultaSearch.setTerm}
+        loading={clienteConsultaSearch.loading}
+        results={clienteConsultaSearch.results}
+        onPick={(c) => { if (c) setConsultaCliente(c.nome); clienteConsultaSearch.closeModal(); }}
+        onCreate={clienteConsultaSearch.closeModal}
       />
     </SafeAreaView>
   );
@@ -548,4 +669,14 @@ function primaryBtnStyle() {
 }
 function primaryBtnLabelStyle() {
   return { color: colors.onBrandPrimary, fontWeight: "600" as const, fontSize: 14 };
+}
+function secondaryBtnStyle() {
+  return {
+    flexDirection: "row" as const, alignItems: "center" as const, justifyContent: "center" as const, gap: 6,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.brandPrimary, borderRadius: radius.pill,
+    paddingHorizontal: spacing.lg, paddingVertical: 10, minWidth: 100,
+  };
+}
+function secondaryBtnLabelStyle() {
+  return { color: colors.brandPrimary, fontWeight: "600" as const, fontSize: 14 };
 }

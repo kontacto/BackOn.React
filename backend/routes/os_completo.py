@@ -14,9 +14,10 @@ rota própria de forma de pagamento)."""
 from typing import Optional
 
 from fastapi import APIRouter, Request
+from fastapi.responses import Response
 
-from models.schemas import OSCompletoSaveRequest, OSItemSaveRequest, DescontoGeralRequest, FecharRequest, FaturarOSRequest, PontuacaoSaveRequest, AutorizacaoItensRequest, OSTempoSaveRequest, AlterarExecutorRequest, OSEquipamentoSaveRequest
-from services import os_itens_service, os_completo_service, os_tempo_service, os_equipamento_service, log_auditoria_service
+from models.schemas import OSCompletoSaveRequest, OSItemSaveRequest, DescontoGeralRequest, FecharRequest, FaturarOSRequest, PontuacaoSaveRequest, AutorizacaoItensRequest, OSTempoSaveRequest, AlterarExecutorRequest, OSEquipamentoSaveRequest, OSChecklistVeiculoSaveRequest
+from services import os_itens_service, os_completo_service, os_tempo_service, os_equipamento_service, os_checklist_veiculo_service, os_completa_pdf_service, log_auditoria_service
 
 router = APIRouter()
 
@@ -392,6 +393,62 @@ async def cancelar_equipamento_os(
     return result
 
 
+# ---------- checklist de entrada de veículo (O.S. Oficina, pedido
+# explícito do usuário 2026-08-26 — sem precedente no legado; cada
+# marcação no diagrama do veículo é um item dinâmico, tabela nova
+# `os_checklist_veiculo`, sem PUT/editar) ----------
+@router.get("/os-completo/{codigo}/checklist-veiculo")
+async def list_checklist_veiculo(codigo: int, servidor: str, banco: str):
+    return await os_checklist_veiculo_service.list_checklist(servidor, banco, codigo)
+
+
+@router.post("/os-completo/{codigo}/checklist-veiculo")
+async def add_checklist_veiculo(codigo: int, req: OSChecklistVeiculoSaveRequest, request: Request):
+    result = await os_checklist_veiculo_service.add_item(req, codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS_COMP", comando="CHECKLIST_ADD",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo),
+            descricao=f"Marcação '{req.tipo_avaria}' incluída no checklist de entrada da O.S. Completa {codigo}",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/os-completo/{codigo}/checklist-veiculo/{item_codigo}/cancelar")
+async def cancelar_checklist_veiculo(
+    codigo: int, item_codigo: int, req: FecharRequest, request: Request,
+):
+    result = await os_checklist_veiculo_service.cancelar_item(req.servidor, req.banco, codigo, item_codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS_COMP", comando="CHECKLIST_CANC",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo),
+            descricao=f"Marcação {item_codigo} cancelada no checklist de entrada da O.S. Completa {codigo}",
+            campos_alterados=[{"campo": "situacao", "antes": "A", "depois": "C"}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/os-completo/{codigo}/checklist-veiculo/concluir")
+async def concluir_checklist_veiculo(codigo: int, req: FecharRequest, request: Request):
+    result = await os_checklist_veiculo_service.concluir(req, codigo)
+    if result.get("success"):
+        sem_avaria = result.get("sem_avaria")
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS_COMP", comando="CHECKLIST_CONC",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo),
+            descricao=f"Checklist de entrada da O.S. Completa {codigo} concluído"
+                       f"{' (sem avarias)' if sem_avaria else ''}",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
 @router.get("/os-completo/{codigo}/tempo")
 async def list_tempo(codigo: int, servidor: str, banco: str):
     return await os_tempo_service.list_tempo(servidor, banco, codigo)
@@ -467,6 +524,37 @@ async def desconto_geral(codigo: int, req: DescontoGeralRequest, request: Reques
             referencia=str(codigo),
             descricao=f"Desconto geral de R$ {req.valor:.2f} aplicado na O.S. Completa {codigo} ({result.get('percentual', 0):g}%)",
             campos_alterados=[{"campo": "desconto_geral", "depois": f"{req.valor:.2f}"}],
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+# ==================== Impressão A4 "Completa" (não-fiscal) ====================
+# Ver services/os_completa_pdf_service.py — motor único de PDF reaproveitado
+# por "Baixar/Imprimir" e "Enviar por Email" (WhatsApp desta tela já existe
+# via WhatsappButton, documentType="OS", e manda só texto — sem anexo, ver
+# docstring do service).
+
+@router.get("/os-completo/{codigo}/pdf")
+async def baixar_pdf_os(codigo: int, servidor: str, banco: str):
+    pdf_bytes = await os_completa_pdf_service.gerar_pdf_os(servidor, banco, codigo)
+    if pdf_bytes is None:
+        return {"success": False, "message": "O.S. não encontrada."}
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="os_{codigo}.pdf"'},
+    )
+
+
+@router.post("/os-completo/{codigo}/enviar-email")
+async def enviar_email_os(codigo: int, req: FecharRequest, request: Request):
+    result = await os_completa_pdf_service.enviar_email_os(req.servidor, req.banco, codigo)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="OS_COMP", comando="EMAIL",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(codigo), descricao=f"O.S. Completa {codigo} enviada por e-mail",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

@@ -260,6 +260,41 @@ async def delete_certificado(sequencia: int, req: CertificadoDeleteRequest, requ
     return result
 
 
+# ==================== Logo da Empresa ====================
+# Gravada direto em `controle.logo_empresa` (VARBINARY) — decisão explícita
+# do usuário 2026-08-26, não Azure Blob. Ver controle_sistema_service.py.
+
+class LogoEmpresaDeleteRequest(AuditFields):
+    servidor: str
+    banco: str
+
+
+@router.post("/controle-sistema/logo")
+async def upload_logo_empresa(
+    request: Request,
+    servidor: str = Form(...),
+    banco: str = Form(...),
+    usuario_alteracao: Optional[int] = Form(None),
+    classe: Optional[int] = Form(None),
+    plataforma: Optional[str] = Form(None),
+    arquivo: UploadFile = File(...),
+):
+    conteudo = await arquivo.read()
+    result = await controle_sistema_service.upload_logo_empresa(servidor, banco, conteudo, arquivo.content_type or "")
+    if result.get("success"):
+        req = LogoEmpresaDeleteRequest(servidor=servidor, banco=banco, usuario_alteracao=usuario_alteracao, classe=classe, plataforma=plataforma)
+        await _log(req, request, comando="GRAVAR_LOGO_EMPRESA", descricao="Logo da empresa cadastrada")
+    return result
+
+
+@router.post("/controle-sistema/logo/remover")
+async def remover_logo_empresa(req: LogoEmpresaDeleteRequest, request: Request):
+    result = await controle_sistema_service.remover_logo_empresa(req.servidor, req.banco)
+    if result.get("success"):
+        await _log(req, request, comando="REMOVER_LOGO_EMPRESA", descricao="Logo da empresa removida")
+    return result
+
+
 # ==================== Modal: NFe de Simples Remessa dos DAV's ====================
 
 @router.get("/controle-sistema/simples-remessa")

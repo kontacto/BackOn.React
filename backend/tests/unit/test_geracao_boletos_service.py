@@ -28,9 +28,17 @@ class FakeCursor:
 class FakeConn:
     def __init__(self, cursor):
         self._c = cursor
+        self.committed = 0
+        self.rolled = 0
 
     def cursor(self, as_dict=False):
         return self._c
+
+    def commit(self):
+        self.committed += 1
+
+    def rollback(self):
+        self.rolled += 1
 
     def close(self):
         pass
@@ -108,3 +116,69 @@ class TestListarTitulos:
         _patch(monkeypatch, cur)
         r = svc._listar_titulos_sync("srv", "bd", 1, {})
         assert r["items"][0]["parcela_info"] == "2 de 3"
+
+
+class TestBaixarPdfSync:
+    """`_baixar_pdf_sync` só delega pro motor real (ver
+    test_boleto_pdf_service.py pro detalhe do PDF/código de barras)."""
+
+    def test_delega_para_boleto_pdf_service(self, monkeypatch):
+        capturado = {}
+
+        def _fake(servidor, banco, cod_banco, titulos):
+            capturado.update(servidor=servidor, banco=banco, cod_banco=cod_banco, titulos=titulos)
+            return {"success": True, "conteudo": b"%PDF-fake", "erros": []}
+
+        monkeypatch.setattr(svc.boleto_pdf_service, "gerar_pdf_titulos_sync", _fake)
+        r = svc._baixar_pdf_sync("srv", "bd", 1, [500, 501])
+        assert r["success"] is True
+        assert capturado == {"servidor": "srv", "banco": "bd", "cod_banco": 1, "titulos": [500, 501]}
+
+
+class TestEnviarEmailSync:
+    def test_sem_titulos_bloqueia(self):
+        r = svc._enviar_email_sync("srv", "bd", 1, [])
+        assert r["success"] is False
+
+    def test_erro_ao_registrar_banco_para_no_item(self, monkeypatch):
+        cur = FakeCursor()
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(
+            svc.boleto_pdf_service, "_registrar_banco_no_titulo_sync",
+            lambda cur, drv, cod_banco: {"success": False, "message": "Banco não encontrado."},
+        )
+        r = svc._enviar_email_sync("srv", "bd", 1, [500])
+        assert r["success"] is True
+        assert r["resultados"][0]["success"] is False
+        assert "banco não encontrado" in r["resultados"][0]["message"].lower()
+
+    def test_sem_email_cadastrado_nunca_tenta_enviar(self, monkeypatch):
+        cur = FakeCursor(one=[{"email_destino": "", "nome": "Cliente", "fantasia": "", "dt_vencimento": None, "valor": 100}])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc.boleto_pdf_service, "_registrar_banco_no_titulo_sync", lambda cur, drv, cod_banco: None)
+        chamado = {"n": 0}
+        monkeypatch.setattr(svc.email_cobranca_service, "_enviar_email_sync", lambda *a, **k: chamado.update(n=chamado["n"] + 1))
+        r = svc._enviar_email_sync("srv", "bd", 1, [500])
+        assert r["resultados"][0]["success"] is False
+        assert "sem e-mail" in r["resultados"][0]["message"].lower()
+        assert chamado["n"] == 0
+
+    def test_com_email_gera_pdf_e_envia(self, monkeypatch):
+        import datetime as _dt
+        cur = FakeCursor(one=[{"email_destino": "cliente@teste.com", "nome": "Cliente Teste", "fantasia": "",
+                                "dt_vencimento": _dt.date(2026, 9, 10), "valor": 100.0}])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc.boleto_pdf_service, "_registrar_banco_no_titulo_sync", lambda cur, drv, cod_banco: None)
+        monkeypatch.setattr(svc.boleto_pdf_service, "gerar_pdf_um_titulo_sync", lambda cur, drv: b"%PDF-fake")
+        capturado = {}
+
+        def _fake_envio(servidor, banco, destinatario, assunto, corpo, anexos=None):
+            capturado.update(destinatario=destinatario, anexos=anexos)
+            return {"success": True, "message": "ok"}
+
+        monkeypatch.setattr(svc.email_cobranca_service, "_enviar_email_sync", _fake_envio)
+        r = svc._enviar_email_sync("srv", "bd", 1, [500])
+        assert r["resultados"][0]["success"] is True
+        assert capturado["destinatario"] == "cliente@teste.com"
+        assert capturado["anexos"][0]["conteudo"] == b"%PDF-fake"
+        assert capturado["anexos"][0]["nome_arquivo"] == "boleto_500.pdf"

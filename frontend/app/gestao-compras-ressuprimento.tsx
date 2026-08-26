@@ -10,6 +10,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 import { AppModal } from "@/src/components/AppModal";
 import NiveisModal from "@/src/components/NiveisModal";
+import AccordionSection from "@/src/components/pedido/AccordionSection";
 
 import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
@@ -347,8 +348,7 @@ export default function GestaoComprasRessuprimentoScreen() {
           </View>
 
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Filtros</Text>
-
+            <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="ressuprimento-filtros">
             <View style={styles.filterGroup}>
               <View style={styles.labelWithInfo}>
                 <Text style={styles.label}>Curva ABC (por quantidade vendida)</Text>
@@ -566,6 +566,7 @@ export default function GestaoComprasRessuprimentoScreen() {
                 </Pressable>
               ) : null}
             </View>
+            </AccordionSection>
           </View>
 
           <View style={styles.card}>

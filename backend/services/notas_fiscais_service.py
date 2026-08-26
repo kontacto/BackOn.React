@@ -1,16 +1,24 @@
 """Cadastros > Notas Fiscais.
 
 Migração de `FrmManRec.frm` ("Manutenção de Nota Fiscal") — a tela mais
-complexa já migrada neste projeto até agora. Escopo desta primeira fase
+complexa já migrada neste projeto até agora. Escopo da primeira fase
 (**Fase 1, decidido com o usuário em 2026-07-13**): CRUD completo do
 documento fiscal (cabeçalho, itens, vencimentos, observações, resumo
 tributário, centro de custo, consulta com filtros, crítica, cancelamento,
-exclusão) **sem emissão fiscal real** — DANFE, XML, Carta de Correção,
-Cancelamento/Inutilização online no SEFAZ, Consulta de Situação SEFAZ e
-Contingência dependem da DLL .NET `Backon_Controllers.Nfe`/`NFSe`, que não
-tem equivalente Python neste projeto. Ver "Notas Fiscais" em
-`PENDENCIAS.md` (raiz do repo) para a lista completa do que fica de fora
-desta fase.
+exclusão) **sem emissão fiscal real** — DANFE, XML, Cancelamento/
+Inutilização online no SEFAZ, Consulta de Situação SEFAZ e Contingência
+dependem da DLL .NET `Backon_Controllers.Nfe`/`NFSe`, que não tem
+equivalente Python neste projeto. Ver "Notas Fiscais" em `PENDENCIAS.md`
+(raiz do repo) para a lista completa do que fica de fora desta fase.
+
+**Carta de Correção Eletrônica (CC-e) — adicionada 2026-08-22, Fase 2**
+(achado real: eu tinha listado como "fora de escopo", a equipe VB6
+corrigiu — é usada diariamente por todos os clientes). Diferente do
+resto da lista acima, CC-e **não precisa** da DLL .NET — reaproveita o
+webservice SEFAZ já integrado nesta migração pro Cancelamento
+(`nfe_cancelamento_service.py`/`nfe_fiscal_common.py`, evento
+`NFeRecepcaoEvento4`). Ver `nfe_correcao_service.py` pro racional
+completo e `_carta_correcao_sync`/`_list_cartas_correcao_sync` abaixo.
 
 Todos os nomes de coluna abaixo foram confirmados via
 `INFORMATION_SCHEMA.COLUMNS` ao vivo em GERDELL/BARESTELA (2026-07-13) —
@@ -72,10 +80,10 @@ Regras replicadas do legado:
     aqui de propósito, não é uma lacuna de migração.
 
 Fora de escopo desta fase (ver PENDENCIAS.md):
-  • Emissão fiscal real (DANFE, XML, Carta de Correção, Cancelamento/
-    Inutilização SEFAZ, Consulta de Situação SEFAZ, Contingência) — precisa
-    de um provedor NFe/NFSe Python (ou algum bridge pra DLL .NET), a
-    decidir.
+  • Emissão fiscal real (DANFE, XML, Cancelamento/Inutilização SEFAZ,
+    Consulta de Situação SEFAZ, Contingência) — precisa de um provedor
+    NFe/NFSe Python (ou algum bridge pra DLL .NET), a decidir. **Carta de
+    Correção Eletrônica saiu desta lista 2026-08-22** — ver acima.
   • Efeitos colaterais específicos de estoque por tipo de movimentação de
     consignação (`Sub consignacoes` no legado — E03/E05/S05/E06/S06/S07/
     S08/E07/E08, grava/atualiza `consignacao`/`consignacao_baixa`) — muito
@@ -91,12 +99,26 @@ Fora de escopo desta fase (ver PENDENCIAS.md):
   • Campos de transporte detalhado (placa, motorista, volumes, peso) e os
     campos da Reforma Tributária 2026 (IBS/CBS/IS) — existem na tabela mas
     não são controles visíveis no `.frm` original.
+
+Reauditoria 2026-08-21 (ver PENDENCIAS.md > "🔴 FRENTE ATIVA" e CLAUDE.md
+> "Toda ramificação condicional..."): 2 achados reais corrigidos.
+1. `Valida_Data` (`FrmManRec.frm:9162-9174`): "A data de movimentação da
+   Nota Fiscal deve ser superior à data de fechamento do Livro Fiscal e
+   do fechamento da Contabilidade! Alterações não permitidas!!!" — nunca
+   era checado; corrigido em `_save_cabecalho_sync`.
+2. "'refaz pedidos de compra" (`FrmManRec.frm:5461-5474`): cancelar uma
+   NF que veio de um Recebimento com baixa de Pedido de Compra
+   (`nf_recebimento_pedido`) precisa reverter `pedido_itens.
+   qtd_recebida`/reabrir o pedido — nunca implementado; corrigido em
+   `_cancelar_sync` (`controle_aux.baixa_pedido_compra` decide se o
+   vínculo de rastreio também é apagado, mesma config real da fonte).
 """
 import asyncio
 from datetime import date
 from typing import Optional
 
 from db.connection import _open_conn
+from services import nfe_correcao_service, nfe_emissao_service, nfe_fiscal_common
 
 SITUACOES_VALIDAS = ("D", "A", "C", "E", "L")
 
@@ -134,6 +156,59 @@ def _to_date(v) -> Optional[date]:
     if isinstance(v, date):
         return v
     return date.fromisoformat(str(v)[:10])
+
+
+# ============ DANFE ============
+def _get_danfe_sync(servidor: str, banco: str, codigo: int) -> dict:
+    """Dados pro fac-símile visual do DANFE (modelo 55) — mesmo padrão de
+    `nfe_emissao_service.parse_nfce_xml_para_exibicao` já usado pro NFCe
+    (ver `comanda_service._get_doc_fiscal_sync`), aqui pro irmão de
+    modelo 55 (`parse_nfe_xml_para_exibicao`). `xml` só existe pra notas
+    emitidas de verdade (Agrupar Comandas/NF-e Avulsa) — uma nota criada
+    só pelo CRUD manual desta tela (sem emissão) não tem XML, e não tem
+    DANFE pra mostrar."""
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT xml, protocolo_sefaz, chave_acesso, dhRecbto, situacao "
+            "FROM n_fiscal WHERE codigo=%s",
+            (codigo,),
+        )
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            return {"success": False, "message": "Nota Fiscal não encontrada."}
+        if not row.get("xml"):
+            cur.close()
+            return {
+                "success": False,
+                "message": "Esta Nota Fiscal ainda não foi emitida — não há XML para gerar o DANFE.",
+            }
+
+        detalhe = nfe_emissao_service.parse_nfe_xml_para_exibicao(row["xml"])
+        if not detalhe:
+            cur.close()
+            return {"success": False, "message": "Não foi possível ler o XML desta Nota Fiscal."}
+
+        # Colunas do cabeçalho são a fonte de verdade sobre protocolo/chave/
+        # situação — o XML assinado nunca é reescrito com o protocolo pós-
+        # autorização (mesmo princípio já usado em `parse_nfce_xml_para_
+        # exibicao`'s chamador).
+        detalhe["protocolo_sefaz"] = row.get("protocolo_sefaz")
+        detalhe["chave_acesso"] = row.get("chave_acesso") or detalhe.get("chave_acesso")
+        detalhe["dh_recbto"] = row.get("dhRecbto")
+        detalhe["situacao"] = row.get("situacao")
+
+        cur.execute("SELECT TOP 1 modelo_danfe FROM controle_aux")
+        aux = cur.fetchone()
+        cur.close()
+        return {
+            "success": True, "detalhe": detalhe,
+            "modelo_danfe": (aux or {}).get("modelo_danfe"),
+        }
+    finally:
+        conn.close()
 
 
 # ============ Cabeçalho ============
@@ -209,6 +284,29 @@ def _save_cabecalho_sync(servidor: str, banco: str, codigo: Optional[int], dados
     conn = _open_conn(servidor, banco)
     try:
         cur = conn.cursor(as_dict=True)
+
+        # Achado real da reauditoria 2026-08-21 (`Valida_Data`,
+        # `FrmManRec.frm:9162-9174`): "A data de movimentação da Nota
+        # Fiscal deve ser superior à data de fechamento do Livro Fiscal e
+        # do fechamento da Contabilidade! Alterações não permitidas!!!" —
+        # nunca era checado nesta migração.
+        data_mov = dados.get("data_mov") or dados.get("data_nf")
+        if data_mov:
+            cur.execute("SELECT data_fecha_livro, data_fecha_cont FROM controle")
+            fechamento = cur.fetchone() or {}
+            data_fecha_livro = fechamento.get("data_fecha_livro")
+            data_fecha_cont = fechamento.get("data_fecha_cont")
+            data_mov_cmp = str(data_mov)[:10]
+            if (data_fecha_livro and data_mov_cmp <= str(data_fecha_livro)[:10]) or (
+                data_fecha_cont and data_mov_cmp <= str(data_fecha_cont)[:10]
+            ):
+                cur.close()
+                conn.close()
+                return {
+                    "success": False,
+                    "message": "A Data de Movimento da Nota Fiscal deve ser posterior à data de "
+                               "fechamento do Livro Fiscal e da Contabilidade — alterações não permitidas.",
+                }
 
         cur.execute("SELECT codigo, origem_destino, transf_pagar FROM tipo_mov WHERE codigo=%s", (mov,))
         tm = cur.fetchone()
@@ -582,6 +680,38 @@ def _cancelar_sync(servidor: str, banco: str, codigo: int) -> dict:
             (codigo,),
         )
         cur.execute("DELETE FROM comanda_nf WHERE nota_fisc=%s", (codigo,))
+
+        # Achado real da reauditoria 2026-08-21 (`FrmManRec.frm:5461-5474`,
+        # "'refaz pedidos de compra"): cancelar uma NF que veio de um
+        # Recebimento com baixa de Pedido de Compra (`nf_recebimento_
+        # pedido`, ver `recebimento_service.py`) precisa reverter a
+        # baixa — senão o Pedido de Compra fica marcado como recebido pra
+        # sempre, mesmo com a NF cancelada. `controle_aux.
+        # baixa_pedido_compra` decide se o vínculo de rastreio também é
+        # apagado (mesma config real da fonte).
+        cur.execute(
+            "SELECT nfrp.pedido, nfrp.item, nfrp.quant, nfr.codigo AS recebimento "
+            "FROM nf_recebimento nfr JOIN nf_recebimento_pedido nfrp ON nfrp.recebimento = nfr.codigo "
+            "WHERE nfr.n_fiscal_gerado = %s",
+            (codigo,),
+        )
+        baixas = cur.fetchall()
+        if baixas:
+            for b in baixas:
+                cur.execute(
+                    "UPDATE pedido_itens SET qtd_recebida = qtd_recebida - %s WHERE codigo=%s AND codigo_int=%s",
+                    (b["quant"], b["pedido"], b["item"]),
+                )
+                cur.execute("UPDATE pedido SET situacao='A' WHERE codigo=%s", (b["pedido"],))
+            cur.execute("SELECT baixa_pedido_compra FROM controle_aux")
+            cfg = cur.fetchone() or {}
+            if cfg.get("baixa_pedido_compra"):
+                cur.execute(
+                    "DELETE nfrp FROM nf_recebimento_pedido nfrp JOIN nf_recebimento nfr ON nfr.codigo = nfrp.recebimento "
+                    "WHERE nfr.n_fiscal_gerado = %s",
+                    (codigo,),
+                )
+
         cur.execute("UPDATE n_fiscal SET situacao='C' WHERE codigo=%s", (codigo,))
         conn.commit()
         cur.close()
@@ -654,9 +784,176 @@ def _buscar_produto_sync(servidor: str, banco: str, codigo_int: str) -> dict:
         conn.close()
 
 
+# ============ Carta de Correção Eletrônica (CC-e) ============
+_DDL_N_FISCAL_CARTA_CORRECAO = """
+IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'n_fiscal_carta_correcao')
+BEGIN
+    CREATE TABLE n_fiscal_carta_correcao (
+        codigo INT IDENTITY(1,1) PRIMARY KEY,
+        n_fiscal INT NOT NULL,
+        n_seq_evento INT NOT NULL,
+        motivo NVARCHAR(1000) NOT NULL,
+        protocolo NVARCHAR(20) NULL,
+        cstat NVARCHAR(5) NULL,
+        xmotivo NVARCHAR(255) NULL,
+        data_registro DATETIME NULL,
+        xml_evento NVARCHAR(MAX) NULL,
+        criado_em DATETIME NOT NULL DEFAULT GETDATE(),
+        usuario NVARCHAR(50) NULL
+    );
+    CREATE INDEX IX_n_fiscal_carta_correcao_nota ON n_fiscal_carta_correcao (n_fiscal);
+END
+"""
+
+
+def _ensure_n_fiscal_carta_correcao_table(cur) -> None:
+    """Tabela própria pro histórico de Cartas de Correção — **não** replica
+    o `n_fiscal.obs_livro` (blob de texto com XML cru concatenado, gambiarra
+    de era VB6 sem tabela dedicada por instalação) — ver docstring de
+    `nfe_correcao_service.py`."""
+    cur.execute(_DDL_N_FISCAL_CARTA_CORRECAO)
+
+
+def _carta_correcao_sync(servidor: str, banco: str, codigo: int, motivo: str, usuario: Optional[str]) -> dict:
+    """Emite uma Carta de Correção (evento 110110) pra uma NF-e (modelo 55)
+    já autorizada — migração de `Command32_Click`/`Command33_Click`
+    (`FrmManRec.frm:7541-7708`). Gate: `protocolo_sefaz` (nota realmente
+    transmitida) + cap real de 20 cartas por nota (NT 2011.003) — o legado
+    só LISTA as 5 primeiras (`PrepEventos`, limitação de UI, não regra),
+    aqui o limite enforçado é o real.
+
+    **`situacao_nfe` removido do gate, achado ao vivo 2026-08-23 (1ª CC-e
+    real testada nesta migração, bloqueada numa NF-e genuinamente
+    autorizada pelo SEFAZ minutos antes)**: essa checagem era uma réplica
+    mal resolvida de `VerificaNFe` (pendência registrada 2026-08-22,
+    "situacao_nfe não está 100% resolvido") — rastreio completo da fonte
+    VB6 (`FrmTraImpNFE.frm:2454`, `DAO_NFE.vb::GravaLoteNFe`/
+    `AlterLoteNFe`) confirma que `situacao_nfe` é gravado num fluxo
+    SEPARADO (a tela de transmissão eletrônica, `FrmTraImpNFE`) que
+    NENHUM dos 3 caminhos de emissão modernos desta migração
+    (`nfe_agrupada_service.py`/`nfe_avulsa_service.py`/
+    `comanda_service.py`) replica — nenhum deles grava essa coluna, então
+    ela fica sempre no `DEFAULT 0` do schema mesmo depois de uma
+    autorização genuína, bloqueando incondicionalmente. `GravaNFE`
+    (`ModNF.bas`, a função mestre de gravação de nota fiscal) também
+    nunca grava essa coluna — confirma que nunca foi parte do fluxo de
+    persistência da nota em si, só do fluxo de transmissão do VB6.
+    `protocolo_sefaz <> ''` já era, mesmo no VB6, o sinal real de "nota
+    genuinamente autorizada" (o valor 1/2 de `situacao_nfe` é gravado
+    ANTES da resposta do SEFAZ chegar, nunca reconfirmado no caminho de
+    sucesso) — e nesta migração é ainda mais confiável, já que os 3
+    caminhos de emissão só fazem `INSERT INTO n_fiscal` depois de
+    confirmar sucesso real (`resultado.get("success")`), nunca antes."""
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        _ensure_n_fiscal_carta_correcao_table(cur)
+        cur.execute(
+            "SELECT protocolo_sefaz, chave_acesso FROM n_fiscal WHERE codigo=%s",
+            (codigo,),
+        )
+        nf = cur.fetchone()
+        if not nf:
+            cur.close()
+            return {"success": False, "message": "Nota Fiscal não encontrada."}
+        if not (nf.get("protocolo_sefaz") or "").strip():
+            cur.close()
+            return {"success": False, "message": "Nota Fiscal não emitida pelo sistema — sem protocolo SEFAZ."}
+
+        cur.execute("SELECT COUNT(*) AS qtd FROM n_fiscal_carta_correcao WHERE n_fiscal=%s", (codigo,))
+        qtd = (cur.fetchone() or {}).get("qtd") or 0
+        if qtd >= 20:
+            cur.close()
+            return {"success": False, "message": "Esta Nota Fiscal já atingiu o limite de 20 cartas de correção do SEFAZ."}
+
+        cur.execute("SELECT cgc, uf FROM controle")
+        ctrl = cur.fetchone() or {}
+        res = nfe_correcao_service.emitir_carta_correcao_sync(
+            cur,
+            cnpj=(ctrl.get("cgc") or "").strip(),
+            uf_sigla=(ctrl.get("uf") or "").strip(),
+            chave_acesso=(nf.get("chave_acesso") or "").strip(),
+            motivo=motivo,
+            n_seq_evento=qtd + 1,
+            tp_amb=nfe_fiscal_common.resolver_tp_amb_sync(cur),
+        )
+        if not res.get("success"):
+            cur.close()
+            return res
+
+        cur.execute(
+            "INSERT INTO n_fiscal_carta_correcao "
+            "(n_fiscal, n_seq_evento, motivo, protocolo, cstat, xmotivo, data_registro, xml_evento, usuario) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (codigo, qtd + 1, motivo, res.get("protocolo"), res.get("cstat"), res.get("xmotivo"),
+             nfe_fiscal_common.parse_dh_sefaz(res.get("data_hora_registro")), res.get("xml_evento"), usuario),
+        )
+        conn.commit()
+        cur.close()
+        return {"success": True, "message": res.get("message"), "n_seq_evento": qtd + 1, "protocolo": res.get("protocolo")}
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "message": f"Erro ao emitir Carta de Correção: {e}"}
+    finally:
+        conn.close()
+
+
+def _list_cartas_correcao_sync(servidor: str, banco: str, codigo: int) -> dict:
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        _ensure_n_fiscal_carta_correcao_table(cur)
+        cur.execute(
+            "SELECT codigo, n_seq_evento, motivo, protocolo, cstat, xmotivo, data_registro, criado_em "
+            "FROM n_fiscal_carta_correcao WHERE n_fiscal=%s ORDER BY n_seq_evento",
+            (codigo,),
+        )
+        cartas = cur.fetchall()
+        cur.close()
+        return {"success": True, "cartas": cartas}
+    finally:
+        conn.close()
+
+
+def _get_carta_correcao_dacce_sync(servidor: str, banco: str, codigo: int, n_seq_evento: int) -> dict:
+    """Dados pro fac-símile de impressão (DACCe) de UMA carta já emitida —
+    não há leiaute oficial obrigatório pra esse documento (diferente do
+    DANFE), então é só um resumo informativo dos dados da carta + cabeçalho
+    da empresa (montado no frontend, ver `dacceFacsimile.ts`)."""
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT chave_acesso FROM n_fiscal WHERE codigo=%s",
+            (codigo,),
+        )
+        nf = cur.fetchone()
+        if not nf:
+            cur.close()
+            return {"success": False, "message": "Nota Fiscal não encontrada."}
+        cur.execute(
+            "SELECT n_seq_evento, motivo, protocolo, data_registro FROM n_fiscal_carta_correcao "
+            "WHERE n_fiscal=%s AND n_seq_evento=%s",
+            (codigo, n_seq_evento),
+        )
+        carta = cur.fetchone()
+        cur.close()
+        if not carta:
+            return {"success": False, "message": "Carta de Correção não encontrada."}
+        carta["chave_acesso"] = nf.get("chave_acesso")
+        carta["x_cond_uso"] = nfe_correcao_service.X_COND_USO
+        return {"success": True, "carta": carta}
+    finally:
+        conn.close()
+
+
 # ============ Wrappers async ============
 async def get(servidor, banco, codigo):
     return await asyncio.to_thread(_get_sync, servidor, banco, codigo)
+
+
+async def get_danfe(servidor, banco, codigo):
+    return await asyncio.to_thread(_get_danfe_sync, servidor, banco, codigo)
 
 
 async def save_cabecalho(servidor, banco, codigo, dados):
@@ -697,3 +994,15 @@ async def excluir(servidor, banco, codigo):
 
 async def buscar_produto(servidor, banco, codigo_int):
     return await asyncio.to_thread(_buscar_produto_sync, servidor, banco, codigo_int)
+
+
+async def carta_correcao(servidor, banco, codigo, motivo, usuario):
+    return await asyncio.to_thread(_carta_correcao_sync, servidor, banco, codigo, motivo, usuario)
+
+
+async def list_cartas_correcao(servidor, banco, codigo):
+    return await asyncio.to_thread(_list_cartas_correcao_sync, servidor, banco, codigo)
+
+
+async def get_carta_correcao_dacce(servidor, banco, codigo, n_seq_evento):
+    return await asyncio.to_thread(_get_carta_correcao_dacce_sync, servidor, banco, codigo, n_seq_evento)

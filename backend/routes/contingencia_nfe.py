@@ -4,7 +4,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Request
 
-from models.contingencia_nfe import ContingenciaNfeAbrirRequest, ContingenciaNfeFecharRequest
+from models.contingencia_nfe import (
+    ContingenciaNfeAbrirRequest, ContingenciaNfeFecharRequest, ContingenciaNfeValidarRequest,
+)
 from services import contingencia_nfe_service, log_auditoria_service
 
 router = APIRouter()
@@ -43,6 +45,26 @@ async def fechar_contingencia(req: ContingenciaNfeFecharRequest, request: Reques
         await log_auditoria_service.registrar_log(
             req.servidor, req.banco, tela="CONT_NFE", comando="GRAVAR",
             usuario=req.usuario_alteracao, classe=req.classe, descricao="Contingência NFe fechada",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.get("/contingencia-nfe/pendentes")
+async def listar_pendentes(servidor: str, banco: str):
+    return await contingencia_nfe_service.listar_pendentes(servidor, banco)
+
+
+@router.post("/contingencia-nfe/validar")
+async def validar_pendentes(req: ContingenciaNfeValidarRequest, request: Request):
+    result = await contingencia_nfe_service.validar_pendentes(
+        req.servidor, req.banco, notas=req.notas, classe=req.classe, master=bool(req.master),
+    )
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="CONT_NFE", comando="GRAVAR",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            descricao=f"Contingência NFe validada — notas {req.notas}",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

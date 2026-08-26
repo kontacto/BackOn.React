@@ -1,35 +1,57 @@
 // Modal "Imprimir Pedido" — preview de recibo estilo térmico (réplica de
-// `Pedido_48_COL`, FrmManPedBar.frm) + impressão via um iframe oculto
-// (ver src/utils/printHtml.ts). Só web — não existe infraestrutura de
-// impressão térmica silenciosa (socket/agente local) nesta migração ainda
-// (ver CLAUDE.md > "Platform Scope"); decisão explícita do usuário
-// 2026-07-16: preview + impressão do navegador, entregável agora sem essa
-// infra.
+// `Pedido_48_COL`, FrmManPedBar.frm) + impressão.
 //
-// A impressão em si NÃO usa o truque de CSS "esconde tudo com `body *`,
-// mostra só o #id do recibo" — na prática saía em branco (reportado pelo
-// usuário 2026-07-16: o preview de impressão só trazia o cabeçalho/rodapé
-// nativos do navegador, nada do conteúdo), provavelmente por causa de
-// algum ancestral (Modal/ScrollView/Pressable) cortando o conteúdo via
-// overflow/posicionamento. Um iframe oculto com seu PRÓPRIO documento HTML
-// evita esse problema inteiro — por isso o conteúdo é montado duas vezes:
-// como JSX (preview na tela) e como string HTML (só na hora de imprimir,
-// em `buildHtml`). Mantenha as duas versões em sincronia ao alterar o
-// conteúdo do recibo/ticket.
+// **Impressão silenciosa (2026-08-26, pedido explícito do usuário:
+// "quero que dessa tela enviar direto pra impressora. não trazer um novo
+// preview")** — o recibo completo (`!isItemMode`) agora enfileira texto
+// puro pra `POST /api/impressao/fila`, consumido pelo agente local
+// (`print-agent/agente_impressao.py`, `win32print` em modo RAW) — mesma
+// infraestrutura já construída e testada ao vivo pro Checkout (ver
+// `project_impressao_silenciosa` na memória), órfã de consumidor web até
+// agora. Sem isso, `window.print()` sempre abre o diálogo/preview NATIVO
+// do navegador — não tem como suprimir isso só com CSS/JS, só trocando o
+// mecanismo de impressão inteiro. Precisa de "Computador"+"Impressora"
+// configurados nesta estação (local, por navegador — mesmo padrão já
+// documentado em `impressaoSilenciosa.ts`); sem configuração ainda, o
+// próprio botão "Imprimir" abre um formulário inline de 2 campos em vez
+// de imprimir, salva e já dispara a impressão em seguida.
+//
+// O ticket de cozinha/bar (`isItemMode`) CONTINUA no fluxo antigo
+// (`printHtml`/iframe oculto/diálogo do navegador) — decisão de escopo,
+// não omissão: usa fonte gigante (`.huge2`) que não tem equivalente em
+// texto puro RAW sem embutir comandos ESC/POS próprios, e o pedido do
+// usuário mirava especificamente a tela "Imprimir Pedido" completa.
+//
+// A impressão pelo navegador (ticket de cozinha/bar) NÃO usa o truque de
+// CSS "esconde tudo com `body *`, mostra só o #id do recibo" — na prática
+// saía em branco (reportado pelo usuário 2026-07-16: o preview de
+// impressão só trazia o cabeçalho/rodapé nativos do navegador, nada do
+// conteúdo), provavelmente por causa de algum ancestral (Modal/
+// ScrollView/Pressable) cortando o conteúdo via overflow/posicionamento.
+// Um iframe oculto com seu PRÓPRIO documento HTML evita esse problema
+// inteiro — por isso o conteúdo é montado 3 vezes: como JSX (preview na
+// tela), como string HTML (`buildHtml`, só o ticket de item) e como texto
+// puro (`buildTextoPuro`, só o recibo completo). Mantenha as versões em
+// sincronia ao alterar o conteúdo do recibo/ticket.
 //
 // Reaproveita a mesma lista já usada por "Pedido Totalizado" (Command65,
 // já implementado em usePedidoItens.ts) pro agrupamento de itens
 // repetidos — o checkbox "Imprimir Totalizado" do legado (Check100,
 // default marcado) vira o toggle "agrupado" aqui.
 import { useEffect, useState } from "react";
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { formatBRL, formatDateBR, fmtNum } from "@/src/utils/format";
-import { apiGet } from "@/src/utils/api";
+import { apiGet, apiSend, friendlyApiError, friendlyCatchError } from "@/src/utils/api";
 import { printHtml, escHtml } from "@/src/utils/printHtml";
 import { Connection } from "@/src/utils/storage/connections";
+import {
+  ImpressaoSilenciosaConfig, impressaoSilenciosaKey, loadImpressaoSilenciosaConfig, saveImpressaoSilenciosaConfig,
+} from "@/src/utils/storage/impressaoSilenciosa";
+import { usePermissions } from "@/src/permissions";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { PedidoData, ClienteRow, ClienteResumo, ItemPrintData } from "./types";
 import { UsePedidoItens } from "./usePedidoItens";
 import { styles } from "./styles";
@@ -59,6 +81,14 @@ type Empresa = {
   fantasia?: string | null; rz_social?: string | null; uf?: string | null;
   endereco: string; numero: number | null; complemento: string; bairro: string; cidade: string;
   cep: string; ddd: string | number; telefone: string; celular: string; cgc: string; inscr_est: string;
+  // Logo da empresa (`controle.logo_empresa`, 2026-08-26) — já vem de
+  // `GET /api/controle/empresa` (mesmo endpoint já consumido aqui).
+  // Aplicada primeiro no Pedido Bar (pedido explícito do usuário: "aplicar
+  // a logo nas pré-vendas começando com o bar") — só no recibo COMPLETO
+  // (não no ticket de cozinha/bar, `isItemMode`, que é uso interno e já
+  // pula endereço/telefone/CNPJ pelo mesmo motivo).
+  logo_base64?: string | null;
+  logo_mime?: string | null;
 };
 
 type FormaPagLinha = { descricao: string; forma_pag: string; valor: number };
@@ -91,6 +121,16 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
   const [formasPag, setFormasPag] = useState<FormaPagLinha[]>([]);
   const [agrupado, setAgrupado] = useState(true);
   const isItemMode = !!item;
+  const { classe, usuarioCodigo } = usePermissions();
+  const fb = useFeedback();
+
+  // Impressão silenciosa (ver docstring do módulo) — config local desta
+  // estação (computador+impressora), carregada a cada abertura do modal.
+  const [printerConfig, setPrinterConfig] = useState<ImpressaoSilenciosaConfig | null>(null);
+  const [configurandoImpressora, setConfigurandoImpressora] = useState(false);
+  const [computadorInput, setComputadorInput] = useState("");
+  const [impressoraInput, setImpressoraInput] = useState("");
+  const [enviandoImpressao, setEnviandoImpressao] = useState(false);
 
   useEffect(() => {
     if (!visible || !conn) return;
@@ -106,6 +146,12 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
       if (jm?.success) setMensagens(jm.linhas || []);
       if (jf?.success) setFormasPag(jf.items || []);
     })();
+    setConfigurandoImpressora(false);
+    loadImpressaoSilenciosaConfig(impressaoSilenciosaKey(conn.empresa, conn.banco)).then((cfg) => {
+      setPrinterConfig(cfg);
+      setComputadorInput(cfg?.computador || "");
+      setImpressoraInput(cfg?.impressora || "");
+    });
   }, [visible, conn, pedido?.pedido, isItemMode]);
 
   if (!pedido) return null;
@@ -147,18 +193,40 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
       // pedido completo continua só centralizado (`center()`, sem negrito).
       parts.push(`<div class="bold center mb">${escHtml((empresa?.fantasia || empresa?.rz_social || "").toUpperCase())}</div>`);
     } else {
-      center((empresa?.fantasia || empresa?.rz_social || "").toUpperCase());
-    }
-    // Endereço/telefone/CNPJ da empresa só fazem sentido no recibo do
-    // cliente — o ticket de cozinha/bar (modo item) é uso interno, esses
-    // dados só ocupam espaço à toa (pedido explícito do usuário).
-    if (!isItemMode) {
-      if (enderecoEmpresa) center(enderecoEmpresa);
-      if (cidadeEmpresa) center(`${cidadeEmpresa}${empresa?.cep ? ` CEP: ${empresa.cep}` : ""}`);
-      if (empresa?.telefone) {
-        center(`Tel: (${empresa.ddd}) ${empresa.telefone}${empresa.celular ? ` / ${empresa.celular}` : ""}`);
+      // Logo + dados da empresa alinhados à ESQUERDA lado a lado (pedido
+      // explícito do usuário, 2026-08-26: "colocar a logo no lado esquerdo
+      // e alinhar as informações da empresa de forma esquerda com a
+      // logo") — substitui o layout anterior (tudo centralizado). Sem
+      // logo cadastrada, cai de volta pro bloco centralizado de sempre
+      // (nunca teve motivo pra desalinhar texto que não tem imagem ao lado).
+      const nomeEmpresa = (empresa?.fantasia || empresa?.rz_social || "").toUpperCase();
+      if (empresa?.logo_base64) {
+        const linhas: string[] = [`<div class="bold">${escHtml(nomeEmpresa)}</div>`];
+        if (enderecoEmpresa) linhas.push(`<div>${escHtml(enderecoEmpresa)}</div>`);
+        if (cidadeEmpresa) linhas.push(`<div>${escHtml(`${cidadeEmpresa}${empresa?.cep ? ` CEP: ${empresa.cep}` : ""}`)}</div>`);
+        if (empresa?.telefone) {
+          linhas.push(`<div>${escHtml(`Tel: (${empresa.ddd}) ${empresa.telefone}${empresa.celular ? ` / ${empresa.celular}` : ""}`)}</div>`);
+        }
+        if (empresa?.cgc) linhas.push(`<div>${escHtml(`CNPJ: ${empresa.cgc}${empresa.inscr_est ? ` IE: ${empresa.inscr_est}` : ""}`)}</div>`);
+        parts.push(
+          '<div class="mb" style="display:flex;align-items:flex-start;gap:8px;">' +
+          `<img src="data:${empresa.logo_mime || "image/png"};base64,${empresa.logo_base64}" ` +
+          'style="width:56px;max-width:56px;max-height:56px;object-fit:contain;flex-shrink:0;" />' +
+          `<div style="flex:1;min-width:0;text-align:left;">${linhas.join("")}</div>` +
+          "</div>"
+        );
+      } else {
+        center(nomeEmpresa);
+        // Endereço/telefone/CNPJ da empresa só fazem sentido no recibo do
+        // cliente — o ticket de cozinha/bar (modo item) é uso interno,
+        // esses dados só ocupam espaço à toa (pedido explícito do usuário).
+        if (enderecoEmpresa) center(enderecoEmpresa);
+        if (cidadeEmpresa) center(`${cidadeEmpresa}${empresa?.cep ? ` CEP: ${empresa.cep}` : ""}`);
+        if (empresa?.telefone) {
+          center(`Tel: (${empresa.ddd}) ${empresa.telefone}${empresa.celular ? ` / ${empresa.celular}` : ""}`);
+        }
+        if (empresa?.cgc) center(`CNPJ: ${empresa.cgc}${empresa.inscr_est ? ` IE: ${empresa.inscr_est}` : ""}`);
       }
-      if (empresa?.cgc) center(`CNPJ: ${empresa.cgc}${empresa.inscr_est ? ` IE: ${empresa.inscr_est}` : ""}`);
     }
     hr();
     // Nome do cliente entra na mesma linha do nº do pedido, mesma fonte
@@ -278,6 +346,96 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
     return parts.join("\n");
   };
 
+  // Recibo completo em TEXTO PURO (sem HTML/CSS) — só pro modo pedido
+  // inteiro (`!isItemMode`), consumido pela fila de impressão silenciosa
+  // (ver docstring do módulo). Espelha a mesma lógica/ordem do ramo
+  // `else` de `buildHtml()` acima — mantenha as duas em sincronia ao
+  // alterar o conteúdo do recibo.
+  const buildTextoPuro = (): string => {
+    const L = 42; // colunas — bobina térmica 80mm em fonte condensada, mesma largura de reciboTexto.ts
+    const linhas: string[] = [];
+    const hr = () => linhas.push("-".repeat(L));
+    const centralizar = (t: string) => {
+      const s = t.slice(0, L);
+      const pad = Math.max(0, Math.floor((L - s.length) / 2));
+      linhas.push(" ".repeat(pad) + s);
+    };
+    const linha = (t: string) => linhas.push(t);
+    const duasColunas = (a: string, b: string) => {
+      const espaco = Math.max(1, L - a.length - b.length);
+      linhas.push(a + " ".repeat(espaco) + b);
+    };
+    const itemLinha = (desc: string, qtdUnit: string, total: string) => {
+      linhas.push(desc);
+      duasColunas(qtdUnit, total);
+    };
+
+    const nomeEmpresa = (empresa?.fantasia || empresa?.rz_social || "").toUpperCase();
+    if (nomeEmpresa) centralizar(nomeEmpresa);
+    if (enderecoEmpresa) centralizar(enderecoEmpresa);
+    if (cidadeEmpresa) centralizar(`${cidadeEmpresa}${empresa?.cep ? ` CEP: ${empresa.cep}` : ""}`);
+    if (empresa?.telefone) {
+      centralizar(`Tel: (${empresa.ddd}) ${empresa.telefone}${empresa.celular ? ` / ${empresa.celular}` : ""}`);
+    }
+    if (empresa?.cgc) centralizar(`CNPJ: ${empresa.cgc}${empresa.inscr_est ? ` IE: ${empresa.inscr_est}` : ""}`);
+    hr();
+    linha(`${situacaoLabel} nº ${pedido.pedido}${pedido.localizacao_descricao ? `   Local: ${pedido.localizacao_descricao}` : ""}`);
+    hr();
+
+    if (agrupado) {
+      it.pedidoTotalizadoGrupos.forEach((g) => {
+        itemLinha(g.descricao, `${fmtNum(g.qtd)} x ${formatBRL(g.qtd ? g.valorTotal / g.qtd : 0)}`, formatBRL(g.valorTotal));
+      });
+    } else {
+      it.itens.forEach((row_) => {
+        itemLinha(
+          row_.descricao
+            + (row_.complemento ? ` — ${row_.complemento}` : "")
+            + (row_.comprimento && row_.largura ? ` — ${fmtNum(row_.comprimento)} x ${fmtNum(row_.largura)} m` : "")
+            + (row_.agendamento ? ` — Agendado: ${formatDateBR(row_.agendamento.data)} às ${row_.agendamento.hora_ini} (${row_.agendamento.profissional})` : ""),
+          `${fmtNum(row_.qtd)} x ${formatBRL(row_.valor_unitario)}`,
+          formatBRL(row_.qtd * row_.valor_unitario)
+        );
+      });
+    }
+    hr();
+    if (subtotalBruto > 0 && descontoTotal > 0.005) {
+      duasColunas("SUB-TOTAL", formatBRL(subtotalBruto));
+      duasColunas("DESCONTO", formatBRL(descontoTotal));
+    }
+    duasColunas("TOTAL", formatBRL(pedido.total));
+    if (pedido.qtd_pessoas && pedido.qtd_pessoas > 0) {
+      duasColunas(`Valor p/ pessoa (${pedido.qtd_pessoas})`, formatBRL(pedido.total / pedido.qtd_pessoas));
+    }
+    hr();
+    if (pedido.obs) { linha(`Obs: ${pedido.obs}`); hr(); }
+    linha("FORMA DE PAGAMENTO");
+    if (formasPag.length > 0) {
+      formasPag.forEach((f) => duasColunas(f.descricao || f.forma_pag, formatBRL(f.valor)));
+    } else if (pedido.forma_pag_descricao) {
+      duasColunas(pedido.forma_pag_descricao, formatBRL(pedido.total));
+    } else {
+      linha("(não definida)");
+    }
+    hr();
+    if (cliente) {
+      if (temDocumentoValido(cliente.cgc_cpf)) linha(`Doc: ${cliente.cgc_cpf}`);
+      linha(cliente.nome);
+      if (clienteResumo?.endereco) linha(clienteResumo.endereco);
+      if (clienteResumo?.telefone) linha(`Tel: ${clienteResumo.telefone}`);
+      hr();
+    }
+    linha(`Vendedor: ${pedido.vendedor_nome}`);
+    linha(`${formatDateBR(pedido.data)} ${pedido.hora_aberto}`);
+
+    if (mensagens.length > 0) {
+      hr();
+      mensagens.forEach((m) => centralizar(m));
+    }
+
+    return linhas.map((l) => "  " + l).join("\n") + "\n\n\n";
+  };
+
   const handlePrint = () => {
     if (!isWeb) return;
     // Título em branco no modo item: no ticket de cozinha/bar (papel
@@ -290,6 +448,52 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
     // inteiro o título continua útil (identifica o PDF quando o destino é
     // "Salvar como PDF"), não mudado.
     printHtml(buildHtml(), isItemMode ? "" : "Imprimir Pedido", PAPER_WIDTH_MM);
+  };
+
+  // Envia o recibo completo pra fila de impressão silenciosa (agente
+  // local, sem diálogo do navegador) — pedido explícito do usuário,
+  // 2026-08-26. `cfg` vem do state OU já recém-salvo (ver
+  // `handleSalvarConfigEImprimir`), pra poder imprimir na hora sem
+  // esperar o próximo render refletir o state novo.
+  const enviarParaFila = async (cfg: ImpressaoSilenciosaConfig) => {
+    if (!conn) return;
+    setEnviandoImpressao(true);
+    try {
+      const j = await apiSend(conn, "/api/impressao/fila", "POST", {
+        computador: cfg.computador,
+        impressora: cfg.impressora || undefined,
+        conteudo: buildTextoPuro(),
+        tipo: "TEXTO",
+        usuario_alteracao: usuarioCodigo,
+        classe,
+        plataforma: Platform.OS,
+      });
+      if (!j?.success) { fb.showError(friendlyApiError(j, "Falha ao enviar para a impressora.")); return; }
+      fb.showSuccess("Enviado para a impressora.");
+      onClose();
+    } catch (e) {
+      fb.showError(friendlyCatchError(e, "Falha ao enviar para a impressora."));
+    } finally {
+      setEnviandoImpressao(false);
+    }
+  };
+
+  const handleImprimir = () => {
+    // Ticket de cozinha/bar continua no fluxo antigo (ver docstring do
+    // módulo) — só o recibo completo usa a fila silenciosa.
+    if (isItemMode) { handlePrint(); return; }
+    if (!printerConfig) { setConfigurandoImpressora(true); return; }
+    enviarParaFila(printerConfig);
+  };
+
+  const handleSalvarConfigEImprimir = async () => {
+    const computador = computadorInput.trim();
+    if (!computador) { fb.showError("Informe o nome do computador desta estação."); return; }
+    const cfg: ImpressaoSilenciosaConfig = { computador, impressora: impressoraInput.trim() };
+    if (conn) await saveImpressaoSilenciosaConfig(impressaoSilenciosaKey(conn.empresa, conn.banco), cfg);
+    setPrinterConfig(cfg);
+    setConfigurandoImpressora(false);
+    await enviarParaFila(cfg);
   };
 
   return (
@@ -316,15 +520,38 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
 
           <ScrollView style={{ maxHeight: 480 }}>
             <View style={rs.paper}>
-              <Text style={isItemMode ? [rs.bold, rs.center] : rs.center}>
-                {(empresa?.fantasia || empresa?.rz_social || "").toUpperCase()}
-              </Text>
-              {!isItemMode && enderecoEmpresa ? <Text style={rs.center}>{enderecoEmpresa}</Text> : null}
-              {!isItemMode && cidadeEmpresa ? <Text style={rs.center}>{cidadeEmpresa}{empresa?.cep ? ` CEP: ${empresa.cep}` : ""}</Text> : null}
-              {!isItemMode && empresa?.telefone ? (
-                <Text style={rs.center}>Tel: ({empresa.ddd}) {empresa.telefone}{empresa.celular ? ` / ${empresa.celular}` : ""}</Text>
-              ) : null}
-              {!isItemMode && empresa?.cgc ? <Text style={rs.center}>CNPJ: {empresa.cgc}{empresa.inscr_est ? ` IE: ${empresa.inscr_est}` : ""}</Text> : null}
+              {/* Logo + dados da empresa alinhados à ESQUERDA lado a lado
+                  (pedido explícito do usuário, 2026-08-26) — sem logo
+                  cadastrada, cai de volta pro bloco centralizado de sempre. */}
+              {!isItemMode && empresa?.logo_base64 ? (
+                <View style={rs.empresaComLogoRow}>
+                  <Image
+                    source={{ uri: `data:${empresa.logo_mime || "image/png"};base64,${empresa.logo_base64}` }}
+                    style={rs.logo}
+                  />
+                  <View style={rs.empresaComLogoInfo}>
+                    <Text style={rs.bold}>{(empresa?.fantasia || empresa?.rz_social || "").toUpperCase()}</Text>
+                    {enderecoEmpresa ? <Text style={rs.left}>{enderecoEmpresa}</Text> : null}
+                    {cidadeEmpresa ? <Text style={rs.left}>{cidadeEmpresa}{empresa?.cep ? ` CEP: ${empresa.cep}` : ""}</Text> : null}
+                    {empresa?.telefone ? (
+                      <Text style={rs.left}>Tel: ({empresa.ddd}) {empresa.telefone}{empresa.celular ? ` / ${empresa.celular}` : ""}</Text>
+                    ) : null}
+                    {empresa?.cgc ? <Text style={rs.left}>CNPJ: {empresa.cgc}{empresa.inscr_est ? ` IE: ${empresa.inscr_est}` : ""}</Text> : null}
+                  </View>
+                </View>
+              ) : (
+                <>
+                  <Text style={isItemMode ? [rs.bold, rs.center] : rs.center}>
+                    {(empresa?.fantasia || empresa?.rz_social || "").toUpperCase()}
+                  </Text>
+                  {!isItemMode && enderecoEmpresa ? <Text style={rs.center}>{enderecoEmpresa}</Text> : null}
+                  {!isItemMode && cidadeEmpresa ? <Text style={rs.center}>{cidadeEmpresa}{empresa?.cep ? ` CEP: ${empresa.cep}` : ""}</Text> : null}
+                  {!isItemMode && empresa?.telefone ? (
+                    <Text style={rs.center}>Tel: ({empresa.ddd}) {empresa.telefone}{empresa.celular ? ` / ${empresa.celular}` : ""}</Text>
+                  ) : null}
+                  {!isItemMode && empresa?.cgc ? <Text style={rs.center}>CNPJ: {empresa.cgc}{empresa.inscr_est ? ` IE: ${empresa.inscr_est}` : ""}</Text> : null}
+                </>
+              )}
 
               <View style={rs.hr} />
               {/* Nome do cliente entra na mesma linha do nº do pedido, mesma
@@ -480,14 +707,56 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
             </View>
           </ScrollView>
 
-          <View style={styles.modalBtns}>
-            <Pressable onPress={onClose} style={[styles.secondaryBtn, { flex: 1, alignItems: "center" }]} testID="pedido-recibo-fechar">
-              <Text style={styles.secondaryBtnText}>Fechar</Text>
-            </Pressable>
-            <Pressable onPress={handlePrint} style={[styles.primaryBtn, { flex: 1 }]} testID="pedido-recibo-imprimir">
-              <Text style={styles.primaryBtnText}>Imprimir</Text>
-            </Pressable>
-          </View>
+          {/* Configuração local de impressora silenciosa (computador +
+              impressora desta estação) — só aparece quando o recibo
+              completo ainda não tem uma salva; ver docstring do módulo. */}
+          {configurandoImpressora ? (
+            <View style={{ gap: spacing.sm }}>
+              <Text style={styles.fieldLabel}>Configurar impressora desta estação</Text>
+              <TextInput
+                value={computadorInput}
+                onChangeText={setComputadorInput}
+                placeholder="Nome do computador"
+                placeholderTextColor={colors.muted}
+                style={styles.input}
+                testID="pedido-recibo-config-computador"
+              />
+              <TextInput
+                value={impressoraInput}
+                onChangeText={setImpressoraInput}
+                placeholder="Nome da impressora (opcional — usa a padrão do agente)"
+                placeholderTextColor={colors.muted}
+                style={styles.input}
+                testID="pedido-recibo-config-impressora"
+              />
+              <View style={styles.modalBtns}>
+                <Pressable onPress={() => setConfigurandoImpressora(false)} style={[styles.secondaryBtn, { flex: 1, alignItems: "center" }]} testID="pedido-recibo-config-cancelar">
+                  <Text style={styles.secondaryBtnText}>Cancelar</Text>
+                </Pressable>
+                <Pressable onPress={handleSalvarConfigEImprimir} disabled={enviandoImpressao} style={[styles.primaryBtn, { flex: 1 }, enviandoImpressao && { opacity: 0.7 }]} testID="pedido-recibo-config-salvar">
+                  {enviandoImpressao ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Salvar e Imprimir</Text>}
+                </Pressable>
+              </View>
+            </View>
+          ) : (
+            <>
+              <View style={styles.modalBtns}>
+                <Pressable onPress={onClose} style={[styles.secondaryBtn, { flex: 1, alignItems: "center" }]} testID="pedido-recibo-fechar">
+                  <Text style={styles.secondaryBtnText}>Fechar</Text>
+                </Pressable>
+                <Pressable onPress={handleImprimir} disabled={enviandoImpressao} style={[styles.primaryBtn, { flex: 1 }, enviandoImpressao && { opacity: 0.7 }]} testID="pedido-recibo-imprimir">
+                  {enviandoImpressao ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={styles.primaryBtnText}>Imprimir</Text>}
+                </Pressable>
+              </View>
+              {!isItemMode && printerConfig ? (
+                <Pressable onPress={() => setConfigurandoImpressora(true)} style={{ marginTop: 6, alignSelf: "center" }} testID="pedido-recibo-trocar-impressora">
+                  <Text style={{ fontSize: 11, color: colors.muted }}>
+                    Impressora: {printerConfig.computador}{printerConfig.impressora ? ` / ${printerConfig.impressora}` : ""} · Trocar
+                  </Text>
+                </Pressable>
+              ) : null}
+            </>
+          )}
         </Pressable>
       </Pressable>
     </Modal>
@@ -509,6 +778,15 @@ const rs = StyleSheet.create({
   // printHtml.ts.
   huge2: { fontSize: 18, fontFamily: isWeb ? "monospace" : undefined, fontWeight: "800", color: "#111", marginBottom: 4 },
   center: { fontSize: 12, textAlign: "center", color: "#111" },
+  left: { fontSize: 12, textAlign: "left", color: "#111" },
   row: { flexDirection: "row", justifyContent: "space-between", gap: 8 },
   hr: { borderBottomWidth: 1, borderColor: "#999", marginVertical: 6 },
+  // Logo + dados da empresa lado a lado, alinhados à ESQUERDA (pedido
+  // explícito do usuário, 2026-08-26: "colocar a logo no lado esquerdo e
+  // alinhar as informações da empresa de forma esquerda com a logo") —
+  // substitui o bloco totalmente centralizado de antes, só quando há logo
+  // cadastrada (ver "Cadastro do Logo" no Controle do Sistema).
+  empresaComLogoRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginBottom: 4 },
+  empresaComLogoInfo: { flex: 1, minWidth: 0 },
+  logo: { width: 56, height: 56, resizeMode: "contain", flexShrink: 0 },
 });

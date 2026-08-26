@@ -9,10 +9,10 @@
 // ICMS/IPI/ISS por item são sugeridos via cascata de tributação mas
 // livremente editáveis; PIS/COFINS nunca é digitável (calculado só na
 // emissão). Ao Emitir, promove pra `n_fiscal`/`n_fiscal_itens` real.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 import { AppModal } from "@/src/components/AppModal";
 import AccordionSection from "@/src/components/pedido/AccordionSection";
@@ -34,6 +34,9 @@ import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
 import { formatBRL } from "@/src/utils/format";
+import { fetchEmpresaHeader } from "@/src/utils/print-report-header";
+import { printFullHtml } from "@/src/utils/printHtml";
+import { buildDanfeHtml } from "@/src/utils/danfeFacsimile";
 
 type TipoMov = { codigo: string; descricao: string; origem_destino: string; cfop: string | null; cfop_fora: string | null };
 
@@ -50,6 +53,10 @@ type ItemRascunho = {
   valor_ipi: string;
   base_iss: string;
   valor_iss: string;
+  /** CFOP próprio do item — vazio usa o CFOP do cabeçalho na emissão
+   * (`_emitir_nfe_avulsa_sync`, backend). Ver CLAUDE.md/PENDENCIAS.md >
+   * "CFOP por item". */
+  cod_fiscal: string;
 };
 
 const NFE_AVULSA_AJUDA_ITENS: HelpItem[] = [
@@ -80,10 +87,53 @@ const NFE_AVULSA_AJUDA_ITENS: HelpItem[] = [
     icon: { lib: "ion", name: "receipt-outline" },
     cor: colors.brandPrimary,
   },
+  {
+    titulo: "CFOP Item",
+    texto: "CFOP próprio deste item — deixe em branco para usar o CFOP do cabeçalho da nota. Só preencha quando este item específico precisar de um CFOP diferente dos demais (ex.: devolução com itens de naturezas fiscais distintas).",
+    icon: { lib: "ion", name: "git-branch-outline" },
+  },
+  {
+    titulo: "Importar de...",
+    texto: "Traz cabeçalho e itens de outro documento já existente (Pedido de Venda, Devolução, Pedido de Compra, Requisição, outra Nota Fiscal ou uma Comanda) pro rascunho, em vez de digitar tudo na mão. Alguns campos não vêm preenchidos (ex.: CFOP em Pedido/Compra) — sempre revise antes de gravar ou emitir.",
+    icon: { lib: "ion", name: "download-outline" },
+  },
+  {
+    titulo: "Frete por Conta",
+    texto: "Define quem é responsável pelo transporte da mercadoria — vai direto no XML da NF-e (campo obrigatório do SEFAZ). Se não escolher nada, a nota sai como \"Emitente (CIF)\".",
+    icon: { lib: "ion", name: "car-outline" },
+  },
+];
+
+// 6 sub-rotinas de importação automática de `NFe\frmtranfe.frm` — ver
+// PENDENCIAS.md > "6 sub-rotinas de importação automática" pro racional
+// completo. `endpoint` bate com as rotas novas de
+// `backend/routes/nfe_avulsa.py` (`POST /nfe-avulsa/importar/{endpoint}`).
+const TIPOS_IMPORTACAO: { value: string; label: string; endpoint: string; placeholder: string }[] = [
+  { value: "pedido", label: "Pedido de Venda", endpoint: "pedido", placeholder: "Nº do Pedido" },
+  { value: "devolucao", label: "Devolução", endpoint: "devolucao", placeholder: "Nº da Devolução" },
+  { value: "compra", label: "Pedido de Compra", endpoint: "compra", placeholder: "Nº do Pedido de Compra" },
+  { value: "requisicao", label: "Requisição", endpoint: "requisicao", placeholder: "Nº da Requisição" },
+  { value: "nota-fiscal", label: "Outra Nota Fiscal", endpoint: "nota-fiscal", placeholder: "Nº/Código da Nota Fiscal" },
+  { value: "complementar", label: "Complementar (de Comanda)", endpoint: "complementar", placeholder: "Nº da Comanda" },
+];
+
+// "Frete por conta" — grava em n_fiscal.paga_frete (smallint), traduzido
+// pro código real <modFrete> na emissão (ver
+// nfe_emissao_service._resolver_mod_frete). Achado real 2026-08-21: o
+// legado grava e usa esse valor de verdade (Grava_Frete/DAO_NFE.vb) —
+// não é um campo decorativo.
+const OPCOES_PAGA_FRETE: SelectOption[] = [
+  { value: "1", label: "Emitente (CIF)" },
+  { value: "2", label: "Destinatário (FOB)" },
+  { value: "3", label: "Terceiros" },
+  { value: "4", label: "Próprio Remetente" },
+  { value: "5", label: "Próprio Destinatário" },
+  { value: "6", label: "Sem Transporte" },
 ];
 
 export default function NfeAvulsaScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ importar_devolucao_ids?: string }>();
   const { can, isMaster, classe, usuarioCodigo } = usePermissions();
   const fb = useFeedback();
   const isWeb = Platform.OS === "web";
@@ -97,12 +147,19 @@ export default function NfeAvulsaScreen() {
 
   const [conn, setConn] = useState<Connection | null>(null);
   const [codigo, setCodigo] = useState<number | null>(null);
+  // "1,2,3" — ids de `devolucao_itens` que originaram este rascunho, só
+  // quando aberto a partir do Gestor de Devolução ("Emitir NF-e"). Ver
+  // `nfe_avulsa_service._ensure_nf_aux_ids_devolucao_origem_col` — vai
+  // junto em `salvarCabecalho()` e é lido de volta na emissão pra
+  // atualizar `devolucao_itens.Nfe` com a nota real gerada.
+  const [idsDevolucaoOrigem, setIdsDevolucaoOrigem] = useState("");
   const [promovida, setPromovida] = useState(false);
   const [carregando, setCarregando] = useState(true);
   const [salvando, setSalvando] = useState(false);
   const [emitindo, setEmitindo] = useState(false);
   const [ajudaVisivel, setAjudaVisivel] = useState(false);
   const [resultado, setResultado] = useState<{ chave_acesso: string; protocolo_sefaz: string; nota_fisc: number } | null>(null);
+  const [baixandoDanfe, setBaixandoDanfe] = useState(false);
 
   const [tiposMov, setTiposMov] = useState<TipoMov[]>([]);
   const [mov, setMov] = useState<string | null>(null);
@@ -110,9 +167,15 @@ export default function NfeAvulsaScreen() {
   const [dataEmissao, setDataEmissao] = useState<string | null>(null);
   const [dataMov, setDataMov] = useState<string | null>(null);
   const [frete, setFrete] = useState("");
+  const [pagaFrete, setPagaFrete] = useState<string | null>(null);
   const [seguro, setSeguro] = useState("");
   const [despesas, setDespesas] = useState("");
   const [desconto, setDesconto] = useState("");
+  // Só preenchidos pela importação "Complementar" (cobrança de FCP não
+  // destacado na NFC-e original) — sem campo próprio na tela hoje, mas
+  // precisam ser persistidos no cabeçalho pra não se perder ao salvar.
+  const [baseFcp, setBaseFcp] = useState("");
+  const [valorFcp, setValorFcp] = useState("");
 
   const [cliente, setCliente] = useState<ClienteRow | null>(null);
   const [fornecedor, setFornecedor] = useState<FornecedorRow | null>(null);
@@ -130,6 +193,11 @@ export default function NfeAvulsaScreen() {
   const [produtoSearchTerm, setProdutoSearchTerm] = useState("");
   const [produtoSearchLoading, setProdutoSearchLoading] = useState(false);
   const [produtoSearchResults, setProdutoSearchResults] = useState<ProdutoRow[]>([]);
+
+  const [importarOpen, setImportarOpen] = useState(false);
+  const [importarTipo, setImportarTipo] = useState<string | null>(null);
+  const [importarDocumento, setImportarDocumento] = useState("");
+  const [importando, setImportando] = useState(false);
 
   const movSelecionado = tiposMov.find((t) => t.codigo === mov) || null;
   const isFornecedor = movSelecionado?.origem_destino === "F";
@@ -238,6 +306,9 @@ export default function NfeAvulsaScreen() {
         fornecedor: isFornecedor ? Number(fornecedor?.codigo_int) : cliente?.codigo,
         mov, cfop: cfop.trim(), data: dataEmissao, data_mov: dataMov || dataEmissao,
         valor_total: valorTotalItens, frete: num(frete), seguro: num(seguro), despesas: num(despesas), desconto: num(desconto),
+        BASE_FCP: num(baseFcp), VALOR_FCP: num(valorFcp),
+        paga_frete: pagaFrete ? Number(pagaFrete) : null,
+        ids_devolucao_origem: idsDevolucaoOrigem || null,
       };
       const r = await fetch(apiUrl("/api/nfe-avulsa/cabecalho"), {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -264,6 +335,7 @@ export default function NfeAvulsaScreen() {
         alqt_icms: num(it.alqt_icms), base_icms: num(it.base_icms), valor_icms: num(it.valor_icms),
         base_ipi: num(it.base_ipi), alqt_ipi: num(it.alqt_ipi), valor_ipi: num(it.valor_ipi),
         base_iss: num(it.base_iss), valor_iss: num(it.valor_iss),
+        cod_fiscal: it.cod_fiscal?.trim() || null,
       }));
       const r = await fetch(apiUrl("/api/nfe-avulsa/itens"), {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -303,7 +375,123 @@ export default function NfeAvulsaScreen() {
       alqt_icms: sugestao?.alqt_icms ? String(sugestao.alqt_icms) : "0",
       base_icms: "0", valor_icms: "0", base_ipi: "0", alqt_ipi: "0", valor_ipi: "0",
       base_iss: sugestao?.base_iss ? String(sugestao.base_iss) : "0", valor_iss: sugestao?.valor_iss ? String(sugestao.valor_iss) : "0",
+      cod_fiscal: "",
     }]);
+  };
+
+  // 6 sub-rotinas de importação automática — endpoints são READ-ONLY (não
+  // escrevem em `nf_aux`), só resolvem o documento de origem. O cabeçalho/
+  // itens retornados são aplicados no estado local, exatamente como um
+  // item adicionado manualmente (`selecionarProduto` acima) — usuário
+  // revisa/ajusta e confirma com "Salvar Rascunho"/"Emitir" normalmente.
+  // Compartilhada pelos dois pontos de entrada: modal manual
+  // (`handleImportar`) e o atalho automático vindo do Gestor de Devolução
+  // (`?importar_devolucao_ids=...`, ver useEffect logo abaixo).
+  const aplicarImportacaoResposta = (c: Connection, j: any) => {
+    const header = j.header || {};
+    if (header.mov) setMov(header.mov);
+    if (header.cfop) setCfop(header.cfop);
+    if (header.BASE_FCP != null) setBaseFcp(String(header.BASE_FCP));
+    if (header.VALOR_FCP != null) setValorFcp(String(header.VALOR_FCP));
+    if (header.ids_devolucao_origem) setIdsDevolucaoOrigem(String(header.ids_devolucao_origem));
+
+    const buscaDestinatario = (async () => {
+      if (!(header.fornecedor && header.tipo_pessoa)) return;
+      const base = c.api.replace(/\/+$/, "");
+      const qsBase = `servidor=${encodeURIComponent(c.servidor)}&banco=${encodeURIComponent(c.banco)}`;
+      if (header.tipo_pessoa === "F") {
+        const rf = await fetch(`${base}/api/fornecedores?${qsBase}&search=${header.fornecedor}`);
+        const jf = await rf.json();
+        const found = (jf?.items || jf || [])[0];
+        if (found) setFornecedor(found);
+      } else {
+        const rc = await fetch(`${base}/api/clientes/find/search?${qsBase}&term=${header.fornecedor}`);
+        const jc = await rc.json();
+        const found = (jc?.items || [])[0];
+        if (found) setCliente(found);
+      }
+    })();
+
+    const novosItens: ItemRascunho[] = (j.itens || []).map((it: any) => ({
+      codigo_int: it.codigo_int, descricao: it.descricao || it.codigo_int,
+      qtd: String(it.qtd ?? "0"), p_unit: String(it.p_unit ?? "0"),
+      alqt_icms: String(it.alqt_icms ?? "0"), base_icms: String(it.base_icms ?? "0"), valor_icms: String(it.valor_icms ?? "0"),
+      base_ipi: String(it.base_ipi ?? "0"), alqt_ipi: String(it.alqt_ipi ?? "0"), valor_ipi: String(it.valor_ipi ?? "0"),
+      base_iss: String(it.base_iss ?? "0"), valor_iss: String(it.valor_iss ?? "0"),
+      cod_fiscal: it.cod_fiscal ? String(it.cod_fiscal) : "",
+    }));
+    setItens((cur) => [...cur, ...novosItens]);
+    return { itensImportados: novosItens.length, aguardaDestinatario: buscaDestinatario };
+  };
+
+  // Atalho vindo do Gestor de Devolução ("Emitir NF-e") — acionado 2026-08-24,
+  // achado real (Leandro): "dentro do gestor de devolução quem chama a tela
+  // gerar nfe avulsa, que já abre carregada com os dados da devolução, sem
+  // o usuário precisar digitar manualmente". Roda uma única vez, assim que o
+  // rascunho (`codigo`) e a conexão estão prontos — mesmo endpoint/lógica do
+  // modal "Importar de..." manual, só sem exigir o usuário abrir o modal e
+  // digitar o número.
+  const autoImportouDevolucao = useRef(false);
+  useEffect(() => {
+    if (autoImportouDevolucao.current || !conn || !codigo || !params.importar_devolucao_ids) return;
+    autoImportouDevolucao.current = true;
+    const ids = params.importar_devolucao_ids.split(",").map((s) => parseInt(s, 10)).filter((n) => !isNaN(n));
+    if (ids.length === 0) return;
+    (async () => {
+      setImportando(true);
+      try {
+        const r = await fetch(apiUrl("/api/nfe-avulsa/importar/devolucao"), {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ids_devolucao: ids }),
+        });
+        const j = await r.json();
+        if (!j?.success) { fb.showError(friendlyApiError(j, "Não foi possível carregar a devolução nesta NF-e.")); return; }
+        const { itensImportados, aguardaDestinatario } = aplicarImportacaoResposta(conn, j);
+        await aguardaDestinatario;
+        fb.showSuccess(
+          `Devolução importada — ${itensImportados} item(ns). Revise e emita a NF-e quando estiver pronto.`,
+          undefined, 5000,
+        );
+      } catch (e) {
+        fb.showError(friendlyCatchError(e));
+      } finally {
+        setImportando(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conn, codigo, params.importar_devolucao_ids]);
+
+  const handleImportar = async () => {
+    if (!importarTipo || !importarDocumento.trim()) {
+      fb.showError("Escolha o tipo de documento e informe o número.");
+      return;
+    }
+    const tipo = TIPOS_IMPORTACAO.find((t) => t.value === importarTipo);
+    const c = await ensureConn();
+    if (!c || !tipo) return;
+    setImportando(true);
+    try {
+      const corpo = tipo.value === "devolucao"
+        ? { servidor: c.servidor, banco: c.banco, ids_devolucao: [Number(importarDocumento)] }
+        : { servidor: c.servidor, banco: c.banco, documento: Number(importarDocumento) };
+      const r = await fetch(apiUrl(`/api/nfe-avulsa/importar/${tipo.endpoint}`), {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(corpo),
+      });
+      const j = await r.json();
+      if (!j?.success) { fb.showError(friendlyApiError(j, "Não foi possível importar este documento.")); return; }
+
+      const { itensImportados, aguardaDestinatario } = aplicarImportacaoResposta(c, j);
+      await aguardaDestinatario;
+      fb.showSuccess(`${itensImportados} item(ns) importado(s) — revise os dados antes de salvar.`, undefined, 5000);
+      setImportarOpen(false);
+      setImportarTipo(null);
+      setImportarDocumento("");
+    } catch (e) {
+      fb.showError(friendlyCatchError(e));
+    } finally {
+      setImportando(false);
+    }
   };
 
   const atualizarItem = (idx: number, campo: keyof ItemRascunho, valor: string) => {
@@ -354,6 +542,23 @@ export default function NfeAvulsaScreen() {
       fb.showError(friendlyCatchError(e));
     } finally {
       setEmitindo(false);
+    }
+  };
+
+  const baixarDanfe = async () => {
+    if (!conn || !resultado?.nota_fisc) return;
+    setBaixandoDanfe(true);
+    try {
+      const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`;
+      const r = await fetch(apiUrl(`/api/notas-fiscais/${resultado.nota_fisc}/danfe?${qs}`));
+      const j = await r.json();
+      if (!j?.success) { fb.showWarning(friendlyApiError(j, "Não foi possível gerar o DANFE.")); return; }
+      const empresa = await fetchEmpresaHeader(conn.api, conn.servidor, conn.banco);
+      printFullHtml(buildDanfeHtml(empresa, j.detalhe, j.modelo_danfe));
+    } catch (e) {
+      fb.showError(friendlyCatchError(e));
+    } finally {
+      setBaixandoDanfe(false);
     }
   };
 
@@ -453,6 +658,16 @@ export default function NfeAvulsaScreen() {
                     <TextInput value={desconto} onChangeText={setDesconto} keyboardType="numeric" editable={!promovida} style={styles.input} />
                   </View>
                 </View>
+
+                <View style={styles.fieldsRow}>
+                  <View style={styles.colHalf}>
+                    <Text style={styles.fieldLabel}>Frete por Conta</Text>
+                    <SelectField
+                      value={pagaFrete} onChange={(v) => setPagaFrete(v as string)} options={OPCOES_PAGA_FRETE}
+                      compactWeb placeholder="Emitente (CIF)" disabled={promovida} testID="nfe-avulsa-paga-frete"
+                    />
+                  </View>
+                </View>
               </AccordionSection>
             </View>
 
@@ -460,10 +675,15 @@ export default function NfeAvulsaScreen() {
               <View style={styles.itensHeaderRow}>
                 <Text style={styles.sectionTitle}>Itens</Text>
                 {!promovida ? (
-                  <Pressable onPress={() => setProdutoSearchOpen(true)} style={styles.addItemBtn} testID="nfe-avulsa-add-item" disabled={!mov}>
-                    <Ionicons name="add" size={16} color="#fff" />
-                    <Text style={styles.addItemBtnText}>Item</Text>
-                  </Pressable>
+                  <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                    <Pressable onPress={() => setImportarOpen(true)} style={styles.secondaryBtn} testID="nfe-avulsa-importar">
+                      <Text style={styles.secondaryBtnText}>Importar de...</Text>
+                    </Pressable>
+                    <Pressable onPress={() => setProdutoSearchOpen(true)} style={styles.addItemBtn} testID="nfe-avulsa-add-item" disabled={!mov}>
+                      <Ionicons name="add" size={16} color="#fff" />
+                      <Text style={styles.addItemBtnText}>Item</Text>
+                    </Pressable>
+                  </View>
                 ) : null}
               </View>
               {itens.length === 0 ? (
@@ -495,6 +715,18 @@ export default function NfeAvulsaScreen() {
                       <View style={styles.colTiny}>
                         <Text style={styles.fieldLabel}>Valor ICMS</Text>
                         <TextInput value={it.valor_icms} onChangeText={(v) => atualizarItem(idx, "valor_icms", v)} keyboardType="numeric" editable={!promovida} style={styles.input} />
+                      </View>
+                      <View style={styles.colTiny}>
+                        <Text style={styles.fieldLabel}>CFOP Item</Text>
+                        <TextInput
+                          value={it.cod_fiscal}
+                          onChangeText={(v) => atualizarItem(idx, "cod_fiscal", v)}
+                          placeholder={cfop || "cabeçalho"}
+                          placeholderTextColor={colors.muted}
+                          editable={!promovida}
+                          style={styles.input}
+                          testID={`nfe-avulsa-item-cfop-${idx}`}
+                        />
                       </View>
                     </View>
                     <View style={styles.fieldsRow}>
@@ -558,6 +790,52 @@ export default function NfeAvulsaScreen() {
             <Text style={styles.hint}>Protocolo SEFAZ: {resultado?.protocolo_sefaz}</Text>
             <Text style={[styles.hint, { marginTop: spacing.sm }]}>Chave de acesso:</Text>
             <Text selectable style={styles.chaveAcesso}>{resultado?.chave_acesso}</Text>
+            <Pressable onPress={baixarDanfe} disabled={baixandoDanfe} style={[styles.bulkBtn, { marginTop: spacing.md, alignSelf: "flex-start" }, baixandoDanfe && { opacity: 0.7 }]} testID="nfe-avulsa-danfe">
+              {baixandoDanfe ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.bulkBtnText}>Baixar DANFE</Text>}
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </AppModal>
+
+      <AppModal visible={importarOpen} transparent animationType="fade" onRequestClose={() => setImportarOpen(false)}>
+        <Pressable style={styles.modalBg} onPress={() => setImportarOpen(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Importar de...</Text>
+              <Pressable onPress={() => setImportarOpen(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+            <Text style={[styles.hint, { marginBottom: spacing.sm }]}>
+              Importa cabeçalho/itens de outro documento já existente pro rascunho — revise tudo antes de gravar.
+            </Text>
+            <Text style={styles.fieldLabel}>Tipo de Documento</Text>
+            <SelectField
+              value={importarTipo}
+              onChange={(v) => setImportarTipo(v as string)}
+              options={TIPOS_IMPORTACAO.map((t) => ({ value: t.value, label: t.label }))}
+              compactWeb
+              testID="nfe-avulsa-importar-tipo"
+            />
+            <Text style={[styles.fieldLabel, { marginTop: spacing.sm }]}>
+              {TIPOS_IMPORTACAO.find((t) => t.value === importarTipo)?.placeholder || "Número do Documento"}
+            </Text>
+            <TextInput
+              value={importarDocumento}
+              onChangeText={setImportarDocumento}
+              keyboardType="numeric"
+              style={styles.input}
+              placeholderTextColor={colors.muted}
+              testID="nfe-avulsa-importar-documento"
+            />
+            <Pressable
+              onPress={handleImportar}
+              disabled={importando}
+              style={[styles.bulkBtn, { marginTop: spacing.md, alignSelf: "flex-start" }, importando && { opacity: 0.7 }]}
+              testID="nfe-avulsa-importar-confirmar"
+            >
+              {importando ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.bulkBtnText}>Importar</Text>}
+            </Pressable>
           </Pressable>
         </Pressable>
       </AppModal>

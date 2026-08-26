@@ -6,6 +6,10 @@ import { Ionicons } from "@/src/components/Ionicons";
 
 import DateField from "@/src/components/DateField";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import AccordionSection from "@/src/components/pedido/AccordionSection";
+import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
+import { useClienteSearchModal } from "@/src/hooks/useClienteSearchModal";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections } from "@/src/utils/storage/connections";
 import { exportReportPdf } from "@/src/utils/export-report";
@@ -54,6 +58,7 @@ export default function RelatorioOSDescontosScreen() {
   const [vendedorOpts, setVendedorOpts] = useState<SelectOption[]>([]);
   const [vendedor, setVendedor] = useState<string | number | null>(null);
   const [clienteFiltro, setClienteFiltro] = useState<string>("");
+  const clienteSearch = useClienteSearchModal(conn);
   const [osFiltro, setOsFiltro] = useState<string>("");
 
   const [loading, setLoading] = useState(false);
@@ -167,10 +172,16 @@ export default function RelatorioOSDescontosScreen() {
       <ScrollView contentContainerStyle={[styles.scroll, isWeb && styles.scrollWeb]}>
         <View style={isWeb ? styles.webShell : undefined}>
         <View style={[styles.filters, isWeb && styles.filtersWeb]}>
+        <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="relosdesc-filtros">
           <View style={styles.dateRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.fieldLabel}>De</Text>
-              <DateField value={dataIni} onChange={setDataIni} allowClear={false} testID="relosdesc-data-ini" />
+              <DateField
+                value={dataIni}
+                onChange={(v) => { setDataIni(v); if (v) setDataFim(v); }}
+                allowClear={false}
+                testID="relosdesc-data-ini"
+              />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.fieldLabel}>Até</Text>
@@ -188,15 +199,21 @@ export default function RelatorioOSDescontosScreen() {
             testID="relosdesc-vendedor"
           />
           <Text style={styles.fieldLabel}>Cliente (nome contém — opcional)</Text>
-          <TextInput
-            value={clienteFiltro}
-            onChangeText={setClienteFiltro}
-            placeholder="Ex.: João, Mercado…"
-            placeholderTextColor={colors.muted}
-            style={styles.input}
-            autoCapitalize="characters"
-            testID="relosdesc-cliente"
-          />
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+            <TextInput
+              value={clienteFiltro}
+              onChangeText={setClienteFiltro}
+              placeholder="Ex.: João, Mercado…"
+              placeholderTextColor={colors.muted}
+              style={[styles.input, { flex: 1, minWidth: 0 }]}
+              autoCapitalize="characters"
+              testID="relosdesc-cliente"
+            />
+            <IconButtonWithTooltip
+              icon="search-outline" label="Buscar Cliente" onPress={clienteSearch.openModal}
+              size={20} color={colors.brandPrimary} testID="relosdesc-cliente-buscar"
+            />
+          </View>
           <Text style={styles.fieldLabel}>Código da OS (opcional)</Text>
           <TextInput
             value={osFiltro}
@@ -220,6 +237,7 @@ export default function RelatorioOSDescontosScreen() {
               </>
             )}
           </Pressable>
+        </AccordionSection>
         </View>
 
         {totais ? (
@@ -291,6 +309,16 @@ export default function RelatorioOSDescontosScreen() {
         ) : null}
         </View>
       </ScrollView>
+      <ClientSearchModal
+        visible={clienteSearch.open}
+        onClose={clienteSearch.closeModal}
+        term={clienteSearch.term}
+        setTerm={clienteSearch.setTerm}
+        loading={clienteSearch.loading}
+        results={clienteSearch.results}
+        onPick={(c) => { setClienteFiltro(c.nome); clienteSearch.closeModal(); }}
+        onCreate={clienteSearch.closeModal}
+      />
     </SafeAreaView>
   );
 }

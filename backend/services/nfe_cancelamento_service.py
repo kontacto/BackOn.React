@@ -58,18 +58,11 @@ _IBGE_POR_UF = nfe_fiscal_common.IBGE_POR_UF
 # grupo/comentário de `NFE_Webservices.vb` linha 13630-13632.
 _UFS_SVRS = nfe_fiscal_common.UFS_SVRS
 
-# Endpoints "recepção de evento" (cancelamento), versão 4.00, só pro grupo
-# SVRS — ver docstring do módulo pro porquê do recorte.
-_ENDPOINTS_RECEPCAO_EVENTO = {
-    "55": {
-        "1": "https://nfe.svrs.rs.gov.br/ws/recepcaoevento/recepcaoevento4.asmx",
-        "2": "https://nfe-homologacao.svrs.rs.gov.br/ws/recepcaoevento/recepcaoevento4.asmx",
-    },
-    "65": {
-        "1": "https://nfce.svrs.rs.gov.br/ws/recepcaoevento/recepcaoevento4.asmx",
-        "2": "https://nfce-homologacao.svrs.rs.gov.br/ws/recepcaoevento/recepcaoevento4.asmx",
-    },
-}
+# Endpoints "recepção de evento" (versão 4.00, grupo SVRS) — **extraído
+# pra `nfe_fiscal_common.ENDPOINTS_RECEPCAO_EVENTO` 2026-08-22**, reaproveitado
+# também pela Carta de Correção (`nfe_correcao_service.py`, evento 110110) —
+# é o MESMO webservice pros dois eventos, só o corpo do `<evento>` muda.
+_ENDPOINTS_RECEPCAO_EVENTO = nfe_fiscal_common.ENDPOINTS_RECEPCAO_EVENTO
 
 _NFE_NS = nfe_fiscal_common.NFE_NS
 _SOAP_NS = nfe_fiscal_common.SOAP_NS
@@ -135,7 +128,11 @@ def _carregar_certificado_sync(cur) -> Optional[tuple[bytes, bytes]]:
 def _assinar_evento(xml_bytes: bytes, id_evento: str, key_pem: bytes, cert_pem: bytes) -> bytes:
     """Assinatura XMLDSig enveloped + C14N — ver `nfe_fiscal_common.
     assinar_xml` (extraído daqui, mesmo comportamento)."""
-    return nfe_fiscal_common.assinar_xml(xml_bytes, id_evento, key_pem, cert_pem)
+    # sha1=True — mesmo achado do MDF-e/NFC-e (2026-08-23): o XSD
+    # compartilhado (`xmldsig-core-schema_v1.01.xsd`) ainda fixa SHA-1,
+    # não SHA-256 como a docstring do módulo presumia sem ter testado ao
+    # vivo até hoje.
+    return nfe_fiscal_common.assinar_xml(xml_bytes, id_evento, key_pem, cert_pem, sha1=True)
 
 
 def _montar_envelope_soap(xml_evento_assinado: bytes) -> bytes:
@@ -143,7 +140,10 @@ def _montar_envelope_soap(xml_evento_assinado: bytes) -> bytes:
     padrão WSDL usado pelo proxy .NET (`Transmitir_NFe`, `Case 4`), o
     corpo (`envEvento`) embrulha o `<evento>` já assinado."""
     corpo = xml_evento_assinado.decode("utf-8")
-    corpo = re.sub(r"^<\?xml[^>]*\?>", "", corpo)
+    # `\s*` — achado ao vivo 2026-08-23, ver docstring de
+    # `nfe_fiscal_common.montar_envelope_soap` pro racional completo
+    # (lxml deixa `\n` residual depois da declaração XML).
+    corpo = re.sub(r"^<\?xml[^>]*\?>\s*", "", corpo)
     env_evento = f'<envEvento xmlns="{_NFE_NS}" versao="1.00"><idLote>1</idLote>{corpo}</envEvento>'
     return nfe_fiscal_common.montar_envelope_soap(env_evento.encode("utf-8"), "NFeRecepcaoEvento4")
 
@@ -200,10 +200,18 @@ def cancelar_nfe_sync(
     except Exception as e:
         return {"success": False, "message": f"Falha ao comunicar com o SEFAZ: {e}"}
 
-    c_stat = _extrair_tag(resposta, "cStat")
-    x_motivo = _extrair_tag(resposta, "xMotivo")
-    n_prot = _extrair_tag(resposta, "nProt")
-    dh_reg = _extrair_tag(resposta, "dhRegEvento")
+    # `retEnvEvento` tem 2 `cStat` aninhados — o do LOTE (nível externo,
+    # neutro/sempre presente) e o do EVENTO de verdade, dentro de
+    # `infEvento` (nível interno) — mesmo achado ao vivo 2026-08-23 já
+    # corrigido em `nfe_correcao_service.py`/`nfe_emissao_service.py`
+    # (CC-e/NFC-e/NF-e) no mesmo dia; aplicado aqui também por
+    # consistência, mesmo sem cancelamento real de NF-e/NFC-e ter sido
+    # testado ao vivo ainda nesta sessão (só MDF-e, código separado).
+    inf_evento = nfe_fiscal_common.extrair_bloco(resposta, "infEvento") or resposta
+    c_stat = _extrair_tag(inf_evento, "cStat")
+    x_motivo = _extrair_tag(inf_evento, "xMotivo")
+    n_prot = _extrair_tag(inf_evento, "nProt")
+    dh_reg = _extrair_tag(inf_evento, "dhRegEvento")
     # 135 = "Evento registrado e vinculado a NF-e" (cancelamento homologado).
     # 136 = "Evento registrado, mas não vinculado a NF-e" (também sucesso).
     if c_stat not in ("135", "136"):
@@ -216,4 +224,14 @@ def cancelar_nfe_sync(
         "message": f"Cancelamento autorizado pelo SEFAZ — protocolo {n_prot or '?'}.",
         "protocolo_cancelamento": n_prot,
         "data_hora_registro": dh_reg,
+        # Achado ao vivo 2026-08-23 (1ª cancelamento real de NF-e/NFC-e
+        # nesta migração): `xml_assinado` era calculado mas NUNCA
+        # devolvido pra quem chama — o cancelamento acontecia de verdade
+        # no SEFAZ, mas o XML assinado do evento (prova documental do
+        # cancelamento) ficava só na memória, descartado assim que a
+        # função retornava. Devolvido aqui pra `comanda_service.
+        # _cancelar_comanda_sync` poder persistir (ver achado irmão:
+        # nem `protocolo_cancelamento` estava sendo gravado em lugar
+        # nenhum, só `situacao='C'`).
+        "xml_evento": xml_assinado.decode("utf-8"),
     }

@@ -6,8 +6,12 @@ import { Ionicons } from "@/src/components/Ionicons";
 
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import WebDateField from "@/src/components/WebDateField";
+import AccordionSection from "@/src/components/pedido/AccordionSection";
 import ClientSearchModal from "@/src/components/pedido/ClientSearchModal";
 import { ClienteRow } from "@/src/components/pedido/types";
+import { AppModal } from "@/src/components/AppModal";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 import { usePermissions } from "@/src/permissions";
 import { useAuditContext } from "@/src/hooks/useAuditContext";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
@@ -18,6 +22,11 @@ import { colors, radius, spacing } from "@/src/theme/colors";
 import {
   WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER,
 } from "@/src/theme/webLayout";
+import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
+import { fetchEmpresaHeader } from "@/src/utils/print-report-header";
+import { printFullHtml } from "@/src/utils/printHtml";
+import { buildDanfeHtml } from "@/src/utils/danfeFacsimile";
+import { buildDacceHtml } from "@/src/utils/dacceFacsimile";
 
 type Conn = Connection;
 
@@ -70,12 +79,25 @@ const isoToBR = (iso: string | null) => {
   return d && m && y ? `${d}/${m}/${y}` : iso;
 };
 
+const NOTAS_FISCAIS_AJUDA_ITENS: HelpItem[] = [
+  { titulo: "Baixar DANFE", texto: "Gera o documento auxiliar (DANFE) a partir do XML já autorizado pelo SEFAZ — só aparece pra notas que já têm chave de acesso.", icon: { lib: "ion", name: "document-text-outline" } },
+  { titulo: "Criticar", texto: "Confere se a soma dos itens bate com o Valor Total da nota — se não bater, a nota fica marcada como 'Erro de Crítica' até ser corrigida.", icon: { lib: "ion", name: "checkmark-done-outline" } },
+  { titulo: "Cancelar", texto: "Cancela a Nota Fiscal internamente (estoque, vínculos). Se a nota tiver protocolo SEFAZ real, o cancelamento oficial junto à Receita ainda precisa ser feito à parte.", icon: { lib: "ion", name: "close-circle-outline" } },
+  { titulo: "Excluir", texto: "Só é possível depois de cancelada — apaga a nota e tudo que está vinculado a ela (itens, vencimentos, resumo tributário).", icon: { lib: "ion", name: "trash-outline" } },
+  {
+    titulo: "Carta de Correção",
+    texto: "Corrige um erro secundário de uma NF-e já autorizada (ex.: descrição do produto, dados adicionais) sem precisar cancelar a nota. Não pode ser usada pra mudar valor, imposto, cliente ou data de emissão — o texto da correção precisa ter entre 15 e 1000 caracteres, e cada nota pode ter até 20 cartas.",
+    icon: { lib: "ion", name: "create-outline" },
+  },
+];
+
 export default function NotasFiscaisScreen() {
   const router = useRouter();
   const { can } = usePermissions();
   const auditCtx = useAuditContext();
   const fb = useFeedback();
   const isWeb = Platform.OS === "web";
+  const [ajudaOpen, setAjudaOpen] = useState(false);
 
   if (!isWeb) {
     return (
@@ -447,6 +469,96 @@ export default function NotasFiscaisScreen() {
     }
   };
 
+  const [baixandoDanfe, setBaixandoDanfe] = useState(false);
+  const baixarDanfe = async () => {
+    if (!conn || !codigo) return;
+    setBaixandoDanfe(true);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`;
+      const r = await fetch(`${base}/api/notas-fiscais/${codigo}/danfe?${qs}`);
+      const j = await r.json();
+      if (!j?.success) { fb.showWarning(friendlyApiError(j, "Não foi possível gerar o DANFE.")); return; }
+      const empresa = await fetchEmpresaHeader(conn.api, conn.servidor, conn.banco);
+      printFullHtml(buildDanfeHtml(empresa, j.detalhe, j.modelo_danfe));
+    } catch (e) {
+      fb.showError(friendlyCatchError(e));
+    } finally {
+      setBaixandoDanfe(false);
+    }
+  };
+
+  // ---- Carta de Correção Eletrônica (CC-e) ----
+  const [cceModalOpen, setCceModalOpen] = useState(false);
+  const [motivoCce, setMotivoCce] = useState("");
+  const [emitindoCce, setEmitindoCce] = useState(false);
+  const [cartasCce, setCartasCce] = useState<Array<{
+    codigo: number; n_seq_evento: number; protocolo: string | null; data_registro: string | null; motivo: string;
+  }>>([]);
+  const [carregandoCartas, setCarregandoCartas] = useState(false);
+  const [imprimindoDacceSeq, setImprimindoDacceSeq] = useState<number | null>(null);
+
+  const carregarCartasCce = useCallback(async () => {
+    if (!conn || !codigo) return;
+    setCarregandoCartas(true);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`;
+      const r = await fetch(`${base}/api/notas-fiscais/${codigo}/cartas-correcao?${qs}`);
+      const j = await r.json();
+      setCartasCce(j?.success ? (j.cartas || []) : []);
+    } catch {
+      setCartasCce([]);
+    } finally {
+      setCarregandoCartas(false);
+    }
+  }, [conn, codigo]);
+
+  const abrirCceModal = () => {
+    setMotivoCce("");
+    setCceModalOpen(true);
+    carregarCartasCce();
+  };
+
+  const emitirCce = async () => {
+    if (!conn || !codigo) return;
+    setEmitindoCce(true);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const r = await fetch(`${base}/api/notas-fiscais/${codigo}/carta-correcao`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, motivo: motivoCce, ...auditCtx }),
+      });
+      const j = await r.json();
+      if (!j?.success) { fb.showError(friendlyApiError(j, "Não foi possível emitir a Carta de Correção.")); return; }
+      fb.showSuccess(j.message || "Carta de Correção emitida.", undefined, 5000);
+      setMotivoCce("");
+      await carregarCartasCce();
+    } catch (e) {
+      fb.showError(friendlyCatchError(e));
+    } finally {
+      setEmitindoCce(false);
+    }
+  };
+
+  const baixarDacce = async (nSeqEvento: number) => {
+    if (!conn || !codigo) return;
+    setImprimindoDacceSeq(nSeqEvento);
+    try {
+      const base = conn.api.replace(/\/+$/, "");
+      const qs = `servidor=${encodeURIComponent(conn.servidor)}&banco=${encodeURIComponent(conn.banco)}`;
+      const r = await fetch(`${base}/api/notas-fiscais/${codigo}/carta-correcao/${nSeqEvento}/dacce?${qs}`);
+      const j = await r.json();
+      if (!j?.success) { fb.showWarning(friendlyApiError(j, "Não foi possível gerar a Carta de Correção.")); return; }
+      const empresa = await fetchEmpresaHeader(conn.api, conn.servidor, conn.banco);
+      printFullHtml(buildDacceHtml(empresa, j.carta));
+    } catch (e) {
+      fb.showError(friendlyCatchError(e));
+    } finally {
+      setImprimindoDacceSeq(null);
+    }
+  };
+
   // ---- consulta ----
   const selecionar = useCallback(async () => {
     if (!conn) return;
@@ -486,6 +598,7 @@ export default function NotasFiscaisScreen() {
   const canCriticar = can("NOTAS_FISCAIS.CRITICAR");
   const canCancelar = can("NOTAS_FISCAIS.CANCELAR");
   const canExcluir = can("NOTAS_FISCAIS.EXCLUIR");
+  const canCartaCorrecao = can("NOTAS_FISCAIS.CARTA_CORRECAO");
 
   // ============ View: Lista/Consulta ============
   if (view === "lista") {
@@ -507,7 +620,7 @@ export default function NotasFiscaisScreen() {
         <ScrollView contentContainerStyle={[styles.scroll, styles.scrollWeb]}>
           <View style={styles.webShell}>
             <View style={styles.card}>
-              <Text style={styles.sectionTitle}>Filtros</Text>
+              <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="notas-fiscais-filtros">
               <View style={styles.rowFields}>
                 <View style={styles.colNarrow}>
                   <Text style={styles.label}>Código da NF</Text>
@@ -605,6 +718,7 @@ export default function NotasFiscaisScreen() {
                   {gridLoading ? <ActivityIndicator color="#fff" /> : <><Ionicons name="search" size={16} color="#fff" /><Text style={styles.primaryBtnText}>  Selecionar</Text></>}
                 </Pressable>
               </View>
+              </AccordionSection>
             </View>
 
             <View style={styles.card}>
@@ -651,6 +765,10 @@ export default function NotasFiscaisScreen() {
         <Text style={styles.headerTitle} numberOfLines={1}>
           {editing ? `Nota Fiscal #${codigo}` : "Nova Nota Fiscal"}
         </Text>
+        <IconButtonWithTooltip
+          icon="information-circle-outline" label="Ajuda" onPress={() => setAjudaOpen(true)}
+          size={20} color={colors.onBrandPrimary} testID="notas-fiscais-ajuda"
+        />
         {canGravar ? (
           <Pressable onPress={gravar} disabled={saving} style={[styles.saveBtn, saving && { opacity: 0.7 }]} testID="notas-fiscais-gravar">
             {saving ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : (
@@ -681,9 +799,21 @@ export default function NotasFiscaisScreen() {
               <View style={[styles.situacaoBadge, situacao === "C" && styles.situacaoBadgeCancelada, situacao === "E" && styles.situacaoBadgeErro]}>
                 <Text style={styles.situacaoBadgeText}>{SITUACAO_LABEL[situacao] || situacao}</Text>
               </View>
+              {cab.chave_acesso ? (
+                <Pressable onPress={baixarDanfe} disabled={baixandoDanfe} style={[styles.secondaryBtn, baixandoDanfe && { opacity: 0.7 }]} testID="notas-fiscais-danfe">
+                  {baixandoDanfe ? <ActivityIndicator color={colors.brandPrimary} size="small" /> : (
+                    <Text style={styles.secondaryBtnText}>Baixar DANFE</Text>
+                  )}
+                </Pressable>
+              ) : null}
               {canCriticar ? (
                 <Pressable onPress={criticar} style={styles.secondaryBtn} testID="notas-fiscais-criticar">
                   <Text style={styles.secondaryBtnText}>Criticar</Text>
+                </Pressable>
+              ) : null}
+              {canCartaCorrecao && cab.chave_acesso ? (
+                <Pressable onPress={abrirCceModal} style={styles.secondaryBtn} testID="notas-fiscais-cce">
+                  <Text style={styles.secondaryBtnText}>Carta de Correção</Text>
                 </Pressable>
               ) : null}
               {canCancelar && situacao !== "C" ? (
@@ -964,6 +1094,66 @@ export default function NotasFiscaisScreen() {
         onPick={onPickPessoa}
         onCreate={() => setSearchOpen(false)}
       />
+
+      <AjudaPedidoModal
+        visible={ajudaOpen} onClose={() => setAjudaOpen(false)}
+        titulo="Notas Fiscais — Ajuda" itens={NOTAS_FISCAIS_AJUDA_ITENS}
+      />
+
+      <AppModal visible={cceModalOpen} transparent animationType="fade" onRequestClose={() => setCceModalOpen(false)}>
+        <Pressable style={styles.modalBg} onPress={() => setCceModalOpen(false)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Carta de Correção</Text>
+              <Pressable onPress={() => setCceModalOpen(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color={colors.muted} />
+              </Pressable>
+            </View>
+            <Text style={styles.hint}>
+              Corrige um erro secundário sem cancelar a nota — não pode mudar valor, imposto, cliente ou data.
+            </Text>
+            <Text style={[styles.label, { marginTop: spacing.sm }]}>
+              Motivo da correção ({motivoCce.trim().length}/1000, mínimo 15)
+            </Text>
+            <TextInput
+              value={motivoCce} onChangeText={setMotivoCce}
+              style={[styles.input, { minHeight: 80 }]} multiline maxLength={1000}
+              placeholder="Descreva a correção…" placeholderTextColor={colors.muted}
+              testID="notas-fiscais-cce-motivo"
+            />
+            <View style={styles.modalActionsRow}>
+              <Pressable
+                onPress={emitirCce}
+                disabled={emitindoCce || motivoCce.trim().length < 15 || cartasCce.length >= 20}
+                style={[styles.primaryBtn, (emitindoCce || motivoCce.trim().length < 15 || cartasCce.length >= 20) && { opacity: 0.6 }]}
+                testID="notas-fiscais-cce-emitir"
+              >
+                {emitindoCce ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.primaryBtnText}>Emitir</Text>}
+              </Pressable>
+            </View>
+
+            {carregandoCartas ? <ActivityIndicator color={colors.brandPrimary} style={{ marginTop: spacing.md }} /> : null}
+            {!carregandoCartas && cartasCce.length > 0 ? (
+              <View style={{ marginTop: spacing.md }}>
+                <Text style={styles.label}>Já emitidas ({cartasCce.length}/20)</Text>
+                {cartasCce.map((c) => (
+                  <View key={c.codigo} style={styles.cceHistRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.cceHistTitle}>Nº {String(c.n_seq_evento).padStart(2, "0")} — protocolo {c.protocolo || "?"}</Text>
+                      <Text style={styles.cceHistData}>{c.data_registro ? new Date(c.data_registro).toLocaleString("pt-BR") : ""}</Text>
+                    </View>
+                    <IconButtonWithTooltip
+                      icon="print-outline" label="Imprimir" onPress={() => baixarDacce(c.n_seq_evento)}
+                      size={18} color={colors.brandPrimary} disabled={imprimindoDacceSeq === c.n_seq_evento}
+                      testID={`notas-fiscais-cce-imprimir-${c.n_seq_evento}`}
+                    />
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </Pressable>
+        </Pressable>
+      </AppModal>
     </SafeAreaView>
   );
 }
@@ -1068,4 +1258,16 @@ const styles = StyleSheet.create({
     borderRadius: radius.md, elevation: 4, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
   },
   descDropdownRow: { paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
+  hint: { fontSize: 11, color: colors.muted, marginTop: 4, fontStyle: "italic" },
+  modalBg: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", alignItems: "center", paddingHorizontal: spacing.xl },
+  modalCard: { backgroundColor: colors.surface, borderRadius: radius.lg, padding: spacing.lg, width: "100%", maxWidth: 420, borderWidth: 1, borderColor: colors.border },
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.sm },
+  modalTitle: { fontSize: 15, fontWeight: "700", color: colors.onSurface },
+  modalActionsRow: { flexDirection: "row", justifyContent: "flex-end", gap: spacing.sm, marginTop: spacing.md },
+  cceHistRow: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  cceHistTitle: { fontSize: 13, fontWeight: "600", color: colors.onSurface },
+  cceHistData: { fontSize: 11, color: colors.muted, marginTop: 2 },
 });
