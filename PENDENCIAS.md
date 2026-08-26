@@ -6,87 +6,388 @@ inteira antes de continuar — não reanalisar do zero.
 
 ## Estado Atual do Projeto
 
-**Última atualização: 2026-08-26 — frente de trabalho: Arquitetura de
-Fotos de Produto (Fases 2-6 implementadas).** Pedido do usuário: analisar
-e propor uma arquitetura de armazenamento pras fotos de produto, hoje
-espalhadas em 2 sistemas desconectados (Gestor de Documentos "oficial",
-nunca lido pela tela de busca; convenção `imagensUrl` local-por-
-dispositivo que a busca de fato usa). Documento de diagnóstico produzido
-primeiro (sem código), publicado como Artifact, revisado com 2 correções
-do usuário (Gestor de Documentos MANTIDO pra documento de produto; storage
-plugável, não fixo em Azure) e aprovado ("aprovado") antes de qualquer
-implementação — ver PENDENCIAS.md > **"Fotos de Produto"** (nova seção,
-mais abaixo) pro detalhe técnico completo.
+**Última atualização: 2026-08-26 — frente de trabalho: Serviço do Sistema
+> aba "Atualização" (Configurações, EM ANDAMENTO).** Pivô explícito do
+usuário sobre a frente anterior: "vamos deixar pausado essa atualização
+automática para ser amadurecido... vamos criar uma tela de Serviço do
+Sistema em Configurações" — a automação 100% orientada a Tarefa Agendada
+Windows independente (`updater/install-updater-task.ps1`) fica PAUSADA;
+o disparo automático da verificação/download passou a ser uma tarefa de
+fundo dentro do próprio processo do backend, configurável por uma tela
+nova dentro do ERP (não descartou o trabalho anterior — reaproveita e
+estende os scripts `updater/*.ps1` já escritos). Decisões confirmadas via
+pergunta direta: (1) o schedule é disparado pelo backend (Python), não
+pelo navegador; (2) baixar/trocar versão reaproveita os scripts
+PowerShell já existentes, não reescreve em Python puro; (3) o botão de
+reverter fica sempre visível na tela, não só logo após aplicar uma
+atualização. Plano completo aprovado antes de codar — ver PENDENCIAS.md >
+**"Serviço do Sistema — Atualização"** (seção abaixo, substitui a antiga
+"Atualizador automático de instalações de cliente") pro desenho técnico
+completo.
 
-Resumo do que foi entregue: sistema NOVO e ISOLADO (`produto_imagem`,
-tabela + service + rotas), storage plugável (`services/imagem_storage.py`
-— `LocalDiskDriver`/`BlobStorageDriver`, config em `controle_aux.
-path_produto_imagem`, aba Kontacto de Controle do Sistema), upload gera 3
-variantes WebP (thumb/medium/web) via Pillow + preserva original sem
-recompressão, EXIF removido das variantes por efeito colateral do
-`exif_transpose`. Frontend: `ProdutoImagensSection.tsx` (grid + estrela de
-"Principal" + cor da Grade) substitui `GestorDocumentosSection` só no
-modal "Fotografia" — o modal "Anexos" continua exatamente igual, servindo
-documento do produto. `produtos.tsx` (busca de item) ganhou a foto
-principal como 1ª tentativa de URL (via novo `LEFT JOIN produto_imagem`
-em `produtos_service.py`), mantendo a cadeia antiga (`imagensUrl`) como
-fallback pra produto ainda não migrado. Script `migrar_fotos_produto.py`
-(CLI, nunca automático) copia o que já foi anexado no Gestor de
-Documentos — idempotente por hash, não apaga nada do sistema antigo.
+Resumo do que já foi entregue nesta rodada: tabela nova
+`servico_sistema_atualizacao` (linha única — credencial/URL do manifest,
+pastas locais de Backend/Frontend, intervalo de verificação, status:
+commit atual/anterior/pendente), registrada em `schema_ensure.py` como de
+praxe. Backend ganhou a primeira tarefa de fundo do processo
+(`asyncio.create_task` dentro de um `lifespan` novo em `server.py` — o
+`@app.on_event("shutdown")` antigo foi migrado pro mesmo `lifespan`, não
+dá pra misturar os dois estilos) que a cada minuto verifica se já passou o
+intervalo configurado e, se sim, dispara `updater/apply_update.ps1 -Mode
+DownloadOnly` como subprocesso — nunca troca a versão em produção
+sozinho, só baixa e marca "pendente". `apply_update.ps1` foi refatorado
+em 3 modos (`DownloadOnly`/`ApplyPending`/`Rollback`, além do `Full`
+original preservado pra uso manual) — endpoints novos
+(`/api/servico-sistema/atualizacao`, `.../status`, `.../aplicar`,
+`.../reverter`) disparam `ApplyPending`/`Rollback` como subprocesso
+DETACHED (precisa sobreviver à morte do processo Python que o disparou,
+já que a própria atualização reinicia o backend). Frontend:
+`app/servico-sistema.tsx` (tela nova, esqueleto de abas pronto — só
+"Atualização" implementada —, com guard REAL de master, `if (!isMaster)
+return <LockedView/>`, que nenhuma outra tela administrativa desta base
+tinha até agora), tile novo em Configurações > Administração, e um badge
+vermelho no item "Configurações" do menu lateral (`useAtualizacaoPendente`,
+polling leve a cada 2 min) quando há atualização baixada esperando
+confirmação.
 
-**Escopo explícito, não omissão**: só 2 drivers reais (Local + Azure Blob,
-o mesmo SDK já validado pelo Gestor de Documentos) — um driver S3-
-compatível (AWS S3/MinIO/GCS) fica pra quando houver credencial real pra
-testar, a interface já foi desenhada pra aceitar um 3º driver sem tocar
-em service/rotas/frontend. CDN, reordenação manual de fotos e limpeza
-física de foto soft-deletada também ficam de fora desta rodada (mesmo
-raciocínio — não implementar o que não dá pra validar/não foi pedido).
+**Verificação até aqui**: backend — `pytest tests/unit -q` → 2702 passed
+(2685 baseline + 17 novos, `test_servico_sistema_service.py`), mesmas 4
+falhas pré-existentes e não relacionadas. `apply_update.ps1` reescrito
+passa em parse-check. Frontend — `tsc --noEmit` → mesmos 12 erros
+pré-existentes, nenhum nos arquivos novos/tocados. **Ainda NÃO testado ao
+vivo**: nenhum dry-run real (não existe Storage Account de distribuição
+criado ainda), nenhuma execução real do ciclo verificar→baixar→avisar→
+aplicar→reverter, tela nunca aberta num navegador de verdade.
 
-**Verificação**: `pytest tests/unit -q` → 2677 passed (2634 baseline + 47
-novos/atualizados — `test_imagem_storage.py`, `test_produto_imagem_
-service.py`, `test_migrar_fotos_produto.py`, extensão de `test_produtos_
-service.py`), mesmas 4 falhas pré-existentes e não relacionadas
-(`test_cnab_itau_service`/`test_os_equipamento_service`, já falhando
-antes desta rodada). `tsc --noEmit` → mesmos 14 erros pré-existentes,
-nenhum nos arquivos tocados. Ambos os venvs do projeto (`.venv`/`.venv -
-Copia`) estavam incompletos pra rodar o backend de verdade (faltava
-`python-multipart`/`reportlab`/`azure-storage-blob` dependendo do venv,
-já pinados em `requirements.txt`) — completados no `.venv` principal
-durante esta rodada.
-
-**TESTADO AO VIVO no mesmo dia, contra ARGEN-TESTE** (`minimachine`/
-`ARGEN-TESTE`, backend local): 2 supervisores `start-backend.ps1`
-duplicados detectados e limpos primeiro (mesmo padrão já documentado em
-[[feedback_backend_supervisor_duplicado]] — só um dos dois de fato tinha
-a porta 8081, matados os dois pares e subida uma instância só). `controle_
-aux.path_produto_imagem` configurado via GET-then-mutate-1-campo (nunca
-POST parcial — `_save_controle_sistema_sync` faz UPDATE às cegas de TODOS
-os campos, achado real documentado no próprio `routes/controle_sistema.py`
-desde 2026-08-17). Ciclo completo confirmado contra o produto real `P10`
-("BROCA AÇO RAPIDO 9/64"): upload real gerou os 4 arquivos físicos (`
-original.jpg` + `thumb/medium/web.webp`) no path configurado, download de
-cada variante confirmado byte-a-byte (Pillow reabriu cada uma: thumb
-150x100 corretamente reduzido, original 300x200 preservado), a busca de
-produto (`/api/produtos-servicos`) passou a devolver `imagem_codigo` pro
-P10 e `null` pros demais — **a correção do achado central da análise
-(dois sistemas de foto desconectados) está confirmada funcionando de
-verdade**. Marcar principal e excluir (soft-delete) também testados ao
-vivo: exclusão limpou a listagem mas manteve os 4 arquivos físicos
-intactos, exatamente como desenhado. Upload de um arquivo não-imagem
-(`PENDENCIAS.md` disfarçado de `.jpg`) rejeitado corretamente pela
-validação de conteúdo real (Pillow), não pela extensão declarada. Script
-de migração rodado em `--dry-run` contra ARGEN-TESTE: achou 2 documentos
-reais em `gestor_documentos` (grupo Produtos) de outro produto, pulou os
-2 com aviso claro (arquivo não encontrado no path local — provavelmente
-apontam pro caminho de rede `\\servidor\Compartilhamento\...` configurado
-no Gestor de Documentos, não acessível desta máquina) — comportamento
-correto, não travou nem gravou nada errado.
+**Trabalho anterior não commitado, ainda pendente de decisão do usuário
+sobre quando commitar**: toda a rodada de refinamentos de Fotos de Produto
+posterior ao commit `cef4dcc` (auto-principal na 1ª foto, exclusão física
+de arquivo, lightbox global de imagem de produto, padronização da busca
+de item com o KPDV — 350ms sem Enter —, unificação visual de Adicionar
+Item/Editar Item, navegação Pedido/O.S. a partir do "Reservado para..." em
+Produtos, destaque do produto reservado na pré-venda) — ver PENDENCIAS.md
+> "Fotos de Produto" pro detalhe já registrado lá. Instrução permanente do
+projeto: só commitar quando o usuário pedir explicitamente.
 
 Esta seção é um RESUMO VIVO — sempre reescrita ao concluir a próxima
 frente de trabalho relevante, nunca empilhada (o histórico completo mora
 no resto do arquivo, abaixo, organizado por tela/módulo). Ver CLAUDE.md
 > "Início de sessão sempre orienta sobre onde o projeto parou" pra regra
 que exige ler isto no começo de toda sessão nova.
+
+## 🟡 2026-08-26 — Atualizador automático de instalações de cliente (PAUSADO — ver "Serviço do Sistema — Atualização" abaixo)
+
+**Status: PAUSADO por decisão explícita do usuário mesmo dia** ("vamos
+deixar pausado essa atualização automática para ser amadurecido") — a
+automação via Tarefa Agendada Windows independente
+(`updater/install-updater-task.ps1`) não é mais o mecanismo de disparo
+ativo. **Nada deste trabalho foi descartado**: os scripts `updater/*.ps1`
+continuam existindo e foram REAPROVEITADOS/ESTENDIDOS pela frente nova —
+ver a seção **"Serviço do Sistema — Atualização"** mais abaixo (fora de
+ordem cronológica no arquivo — mantida perto desta seção de propósito,
+já que é sua continuação direta) pro desenho atual e o que mudou
+(`apply_update.ps1` ganhou modos `DownloadOnly`/`ApplyPending`/`Rollback`;
+o disparo passou a ser uma tarefa de fundo do backend, configurada por
+uma tela nova, não mais a Tarefa Agendada independente documentada
+abaixo). O conteúdo original desta seção (histórico de como o desenho
+inicial foi pensado) fica preservado abaixo, sem edição, só de referência.
+
+**Protocolo Gauntlet: acionado (Carlos — processo/fluxo/segurança; Thomé —
+implementação).**
+
+**Pedido do usuário**: "preciso criar um serviço para atualizar
+automaticamente a partir do nosso repositório as instalações do Backend,
+frontend do cliente." Cada cliente roda seu próprio par Backend Python +
+Frontend Web (arquitetura multi-tenant já documentada em
+`BACKEND_DEPLOY_WINDOWS.md`) — hoje atualizar é 100% manual, um por um,
+sem visibilidade central de quem está desatualizado.
+
+**4 decisões confirmadas via `AskUserQuestion` antes de implementar**
+(não presumidas):
+1. "Frontend do cliente" = app **Web rodando localmente em cada
+   instalação** — não o APK mobile (mecanismo completamente diferente,
+   fora de escopo aqui).
+2. Gatilho: verificação **e** aplicação automáticas, sem depender de
+   comando manual por cliente.
+3. Fonte de distribuição: **servidor próprio da Kontacto** (não `git
+   pull` direto do GitHub privado nas máquinas de cliente).
+4. Segurança: **rollback automático** se a atualização quebrar (não
+   notificação central, não gate de homologação — só essas 2 outras
+   opções foram oferecidas e recusadas).
+
+**Arquitetura** (plano completo aprovado, ver
+`C:\Users\carlo\.claude\plans\virtual-yawning-pearl.md` nesta máquina se
+ainda existir, ou recriar a partir deste resumo se necessário):
+
+- **Distribuição**: Azure Blob Storage, container `releases`, mesmo SDK
+  (`azure-storage-blob`) já validado 2x neste projeto (Gestor de
+  Documentos, Fotos de Produto), mas conta/container **PRÓPRIOS da
+  Kontacto** — nunca o Blob de um cliente. Cliente recebe só uma **SAS de
+  leitura** (nunca a connection string completa).
+- **Identidade da release = commit SHA curto** (`git rev-parse --short
+  HEAD`) — não existe tag/versão semântica neste repositório (`git tag`
+  vazio), não inventar uma.
+- **Publicação** (`updater/publish/publish_release.ps1`, só roda na
+  máquina da Kontacto): zip do `backend/` (sem `.venv`/`__pycache__`/
+  `logs`/`.env`) com um `VERSION` gravado dentro (`{commit,
+  published_at}` — nunca derivado de `git describe` em runtime, cliente
+  não tem `.git`); `npx expo export -p web` + zip de `frontend/dist/`;
+  sha256 dos 2 zips; upload dos 2 zips + `manifest.json` pro Blob. Sempre
+  um passo **manual e deliberado** — não existe pipeline de CI/gate de
+  homologação automatizado nesta rodada (não pedido); é isso que controla
+  o que vira release.
+- **Aplicação** (`updater/apply_update.ps1`, Tarefa Agendada
+  `BackOn-Updater`, a cada ~30 min, mesmo padrão de `BackOn-Backend`):
+  baixa `manifest.json`, compara commit com `state.json` local; se
+  diferente, baixa+confere sha256 dos 2 zips, extrai em pasta NOVA
+  versionada (`releases\backend-<sha>\`/`frontend-<sha>\`, nunca
+  sobrescreve a versão rodando), prepara o venv do backend (reaproveita
+  via cópia — `python.exe` de um venv resolve o próprio prefixo pela
+  posição do executável, não por caminho absoluto gravado na criação, e
+  copiar é seguro — só roda `pip install` de novo se
+  `requirements-windows.txt` mudou, hash comparado), troca as junctions
+  `current-backend`/`current-frontend`, reinicia a Tarefa
+  `BackOn-Backend`, faz **health check** (`GET /api/` esperando `{"message":
+  "Back-On API ativo"}`). Se falhar: desfaz a junction, sobe a versão
+  anterior de novo, loga o erro, **NÃO atualiza `state.json`** (tenta de
+  novo sozinho no próximo ciclo) — rollback automático sem intervenção
+  manual, exatamente o requisito 4 acima.
+- **Frontend servido pelo próprio processo do backend** (decisão de
+  design pra não introduzir um 2º processo/porta/Tarefa Agendada só pra
+  arquivos estáticos numa instalação de cliente): `server.py` ganhou
+  `app.mount("/", StaticFiles(...))` apontando pra
+  `FRONTEND_DIST_DIR` (env var setada pelo atualizador, nível Machine,
+  apontando pra junction `current-frontend`) — cai em `frontend/dist`
+  relativo se a env var não existir (dev local), e só monta se a pasta
+  realmente existir (guard, nunca quebra `uvicorn --reload` sem build).
+  **Precisa ficar DEPOIS de `app.include_router(api_router)`** — Starlette
+  resolve rotas na ordem de registro, um mount em `/` antes capturaria
+  `/api/*` também.
+
+**Achado técnico real durante a implementação**: `server.py` faz `from
+routes import (..., os, os_completo, ...)` — isso REBINDA o nome global
+`os` pro módulo `routes.os` (rotas de O.S.), sombreando silenciosamente
+`import os` da biblioteca padrão. Usar `os.environ` depois disso quebra
+com `AttributeError: module 'routes.os' has no attribute 'environ'`.
+Corrigido importando a stdlib sob um alias: `import os as stdlib_os`
+(comentário inline deixado no arquivo) — vale pra qualquer código futuro
+que precise de `os` da stdlib dentro deste arquivo especificamente.
+
+**Entregue nesta rodada**:
+- `backend/routes/misc.py` — `GET /api/version`, lê `backend/VERSION`
+  (JSON), devolve `{"commit": None, "published_at": None}` sem erro se o
+  arquivo não existir ou estiver corrompido (nunca derruba o endpoint).
+- `backend/server.py` — fix do alias `os`/`stdlib_os` + mount condicional
+  do frontend estático.
+- `backend/tests/unit/test_version_endpoint.py` — 3 testes, chamando a
+  rota diretamente via `asyncio.run(misc_module.version())` (não
+  `starlette.testclient.TestClient` — exige um pacote `httpx2` não pinado
+  nesta venv, confirmado via grep que nenhum outro teste do projeto usa
+  esse client; mesma convenção já estabelecida de testar a função
+  diretamente).
+- `updater/apply_update.ps1`, `updater/install-updater-task.ps1`,
+  `updater/config.exemplo.json`, `updater/README.md` — lado-cliente
+  completo, descrito acima. Parse check (`[scriptblock]::Create`) OK nos
+  3 scripts PowerShell.
+- `updater/publish/publish_release.ps1`, `updater/publish/README.md` —
+  lado-Kontacto, inclusive o passo de gerar a SAS de leitura a partir da
+  connection string completa (nunca commitada, vem só de
+  `$env:BACKON_RELEASES_CONNECTION_STRING` na hora de publicar).
+- `BACKEND_DEPLOY_WINDOWS.md` — seção "Atualizar para versão nova"
+  reescrita: fluxo manual (`git pull`+reinstalar+reiniciar) vira "primeira
+  instalação apenas"; atualização contínua aponta pro `updater/README.md`.
+
+**Fora de escopo desta rodada (decisão, não omissão)**: atualização do
+APK mobile (mecanismo diferente — EAS Update/OTA ou build+reinstalação,
+já descartado no início desta análise via pergunta direta ao usuário);
+notificação central pra Kontacto quando uma atualização falha (usuário
+pediu só rollback automático — o log local em `updater/logs/` já registra
+a falha, alerta central fica pra quando for pedido); ambiente de
+homologação automatizado antes de publicar (o controle continua sendo
+`publish_release.ps1` disparado manualmente); migração de schema (já
+resolvida por `schema_ensure.py`, se aplica sozinha na 1ª conexão depois
+do backend novo subir — nenhum trabalho adicional necessário aqui).
+
+**Dúvidas/pendências reais antes de considerar esta frente concluída**:
+1. Não existe ainda um Storage Account do Azure dedicado à distribuição —
+   precisa ser criado (conta nova + container `releases`) antes de
+   qualquer teste real ponta a ponta.
+2. Nenhum dry-run real foi rodado — falta: publicar uma release de teste
+   via `publish_release.ps1`, rodar `apply_update.ps1` manualmente uma vez
+   e confirmar que baixa/extrai/troca/sobe/passa no health check; depois
+   simular uma falha proposital (ex.: corromper o zip do backend ou
+   quebrar o código antes de publicar) e confirmar que o rollback
+   automático funciona, ANTES de cogitar registrar `BackOn-Updater` em
+   qualquer máquina real (mesmo cuidado já seguido com
+   `install-startup-task.ps1` — não registrar Tarefa Agendada de produção
+   sem confirmação explícita do usuário).
+3. `apply_update.ps1` assume que a Tarefa `BackOn-Backend` já existe
+   (criada manualmente via `install-startup-task.ps1` na primeira
+   instalação, apontando pra `current-backend\scripts\start-backend.ps1`
+   — caminho estável através da junction, nunca precisa ser reregistrada
+   a cada atualização) — se a tarefa não existir ainda, o script só loga
+   um aviso e segue; não tenta criar a tarefa sozinho. Confirmar que essa
+   é a expectativa certa (a alternativa seria o atualizador também
+   registrar `BackOn-Backend` na primeira execução — não implementado,
+   não pedido).
+
+## 🟡 2026-08-26 — Serviço do Sistema — Atualização
+
+**Status: EM ANDAMENTO — backend completo e testado (2707 passed),
+scripts PowerShell reescritos em 3 modos e com parse-check OK, tela nova
+escrita e sem erro de tipo, mas SEM teste ao vivo em navegador e SEM
+Storage Account de distribuição real pra testar o ciclo ponta a ponta.**
+
+**Atualização mesmo dia — Modo Didático + "Verificar agora" + Intervalo
+0 = desligado.** Usuário pediu Modo Didático na tela (ícone "i" no
+cabeçalho, reaproveita `AjudaPedidoModal` já usado em Pedido Bar/Geral e
+Controle do Sistema, conteúdo explica cada campo/ação — inclusive
+deixando claro que "URL do manifest" NÃO é o link do GitHub, é o link do
+`manifest.json` publicado no Blob de distribuição). Junto, esclareceu 4
+dúvidas reais que motivaram o pedido de ajuda em primeiro lugar, e pediu
+pra implementar "intervalo 0 = desliga verificação automática, vira
+manual por essa tela" como feature real (confirmado via pergunta direta).
+Implementado: `_save_config_sync` agora aceita `intervalo_minutos=0`
+(antes recusava, e tinha um bug real — `dados.get(...) or 30` trocava
+`0` por `30` silenciosamente, `0` é falsy em Python); `_ciclo_
+verificacao_sync` pula a instalação inteira quando `intervalo_minutos <=
+0`; lógica de baixar/verificar foi extraída pra
+`_executar_verificacao_download_sync` (reaproveitada pelo ciclo
+automático E pelo botão manual, sem duplicar); novo endpoint `POST
+/api/servico-sistema/atualizacao/verificar-agora` (`verificar_agora`
+service) — dispara a checagem na hora, ignora intervalo/última
+verificação, funciona mesmo com verificação automática desligada.
+Frontend ganhou o botão "Verificar agora" (spinner+gerúndio, sem
+confirmação — não reinicia nada, diferente de Aplicar/Reverter) na
+seção "Verificação automática". 5 testes novos (22 no total),
+`pytest tests/unit -q` → 2707 passed, mesmas 4 falhas pré-existentes.
+`tsc --noEmit` seguiu limpo (mesmos 12 erros pré-existentes do projeto).
+
+**Protocolo Gauntlet: acionado (Carlos — processo/fluxo/segurança; Thomé —
+implementação).**
+
+Continuação direta de "Atualizador automático de instalações de cliente"
+(seção acima, PAUSADA) — pedido do usuário: "vamos deixar pausado essa
+atualização automática para ser amadurecido. vamos criar uma tela de
+Serviço do Sistema em Configurações. Nessa tela terão várias abas de
+configurações no futuro. A primeira delas é 'Atualização'... Só o Master
+terá acesso a essa tela. Através dessa tela será executado o schedule
+para verificar em tantos minutos configurados nessa tela para ver se há
+atualização e para ser baixados. quando houver atualização o próprio
+usuário será avisado na tela principal... através de um aviso no menu
+lateral. sempre com o recurso de reversão da versão atualizada."
+
+**3 decisões de arquitetura confirmadas via pergunta direta antes de
+implementar**:
+1. O schedule é disparado pelo **backend** (processo Python), não pelo
+   navegador — continua funcionando sem ninguém logado.
+2. Baixar/trocar versão **reaproveita os scripts PowerShell** já
+   escritos em `updater/` — o backend invoca como subprocesso, no lugar
+   da Tarefa Agendada independente.
+3. O botão de reverter fica **sempre visível**, contanto que exista uma
+   versão anterior guardada.
+
+**Achado real durante a implementação**: `server.py` fazia `from routes
+import (..., os, os_completo, ...)` — isso rebinda o nome global `os` pro
+módulo `routes.os`, sombreando `import os` da stdlib. Já tinha sido
+corrigido na rodada anterior com um alias (`import os as stdlib_os`); esta
+rodada não precisou mexer nisso de novo, só reaproveitou o alias já
+existente.
+
+**Entregue nesta rodada**:
+- `backend/services/servico_sistema_service.py` — tabela nova
+  `servico_sistema_atualizacao` (linha única: `manifest_url`,
+  `pasta_backend`, `pasta_frontend`, `intervalo_minutos`, `commit_atual`,
+  `commit_anterior`, `commit_pendente`, `pendente_desde`,
+  `ultima_verificacao`, `ultimo_erro`), get/save config, get status
+  (leve, só `{pendente}`), `aplicar_atualizacao`/`reverter_atualizacao`
+  (escrevem um `updater/config.json` fresco a partir da config do banco e
+  disparam `apply_update.ps1` como subprocesso DETACHED — precisa
+  sobreviver à morte do processo Python que o disparou, já que a própria
+  atualização reinicia o backend), e `loop_verificacao_atualizacao` —
+  primeira tarefa de fundo deste backend.
+- **Restrição real de arquitetura resolvida**: todo service deste
+  backend é parametrizado por `servidor`+`banco` por requisição — a
+  tarefa de fundo não tem contexto de requisição nenhum. Resolvido
+  gravando `backend/updater_conn.json` (`{servidor, banco}`) toda vez que
+  a config é salva pela tela — é assim que o loop sabe contra qual banco
+  checar a cada ciclo, sem inventar uma "conexão padrão" mais elaborada
+  (coerente com a realidade de produção: 1 backend = 1 instalação = 1
+  banco).
+- `backend/server.py` — `@app.on_event("shutdown")` migrado pra um
+  `lifespan` (context manager) novo, que também sobe
+  `asyncio.create_task(loop_verificacao_atualizacao())` — não dá pra
+  misturar os dois estilos de hook de ciclo de vida no mesmo app.
+- `backend/routes/servico_sistema.py` — 4 rotas (`GET .../atualizacao`,
+  `GET .../atualizacao/status`, `POST .../atualizacao`,
+  `POST .../atualizacao/aplicar`, `POST .../atualizacao/reverter`), log
+  de auditoria nas 3 de escrita.
+- `_ensure_servico_sistema_atualizacao_table` registrada em
+  `schema_ensure.py::_MIGRACOES` (padrão idempotente de praxe).
+- `updater/apply_update.ps1` — refatorado em 3 modos via `-Mode`
+  (`Full` padrão/original, `DownloadOnly`, `ApplyPending`, `Rollback`),
+  reaproveitando os MESMOS blocos de lógica já escritos (download+sha256,
+  extração, venv, junction-swap, health-check) organizados em funções
+  (`Invoke-Download`/`Invoke-Apply`/`Invoke-Rollback`) em vez de
+  duplicados. `state.json` ganhou campos novos (`pendingCommit`/
+  `pendingBackendRelease`/`pendingFrontendRelease` — o que
+  `DownloadOnly` deixa pronto pro `ApplyPending` consumir depois;
+  `previousCommit`/`previousBackendRelease`/`previousFrontendRelease` —
+  gravados no `Apply` bem-sucedido, é o que `Rollback` lê). `config.json`
+  ganhou `currentBackendDir`/`currentFrontendDir` opcionais (os 2 campos
+  de pasta que a tela grava, direto — sem eles, cai no comportamento
+  antigo derivado de `installDir`).
+- `frontend/app/servico-sistema.tsx` — tela nova, esqueleto de abas
+  pronto (`TABS`, só "Atualização" implementada), full-page mesmo padrão
+  de `controle-sistema.tsx`. **Guard REAL de master** (`if (!isMaster)
+  return <LockedView/>`) — achado da investigação: nenhuma tela
+  administrativa desta base (`modulos-recursos.tsx`/`ia-key.tsx`/
+  `whatsapp-config.tsx`) tinha isso antes, só ficavam escondidas no tile
+  de Configurações. Esta é a primeira a bloquear acesso direto por URL
+  também, não retroativo pras outras.
+- `frontend/src/hooks/useServicoSistemaForm.ts` — hook simples (form
+  tipado direto, sem o aparato de arrays `TEXT_FIELDS`/`NUM_FIELDS`
+  genérico de `useControleSistemaForm.ts` — decisão consciente, ver
+  achado da investigação: esse aparato existe lá por causa de dezenas de
+  colunas legadas, não compensa pra uma tabela de 6-8 campos).
+- `frontend/app/(tabs)/configuracoes.tsx` — tile novo "Serviço do
+  Sistema" no bloco Administração, posição alfabética correta (entre
+  "Módulos e Recursos" e "WhatsApp" — regra `[GLOBAL]` "Card List
+  Ordering").
+- `frontend/src/hooks/useAtualizacaoPendente.ts` +
+  `frontend/src/navigation/Sidebar.tsx` — badge vermelho (mesmo visual
+  8x8 já usado em `IconButtonWithTooltip`) no item "Configurações" do
+  menu lateral, polling leve (`GET .../atualizacao/status`, a cada 2 min)
+  quando há `commit_pendente`. Visível pra qualquer usuário logado (avisa
+  a equipe), sem gate de master no badge em si — o gate fica só na tela.
+
+**Verificação**: `backend/tests/unit/test_servico_sistema_service.py`
+novo (17 testes — config get/save, status, aplicar/reverter com
+subprocess sempre mockado, ciclo do loop de fundo incluindo isolamento de
+erro) + `pytest tests/unit -q` completo → 2702 passed, mesmas 4 falhas
+pré-existentes e não relacionadas. `apply_update.ps1` reescrito passa em
+parse-check (`[scriptblock]::Create`). `tsc --noEmit` → mesmos 12 erros
+pré-existentes do projeto, nenhum nos arquivos novos/tocados desta rodada.
+
+**Fora de escopo desta rodada (igual à anterior, ainda válido)**: APK
+mobile, notificação central de falha, homologação automatizada antes de
+publicar, migração de schema (já resolvida por `schema_ensure.py`).
+
+**Pendências reais antes de considerar esta frente concluída**:
+1. Não existe ainda um Storage Account do Azure dedicado à distribuição
+   — nenhum teste real é possível sem ele.
+2. Nenhum dry-run foi rodado — falta: gravar a config pela tela de
+   verdade (numa máquina/banco de teste), publicar uma release de teste,
+   confirmar que o ciclo de fundo detecta e marca `commit_pendente`, que
+   o badge aparece no Sidebar, que "Aplicar agora" realmente troca a
+   versão e reinicia, e que "Reverter" volta pra anterior.
+3. A tela em si nunca foi aberta num navegador — só `tsc --noEmit` foi
+   verificado, nenhuma checagem visual/interação real.
+4. `BACKEND_DEPLOY_WINDOWS.md` ainda referencia o fluxo antigo
+   (`install-updater-task.ps1`) como o caminho de atualização contínua —
+   precisa ser atualizado pra apontar pra "Serviço do Sistema" como o
+   mecanismo atual, mantendo o antigo só como alternativa manual/
+   avançada.
 
 ## 🟡 2026-08-26 — Fotos de Produto
 
@@ -193,6 +494,41 @@ achados e pulados corretamente, arquivo não localizável nesta máquina)
 também testados ao vivo. `controle_aux.path_produto_imagem` ficou
 configurado em ARGEN-TESTE (`C:\fotos_produto_teste`, path local de
 teste) — pronto pra continuar sendo usado em sessões futuras.
+
+**Extensões pedidas na sequência, mesmo dia** (todas testadas ao vivo ou
+com `pytest`/`tsc` limpos, backend reiniciado a cada rodada):
+1. Tooltip nos ícones da galeria (estrela/lixeira) via `IconButtonWithTooltip`
+   já existente — achado e corrigido bug de tooltip cortada na borda
+   esquerda do modal (`tooltipAlign="left"` nos ícones do canto esquerdo).
+2. Formatos aceitos + orientação de proporção quadrada (mínimo 600x600,
+   1:1) exibidos no modal Fotografia — miniaturas sempre quadradas
+   (`objectFit: cover`), foto retangular é cortada nas bordas.
+3. Miniatura + botão "Fotografia" no cabeçalho de identidade do Produto
+   Completo (`produto-completo.tsx`) — antes só existia dentro do modal.
+   `_get_produto_sync` ganhou `imagem_principal_codigo`.
+4. Exclusão de foto passou a remover o arquivo físico também (não só
+   soft-delete) — pedido explícito do usuário, reverte a decisão
+   conservadora original só pra este sistema (Gestor de Documentos
+   continua soft-delete puro pra Produtos).
+5. 1ª foto de um produto sem nenhuma outra ativa vira principal
+   automaticamente (até o usuário mudar manualmente).
+6. Miniatura da identidade atualiza na hora (sem fechar o modal) via
+   callback `onPrincipalChanged` de `ProdutoImagensSection.tsx`.
+7. Foto do produto exibida em "Confirmar Item" (`AddItemModal.tsx`) e na
+   lista de itens do pedido (`ItemList.tsx`, compartilhado Bar/Geral) —
+   `itens_service._list_itens_sync` ganhou o mesmo `LEFT JOIN produto_
+   imagem` já usado na busca de produto.
+8. **Lightbox global** — clicar em QUALQUER imagem de produto (busca,
+   item do pedido, Confirmar Item, galeria do cadastro, identidade do
+   produto) amplia num visualizador central (`ImageLightboxModal.tsx`,
+   variante "web" ~1200px). Ver CLAUDE.md > "Clicar em imagem de produto
+   amplia (Lightbox)" pro detalhe completo da regra `[GLOBAL]`.
+   **KPDV explicitamente fora desta rodada** — investigação confirmou
+   que o KPDV não exibe foto de produto em NENHUM lugar hoje (sem campo
+   no DTO, sem binding de imagem em nenhuma tela); levar a regra pra lá
+   significa construir a exibição da foto do zero primeiro, não só
+   adicionar zoom — escopo maior, fica pendente até o usuário confirmar
+   prioridade.
 
 ## 🟡 2026-08-26 — Checklist de Entrada de Veículo (O.S. Oficina)
 

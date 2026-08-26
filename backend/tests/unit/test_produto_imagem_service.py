@@ -166,6 +166,41 @@ class TestUploadImagem:
         hash_esperado = hashlib.sha256(conteudo).hexdigest()
         assert hash_esperado in insert_params
 
+    def test_primeira_foto_do_produto_vira_principal_automaticamente(self, monkeypatch):
+        # Pedido explícito do usuário 2026-08-26: mesmo sem marcar o
+        # checkbox "Definir como principal", a 1ª foto de um produto (sem
+        # nenhuma outra ativa ainda, ordem=0) sempre vira principal.
+        _patch_driver(monkeypatch)
+        cur = FakeCursor(one=[{"prox": 0}, {"codigo": 50}])
+        _patch_conn(monkeypatch, cur)
+
+        r = svc._upload_imagem_sync(
+            "srv", "bd", codigo_int="123", conteudo=_png_bytes(), nome_original="foto.png", principal=False,
+        )
+        assert r["success"] is True
+
+        queries_names = [q for q, _ in cur.queries]
+        assert any(q.startswith("UPDATE produto_imagem SET principal=0") for q in queries_names)
+        insert_query, insert_params = cur.queries[-2]
+        assert "INSERT INTO produto_imagem" in insert_query
+        assert insert_params[9] == 1  # posição do campo `principal` no INSERT
+
+    def test_segunda_foto_nao_forca_principal(self, monkeypatch):
+        _patch_driver(monkeypatch)
+        cur = FakeCursor(one=[{"prox": 1}, {"codigo": 51}])
+        _patch_conn(monkeypatch, cur)
+
+        r = svc._upload_imagem_sync(
+            "srv", "bd", codigo_int="123", conteudo=_png_bytes(), nome_original="foto.png", principal=False,
+        )
+        assert r["success"] is True
+        # ordem=1 (já existe uma foto ativa) — não deve forçar principal,
+        # nem disparar o UPDATE de zerar o anterior.
+        queries_names = [q for q, _ in cur.queries]
+        assert not any(q.startswith("UPDATE produto_imagem SET principal=0") for q in queries_names)
+        insert_query, insert_params = cur.queries[-2]
+        assert insert_params[9] == 0
+
     def test_upload_com_principal_zera_o_anterior_antes_de_inserir(self, monkeypatch):
         _patch_driver(monkeypatch)
         cur = FakeCursor(one=[{"prox": 1}, {"codigo": 43}])
@@ -175,9 +210,13 @@ class TestUploadImagem:
             "srv", "bd", codigo_int="123", conteudo=_png_bytes(), nome_original="foto.png", principal=True,
         )
         assert r["success"] is True
-        # 1ª query deve ser o UPDATE que zera o principal anterior
-        primeira_query = cur.queries[0][0]
-        assert "UPDATE produto_imagem SET principal=0" in primeira_query
+        # UPDATE que zera o principal anterior roda antes do INSERT (a
+        # SELECT de `ordem` sempre vem primeiro agora, pra decidir se essa
+        # é a 1ª foto do produto — ver teste de auto-principal acima).
+        queries_names = [q for q, _ in cur.queries]
+        idx_update = next(i for i, q in enumerate(queries_names) if q.startswith("UPDATE produto_imagem SET principal=0"))
+        idx_insert = next(i for i, q in enumerate(queries_names) if q.startswith("INSERT INTO produto_imagem"))
+        assert idx_update < idx_insert
 
     def test_falha_ao_gravar_no_driver_nao_grava_registro(self, monkeypatch):
         class DriverQueFalha(FakeDriver):
@@ -274,14 +313,39 @@ class TestExcluirImagem:
         r = svc._excluir_imagem_sync("srv", "bd", 999)
         assert r["success"] is False
 
-    def test_soft_delete_nunca_remove_fisicamente(self, monkeypatch):
-        cur = FakeCursor(one=[{"codigo": 1}])
+    def test_marca_situacao_cancelada_e_remove_arquivo_fisico(self, monkeypatch):
+        # Pedido explícito do usuário 2026-08-26: excluir no app remove o
+        # objeto físico também (original + 3 variantes) — reverte o
+        # soft-delete "puro" original, mas mantém a linha marcada como
+        # cancelada (histórico/dedupe do script de migração).
+        cur = FakeCursor(one=[{"codigo_int": "123", "storage_key": "uuid-1", "content_type": "image/png"}])
         conn = _patch_conn(monkeypatch, cur)
+        driver = FakeDriver()
+        prefixo = "srv/bd/123/uuid-1"
+        driver.salvos[f"{prefixo}/original.png"] = (b"x", "image/png")
+        for variante in ("thumb", "medium", "web"):
+            driver.salvos[f"{prefixo}/{variante}.webp"] = (b"x", "image/webp")
+        _patch_driver(monkeypatch, driver)
+
         r = svc._excluir_imagem_sync("srv", "bd", 1)
+
         assert r["success"] is True
         assert conn.committed is True
         update_query = cur.queries[-1][0]
         assert "SET situacao='C', principal=0" in update_query
+        assert driver.salvos == {}  # os 4 arquivos foram removidos de verdade
+
+    def test_falha_ao_remover_arquivo_fisico_nao_desfaz_exclusao(self, monkeypatch):
+        cur = FakeCursor(one=[{"codigo_int": "123", "storage_key": "uuid-1", "content_type": "image/png"}])
+        conn = _patch_conn(monkeypatch, cur)
+
+        def _raise(*a, **k):
+            raise RuntimeError("driver indisponível")
+        monkeypatch.setattr(svc, "resolver_driver_sync", _raise)
+
+        r = svc._excluir_imagem_sync("srv", "bd", 1)
+        assert r["success"] is True  # best-effort — exclusão lógica já confirmada
+        assert conn.committed is True
 
 
 class TestMarcarPrincipal:

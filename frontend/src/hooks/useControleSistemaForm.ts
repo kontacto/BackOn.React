@@ -72,6 +72,7 @@ const TEXT_FIELDS = [
   // Kontacto (só Master)
   "codigo_kontacto", "situacao",
   "path_padrao_xml", "Path_importacao_venda_externa", "Path_backup_sql", "path_gestor_documentos",
+  "path_produto_imagem",
   "PATH_LOGO_EMAIL_COBRANCA", "TEXTO_CORPO_EMAIL_COBRANCA",
   "TRAY_ID_LOJA", "TRAY_url_api", "TRAY_Consumer_Key", "TRAY_Consumer_Secret", "TRAY_code",
 ] as const;

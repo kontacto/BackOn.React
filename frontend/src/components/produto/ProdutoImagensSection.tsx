@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Ionicons } from "@/src/components/Ionicons";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import ImageLightboxModal from "@/src/components/ImageLightboxModal";
 import SelectField from "@/src/components/SelectField";
 import { useAuditContext } from "@/src/hooks/useAuditContext";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
@@ -16,11 +18,23 @@ import { produtoImagemUrl } from "@/src/utils/produtoImagem";
 // A foto marcada como "Principal" é a que aparece na busca de produto/PDV/
 // catálogo — mesmo raciocínio do texto de ajuda abaixo.
 
+// Mesmos formatos aceitos por `_MIME_POR_FORMATO`/decodificação real via
+// Pillow no backend (produto_imagem_service.py) — mudar um lado sem o
+// outro deixa a mensagem/`accept` do input mentindo sobre o que de fato é
+// aceito no upload.
+const FORMATOS_ACEITOS_ACCEPT = "image/jpeg,image/png,image/webp,image/gif,image/bmp";
+
 type Props = {
   api: string;
   servidor: string;
   banco: string;
   codigoInt: string;
+  // Chamado toda vez que a lista é recarregada (upload/excluir/marcar
+  // principal), com o `codigo` da foto principal atual (ou `null` — sem
+  // foto principal) — pra quem embute este componente (o modal Fotografia
+  // de produto-completo.tsx) já atualizar a miniatura da tela de produto
+  // na hora, sem precisar fechar o modal primeiro.
+  onPrincipalChanged?: (codigo: number | null) => void;
 };
 
 type ImagemItem = {
@@ -29,7 +43,7 @@ type ImagemItem = {
   principal: boolean;
 };
 
-export default function ProdutoImagensSection({ api, servidor, banco, codigoInt }: Props) {
+export default function ProdutoImagensSection({ api, servidor, banco, codigoInt, onPrincipalChanged }: Props) {
   const auditCtx = useAuditContext();
   const fb = useFeedback();
   const base = api.replace(/\/+$/, "");
@@ -43,19 +57,22 @@ export default function ProdutoImagensSection({ api, servidor, banco, codigoInt 
   const [definirPrincipal, setDefinirPrincipal] = useState(false);
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
       const r = await fetch(`${base}/api/produto-imagem?${qsConn}&codigo_int=${encodeURIComponent(codigoInt)}`);
       const j = await r.json();
-      setItems(j?.success ? j.items : []);
+      const novosItems: ImagemItem[] = j?.success ? j.items : [];
+      setItems(novosItems);
+      onPrincipalChanged?.(novosItems.find((i) => i.principal)?.codigo ?? null);
     } catch {
       setItems([]);
     } finally {
       setLoading(false);
     }
-  }, [base, qsConn, codigoInt]);
+  }, [base, qsConn, codigoInt, onPrincipalChanged]);
 
   useEffect(() => {
     (async () => {
@@ -150,19 +167,50 @@ export default function ProdutoImagensSection({ api, servidor, banco, codigoInt 
           {items.map((it) => (
             <View key={it.codigo} style={styles.cell} testID={`produto-imagem-${it.codigo}`}>
               {/* eslint-disable-next-line jsx-a11y/alt-text */}
-              <img src={produtoImagemUrl(conn, it.codigo, "thumb")} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: radius.sm }} />
+              <img
+                src={produtoImagemUrl(conn, it.codigo, "thumb")}
+                onClick={() => setLightboxUrl(produtoImagemUrl(conn, it.codigo, "web"))}
+                style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: radius.sm, cursor: "pointer" }}
+              />
               {it.principal ? (
-                <View style={styles.badgePrincipal}>
-                  <Ionicons name="star" size={12} color="#fff" />
+                <View style={styles.actionStarPos}>
+                  <IconButtonWithTooltip
+                    icon="star"
+                    label="Foto principal"
+                    onPress={() => {}}
+                    size={12}
+                    color="#fff"
+                    tooltipAlign="left"
+                    style={[styles.actionIconInner, { backgroundColor: colors.brandPrimary }]}
+                    testID={`produto-imagem-${it.codigo}-principal-badge`}
+                  />
                 </View>
               ) : (
-                <Pressable onPress={() => marcarPrincipal(it.codigo)} style={styles.actionStar} hitSlop={6} testID={`produto-imagem-${it.codigo}-principal`}>
-                  <Ionicons name="star-outline" size={16} color={colors.onBrandPrimary} />
-                </Pressable>
+                <View style={styles.actionStarPos}>
+                  <IconButtonWithTooltip
+                    icon="star-outline"
+                    label="Definir como principal"
+                    onPress={() => marcarPrincipal(it.codigo)}
+                    size={16}
+                    color={colors.onBrandPrimary}
+                    tooltipAlign="left"
+                    style={styles.actionIconInner}
+                    testID={`produto-imagem-${it.codigo}-principal`}
+                  />
+                </View>
               )}
-              <Pressable onPress={() => excluir(it.codigo)} style={styles.actionTrash} hitSlop={6} testID={`produto-imagem-${it.codigo}-excluir`}>
-                <Ionicons name="trash-outline" size={16} color={colors.onBrandPrimary} />
-              </Pressable>
+              <View style={styles.actionTrashPos}>
+                <IconButtonWithTooltip
+                  icon="trash-outline"
+                  label="Excluir foto"
+                  onPress={() => excluir(it.codigo)}
+                  size={16}
+                  color={colors.onBrandPrimary}
+                  tooltipAlign="right"
+                  style={styles.actionIconInner}
+                  testID={`produto-imagem-${it.codigo}-excluir`}
+                />
+              </View>
             </View>
           ))}
         </View>
@@ -190,7 +238,7 @@ export default function ProdutoImagensSection({ api, servidor, banco, codigoInt 
           {Platform.OS === "web" ? (
             <input
               type="file"
-              accept="image/*"
+              accept={FORMATOS_ACEITOS_ACCEPT}
               onChange={(e) => setArquivo((e.target as HTMLInputElement).files?.[0] || null)}
               style={{
                 flex: 1, height: 36, boxSizing: "border-box", padding: "0 8px", fontSize: 13,
@@ -210,7 +258,16 @@ export default function ProdutoImagensSection({ api, servidor, banco, codigoInt 
             )}
           </Pressable>
         </View>
+        <Text style={styles.formatosHint}>
+          Formatos aceitos: JPG, PNG, WEBP, GIF ou BMP — até 10MB por foto.
+        </Text>
+        <Text style={styles.formatosHint}>
+          Prefira fotos QUADRADAS (proporção 1:1), com pelo menos 600x600 pixels — as miniaturas (busca de
+          produto, PDV, catálogo) sempre aparecem em formato quadrado, então uma foto retangular tem as bordas
+          cortadas automaticamente pra preencher o quadrado, sem distorcer a imagem.
+        </Text>
       </View>
+      <ImageLightboxModal visible={!!lightboxUrl} onClose={() => setLightboxUrl(null)} imageUrl={lightboxUrl} />
     </View>
   );
 }
@@ -221,19 +278,21 @@ const styles = StyleSheet.create({
   empty: { color: colors.muted, fontSize: 13, paddingVertical: spacing.md },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.md },
   cell: {
+    // Sem `overflow: "hidden"` — a própria <img> já se recorta nos cantos
+    // (mesmo `borderRadius` aplicado direto nela); manter overflow visível
+    // aqui é o que permite a tooltip dos ícones (Definir principal/Excluir)
+    // escapar pra fora da miniatura 110x110 em vez de ficar cortada.
     width: 110, height: 110, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border,
-    backgroundColor: colors.surfaceSecondary, overflow: "hidden", position: "relative",
+    backgroundColor: colors.surfaceSecondary, position: "relative",
   },
-  badgePrincipal: {
-    position: "absolute", top: 4, left: 4, backgroundColor: colors.brandPrimary,
-    borderRadius: 10, width: 20, height: 20, alignItems: "center", justifyContent: "center",
-  },
-  actionStar: {
-    position: "absolute", top: 4, left: 4, backgroundColor: "rgba(0,0,0,0.45)",
-    borderRadius: 10, width: 20, height: 20, alignItems: "center", justifyContent: "center",
-  },
-  actionTrash: {
-    position: "absolute", top: 4, right: 4, backgroundColor: "rgba(0,0,0,0.45)",
+  // Posicionamento (absoluto sobre a miniatura) separado do visual do
+  // círculo (`actionIconInner`) — `IconButtonWithTooltip` aplica seu
+  // `style` no Pressable interno, não no wrapper que ele mesmo cria pra
+  // posicionar a tooltip; por isso o wrapper de posição fica aqui fora.
+  actionStarPos: { position: "absolute", top: 4, left: 4 },
+  actionTrashPos: { position: "absolute", top: 4, right: 4 },
+  actionIconInner: {
+    backgroundColor: "rgba(0,0,0,0.45)",
     borderRadius: 10, width: 20, height: 20, alignItems: "center", justifyContent: "center",
   },
   uploadCard: {
@@ -241,6 +300,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceSecondary,
   },
   uploadRow: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-end", marginBottom: spacing.sm },
+  formatosHint: { fontSize: 11, color: colors.muted },
   label: { fontSize: 12, color: colors.muted, marginBottom: 4 },
   chkRow: { flexDirection: "row", alignItems: "center", gap: 6, height: 36 },
   chkLabel: { fontSize: 13, color: colors.onSurface },

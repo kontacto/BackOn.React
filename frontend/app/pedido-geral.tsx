@@ -18,6 +18,8 @@ import { Ionicons } from "@/src/components/Ionicons";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { apiGet, apiSend } from "@/src/utils/api";
+import { produtoImagemUrl } from "@/src/utils/produtoImagem";
+import ImageLightboxModal from "@/src/components/ImageLightboxModal";
 import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
@@ -161,7 +163,7 @@ export default function PedidoGeralScreen() {
 function PedidoGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) {
   const { can, isMaster, classe, moduleOn } = usePermissions();
   const feedback = useFeedback();
-  const params = useLocalSearchParams<{ pedido?: string }>();
+  const params = useLocalSearchParams<{ pedido?: string; destacar?: string }>();
   const editing = !!params.pedido;
   const pedidoId = params.pedido ? parseInt(String(params.pedido), 10) : null;
 
@@ -226,6 +228,7 @@ function PedidoGeralWebScreen({ router }: { router: ReturnType<typeof useRouter>
   const [funcaoCod, setFuncaoCod] = useState<number>(1);
   const [waCompany, setWaCompany] = useState<string | null>(null);
   const [waEnabled, setWaEnabled] = useState<boolean | null>(null);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
   const sit = (pedido?.situacao || "A").toUpperCase();
   const isAberto = !editing || sit === "A";
@@ -248,7 +251,6 @@ function PedidoGeralWebScreen({ router }: { router: ReturnType<typeof useRouter>
   const it = usePedidoItens({
     conn, editing, pedidoId, isAberto, usuarioCod, funcaoCod, classe, master: isMaster, showToast,
     servicosOn: moduleOn("servicos"), basePath: "/api/pedido-completo", printPorFinalidade: true,
-    buscaProdutoSoEnter: true,
   });
 
   useEffect(() => {
@@ -921,6 +923,9 @@ function PedidoGeralWebScreen({ router }: { router: ReturnType<typeof useRouter>
                 onCancelar={handleCancelar}
                 cancelando={cancelando}
                 onImprimir={() => setReciboOpen(true)}
+                imagemUrlResolver={conn ? (codigo, variante) => produtoImagemUrl(conn, codigo, variante || "thumb") : undefined}
+                onEnlargeImagem={setLightboxUrl}
+                destacarProduto={params.destacar}
                 footerRight={
                   can("PEDIDO_COMP.WHATSAPP") ? (
                     <WhatsappButton
@@ -1136,6 +1141,7 @@ function PedidoGeralWebScreen({ router }: { router: ReturnType<typeof useRouter>
         titulo="Pedido de Venda"
         itens={AJUDA_PEDIDO_GERAL_ITENS}
       />
+      <ImageLightboxModal visible={!!lightboxUrl} onClose={() => setLightboxUrl(null)} imageUrl={lightboxUrl} />
     </SafeAreaView>
   );
 }

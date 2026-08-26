@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   ActivityIndicator,
   Image,
@@ -29,6 +29,30 @@ const GENERIC_AUTH_ERROR = "Usuário ou senha inválidos.";
 function normalizeApiUrl(url: string): string {
   return url.trim().replace(/\/+$/, "");
 }
+
+// Mesma aparência visual de `styles.input` (definido mais abaixo), só que
+// como objeto inline pro <input> cru — reconstrução manual necessária
+// porque um <input> HTML puro não lê StyleSheet.create do react-native-web
+// diretamente, mesmo padrão já usado em WebDateField.tsx/
+// GestorDocumentosSection.tsx pros elementos web-only deste projeto.
+// `WebkitTextSecurity` é a peça que mascara o texto sem usar
+// type="password" (ver comentário no JSX) — não é uma propriedade CSS
+// padrão reconhecida pelos tipos do React, por isso o cast.
+const maskedSenhaInputStyle = {
+  backgroundColor: colors.surfaceSecondary,
+  border: `1px solid ${colors.border}`,
+  borderRadius: radius.md,
+  paddingLeft: spacing.lg,
+  paddingRight: spacing.lg,
+  paddingTop: 14,
+  paddingBottom: 14,
+  fontSize: 15,
+  color: colors.onSurface,
+  minHeight: 48,
+  boxSizing: "border-box",
+  width: "100%",
+  WebkitTextSecurity: "disc",
+} as CSSProperties;
 
 const LOGIN_CARD_SHADOW_STYLE =
   Platform.OS === "web"
@@ -156,6 +180,14 @@ export default function LoginScreen() {
   useEffect(() => {
     setError(null);
   }, [selected, usuario, senha]);
+
+  // Mesmo critério de `isMasterKontactoUser` acima, mas avaliado EM TEMPO
+  // REAL sobre o texto digitado (antes do login responder) — é por isso
+  // que precisa ser um campo separado da checagem pós-login: o navegador
+  // decide se oferece salvar a senha no momento em que ela É DIGITADA/
+  // ENVIADA, não depois, então a troca de campo tem que acontecer enquanto
+  // o usuário ainda está digitando.
+  const isMasterUsernameTyped = usuario.trim().toUpperCase() === "KONTACTO";
 
   const handleSubmit = async () => {
     if (submitting) return;
@@ -366,19 +398,51 @@ export default function LoginScreen() {
 
             <View style={styles.field}>
               <Text style={styles.label}>Senha</Text>
-              <TextInput
-                value={senha}
-                onChangeText={setSenha}
-                placeholder="Digite sua senha"
-                placeholderTextColor={colors.muted}
-                secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
-                style={styles.input}
-                testID="login-senha-input"
-                returnKeyType="go"
-                onSubmitEditing={handleSubmit}
-              />
+              {isWeb && isMasterUsernameTyped ? (
+                // Regra de segurança [GLOBAL-ish, só nesta tela]: o navegador
+                // NUNCA pode oferecer "Salvar senha?" pra conta master
+                // (KONTACTO) — ver print do usuário, Chrome oferecendo salvar
+                // mesmo com `disableBiometrics()`/`setSenha("")` já rodando
+                // pós-login (isso só protege a biometria DO APP, não o
+                // gerenciador de senha do NAVEGADOR, que decide salvar com
+                // base em existir um <input type="password"> de verdade
+                // sendo enviado — não tem API pra desligar isso condicional-
+                // mente depois do fato). Único jeito confiável: nunca deixar
+                // este campo virar um <input type="password"> nativo quando
+                // o usuário digitado é KONTACTO — mascarado por CSS
+                // (`-webkit-text-security`) em vez disso. Suportado em
+                // Chrome/Edge/Safari (WebKit/Blink); Firefox não implementa
+                // essa propriedade e cai pra texto visível — limitação
+                // conhecida do navegador, não deste código.
+                // eslint-disable-next-line jsx-a11y/no-redundant-roles
+                <input
+                  value={senha}
+                  onChange={(e) => setSenha((e.target as HTMLInputElement).value)}
+                  placeholder="Digite sua senha"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  autoComplete="off"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
+                  style={maskedSenhaInputStyle}
+                  data-testid="login-senha-input"
+                />
+              ) : (
+                <TextInput
+                  value={senha}
+                  onChangeText={setSenha}
+                  placeholder="Digite sua senha"
+                  placeholderTextColor={colors.muted}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  style={styles.input}
+                  testID="login-senha-input"
+                  returnKeyType="go"
+                  onSubmitEditing={handleSubmit}
+                />
+              )}
             </View>
 
             {error ? (

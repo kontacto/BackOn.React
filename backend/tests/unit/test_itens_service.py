@@ -219,6 +219,38 @@ class TestListItensRetornaDataHoraInclusao:
         assert item["data_inclusao"] is None
         assert item["hora_inclusao"] == ""
 
+
+class TestListItensRetornaImagemPrincipal:
+    """LEFT JOIN produto_imagem — ver PENDENCIAS.md > "Fotos de Produto".
+    Devolve a foto principal do produto por item, pra ItemList.tsx/
+    AddItemModal.tsx exibirem a miniatura sem chamada extra por item."""
+
+    def test_mapeia_imagem_codigo_quando_produto_tem_foto_principal(self, monkeypatch):
+        row = {
+            "codauto": 1, "produto": "100", "qtd_pedida": 2, "p_venda": 45.0, "p_normal": 50.0,
+            "desconto": 0, "acrescimo": 0, "descricao_produto": "", "unidade_pedido": "UN",
+            "data_inclusao_item": None, "hora_inclusao_item": None,
+            "peca_desc": "Produto Teste", "peca_fab": "FAB100", "serv_desc": None,
+            "imagem_codigo": 7,
+        }
+        cur = FakeCursor(one=[{"situacao": "A"}], many=[[row]])
+        _patch(monkeypatch, cur)
+        r = svc._list_itens_sync("srv", "bd", 1)
+        assert r["items"][0]["imagem_codigo"] == 7
+
+    def test_imagem_codigo_null_quando_produto_sem_foto(self, monkeypatch):
+        row = {
+            "codauto": 1, "produto": "100", "qtd_pedida": 2, "p_venda": 45.0, "p_normal": 50.0,
+            "desconto": 0, "acrescimo": 0, "descricao_produto": "", "unidade_pedido": "UN",
+            "data_inclusao_item": None, "hora_inclusao_item": None,
+            "peca_desc": "Produto Teste", "peca_fab": "FAB100", "serv_desc": None,
+            "imagem_codigo": None,
+        }
+        cur = FakeCursor(one=[{"situacao": "A"}], many=[[row]])
+        _patch(monkeypatch, cur)
+        r = svc._list_itens_sync("srv", "bd", 1)
+        assert r["items"][0]["imagem_codigo"] is None
+
     def test_taxa_de_servico_sempre_ordenada_por_ultimo(self, monkeypatch):
         cur = FakeCursor(one=[{"situacao": "A"}], many=[[]])
         _patch(monkeypatch, cur)

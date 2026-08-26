@@ -187,6 +187,18 @@ def _get_produto_sync(servidor: str, banco: str, codigo_int: str) -> dict:
             return {"success": False, "message": "Produto não encontrado."}
         produto = _row_to_dict(row)
 
+        # Foto principal (sistema novo, ver produto_imagem_service.py e
+        # PENDENCIAS.md > "Fotos de Produto") — resolvida à parte, mesmo
+        # raciocínio de `fornecedor_nome` logo abaixo: não é uma coluna de
+        # `pecas`, a tela usa isso só pra montar a URL da miniatura exibida
+        # ao lado dos campos de identidade.
+        cur.execute(
+            "SELECT codigo FROM produto_imagem WHERE codigo_int=%s AND principal=1 AND situacao='A'",
+            (codigo_int,),
+        )
+        imgrow = cur.fetchone()
+        produto["imagem_principal_codigo"] = int(imgrow["codigo"]) if imgrow else None
+
         # Nome do fornecedor tratado como Fabricante/Distribuidor (aba Dados
         # Principais) — resolvido à parte porque `pecas.fornecedor` só
         # guarda o código, e a tela precisa exibir o nome (mecanismo de

@@ -7,6 +7,8 @@ import { Ionicons } from "@/src/components/Ionicons";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { apiGet, apiSend } from "@/src/utils/api";
+import { produtoImagemUrl } from "@/src/utils/produtoImagem";
+import ImageLightboxModal from "@/src/components/ImageLightboxModal";
 import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
 import { colors, spacing } from "@/src/theme/colors";
@@ -45,7 +47,7 @@ export default function PedidoFormScreen() {
   const router = useRouter();
   const { can, isMaster, classe, moduleOn } = usePermissions();
   const feedback = useFeedback();
-  const params = useLocalSearchParams<{ pedido?: string; cliente?: string; cliente_nome?: string }>();
+  const params = useLocalSearchParams<{ pedido?: string; cliente?: string; cliente_nome?: string; destacar?: string }>();
   const editing = !!params.pedido;
   const pedidoId = params.pedido ? parseInt(String(params.pedido), 10) : null;
 
@@ -118,6 +120,7 @@ export default function PedidoFormScreen() {
   // Status global do WhatsApp (pill = não renderiza a frase sozinho, ver
   // WhatsappButton.tsx) — usado pra mostrar "desativado" abaixo do rodapé.
   const [waEnabled, setWaEnabled] = useState<boolean | null>(null);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
   const isAberto = (pedido?.situacao || "A").toUpperCase() === "A";
   const it = usePedidoItens({
@@ -968,6 +971,9 @@ export default function PedidoFormScreen() {
             onCancelar={editing && pedidoId ? handleCancelar : undefined}
             cancelando={cancelando}
             onImprimir={editing && pedidoId ? () => setReciboOpen(true) : undefined}
+            imagemUrlResolver={conn ? (codigo, variante) => produtoImagemUrl(conn, codigo, variante || "thumb") : undefined}
+            onEnlargeImagem={setLightboxUrl}
+            destacarProduto={params.destacar}
             footerRight={
               editing && pedidoId && can("PEDIDO.WHATSAPP") ? (
                 <WhatsappButton
@@ -1064,6 +1070,7 @@ export default function PedidoFormScreen() {
       />
       <ScreenToast toast={toast} testID="pedido-form-toast" />
       <AjudaPedidoModal visible={ajudaOpen} onClose={() => setAjudaOpen(false)} />
+      <ImageLightboxModal visible={!!lightboxUrl} onClose={() => setLightboxUrl(null)} imageUrl={lightboxUrl} />
     </SafeAreaView>
   );
 }

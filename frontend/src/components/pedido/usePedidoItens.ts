@@ -42,16 +42,11 @@ type Params = {
   // com exceção da taxa de serviço"). Sem equivalente na O.S. ainda.
   // Default false.
   printPorFinalidade?: boolean;
-  // Busca de produto só dispara no Enter, não a cada tecla — pedido
-  // explícito do usuário, 2026-07-20, só pro Pedido Geral (Bar mantém a
-  // busca-enquanto-digita com debounce de 300ms, comportamento já em uso,
-  // sem motivo pra mudar). Default false.
-  buscaProdutoSoEnter?: boolean;
 };
 
 export function usePedidoItens({
   conn, editing, pedidoId, isAberto, usuarioCod, funcaoCod, classe, master = false, showToast, servicosOn,
-  basePath = "/api/pedidos", printPorFinalidade = false, buscaProdutoSoEnter = false,
+  basePath = "/api/pedidos", printPorFinalidade = false,
 }: Params) {
   const { showConfirm } = useFeedback();
   // -------- Itens do pedido
@@ -323,25 +318,34 @@ export function usePedidoItens({
   );
 
   // Busca de produto/serviço em si — extraída da debounce abaixo pra também
-  // poder ser chamada direto no Enter (Pedido Geral, ver
-  // `buscaProdutoSoEnter`). Retorna os itens encontrados (não só popula o
-  // state) pra quem chamou poder decidir na hora — ex.: 1 resultado só
-  // pula direto pra "Confirmar Item" (`AddItemModal.tsx`).
+  // poder ser chamada direto no Enter (bypass do debounce, mesmo
+  // comportamento do KPDV — ver comentário da debounce mais abaixo).
+  // Retorna os itens encontrados (não só popula o state) pra quem chamou
+  // poder decidir na hora — ex.: 1 resultado só pula direto pra "Confirmar
+  // Item" (`AddItemModal.tsx`). `buscaReqIdRef` descarta resultado de uma
+  // busca já superada por uma mais nova (usuário continuou digitando
+  // enquanto a resposta anterior ainda não tinha voltado) — mesmo
+  // raciocínio do `CancellationTokenSource` do KPDV
+  // (`VendaViewModel.BuscarAsync`), só que sem abortar a requisição HTTP
+  // em si (`apiGet` não suporta `AbortSignal` hoje), só ignorando a
+  // resposta se ela já estiver desatualizada.
+  const buscaReqIdRef = useRef(0);
   const buscarProdutos = useCallback(async (termo: string): Promise<ProdutoServico[]> => {
     if (!conn || !termo.trim()) { setProdResults([]); return []; }
+    const meuId = ++buscaReqIdRef.current;
     setProdLoading(true);
     try {
       const j = await apiGet(conn, `/api/produtos-servicos`, {
         search: termo, page: 1, size: 30, tipo: servicosOn ? "all" : "P",
       });
       const items: ProdutoServico[] = j?.items || [];
-      setProdResults(items);
+      if (buscaReqIdRef.current === meuId) setProdResults(items);
       return items;
     } catch {
-      setProdResults([]);
+      if (buscaReqIdRef.current === meuId) setProdResults([]);
       return [];
     } finally {
-      setProdLoading(false);
+      if (buscaReqIdRef.current === meuId) setProdLoading(false);
     }
   }, [conn, servicosOn]);
 
@@ -392,19 +396,23 @@ export function usePedidoItens({
   // -------- Busca produto/serviço (debounce) dentro do modal de adicionar.
   // Com o campo de busca vazio, a lista padrão exibida é a dos itens já no
   // pedido (`pedidoProdutos` abaixo) — só dispara a busca na API quando o
-  // usuário efetivamente digita algo. Não roda no Pedido Geral
-  // (`buscaProdutoSoEnter`) — lá a busca só dispara no Enter, via
-  // `buscarProdutos` chamada direto por `AddItemModal.tsx` (pedido explícito
-  // do usuário, 2026-07-20).
+  // usuário efetivamente digita algo. Padronizado com a busca de produto do
+  // KPDV (pedido explícito do usuário, 2026-08-26 — "temos que padronizar
+  // essas buscas como a busca de produtos do KPDV"): debounce de 350ms
+  // (`VendaViewModel.BuscarAsync`, KPDV) contado a partir da ÚLTIMA tecla —
+  // nunca precisa de Enter pra buscar em nenhuma tela (Bar, Geral ou O.S.).
+  // Isso reverte a exceção "só busca no Enter" que existia só pro Pedido
+  // Geral desde 2026-07-20 — decisão revista pelo próprio usuário nesta
+  // rodada, parâmetro `buscaProdutoSoEnter` removido (não é mais lido em
+  // lugar nenhum).
   useEffect(() => {
-    if (buscaProdutoSoEnter) return;
     if (!addOpen || !conn || !prodTerm.trim()) {
       setProdResults([]);
       return;
     }
-    const t = setTimeout(() => { buscarProdutos(prodTerm); }, 300);
+    const t = setTimeout(() => { buscarProdutos(prodTerm); }, 350);
     return () => clearTimeout(t);
-  }, [prodTerm, addOpen, conn, servicosOn, buscaProdutoSoEnter, buscarProdutos]);
+  }, [prodTerm, addOpen, conn, servicosOn, buscarProdutos]);
 
   // Itens já lançados no pedido, deduplicados por produto — lista padrão do
   // modal de Adicionar Item enquanto a busca está vazia (facilita repetir um
@@ -425,6 +433,7 @@ export function usePedidoItens({
           estoque: null,
           cod_fab: it.cod_fab,
           unidade: it.unidade,
+          imagem_codigo: it.imagem_codigo,
         });
       }
     }

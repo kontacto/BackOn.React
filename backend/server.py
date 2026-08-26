@@ -4,8 +4,11 @@ Aplicação FastAPI: carrega o .env, monta o APIRouter com prefixo /api,
 inclui os routers de cada domínio, configura CORS e logging.
 Toda a lógica de negócio fica em services/ e os endpoints em routes/.
 """
+import asyncio
 import logging
+import os as stdlib_os  # `os` sozinho colide com `routes.os` (rotas de O.S.), importado mais abaixo
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -25,6 +28,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from fastapi import APIRouter, FastAPI  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 from starlette.middleware.cors import CORSMiddleware  # noqa: E402
 
 from db import mongo  # noqa: E402
@@ -34,11 +38,27 @@ from routes import (  # noqa: E402
     entrada_saida_caixa, envio_massa, equipamentos, estoque_combustivel, etiqueta_produto, fechamento_turno, financeiro, fornecedores, funcionarios,
     geracao_boletos, gestao_compras, gestor_documentos, gestor_nfce, gestor_nfse, ia_config, ilha, impressao, inutilizacao_nfe, inventario, layout, log_auditoria, lookups, margem_lucro, mdfe, misc, modificadores, movimentacao_produtos,
     mov_encerrante, ncm_cest, nfe_agrupada, nfe_avulsa, notas_fiscais, os, os_completo, pedido_completo, pedido_compra, pedidos, permissoes, produto_completo, produto_imagem, produtos,
-    produtos_compostos, produtos_niveis, projetos, reabertura_turno, recebimento, relatorio_clientes, relatorios, requisicao, retifica, servicos, tabelas_aux, tanque,
+    produtos_compostos, produtos_niveis, projetos, reabertura_turno, recebimento, relatorio_clientes, relatorios, requisicao, retifica, servico_sistema, servicos, tabelas_aux, tanque,
     tanque_estoque, tanque_nf, taxas_ia, telemarketing, usuarios, veiculos, viagem, whatsapp,
 )
+from services import servico_sistema_service  # noqa: E402
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Primeira tarefa de fundo deste backend (ver services/servico_sistema_
+    # service.py) — verifica/baixa atualização em background, dentro do
+    # próprio processo, substituindo a Tarefa Agendada Windows independente
+    # que ficou pausada. Cancelada no shutdown junto com o fechamento do
+    # Mongo — precisa ser um `lifespan` só (não dá pra misturar com o
+    # `@app.on_event` antigo no mesmo app).
+    task = asyncio.create_task(servico_sistema_service.loop_verificacao_atualizacao())
+    yield
+    task.cancel()
+    if mongo.client is not None:
+        mongo.client.close()
+
+
+app = FastAPI(lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 
 # Ordem das inclusões: rotas mais específicas de clientes (find/resumo) já são
@@ -73,6 +93,7 @@ api_router.include_router(lookups.router)
 api_router.include_router(permissoes.router)
 api_router.include_router(controle_config.router)
 api_router.include_router(controle_sistema.router)
+api_router.include_router(servico_sistema.router)
 api_router.include_router(impressao.router)
 api_router.include_router(gestor_documentos.router)
 api_router.include_router(tabelas_aux.router)
@@ -135,6 +156,24 @@ api_router.include_router(afericao_abastecimento.router)
 
 app.include_router(api_router)
 
+# Serve o build web do frontend (`npx expo export -p web`) no MESMO
+# processo/porta do backend — decisão do Atualizador automático (ver
+# PENDENCIAS.md > "Atualizador automático de instalações de cliente")
+# pra não precisar de um segundo processo/porta só pra arquivos
+# estáticos numa instalação de cliente. `FRONTEND_DIST_DIR` é setado
+# pelo `updater/apply_update.ps1` apontando pra pasta da versão do
+# frontend atualmente ativa; sem essa env var (ambiente de
+# desenvolvimento local, sem build de produção), cai no default
+# `frontend/dist` relativo à raiz do repo — e se nem esse existir, o
+# mount simplesmente não acontece (nunca quebra `uvicorn --reload` local,
+# que não tem build nenhum). **Precisa ficar DEPOIS de
+# `app.include_router(api_router)`** — um mount em "/" registrado antes
+# capturaria `/api/*` também, já que Starlette resolve rotas na ordem em
+# que foram registradas.
+_frontend_dist_dir = stdlib_os.environ.get("FRONTEND_DIST_DIR") or str((ROOT_DIR.parent / "frontend" / "dist").resolve())
+if Path(_frontend_dist_dir).is_dir():
+    app.mount("/", StaticFiles(directory=_frontend_dist_dir, html=True), name="frontend")
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -148,9 +187,3 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 logger = logging.getLogger(__name__)
-
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    if mongo.client is not None:
-        mongo.client.close()

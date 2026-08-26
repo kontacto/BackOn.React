@@ -96,6 +96,10 @@ export type ItemRow = {
   pontuacao_e?: number | null;
   pontuacao_v?: number | null;
   pontuacao_a?: number | null;
+  // Foto principal do produto — mesmo campo/raciocínio de
+  // `ProdutoServico.imagem_codigo` acima, exibida na lista de itens do
+  // pedido (`ItemList.tsx`).
+  imagem_codigo?: number | null;
 };
 
 // Dados mínimos pro ticket de impressão de um item só (ReciboPedidoModal
@@ -120,6 +124,10 @@ export type ProdutoServico = {
   // o Pedido Geral (PEDIDO_COMP) exige a escolha de um número de série antes
   // de incluir o item quando true (Fase B). Ver PENDENCIAS.md > "Transações".
   controla_num_serie?: boolean;
+  // Foto principal do produto (produto_imagem, sistema novo — ver
+  // PENDENCIAS.md > "Fotos de Produto"), `codigo` de produto_imagem ou
+  // null/undefined quando não tem foto migrada. Serviço nunca traz isso.
+  imagem_codigo?: number | null;
 };
 
 export type DescontoRow = {

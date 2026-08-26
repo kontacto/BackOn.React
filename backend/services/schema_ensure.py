@@ -93,6 +93,7 @@ from services.produto_completo_service import _ensure_promocao_periodo_cols, _en
 from services.produto_imagem_service import _ensure_produto_imagem_table
 from services.imagem_storage import _ensure_path_produto_imagem_col
 from services.projetos_service import _ensure_projetos_tables
+from services.servico_sistema_service import _ensure_servico_sistema_atualizacao_table
 from services.tabelas_aux_service import _ensure_nfse_indop_sync
 
 # Toda checagem de schema conhecida do sistema — cada entrada é chamada
@@ -146,6 +147,7 @@ _MIGRACOES: list[Callable[[object], None]] = [
     _ensure_banco_logo_cols,
     _ensure_produto_imagem_table,
     _ensure_path_produto_imagem_col,
+    _ensure_servico_sistema_atualizacao_table,
 ]
 
 # (servidor, banco) já garantidos NESTA execução do processo — evita

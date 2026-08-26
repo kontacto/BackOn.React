@@ -2602,6 +2602,53 @@ pelo usuário no mesmo pedido, 2026-07-23.
   nova, mapear pros tokens/estilos já existentes em vez de inventar
   classes ou valores soltos.
 
+### 9. Clicar em imagem de produto amplia (Lightbox) `[GLOBAL]`
+
+**Adicionado 2026-08-26, user-directed** ("regra global ao clicar na
+imagem, exibe a imagem ampliada, nas pré-vendas, listagem KPDV e onde
+exibir a imagem do produto"). Toda vez que uma foto de produto é exibida
+em qualquer tela do app web (busca/listagem de produto, item do pedido,
+"Confirmar Item", galeria de fotos do próprio cadastro, identidade do
+Produto Completo — "onde exibir a imagem do produto"), clicar na imagem
+abre ela ampliada num visualizador central (Lightbox), não faz outra
+ação (não navega, não abre outro modal) — a menos que ainda não exista
+foto pra ampliar, caso em que o clique pode continuar abrindo o fluxo de
+cadastro de foto (ex.: miniatura vazia no cabeçalho do Produto Completo).
+
+- **Componente compartilhado**: `frontend/src/components/
+  ImageLightboxModal.tsx` — modal central, fundo escurecido, imagem em
+  tamanho grande (`objectFit: "contain"`, nunca corta), botão fechar (X)
+  + clique fora fecha. Sempre pedir a variante **"web"** (~1200px) do
+  `produto_imagem` pra ampliar — nunca a mesma "thumb" só esticada
+  (fica borrada); ver `frontend/src/utils/produtoImagem.ts`.
+- **Nunca reimplementar isso por tela** — mesmo princípio de
+  `IconButtonWithTooltip`/`ScreenToast` já documentados neste arquivo:
+  um componente único, reutilizado, não um `Modal`/estado local
+  reinventado a cada lugar que mostra foto de produto.
+- Quando a imagem está dentro de um elemento que já tem sua própria ação
+  de clique (linha de item que abre edição, célula de card cujos ícones
+  de estrela/lixeira já são cliques próprios), o clique na IMAGEM em si
+  precisa de `stopPropagation()` — a ação "ampliar" nunca deve disparar
+  junto com a ação do elemento pai. Componentes que não devem conhecer
+  `conn`/URL de imagem diretamente (`ItemList.tsx`, compartilhado com
+  O.S. — ver comentário próprio no arquivo) recebem um resolvedor de URL
+  via prop (`imagemUrlResolver`) e um callback (`onEnlargeImagem`) da
+  tela dona, em vez de montar a URL/abrir o Lightbox sozinhos.
+- **Já aplicado**: `produtos.tsx` (busca/listagem), `ItemList.tsx`
+  (linha de item — Pedido Bar, Pedido Geral), `AddItemModal.tsx`
+  ("Confirmar Item"), `ProdutoImagensSection.tsx` (galeria do cadastro),
+  `produto-completo.tsx` (miniatura da identidade do produto).
+- **KPDV (C#/.NET/WPF) — NÃO aplicado ainda, escopo maior que só
+  "adicionar zoom"**: investigação confirmou que o KPDV **não exibe foto
+  de produto em lugar nenhum hoje** (nenhum campo de imagem no DTO de
+  produto, nenhum binding de imagem em nenhuma tela) — ou seja, levar
+  essa regra pro KPDV significa primeiro construir a exibição da foto em
+  si (novo campo no DTO, nova chamada pro backend, novo binding de UI) e
+  só depois o Lightbox, não é um ajuste pontual num recurso já existente.
+  Fica registrado como pendência separada — ver PENDENCIAS.md > "Fotos
+  de Produto" — não implementar sem confirmar escopo/prioridade com o
+  usuário antes, dado o tamanho real do trabalho.
+
 ## Padrão de Impressão de Relatórios `[GLOBAL]`
 
 **Added 2026-07-16, user-directed** ("na impressão de qualquer relatório

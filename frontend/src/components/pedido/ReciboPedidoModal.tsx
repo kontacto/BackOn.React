@@ -152,7 +152,18 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
       setComputadorInput(cfg?.computador || "");
       setImpressoraInput(cfg?.impressora || "");
     });
-  }, [visible, conn, pedido?.pedido, isItemMode]);
+    // Dependência é `conn?.empresa`/`conn?.banco` (primitivos), não o objeto
+    // `conn` inteiro — bug real corrigido 2026-08-26: como este efeito é
+    // quem fecha o painel "Configurar impressora desta estação"
+    // (`setConfigurandoImpressora(false)`, acima), depender do objeto
+    // `conn` por REFERÊNCIA fazia esse painel fechar sozinho sempre que o
+    // componente pai recriava o objeto `conn` num re-render (mesmo com os
+    // mesmos valores) — ex.: o relógio de "tempo aberto" do Painel de
+    // Pedidos re-renderiza a cada 10s. Digitar no campo Impressora não
+    // deveria ter esse efeito, mas qualquer re-render do pai enquanto o
+    // painel estava aberto tinha o mesmo risco.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, conn?.empresa, conn?.banco, pedido?.pedido, isItemMode]);
 
   if (!pedido) return null;
 

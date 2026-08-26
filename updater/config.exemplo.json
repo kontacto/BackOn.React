@@ -1,0 +1,10 @@
+{
+  "manifestUrl": "https://SUACONTA.blob.core.windows.net/releases/manifest.json?sv=2024-11-04&ss=b&srt=o&sp=r&se=2027-01-01T00%3A00%3A00Z&sig=SUBSTITUA_PELA_SAS_DE_LEITURA",
+  "installDir": "C:\\BackOn",
+  "currentBackendDir": "C:\\BackOn\\current-backend",
+  "currentFrontendDir": "C:\\BackOn\\current-frontend",
+  "backendPort": 8081,
+  "healthCheckTimeoutSeconds": 30,
+  "healthCheckRetries": 10,
+  "keepReleases": 2
+}

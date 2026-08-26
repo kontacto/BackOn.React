@@ -203,6 +203,12 @@ export const styles = StyleSheet.create({
     paddingVertical: spacing.sm, paddingHorizontal: spacing.md,
     borderWidth: 1, borderColor: colors.border,
   },
+  // Item destacado ao abrir o Pedido/O.S. a partir do "Reservado para..."
+  // de produtos.tsx — cor diferente pra identificação rápida (pedido
+  // explícito do usuário, 2026-08-26).
+  itemRowDestacado: {
+    backgroundColor: colors.brandTertiary, borderColor: colors.brandPrimary, borderWidth: 1.5,
+  },
   itemDescCompact: { fontSize: 14, fontWeight: "500", color: colors.onSurface, flexShrink: 1, minWidth: 0 },
   itemSubCompact: { fontSize: 12, color: colors.muted, flexShrink: 1, minWidth: 0 },
   itemIncluidoEmCompact: { fontSize: 11, color: colors.muted, fontStyle: "italic", flexShrink: 1, minWidth: 0 },

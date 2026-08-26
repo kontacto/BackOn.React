@@ -15,6 +15,7 @@ import { useRouter, usePathname } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import { usePermissions } from "@/src/permissions";
+import { useAtualizacaoPendente } from "@/src/hooks/useAtualizacaoPendente";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 // Preferência de menu recolhido (só ícones) — lembrada no navegador entre
@@ -33,6 +34,7 @@ type NavItem = {
   icon: keyof typeof Ionicons.glyphMap;
   href: string;
   visible: boolean;
+  badge?: boolean;
 };
 
 // Telas fora do grupo (tabs) mapeadas pra aba "lógica" a que pertencem, só
@@ -72,6 +74,7 @@ const DETAIL_TO_TAB: Record<string, string> = {
   "/grupo-usuario": "/configuracoes",
   "/log-auditoria": "/configuracoes",
   "/whatsapp-config": "/configuracoes",
+  "/servico-sistema": "/configuracoes",
   "/mensagens": "/configuracoes",
   "/mensagens-pdv": "/configuracoes",
   "/relatorio-descontos": "/relatorios",
@@ -110,6 +113,7 @@ export default function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
   const { moduleOn } = usePermissions();
+  const atualizacaoPendente = useAtualizacaoPendente();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
       return window.localStorage.getItem(COLLAPSE_KEY) === "1";
@@ -147,7 +151,7 @@ export default function Sidebar() {
     { key: "financeiro", label: "Financeiro", icon: "cash-outline", href: "/financeiro", visible: true },
     { key: "posto-combustivel", label: "Posto", icon: "water-outline", href: "/posto-combustivel", visible: moduleOn("Posto") },
     { key: "cilindros", label: "Cilindros", icon: "flame-outline", href: "/cilindros", visible: moduleOn("Cilindro") },
-    { key: "configuracoes", label: "Configurações", icon: "settings-outline", href: "/configuracoes", visible: true },
+    { key: "configuracoes", label: "Configurações", icon: "settings-outline", href: "/configuracoes", visible: true, badge: atualizacaoPendente },
     { key: "relatorios", label: "Relatórios", icon: "bar-chart-outline", href: "/relatorios", visible: true },
   ];
 
@@ -225,7 +229,12 @@ export default function Sidebar() {
               style={[styles.item, active && styles.itemActive, collapsed && styles.itemCollapsed]}
               testID={`sidebar-${item.key}`}
             >
-              <Ionicons name={item.icon} size={20} color={active ? colors.brandPrimary : colors.muted} />
+              <View style={styles.iconWrap}>
+                <Ionicons name={item.icon} size={20} color={active ? colors.brandPrimary : colors.muted} />
+                {item.badge ? (
+                  <View pointerEvents="none" style={styles.badge} testID={`sidebar-${item.key}-badge`} />
+                ) : null}
+              </View>
               {!collapsed ? (
                 <Text style={[styles.label, active && styles.labelActive]} numberOfLines={1}>
                   {item.label}
@@ -310,6 +319,15 @@ const styles = StyleSheet.create({
   },
   itemActive: {
     backgroundColor: colors.surfaceSecondary,
+  },
+  // Wrapper só pro ícone, pra ancorar o badge de aviso (ver `badge` abaixo)
+  // exatamente no canto do ícone — não do item inteiro, que muda de largura
+  // entre recolhido/expandido.
+  iconWrap: { position: "relative" },
+  badge: {
+    position: "absolute", top: -2, right: -2,
+    width: 8, height: 8, borderRadius: 4,
+    backgroundColor: "#ff5252", borderWidth: 1, borderColor: colors.surface,
   },
   // Tooltip do rótulo no menu recolhido — à direita do ícone, verticalmente
   // centralizado (spans a altura inteira do item via top:0/bottom:0 +

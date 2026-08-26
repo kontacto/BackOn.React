@@ -48,11 +48,12 @@ def _list_itens_sync(servidor: str, banco: str, pedido: int) -> dict:
             "SELECT i.codauto, i.produto, i.qtd_pedida, i.p_venda, i.p_normal, i.desconto, i.acrescimo, "
             "       i.descricao_produto, i.unidade_pedido, i.data_inclusao_item, i.hora_inclusao_item, "
             "       pe.descricao AS peca_desc, pe.codigo_fab AS peca_fab, "
-            "       sv.descricao AS serv_desc, tp.descricao AS finalidade_desc "
+            "       sv.descricao AS serv_desc, tp.descricao AS finalidade_desc, pi.codigo AS imagem_codigo "
             "FROM pedido_venda_prod i "
             "LEFT JOIN pecas pe ON pe.codigo_int = i.produto "
             "LEFT JOIN servicos sv ON sv.codigo = i.produto "
             "LEFT JOIN tipo_peca tp ON tp.codigo = pe.tipo_peca "
+            "LEFT JOIN produto_imagem pi ON pi.codigo_int = i.produto AND pi.principal = 1 AND pi.situacao = 'A' "
             "WHERE i.pedido = %s AND ISNULL(i.item_cancelado,0) = 0 "
             # Taxa de Serviço (S002) sempre por último, independente de quando
             # foi incluída/atualizada — pedido explícito do usuário.
@@ -93,6 +94,7 @@ def _list_itens_sync(servidor: str, banco: str, pedido: int) -> dict:
                 # (pecas.tipo_peca); usada como rótulo no ticket de impressão
                 # de item (ver PENDENCIAS.md > "Pedido Bar" > "Impressão de item").
                 "finalidade_descricao": (r.get("finalidade_desc") or "").strip(),
+                "imagem_codigo": int(r["imagem_codigo"]) if r.get("imagem_codigo") is not None else None,
             })
         cur.close()
         conn.close()

@@ -24,6 +24,13 @@ o EXIF intacto (auditoria/impressão).
 `storage_key` é um UUID novo por upload (nunca o nome original do
 arquivo) — resolve a colisão silenciosa que existe no Gestor de
 Documentos (dois uploads com o mesmo nome de arquivo se sobrescrevem lá).
+
+Exclusão (`_excluir_imagem_sync`): marca `situacao='C'` (mantém a linha —
+histórico/dedupe por hash no script de migração) **e** remove o objeto
+físico (original + 3 variantes) do storage — pedido explícito do usuário
+2026-08-26, diferente do Gestor de Documentos (que só faz soft-delete pra
+Produtos, sem tocar no arquivo). Remoção física é best-effort: se falhar,
+não desfaz nem bloqueia a exclusão lógica já confirmada.
 """
 import asyncio
 import hashlib
@@ -153,16 +160,22 @@ def _upload_imagem_sync(
     conn = _open_conn(servidor, banco)
     try:
         cur = conn.cursor(as_dict=True)
-        if principal:
-            cur.execute(
-                "UPDATE produto_imagem SET principal=0 WHERE codigo_int=%s AND principal=1",
-                (codigo_int,),
-            )
         cur.execute(
             "SELECT ISNULL(MAX(ordem), -1) + 1 AS prox FROM produto_imagem WHERE codigo_int=%s AND situacao='A'",
             (codigo_int,),
         )
         ordem = int(cur.fetchone()["prox"])
+        # Primeira foto ativa do produto (ordem=0, nenhuma outra existente)
+        # sempre vira principal automaticamente — pedido explícito do
+        # usuário 2026-08-26, evita produto ficar sem foto principal só
+        # porque ninguém marcou o checkbox no primeiro envio.
+        if ordem == 0:
+            principal = True
+        if principal:
+            cur.execute(
+                "UPDATE produto_imagem SET principal=0 WHERE codigo_int=%s AND principal=1",
+                (codigo_int,),
+            )
         cur.execute(
             "INSERT INTO produto_imagem (codigo_int, storage_key, nome_original, content_type, largura, "
             "altura, tamanho_bytes, hash_conteudo, cor, principal, ordem, usuario_inclusao) "
@@ -217,6 +230,15 @@ def _list_imagens_sync(servidor: str, banco: str, codigo_int: str) -> dict:
         conn.close()
 
 
+def _extensao_original(content_type: str) -> str:
+    ext_por_mime = {v: k.lower() for k, v in _MIME_POR_FORMATO.items()}
+    return {"jpeg": "jpg"}.get(ext_por_mime.get(content_type, ""), ext_por_mime.get(content_type, "bin"))
+
+
+def _prefixo_storage(servidor: str, banco: str, codigo_int: str, storage_key: str) -> str:
+    return f"{_sanitizar(servidor)}/{_sanitizar(banco)}/{_sanitizar(codigo_int)}/{storage_key}"
+
+
 def _arquivo_sync(servidor: str, banco: str, codigo: int, variante: str) -> dict:
     if variante not in (*_VARIANTES.keys(), "original"):
         return {"success": False, "message": "Variante inválida."}
@@ -234,15 +256,14 @@ def _arquivo_sync(servidor: str, banco: str, codigo: int, variante: str) -> dict
     if not row:
         return {"success": False, "message": "Foto não encontrada."}
 
-    ext = "webp" if variante != "original" else None
     content_type = row.get("content_type") or "application/octet-stream"
     if variante == "original":
-        ext_por_mime = {v: k.lower() for k, v in _MIME_POR_FORMATO.items()}
-        ext = {"jpeg": "jpg"}.get(ext_por_mime.get(content_type, ""), ext_por_mime.get(content_type, "bin"))
+        ext = _extensao_original(content_type)
     else:
+        ext = "webp"
         content_type = "image/webp"
 
-    prefixo = f"{_sanitizar(servidor)}/{_sanitizar(banco)}/{_sanitizar(row['codigo_int'])}/{row['storage_key']}"
+    prefixo = _prefixo_storage(servidor, banco, row["codigo_int"], row["storage_key"])
     caminho = f"{prefixo}/{variante}.{ext}"
     try:
         driver = resolver_driver_sync(servidor, banco)
@@ -259,16 +280,40 @@ def _excluir_imagem_sync(servidor: str, banco: str, codigo: int) -> dict:
     conn = _open_conn(servidor, banco)
     try:
         cur = conn.cursor(as_dict=True)
-        cur.execute("SELECT codigo FROM produto_imagem WHERE codigo=%s AND situacao='A'", (codigo,))
-        if not cur.fetchone():
+        cur.execute(
+            "SELECT codigo_int, storage_key, content_type FROM produto_imagem WHERE codigo=%s AND situacao='A'",
+            (codigo,),
+        )
+        row = cur.fetchone()
+        if not row:
             cur.close()
             return {"success": False, "message": "Foto não encontrada."}
-        # Soft-delete — nunca remove o objeto físico nesta rodada (mesmo
-        # padrão conservador do Gestor de Documentos pra Produtos; limpeza
-        # física por retenção fica pra decisão futura, fora de escopo).
+        # A linha fica marcada como cancelada (situacao='C') — mantém o
+        # histórico/metadado (auditoria, dedupe por hash no script de
+        # migração), mas deixa de contar como foto ativa em qualquer
+        # listagem/uso. Pedido explícito do usuário 2026-08-26: excluir
+        # também remove o objeto FÍSICO (original + 3 variantes) — decisão
+        # que reverte o padrão conservador original (soft-delete sem tocar
+        # no arquivo, mesmo que o Gestor de Documentos ainda faça isso pra
+        # Produtos) especificamente pra este sistema novo.
         cur.execute("UPDATE produto_imagem SET situacao='C', principal=0 WHERE codigo=%s", (codigo,))
         conn.commit()
         cur.close()
+
+        try:
+            driver = resolver_driver_sync(servidor, banco)
+            prefixo = _prefixo_storage(servidor, banco, row["codigo_int"], row["storage_key"])
+            ext_original = _extensao_original(row.get("content_type") or "")
+            driver.excluir(f"{prefixo}/original.{ext_original}")
+            for variante in _VARIANTES:
+                driver.excluir(f"{prefixo}/{variante}.webp")
+        except Exception:
+            # Best-effort — a exclusão lógica (situacao='C') já está
+            # gravada e é o que decide se a foto aparece em algum lugar;
+            # uma falha ao remover o arquivo físico (driver reconfigurado
+            # nesse meio-tempo, permissão de pasta, etc.) não pode reverter
+            # nem travar a exclusão já confirmada ao usuário.
+            pass
         return {"success": True, "message": "Foto removida."}
     except Exception as e:
         try:

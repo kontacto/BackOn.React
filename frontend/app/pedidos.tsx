@@ -22,17 +22,6 @@ import { DraggablePedidoCard, DroppableColuna } from "@/src/components/pedido/Pa
 import { ORDEM_COLUNAS_TIPO, TIPO_COLOR, normalizaDescricao, tipoClienteKey } from "@/src/components/pedido/painelTipos";
 import { loadPedidosFiltros, pedidosFiltrosKey, savePedidosFiltros } from "@/src/utils/storage/pedidosFilters";
 
-const FAB_SHADOW_STYLE =
-  Platform.OS === "web"
-    ? { boxShadow: "0 4px 8px rgba(0, 0, 0, 0.25)" }
-    : {
-        shadowColor: "#000",
-        shadowOpacity: 0.25,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 8,
-      };
-
 type Pedido = {
   pedido: number;
   data: string | null;
@@ -775,6 +764,16 @@ export default function PedidosScreen() {
           <Ionicons name="chevron-back" size={22} color={colors.onBrandPrimary} />
         </Pressable>
         <Text style={styles.headerTitle}>Pedidos ({total})</Text>
+        {can("PEDIDO.GRAVAR") ? (
+          <Pressable
+            onPress={() => router.push("/pedido-form")}
+            style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]}
+            hitSlop={12}
+            testID="pedidos-header-add"
+          >
+            <Ionicons name="add" size={24} color={colors.onBrandPrimary} />
+          </Pressable>
+        ) : null}
         <Pressable
           onPress={() => setShowFilters((v) => !v)}
           style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.7 }]}
@@ -900,17 +899,6 @@ export default function PedidosScreen() {
           )}
         />
       )}
-
-      {can("PEDIDO.GRAVAR") ? (
-        <Pressable
-          onPress={() => router.push("/pedido-form")}
-          style={({ pressed }) => [styles.fab, FAB_SHADOW_STYLE, pressed && { opacity: 0.85 }]}
-          hitSlop={8}
-          testID="pedidos-fab-new"
-        >
-          <Ionicons name="add" size={28} color={colors.onBrandPrimary} />
-        </Pressable>
-      ) : null}
 
       <ClientSearchModal
         visible={novoPedidoCodigoTipo != null}
@@ -1069,10 +1057,5 @@ const styles = StyleSheet.create({
   cardValor: { fontSize: 15, fontWeight: "600", color: colors.brandPrimary },
   sitTag: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 },
   sitTagText: { fontSize: 10, fontWeight: "700", letterSpacing: 0.4 },
-  fab: {
-    position: "absolute", right: spacing.lg, bottom: spacing.xl,
-    width: 56, height: 56, borderRadius: 28, backgroundColor: colors.brandPrimary,
-    alignItems: "center", justifyContent: "center",
-  },
   empty: { textAlign: "center", color: colors.muted, fontSize: 14, marginTop: 40 },
 });

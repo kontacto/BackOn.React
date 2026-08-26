@@ -249,9 +249,25 @@ Invoke-RestMethod -Uri "http://localhost:8081/api/login" `
 
 ---
 
-## 🔄 Atualizar para versão nova (dia-a-dia)
+## 🔄 Atualizar para versão nova
 
-Quando houver atualização do código no GitHub:
+**Atualizado 2026-08-26**: o mecanismo de disparo automático deixou de
+ser a Tarefa Agendada Windows independente (`BackOn-Updater`, PAUSADA por
+decisão do usuário) — agora é a tela **"Serviço do Sistema" > "Atualização"**
+(Configurações, só usuário master), que configura credencial/pastas/
+intervalo e roda o schedule DENTRO do próprio processo do backend (sem
+precisar de uma segunda Tarefa Agendada). Baixar/trocar versão continua
+reaproveitando os scripts em `updater/` (agora com 3 modos — ver
+`updater/README.md`) — só QUEM os invoca mudou. O passo manual abaixo
+(`git pull` + reinstalar + reiniciar) continua sendo necessário só pra
+**primeira instalação** de uma máquina nova, antes de existir um backend
+rodando pra configurar a tela (ver "🛠 Rodar como serviço Windows" logo
+abaixo). Ver PENDENCIAS.md > "Serviço do Sistema — Atualização" pro
+desenho completo — `updater/install-updater-task.ps1` (a Tarefa Agendada
+independente) continua existindo no repositório, mas não é mais o
+caminho recomendado.
+
+### Primeira instalação / atualização manual pontual (sem o Atualizador)
 
 ```powershell
 # Se o backend estiver rodando como Tarefa Agendada (ver seção abaixo), pare antes:
@@ -277,6 +293,10 @@ Start-ScheduledTask -TaskName "BackOn-Backend"
 > diagnóstico na seção Troubleshooting, "Porta 8081 já em uso") — uma
 > instância órfã de uma sessão anterior pode continuar servindo código
 > desatualizado sem avisar.
+>
+> Isso vale igualmente pro Atualizador automático — é exatamente esse tipo
+> de instância órfã que o health check + rollback de `apply_update.ps1`
+> existem pra evitar sem intervenção manual.
 
 ---
 

@@ -226,6 +226,13 @@ export default function ConfiguracoesScreen() {
                         testID="config-modulos"
                       />
                       <Item
+                        icon="cloud-download-outline"
+                        label="Serviço do Sistema"
+                        hint="Atualização automática de Backend/Frontend desta instalação"
+                        onPress={() => router.push("/servico-sistema")}
+                        testID="config-servico-sistema"
+                      />
+                      <Item
                         icon="logo-whatsapp"
                         label="WhatsApp"
                         hint="Configurar envio de Pedidos e OS por WhatsApp"

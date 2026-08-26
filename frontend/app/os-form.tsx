@@ -62,7 +62,7 @@ export default function OSFormScreen() {
   const router = useRouter();
   const { can, moduleOn, isMaster, classe } = usePermissions();
   const servicosOn = moduleOn("servicos");
-  const params = useLocalSearchParams<{ os?: string; cliente?: string; cliente_nome?: string }>();
+  const params = useLocalSearchParams<{ os?: string; cliente?: string; cliente_nome?: string; destacar?: string }>();
   const editing = !!params.os;
   const osId = params.os ? parseInt(String(params.os), 10) : null;
 
@@ -773,7 +773,13 @@ export default function OSFormScreen() {
               <Pressable
                 key={it.cod_os_prod}
                 onPress={() => can("OS.EDIT_ITEM") && openEditItem(it)}
-                style={({ pressed }) => [styles.itemCard, pressed && { opacity: 0.7 }]}
+                style={({ pressed }) => [
+                  styles.itemCard,
+                  // Item destacado ao abrir a partir do "Reservado para..."
+                  // de produtos.tsx — pedido explícito do usuário, 2026-08-26.
+                  !!params.destacar && it.produto === params.destacar && styles.itemCardDestacado,
+                  pressed && { opacity: 0.7 },
+                ]}
                 testID={`os-item-${it.cod_os_prod}`}
               >
                 <View style={[styles.itemTipo, it.tipo === "P" ? styles.tagProd : styles.tagServ]}>
@@ -1300,6 +1306,9 @@ const styles = StyleSheet.create({
     flexDirection: "row", alignItems: "center", gap: spacing.md,
     backgroundColor: colors.surfaceSecondary, borderRadius: radius.md,
     padding: spacing.md, borderWidth: 1, borderColor: colors.border, marginBottom: 8,
+  },
+  itemCardDestacado: {
+    backgroundColor: colors.brandTertiary, borderColor: colors.brandPrimary, borderWidth: 1.5,
   },
   itemTipo: { width: 32, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center" },
   tagProd: { backgroundColor: colors.brandTertiary },

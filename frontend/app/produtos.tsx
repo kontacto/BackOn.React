@@ -29,6 +29,7 @@ import AddItemModal from "@/src/components/pedido/AddItemModal";
 import ReciboPedidoModal from "@/src/components/pedido/ReciboPedidoModal";
 import { apiGet } from "@/src/utils/api";
 import { produtoImagemUrl } from "@/src/utils/produtoImagem";
+import ImageLightboxModal from "@/src/components/ImageLightboxModal";
 import { PedidoData, ClienteRow } from "@/src/components/pedido/types";
 
 const isWeb = Platform.OS === "web";
@@ -91,6 +92,7 @@ export default function ProdutosScreen() {
   const [funcaoCod, setFuncaoCod] = useState<number>(1); // 1=gerente,2=supervisor,3=vendedor
   const [usuarioCod, setUsuarioCod] = useState<number>(-2);
   const [toast, setToast] = useState<string | null>(null);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [conn, setConn] = useState<Connection | null>(null);
   const [search, setSearch] = useState("");
   // Quando a tela é aberta a partir de um cadastro específico (Cadastros >
@@ -272,6 +274,24 @@ export default function ProdutosScreen() {
     }
   }, [conn]);
 
+  // Abre o Pedido/O.S. reservado direto do modal "Reservado para..." —
+  // mesmo critério de rota já usado em ModuleTiles.tsx (Bar/quick pra quem
+  // tem a permissão "curta", Geral/Completa como alternativa pra quem só
+  // tem a permissão "_COMP") — como o documento já é um número específico
+  // (não uma lista), não dá pra saber de antemão se é Bar ou Geral, então a
+  // permissão do usuário decide qual tela abrir. `destacar` (código do
+  // produto) viaja junto — pedido explícito do usuário, 2026-08-26: o item
+  // reservado aparece marcado (cor diferente) na lista de itens da tela de
+  // destino, pra identificação rápida sem precisar procurar na lista.
+  const abrirReserva = useCallback((tipo: "PED" | "OS", doc: number, codigoProduto: string) => {
+    setResModal(null);
+    if (tipo === "OS") {
+      router.push({ pathname: can("OS.ABRIR") ? "/os-form" : "/os-geral", params: { os: String(doc), destacar: codigoProduto } });
+    } else {
+      router.push({ pathname: can("PEDIDO.ABRIR") ? "/pedido-form" : "/pedido-geral", params: { pedido: String(doc), destacar: codigoProduto } });
+    }
+  }, [can, router]);
+
   const brDate = (iso: string | null) => {
     const [y, m, d] = (iso || "").split("-");
     return d ? `${d}/${m}/${y}` : "—";
@@ -412,7 +432,11 @@ export default function ProdutosScreen() {
             testID={`item-${item.tipo}-${item.codigo}`}
           >
             {item.tipo === "P" ? (
-              <ProdutoFoto urls={fotoUrls(item)} />
+              <ProdutoFoto
+                urls={fotoUrls(item)}
+                enlargeUrl={item.imagem_codigo != null && conn ? produtoImagemUrl(conn, item.imagem_codigo, "web") : undefined}
+                onEnlarge={setLightboxUrl}
+              />
             ) : (
               <View style={[styles.thumb, styles.thumbServico]}>
                 <Ionicons name="construct-outline" size={26} color={colors.brandPrimary} />
@@ -567,7 +591,12 @@ export default function ProdutosScreen() {
                   <Text style={[styles.resHead, { flex: 0.8, textAlign: "right" }]}>Qtd</Text>
                 </View>
                 {resItems.map((r) => (
-                  <View key={r.doc} style={styles.resRow} testID={`reserva-doc-${r.doc}`}>
+                  <Pressable
+                    key={r.doc}
+                    onPress={() => abrirReserva(resModal?.tipo === "OS" ? "OS" : "PED", r.doc, resModal?.item.codigo || "")}
+                    style={({ pressed }) => [styles.resRow, pressed && { backgroundColor: colors.brandTertiary }]}
+                    testID={`reserva-doc-${r.doc}`}
+                  >
                     <View style={{ flex: 1 }}>
                       <Text style={styles.resDoc}>#{r.doc}</Text>
                       <Text style={styles.resSit}>{r.situacao_label}</Text>
@@ -575,7 +604,8 @@ export default function ProdutosScreen() {
                     <Text style={[styles.resCell, { flex: 2 }]} numberOfLines={1}>{r.cliente}</Text>
                     <Text style={[styles.resCell, { flex: 1.1 }]}>{brDate(r.data)}</Text>
                     <Text style={[styles.resCell, { flex: 0.8, textAlign: "right", fontWeight: "700" }]}>{r.qtd}</Text>
-                  </View>
+                    <Ionicons name="chevron-forward" size={16} color={colors.muted} style={{ marginLeft: 4 }} />
+                  </Pressable>
                 ))}
               </ScrollView>
             )}
@@ -588,6 +618,7 @@ export default function ProdutosScreen() {
           <Text style={styles.toastText}>{toast}</Text>
         </View>
       ) : null}
+      <ImageLightboxModal visible={!!lightboxUrl} onClose={() => setLightboxUrl(null)} imageUrl={lightboxUrl} />
       </>
       )}
     </SafeAreaView>
@@ -596,7 +627,12 @@ export default function ProdutosScreen() {
 
 // Foto do produto: tenta as URLs em ordem (extensões diferentes). Se todas falharem
 // (ou a lista vier vazia, quando não há URL configurada), mostra o ícone padrão.
-function ProdutoFoto({ urls }: { urls: string[] }) {
+// Clicar na foto amplia (Lightbox) — regra [GLOBAL], ver CLAUDE.md > "Clicar
+// em imagem de produto amplia (Lightbox)". `enlargeUrl` é opcional: só
+// produto já migrado pra `produto_imagem` tem uma URL de variante maior
+// pra mostrar; sem isso, o clique não faz nada (não amplia a mesma
+// miniatura pequena, ficaria borrada).
+function ProdutoFoto({ urls, enlargeUrl, onEnlarge }: { urls: string[]; enlargeUrl?: string; onEnlarge?: (url: string) => void }) {
   const [idx, setIdx] = useState(0);
   const key = urls.join("|");
   useEffect(() => {
@@ -610,13 +646,22 @@ function ProdutoFoto({ urls }: { urls: string[] }) {
       </View>
     );
   }
-  return (
+  const img = (
     <Image
       source={{ uri: current }}
       style={styles.thumb}
       onError={() => setIdx((i) => i + 1)}
       resizeMode="cover"
     />
+  );
+  if (!enlargeUrl || !onEnlarge) return img;
+  return (
+    <Pressable
+      onPress={(e) => { e.stopPropagation(); onEnlarge(enlargeUrl); }}
+      testID={`produto-foto-ampliar-${key}`}
+    >
+      {img}
+    </Pressable>
   );
 }
 

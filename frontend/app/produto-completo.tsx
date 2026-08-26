@@ -11,6 +11,8 @@ import { AppModal } from "@/src/components/AppModal";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import GestorDocumentosSection, { GESTOR_DOC_GRUPO_PRODUTO } from "@/src/components/GestorDocumentosSection";
 import ProdutoImagensSection from "@/src/components/produto/ProdutoImagensSection";
+import { produtoImagemUrl } from "@/src/utils/produtoImagem";
+import ImageLightboxModal from "@/src/components/ImageLightboxModal";
 import ModificadoresSection from "@/src/components/ModificadoresSection";
 import NiveisModal from "@/src/components/NiveisModal";
 import { buildNivelBreadcrumb } from "@/src/utils/nivelTree";
@@ -224,7 +226,7 @@ const PRODUTO_AJUDA_ITENS: HelpItem[] = [
   },
   {
     titulo: "Fotografia",
-    texto: "Envia fotos do produto. A foto marcada com a estrela é a Principal — é ela que aparece na busca de produto, no PDV e no catálogo. Também permite associar uma cor a cada foto (ligada à Grade) e publicar o produto no site (Tray).",
+    texto: "Envia fotos do produto. A foto marcada com a estrela é a Principal — é ela que aparece na busca de produto, no PDV e no catálogo. Prefira fotos quadradas (proporção 1:1, mínimo 600x600px) — foto retangular é cortada nas bordas pra caber no formato quadrado das miniaturas. Também permite associar uma cor a cada foto (ligada à Grade) e publicar o produto no site (Tray).",
     icon: { lib: "ion", name: "image-outline" },
   },
   {
@@ -265,6 +267,8 @@ export default function ProdutoCompletoScreen() {
   const [tab, setTab] = useState<TabKey>("principal");
   const [fornecedorModal, setFornecedorModal] = useState(false);
   const [fotografiaModal, setFotografiaModal] = useState(false);
+  const openFotografia = () => (f.editingCodigo ? setFotografiaModal(true) : Alert.alert("Grave o produto primeiro"));
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [gradeModal, setGradeModal] = useState(false);
 
   const [nivelList, setNivelList] = useState<NivelFlat[]>([]);
@@ -519,7 +523,7 @@ export default function ProdutoCompletoScreen() {
           <IconButtonWithTooltip
             icon="image-outline"
             label="Fotografia"
-            onPress={() => (f.editingCodigo ? setFotografiaModal(true) : Alert.alert("Grave o produto primeiro"))}
+            onPress={openFotografia}
             disabled={!can("PRODUTO_COMP.FOTOGRAFIA")}
             color={colors.onBrandPrimary}
             testID="produto-completo-btn-fotografia"
@@ -569,6 +573,8 @@ export default function ProdutoCompletoScreen() {
               descrição e aplicação ficam ACIMA da barra de abas, nunca
               escondidos ao trocar de aba). Ver CLAUDE.md > "Produto Completo". */}
           <View style={styles.card}>
+           <View style={styles.identityRow}>
+            <View style={styles.identityFields}>
             <View style={styles.rowFields}>
               <View style={styles.colNarrow}>
                 <Text style={styles.label}>Código Interno</Text>
@@ -609,6 +615,49 @@ export default function ProdutoCompletoScreen() {
 
             <Text style={styles.label}>Aplicação/Observações</Text>
             <TextInput value={String(f.form.Descricao_Completa || "")} onChangeText={(v) => f.setField("Descricao_Completa", v)} style={[styles.input, { minHeight: 70 }]} multiline testID="produto-aplicacao" />
+            </View>
+
+            {/* Foto principal + atalho pro modal Fotografia — pedido
+                explícito do usuário, exibida ao lado dos campos de
+                identidade (não só dentro do modal), pra dar visibilidade
+                imediata de qual é a foto que aparece na busca de produto/
+                PDV/catálogo. Ver ProdutoImagensSection.tsx e PENDENCIAS.md
+                > "Fotos de Produto". */}
+            <View style={styles.identityPhotoCol}>
+              <Pressable
+                // Com foto: clicar amplia (Lightbox, regra [GLOBAL]). Sem
+                // foto ainda: clicar abre o mesmo modal Fotografia do botão
+                // abaixo, já que não há nada pra ampliar.
+                onPress={
+                  f.conn && f.imagemPrincipalCodigo != null
+                    ? () => setLightboxUrl(produtoImagemUrl(f.conn as NonNullable<typeof f.conn>, f.imagemPrincipalCodigo as number, "web"))
+                    : openFotografia
+                }
+                disabled={!can("PRODUTO_COMP.FOTOGRAFIA")}
+                style={({ pressed }) => [styles.identityPhotoThumb, pressed && { opacity: 0.85 }]}
+                testID="produto-completo-foto-principal"
+              >
+                {f.conn && f.imagemPrincipalCodigo != null ? (
+                  // eslint-disable-next-line jsx-a11y/alt-text
+                  <img
+                    src={produtoImagemUrl(f.conn, f.imagemPrincipalCodigo, "medium")}
+                    style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: radius.md }}
+                  />
+                ) : (
+                  <Ionicons name="image-outline" size={32} color={colors.muted} />
+                )}
+              </Pressable>
+              <Pressable
+                onPress={openFotografia}
+                disabled={!can("PRODUTO_COMP.FOTOGRAFIA")}
+                style={({ pressed }) => [styles.identityPhotoBtn, pressed && { opacity: 0.85 }]}
+                testID="produto-completo-foto-principal-btn"
+              >
+                <Ionicons name="camera-outline" size={14} color={colors.brandPrimary} />
+                <Text style={styles.identityPhotoBtnText}>Fotografia</Text>
+              </Pressable>
+            </View>
+           </View>
           </View>
 
           <View style={styles.tabBar}>
@@ -1059,12 +1108,20 @@ export default function ProdutoCompletoScreen() {
       {f.conn && f.editingCodigo ? (
         <FotografiaModal
           visible={fotografiaModal}
-          onClose={() => setFotografiaModal(false)}
+          onClose={() => {
+            setFotografiaModal(false);
+            // Recarrega o produto pra atualizar a miniatura da foto
+            // principal exibida ao lado dos campos de identidade — o
+            // modal pode ter trocado/enviado/excluído a foto principal
+            // enquanto esteve aberto.
+            if (f.conn && f.editingCodigo) f.carregarDetalhe(f.conn, f.editingCodigo);
+          }}
           conn={f.conn}
           codigoInt={f.editingCodigo}
           gradeOn={gradeOn}
           canEnviarSite={can("PRODUTO_COMP.ENVIAR_SITE")}
           onEnviarSite={f.enviarSite}
+          onPrincipalChanged={f.setImagemPrincipalCodigo}
         />
       ) : null}
       {f.editingCodigo ? (
@@ -1121,6 +1178,7 @@ export default function ProdutoCompletoScreen() {
         onPick={handleNcmCestPick}
       />
       <AjudaPedidoModal visible={ajudaOpen} onClose={() => setAjudaOpen(false)} titulo="Cadastro de Produtos" itens={PRODUTO_AJUDA_ITENS} />
+      <ImageLightboxModal visible={!!lightboxUrl} onClose={() => setLightboxUrl(null)} imageUrl={lightboxUrl} />
     </SafeAreaView>
   );
 }
@@ -1384,9 +1442,10 @@ function FornecedorModal({ visible, onClose, fornecedores, setFornecedores, conn
 // "Aviso de teste" na docstring).
 // ---------------------------------------------------------------------------
 
-function FotografiaModal({ visible, onClose, conn, codigoInt, gradeOn, canEnviarSite, onEnviarSite }: {
+function FotografiaModal({ visible, onClose, conn, codigoInt, gradeOn, canEnviarSite, onEnviarSite, onPrincipalChanged }: {
   visible: boolean; onClose: () => void; conn: { servidor: string; banco: string; api: string };
   codigoInt: string; gradeOn: boolean; canEnviarSite: boolean; onEnviarSite: (idTray?: number) => Promise<boolean>;
+  onPrincipalChanged?: (codigo: number | null) => void;
 }) {
   const [enviando, setEnviando] = useState(false);
   return (
@@ -1398,7 +1457,7 @@ function FotografiaModal({ visible, onClose, conn, codigoInt, gradeOn, canEnviar
             <Pressable onPress={onClose} hitSlop={8}><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
           </View>
           <ScrollView style={{ maxHeight: 480 }}>
-            <ProdutoImagensSection api={conn.api} servidor={conn.servidor} banco={conn.banco} codigoInt={codigoInt} />
+            <ProdutoImagensSection api={conn.api} servidor={conn.servidor} banco={conn.banco} codigoInt={codigoInt} onPrincipalChanged={onPrincipalChanged} />
             {gradeOn ? (
               <Text style={styles.sectionHint}>
                 Depois de enviar as fotos acima, use "Cadastrar/Atualizar no Site" para publicar na Tray — a cor de
@@ -2025,6 +2084,22 @@ const styles = StyleSheet.create({
   // até a largura inteira do card num monitor grande (container agora 1600px).
   colFlex: { flex: 1, minWidth: 160, maxWidth: 420 },
   colNarrow: { width: 140 },
+  // Identidade do produto: campos à esquerda (flex, absorve o espaço) +
+  // foto principal/atalho Fotografia à direita, largura fixa — pedido
+  // explícito do usuário (antes esse espaço à direita do card ficava
+  // vazio em telas largas). Ver "Foto principal + atalho" no JSX acima.
+  identityRow: { flexDirection: "row", gap: spacing.lg, alignItems: "flex-start" },
+  identityFields: { flex: 1, minWidth: 0 },
+  identityPhotoCol: { width: 140, alignItems: "center", gap: spacing.sm },
+  identityPhotoThumb: {
+    width: 140, height: 140, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surfaceSecondary, alignItems: "center", justifyContent: "center", overflow: "hidden",
+  },
+  identityPhotoBtn: {
+    flexDirection: "row", alignItems: "center", gap: 6, borderWidth: 1, borderColor: colors.brandPrimary,
+    borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 6,
+  },
+  identityPhotoBtnText: { fontSize: 12, fontWeight: "600", color: colors.brandPrimary },
   switchRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.md },
   switchRowInline: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   switchLabel: { fontSize: 13, color: colors.onSurface, fontWeight: "500" },

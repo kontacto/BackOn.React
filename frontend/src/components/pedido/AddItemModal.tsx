@@ -14,6 +14,8 @@ import { formatBRL, parseNum, fmtNum, calcDescUnit } from "@/src/utils/format";
 import { usePermissions } from "@/src/permissions";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { apiGet } from "@/src/utils/api";
+import { produtoImagemUrl } from "@/src/utils/produtoImagem";
+import ImageLightboxModal from "@/src/components/ImageLightboxModal";
 import { styles } from "./styles";
 import { ProdutoServico, ModificadorCategoriaVenda } from "./types";
 import { UsePedidoItens } from "./usePedidoItens";
@@ -31,6 +33,7 @@ export default function AddItemModal({ it, onOpenProdutos, tela = "PEDIDO" }: Pr
   const { selProd } = it;
   const { can } = usePermissions();
   const fb = useFeedback();
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const canDesc = can(`${tela}.DESC_ITEM`);
   // Seletor de Modificadores (Fase 2) — por pedido explícito do usuário
   // (2026-07-23: "faça somente em Pedidos Bar. Depois faremos nas outras
@@ -152,19 +155,21 @@ export default function AddItemModal({ it, onOpenProdutos, tela = "PEDIDO" }: Pr
     return () => { cancelado = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exigeNumSerie, selProd?.codigo]);
-  // Busca só dispara no Enter no Pedido Geral (pedido explícito do
-  // usuário, 2026-07-20: "na busca do pedido geral só efetuar a busca
-  // depois do enter") — diferente do Bar, que busca enquanto digita com
-  // debounce (`usePedidoItens`'s `buscaProdutoSoEnter`). `searchTriggered`
-  // controla só a exibição/mensagem aqui; quem decide se busca de fato é
-  // o hook (`buscarProdutos`, chamada no onSubmitEditing abaixo).
-  const [searchTriggered, setSearchTriggered] = useState(false);
+  // Busca padronizada com o KPDV (pedido explícito do usuário, 2026-08-26
+  // — "não precisa dar enter para começar a pesquisar... padronizar essas
+  // buscas como a busca de produtos do KPDV"): busca automaticamente 350ms
+  // depois da última tecla, em toda tela (Bar, Geral, O.S.) — mesmo
+  // debounce de `VendaViewModel.BuscarAsync` do KPDV, ver `usePedidoItens.
+  // ts`. Isso reverte a exceção "só busca no Enter" que existia só pro
+  // Pedido Geral desde 2026-07-20. Enter continua funcionando, mas agora
+  // como ACELERADOR (igual ao KPDV): pula o debounce e busca na hora — só
+  // isso, digitar e esperar já basta.
   const digitou = it.prodTerm.trim().length > 0;
   // Com o campo de busca vazio, a lista padrão é a dos itens já lançados
-  // no pedido — só troca pra resultado de busca quando o usuário digita
-  // (Bar) ou aperta Enter (Geral). Não mostra a lista de conveniência no
-  // Pedido Geral (ver comentário acima).
-  const buscando = isPedidoComp ? (digitou && searchTriggered) : digitou;
+  // no pedido (Bar) — Pedido Geral continua sem essa lista de conveniência
+  // (pedido explícito do usuário, 2026-07-20 — "a busca do pedido geral
+  // não precisa trazer os itens do pedido, como acontece no bar").
+  const buscando = digitou;
   const listaExibida = buscando ? it.prodResults : (isPedidoComp ? [] : it.pedidoProdutos);
 
   // Pedido sem nenhum item ainda -> não há nada útil pra "repetir" na lista
@@ -181,25 +186,27 @@ export default function AddItemModal({ it, onOpenProdutos, tela = "PEDIDO" }: Pr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [it.addOpen]);
 
-  // Modal não desmonta ao fechar (`Modal` do RN só esconde) — reseta o
-  // estado "já buscou" a cada reabertura, senão reaparece com o resultado
-  // da busca anterior antes do usuário digitar de novo.
-  useEffect(() => {
-    if (it.addOpen) setSearchTriggered(false);
-  }, [it.addOpen]);
-
   return (
+    <>
     <Modal visible={it.addOpen} transparent animationType="slide" onRequestClose={() => it.setAddOpen(false)}>
       <Pressable style={[styles.modalBg, isWeb && styles.modalBgWebCompact]} onPress={() => it.setAddOpen(false)}>
-        {/* Busca/lista de produtos usa o tier de seleção (560px, precisa de
-            espaço pra lista); confirmar o item selecionado (qtd/valor/
-            desconto) usa o tier estreito de confirmação pontual (420px). */}
+        {/* Regra [GLOBAL] 2026-08-26, user-directed: "Adicionar Item" tem
+            que abrir/parecer com o mesmo formato de "Editar Item" — uma
+            única tela (mesmo tamanho de modal, mesmo título, o tempo
+            todo), a busca acontece dentro dela, nunca abrindo outro
+            modal/tela. Antes disso, o modal trocava de tamanho (560px de
+            busca -> 420px de confirmação) e de título ("Adicionar Item"
+            -> "Confirmar Item") ao selecionar um produto, o que lia como
+            "sair da tela" mesmo sendo tecnicamente o mesmo <Modal>. Agora
+            fica sempre no tier estreito (420px, igual EditItemModal.tsx),
+            sempre com o mesmo título — só o CONTEÚDO interno troca entre
+            "buscar" e "confirmar", dentro do mesmo card. */}
         <Pressable
-          style={[styles.modalCard, isWeb && (selProd ? styles.modalCardWebCompactNarrow : styles.modalCardWebCompact)]}
+          style={[styles.modalCard, isWeb && styles.modalCardWebCompactNarrow]}
           onPress={(e) => e.stopPropagation()}
         >
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>{selProd ? "Confirmar Item" : "Adicionar Item"}</Text>
+            <Text style={styles.modalTitle}>Adicionar Item</Text>
             <Pressable onPress={() => it.setAddOpen(false)} hitSlop={8}>
               <Ionicons name="close" size={22} color={colors.muted} />
             </Pressable>
@@ -211,17 +218,18 @@ export default function AddItemModal({ it, onOpenProdutos, tela = "PEDIDO" }: Pr
                 <Ionicons name="search" size={16} color={colors.muted} />
                 <TextInput
                   value={it.prodTerm}
-                  onChangeText={(v) => { it.setProdTerm(v); if (isPedidoComp) setSearchTriggered(false); }}
-                  onSubmitEditing={isPedidoComp ? async () => {
+                  onChangeText={it.setProdTerm}
+                  onSubmitEditing={async () => {
+                    // Enter = acelerador (bypassa o debounce de 350ms),
+                    // mesmo comportamento do KPDV — nunca obrigatório, só
+                    // mais rápido pra quem prefere apertar Enter. 1
+                    // resultado só -> pula direto pra "Confirmar Item"
+                    // (mesmo princípio já usado no campo Cliente).
+                    if (!it.prodTerm.trim()) return;
                     const encontrados = await it.buscarProdutos(it.prodTerm);
-                    setSearchTriggered(true);
-                    // 1 resultado só -> pula direto pra "Confirmar Item",
-                    // sem precisar tocar no registro (pedido explícito do
-                    // usuário, 2026-07-20 — mesmo princípio já usado no
-                    // campo Cliente: 1 resultado carrega direto).
                     if (encontrados.length === 1) it.pickProduto(encontrados[0]);
-                  } : undefined}
-                  returnKeyType={isPedidoComp ? "search" : undefined}
+                  }}
+                  returnKeyType="search"
                   placeholder="Buscar produto ou serviço…"
                   placeholderTextColor={colors.muted}
                   style={styles.searchInput}
@@ -249,6 +257,16 @@ export default function AddItemModal({ it, onOpenProdutos, tela = "PEDIDO" }: Pr
                     >
                       {p.codigo === "S002" ? (
                         <MaterialCommunityIcons name="room-service" size={16} color={colors.success} />
+                      ) : isWeb && it.conn && p.imagem_codigo != null ? (
+                        // eslint-disable-next-line jsx-a11y/alt-text
+                        <img
+                          src={produtoImagemUrl(it.conn, p.imagem_codigo, "thumb")}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (it.conn && p.imagem_codigo != null) setLightboxUrl(produtoImagemUrl(it.conn, p.imagem_codigo, "web"));
+                          }}
+                          style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: radius.sm, cursor: "pointer" }}
+                        />
                       ) : (
                         <Ionicons
                           name={p.tipo === "P" ? "cube" : "construct"}
@@ -297,12 +315,10 @@ export default function AddItemModal({ it, onOpenProdutos, tela = "PEDIDO" }: Pr
                 ))}
                 {!it.prodLoading && listaExibida.length === 0 ? (
                   <Text style={styles.emptyText}>
-                    {isPedidoComp
-                      ? (searchTriggered
-                          ? "Nenhum produto/serviço encontrado."
-                          : (digitou ? "Aperte Enter para buscar." : "Digite e aperte Enter para buscar um produto ou serviço."))
-                      : (buscando
-                          ? "Nenhum produto/serviço encontrado."
+                    {buscando
+                      ? "Nenhum produto/serviço encontrado."
+                      : (isPedidoComp
+                          ? "Digite para buscar um produto ou serviço."
                           : "Nenhum item no pedido ainda — busque um produto ou serviço.")}
                   </Text>
                 ) : null}
@@ -319,9 +335,19 @@ export default function AddItemModal({ it, onOpenProdutos, tela = "PEDIDO" }: Pr
           ) : (
             <ScrollView style={{ maxHeight: 520 }} keyboardShouldPersistTaps="handled">
               <View style={{ gap: spacing.sm }}>
-                <View style={styles.selProdBox}>
-                  <Text style={styles.itemDesc} numberOfLines={2}>{selProd.descricao}</Text>
-                  <Text style={styles.resultSub}>#{selProd.codigo}{selProd.cod_fab ? ` · ${selProd.cod_fab}` : ""}</Text>
+                <View style={[styles.selProdBox, { flexDirection: "row", alignItems: "center", gap: spacing.sm }]}>
+                  {isWeb && it.conn && selProd.imagem_codigo != null ? (
+                    // eslint-disable-next-line jsx-a11y/alt-text
+                    <img
+                      src={produtoImagemUrl(it.conn, selProd.imagem_codigo, "thumb")}
+                      onClick={() => it.conn && selProd.imagem_codigo != null && setLightboxUrl(produtoImagemUrl(it.conn, selProd.imagem_codigo, "web"))}
+                      style={{ width: 44, height: 44, borderRadius: radius.sm, objectFit: "cover", flexShrink: 0, cursor: "pointer" }}
+                    />
+                  ) : null}
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.itemDesc} numberOfLines={2}>{selProd.descricao}</Text>
+                    <Text style={styles.resultSub}>#{selProd.codigo}{selProd.cod_fab ? ` · ${selProd.cod_fab}` : ""}</Text>
+                  </View>
                 </View>
                 {exigeNumSerie ? (
                   <View>
@@ -647,6 +673,8 @@ export default function AddItemModal({ it, onOpenProdutos, tela = "PEDIDO" }: Pr
         </Pressable>
       </Pressable>
     </Modal>
+    <ImageLightboxModal visible={!!lightboxUrl} onClose={() => setLightboxUrl(null)} imageUrl={lightboxUrl} />
+    </>
   );
 }
 

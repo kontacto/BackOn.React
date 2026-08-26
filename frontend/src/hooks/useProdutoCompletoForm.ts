@@ -99,6 +99,10 @@ export function useProdutoCompletoForm(codigoParam?: string) {
   // `pecas`) só pra exibição; também atualizado localmente ao escolher um
   // fornecedor pelo mecanismo de busca (ver produto-completo.tsx).
   const [fornecedorNome, setFornecedorNome] = useState("");
+  // Foto principal (sistema novo, ver PENDENCIAS.md > "Fotos de Produto") —
+  // mesmo padrão de `fornecedorNome` acima: não é um campo do form (não é
+  // coluna de `pecas`), fica fora do loop genérico de `aplicarDetalhe`.
+  const [imagemPrincipalCodigo, setImagemPrincipalCodigo] = useState<number | null>(null);
 
   const setField = useCallback((k: string, v: string | boolean) => {
     setForm((f) => ({ ...f, [k]: v }));
@@ -120,6 +124,7 @@ export function useProdutoCompletoForm(codigoParam?: string) {
     setProtocoloSt(j.protocolo_st || []);
     setGrade(j.grade || []);
     setFornecedorNome(d.fornecedor_nome || "");
+    setImagemPrincipalCodigo(d.imagem_principal_codigo != null ? Number(d.imagem_principal_codigo) : null);
   }, []);
 
   const carregarDetalhe = useCallback(
@@ -324,6 +329,7 @@ export function useProdutoCompletoForm(codigoParam?: string) {
     fornecedores, setFornecedores, similares, setSimilares, secundarios, setSecundarios,
     xmlVinculos, setXmlVinculos, protocoloSt, setProtocoloSt, grade,
     fornecedorNome, setFornecedorNome,
+    imagemPrincipalCodigo, setImagemPrincipalCodigo,
     save, deleteProduto, criarItensGrade, enviarSite, carregarDetalhe, buscarPorCodigoInt,
   };
 }

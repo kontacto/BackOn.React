@@ -210,7 +210,7 @@ export default function OSGeralScreen() {
 
 function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) {
   const { can, isMaster, classe, moduleOn } = usePermissions();
-  const params = useLocalSearchParams<{ os?: string }>();
+  const params = useLocalSearchParams<{ os?: string; destacar?: string }>();
   const editing = !!params.os;
   const osId = params.os ? parseInt(String(params.os), 10) : null;
 
@@ -1547,6 +1547,7 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
                 onCancelar={handleCancelar}
                 cancelando={cancelando}
                 onImprimir={() => setReciboOpen(true)}
+                destacarProduto={params.destacar}
                 onTempoGastoItem={(item) => {
                   setTempoGastoPreselect(item.produto);
                   setTempoModalOpen(true);

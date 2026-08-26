@@ -11,7 +11,7 @@ import { Ionicons } from "@/src/components/Ionicons";
 // plataforma Windows está pausada (CLAUDE.md > "Platform Scope").
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 
-import { colors } from "@/src/theme/colors";
+import { colors, radius } from "@/src/theme/colors";
 import { formatBRL, formatDateBR, fmtNum } from "@/src/utils/format";
 import { usePermissions } from "@/src/permissions";
 import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
@@ -114,6 +114,24 @@ type Props = {
   // botão de WhatsApp na mesma linha (pedido explícito do usuário,
   // 2026-07-17), sem o ItemList precisar conhecer `conn`/`documentId`/etc.
   footerRight?: ReactNode;
+  // Resolve a URL de miniatura de uma foto de produto (`produto_imagem`,
+  // codigo -> URL) — mesmo raciocínio de `footerRight` acima: a tela dona
+  // conhece `conn`, o ItemList não precisa (nem deve, ver comentário
+  // acima sobre `ItemListItens` ser mínima/compartilhada com O.S.).
+  // undefined = não mostra foto, cai no ícone padrão (cubo/chave).
+  // `variante` opcional (default "thumb") — a versão "web" (maior) é usada
+  // pro Lightbox de ampliar, ver ImageLightboxModal.tsx.
+  imagemUrlResolver?: (codigo: number, variante?: "thumb" | "medium" | "web" | "original") => string;
+  // Regra [GLOBAL]: clicar na foto do item amplia — a tela dona é quem
+  // guarda o estado do Lightbox (mesmo raciocínio de `imagemUrlResolver`
+  // acima, o ItemList não guarda estado que não é dele).
+  onEnlargeImagem?: (url: string) => void;
+  // Código do produto (`pecas.codigo_int`/`servicos.codigo`) pra destacar
+  // com cor diferente na lista — pedido explícito do usuário 2026-08-26:
+  // ao abrir o Pedido/O.S. a partir do modal "Reservado para..." de
+  // `produtos.tsx`, o item reservado precisa ser identificado rápido sem
+  // precisar procurar na lista. Comparado direto com `item.produto`.
+  destacarProduto?: string;
   // Tempo Gasto por Serviço, acessível direto da linha (O.S. Completa,
   // exclusivo) — a tela dona decide como abrir o modal (pré-selecionando
   // o serviço do item clicado), o ItemList só avisa qual item foi tocado.
@@ -214,6 +232,7 @@ const ps = {
 export default function ItemList({
   editing, isAberto, it, tela = "PEDIDO", onAnalisar, onFechar, fechando, onFaturar, faturando, isFechado,
   onDividir, onReabrir, reabrindo, onCancelar, cancelando, onImprimir, footerRight, onTempoGastoItem,
+  imagemUrlResolver, onEnlargeImagem, destacarProduto,
 }: Props) {
   const router = useRouter();
   const { itens, subtotal, itensLoading, descTotalItens, geralAtual } = it;
@@ -494,6 +513,7 @@ export default function ItemList({
             const desc = item.descricao || item.produto;
             const complementoDiferente =
               item.complemento && item.complemento.trim().toUpperCase() !== desc.trim().toUpperCase();
+            const destacado = !!destacarProduto && item.produto === destacarProduto;
             return (
               <Pressable
                 key={item.codauto}
@@ -505,6 +525,7 @@ export default function ItemList({
                   // Completa pode ter mais elementos na linha do que o
                   // Pedido — deixa quebrar linha em vez de estourar largura.
                   (canPontuacaoInline || canTempoGastoInline) && { flexWrap: "wrap" as const, rowGap: 6 },
+                  destacado && styles.itemRowDestacado,
                   pressed && canEditItem && { opacity: 0.8 },
                 ]}
                 testID={`pedido-form-item-${item.codauto}`}
@@ -517,6 +538,19 @@ export default function ItemList({
                 >
                   {item.produto === "S002" ? (
                     <MaterialCommunityIcons name="room-service" size={16} color={colors.success} />
+                  ) : isWeb && imagemUrlResolver && item.imagem_codigo != null ? (
+                    // eslint-disable-next-line jsx-a11y/alt-text
+                    <img
+                      src={imagemUrlResolver(item.imagem_codigo)}
+                      onClick={onEnlargeImagem ? (e) => {
+                        e.stopPropagation();
+                        onEnlargeImagem(imagemUrlResolver(item.imagem_codigo as number, "web"));
+                      } : undefined}
+                      style={{
+                        width: "100%", height: "100%", objectFit: "cover", borderRadius: radius.sm,
+                        cursor: onEnlargeImagem ? "pointer" : undefined,
+                      }}
+                    />
                   ) : (
                     <Ionicons
                       name={item.tipo === "P" ? "cube" : "construct"}
