@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Atualizador automático do Back-On (Backend + Frontend Web) numa instalação
   de cliente — baixa a release publicada pela Kontacto, troca a versão em
@@ -152,8 +152,27 @@ function Get-JunctionTarget {
 }
 
 function Get-Sha256Lower {
+    # .NET puro (System.Security.Cryptography), não `Get-FileHash` — achado
+    # real 2026-08-26: `Get-FileHash` depende de autoload do módulo
+    # Microsoft.PowerShell.Utility via $env:PSModulePath, que fica
+    # ausente/reduzido quando este script é invocado como subprocesso a
+    # partir do backend Python (processo iniciado por sua vez via
+    # Start-Process/Tarefa Agendada) — "Get-FileHash: comando não
+    # reconhecido" mesmo sendo um cmdlet nativo do PowerShell. Tipos .NET
+    # não dependem de PSModulePath, então nunca têm esse problema.
     param([string]$Path)
-    return (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $hashBytes = $sha256.ComputeHash($stream)
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha256.Dispose()
+    }
+    return ([System.BitConverter]::ToString($hashBytes) -replace '-', '').ToLowerInvariant()
 }
 
 function Get-ManifestBaseUrl {

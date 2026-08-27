@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   [SÓ RODA NA MÁQUINA DA KONTACTO — nunca instalar em cliente]
   Publica uma release (Backend + Frontend Web) no Blob de distribuição, pra
@@ -108,8 +108,23 @@ Compress-Archive -Path (Join-Path $frontendDistDir "*") -DestinationPath $fronte
 # 3. sha256 (lowercase hex — apply_update.ps1 espera esse formato)
 # ---------------------------------------------------------------------------
 function Get-Sha256Lower {
+    # .NET puro, não `Get-FileHash` — mesmo achado/mesma correção de
+    # updater/apply_update.ps1 (2026-08-26): `Get-FileHash` depende de
+    # autoload de módulo via PSModulePath, que pode ficar indisponível
+    # dependendo do processo que invoca o script.
     param([string]$Path)
-    return (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $hashBytes = $sha256.ComputeHash($stream)
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha256.Dispose()
+    }
+    return ([System.BitConverter]::ToString($hashBytes) -replace '-', '').ToLowerInvariant()
 }
 
 $backendSha = Get-Sha256Lower $backendZipPath

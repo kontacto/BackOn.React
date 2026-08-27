@@ -22,36 +22,51 @@ script, baixa e aplica na mesma chamada.
 inteiro. `updater/publish/` é a única exceção: só roda na máquina da
 Kontacto (ver `updater/publish/README.md`).
 
-## Pré-requisito — primeira instalação continua manual
+## Instalação — 1ª vez numa máquina nova
 
-O atualizador cuida das atualizações **seguintes**; a primeira instalação
-de uma máquina nova ainda segue o guia manual em
-`BACKEND_DEPLOY_WINDOWS.md` (SQL Server, Python, backend rodando pelo
-menos uma vez via `install-startup-task.ps1`). Só depois que existe uma
-instalação funcionando é que o atualizador assume.
-
-## Instalação (numa máquina já com o backend manual rodando)
+Pré-requisito de infraestrutura (SQL Server, Python) continua em
+`BACKEND_DEPLOY_WINDOWS.md` — isso não muda. O que muda é que **não é
+mais preciso subir o backend manualmente antes** — o `bootstrap-install.ps1`
+faz isso por você:
 
 1. Copie esta pasta `updater\` pra dentro do `installDir` que você vai
    usar (ex.: `C:\BackOn\updater\`).
-2. Copie `config.exemplo.json` pra `config.json` e preencha:
-   - `manifestUrl`: URL do `manifest.json` com a SAS de leitura (peça pra
-     Kontacto — nunca é a connection string completa).
-   - `installDir`: pasta raiz onde as releases vão ficar (ex.:
-     `C:\BackOn`).
-3. Rode uma vez manualmente pra confirmar que funciona:
+2. Copie `config.exemplo.json` pra `config.json` e preencha `manifestUrl`
+   (peça a URL com a SAS de leitura pra Kontacto — nunca é a connection
+   string completa), `currentBackendDir`/`currentFrontendDir` (ex.:
+   `C:\BackOn\current-backend`/`current-frontend`) e `installDir`. A tela
+   "Serviço do Sistema" **não existe ainda** nesse ponto (só existe depois
+   que já tem um backend rodando) — essa 1ª configuração é sempre pelo
+   arquivo.
+3. Rode, **como Administrador**:
    ```powershell
-   powershell -ExecutionPolicy Bypass -File .\apply_update.ps1
+   powershell -ExecutionPolicy Bypass -File .\bootstrap-install.ps1
    ```
-   Confira o log em `updater\logs\updater-AAAAMMDD.log` — deve baixar,
-   trocar a versão e passar no health check.
-4. **Só depois de confirmar o passo 3**, registre a Tarefa Agendada que
-   roda isso sozinho a cada 30 min:
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File .\install-updater-task.ps1
-   ```
-   (precisa ser Administrador — mesmo padrão de
-   `backend\scripts\install-startup-task.ps1`.)
+   Isso baixa a release publicada mais recente, cria as junctions, registra
+   a Tarefa Agendada `BackOn-Backend` (apontando pro caminho estável da
+   junction — nunca precisa ser reregistrada depois) e confirma que o
+   backend sobe de verdade (health check). Ver o cabeçalho de
+   `bootstrap-install.ps1` pro porquê disso ser um script separado de
+   `apply_update.ps1` (gap real: `apply_update.ps1` sozinho não consegue
+   reiniciar um serviço que nunca existiu).
+4. Com o backend no ar, abra `http://localhost:8081` no navegador, logue
+   como usuário master, e vá em **Configurações > Serviço do Sistema >
+   Atualização** — preencha a mesma config (agora pela tela, que grava no
+   banco) e Grave. **A partir daqui**, as atualizações seguintes são
+   automáticas: o próprio backend verifica periodicamente (configurável
+   ali, incluindo 0 = desligado + botão "Verificar agora"), avisa via
+   badge no menu lateral quando encontra algo, e "Aplicar agora"/"Reverter"
+   ficam disponíveis na mesma tela. **Este é o caminho recomendado hoje**
+   — não precisa mexer em Tarefa Agendada nenhuma depois do bootstrap.
+
+### Alternativa (não recomendada hoje): Tarefa Agendada `BackOn-Updater` independente
+
+`install-updater-task.ps1` registra uma 2ª Tarefa Agendada que roda
+`apply_update.ps1` sozinha a cada 30 min, fora do backend — é o desenho
+ORIGINAL desta pasta, hoje **pausado** por decisão do usuário em favor do
+disparo dentro do backend (passo 4 acima). O script continua funcional
+(reaproveitado, não removido) caso essa decisão mude no futuro — ver
+PENDENCIAS.md > "Atualizador automático de instalações de cliente (PAUSADO)".
 
 ## Como funciona
 

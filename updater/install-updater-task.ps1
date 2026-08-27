@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Registra a Tarefa Agendada "BackOn-Updater", que roda apply_update.ps1
   periodicamente (padrão: a cada 30 min) pra manter a instalação atualizada
