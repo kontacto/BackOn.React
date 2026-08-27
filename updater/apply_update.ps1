@@ -192,7 +192,29 @@ function Get-ReleaseAsset {
     try {
         Invoke-WebRequest -Uri $url -OutFile $DestPath -UseBasicParsing -TimeoutSec 300
     } catch {
-        Fail "Falha ao baixar $FileName`: $($_.Exception.Message)"
+        # Achado real, 2026-08-27 (1ª instalação de cliente, Juan): 403 ao
+        # baixar o zip mesmo com manifest.json baixando OK — o corpo do erro
+        # do Azure Storage (XML com <Code>/<Message>, ex.: "Authentication
+        # Failed"/"Server failed to authenticate the request... signature
+        # did not match", que é o sintoma típico de SAS gerada com escopo de
+        # UM blob específico — `sr=b` — em vez de container inteiro —
+        # `sr=c`, ver updater/publish/README.md) fica ESCONDIDO dentro de
+        # `WebException.Response`, que `.Exception.Message` sozinho não
+        # mostra (só o texto genérico ".NET/PowerShell", tipo "(403)
+        # Proibido"). Lendo o corpo aqui garante que a PRÓXIMA falha já
+        # aponta a causa raiz, sem precisar adivinhar.
+        $detalhe = $_.Exception.Message
+        if ($_.Exception.Response) {
+            try {
+                $stream = $_.Exception.Response.GetResponseStream()
+                $reader = New-Object System.IO.StreamReader($stream)
+                $body = $reader.ReadToEnd()
+                if ($body) { $detalhe = "$detalhe`nResposta do servidor: $body" }
+            } catch {
+                # Best-effort — se não der pra ler o corpo, segue só com a mensagem genérica.
+            }
+        }
+        Fail "Falha ao baixar $FileName`: $detalhe"
     }
     $actual = Get-Sha256Lower $DestPath
     if ($actual -ne $ExpectedSha256.ToLowerInvariant()) {
