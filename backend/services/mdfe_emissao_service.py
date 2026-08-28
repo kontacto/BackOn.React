@@ -45,7 +45,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from db.connection import _open_conn
-from services import mdfe_service, nfe_emissao_service, nfe_fiscal_common
+from services import apoio_fiscal_service, mdfe_service, nfe_emissao_service, nfe_fiscal_common
 
 
 class MdfeSituacaoInvalida(Exception):
@@ -284,7 +284,7 @@ def _montar_xml_mdfe_sync(cur, cod_mdfe: int) -> bytes:
 # ---------------------------------------------------------------------------
 # Emissão real (GeraMDFe)
 # ---------------------------------------------------------------------------
-def emitir_mdfe_sync(cur, cod_mdfe: int, usuario: Optional[str]) -> dict:
+def emitir_mdfe_sync(cur, cod_mdfe: int, usuario: Optional[str], *, servidor: str = "", banco: str = "") -> dict:
     cur.execute("SELECT * FROM MDFe WHERE codigo=%s", (cod_mdfe,))
     m = cur.fetchone()
     if not m:
@@ -365,10 +365,16 @@ def emitir_mdfe_sync(cur, cod_mdfe: int, usuario: Optional[str]) -> dict:
     n_prot = nfe_fiscal_common.extrair_tag(resposta, "nProt")
     dh_recbto = nfe_fiscal_common.extrair_tag(resposta, "dhRecbto")
     if c_stat != "100":
-        return {
+        resultado_rejeicao = {
             "success": False,
             "message": f"SEFAZ recusou a emissão (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}.",
         }
+        if servidor and banco:
+            resultado_rejeicao["apoio_fiscal"] = apoio_fiscal_service.notificar_rejeicao_sync(
+                servidor, banco, tipo_documento="MDF-e", codigo_rejeicao=c_stat or "?",
+                mensagem_original=x_motivo or "", referencia=chave_acesso,
+            )
+        return resultado_rejeicao
 
     xml_prot = nfe_fiscal_common.extrair_bloco(resposta, "protMDFe") or ""
     cur.execute(
@@ -445,7 +451,10 @@ def _transmitir_evento_mdfe(cur, xml_evento: bytes, id_evento: str, tp_amb: str)
     return nfe_fiscal_common.transmitir(envelope, url, key_pem, cert_pem)
 
 
-def encerrar_mdfe_sync(cur, cod_mdfe: int, municipio_encerra: int, usuario: Optional[str]) -> dict:
+def encerrar_mdfe_sync(
+    cur, cod_mdfe: int, municipio_encerra: int, usuario: Optional[str],
+    *, servidor: str = "", banco: str = "",
+) -> dict:
     cur.execute("SELECT * FROM MDFe WHERE codigo=%s", (cod_mdfe,))
     m = cur.fetchone()
     if not m:
@@ -471,7 +480,13 @@ def encerrar_mdfe_sync(cur, cod_mdfe: int, municipio_encerra: int, usuario: Opti
     c_stat = nfe_fiscal_common.extrair_tag(resposta, "cStat")
     x_motivo = nfe_fiscal_common.extrair_tag(resposta, "xMotivo")
     if c_stat not in ("135", "136"):
-        return {"success": False, "message": f"SEFAZ recusou o encerramento (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}."}
+        resultado_rejeicao = {"success": False, "message": f"SEFAZ recusou o encerramento (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}."}
+        if servidor and banco:
+            resultado_rejeicao["apoio_fiscal"] = apoio_fiscal_service.notificar_rejeicao_sync(
+                servidor, banco, tipo_documento="Encerramento MDF-e", codigo_rejeicao=c_stat or "?",
+                mensagem_original=x_motivo or "", referencia=m.get("chave_acesso"),
+            )
+        return resultado_rejeicao
 
     historico_novo = f"{datetime.now().strftime('%d/%m/%Y %H:%M')} - Encerrado por {usuario or '?'}\n" + (m.get("historico") or "")
     cur.execute(
@@ -482,7 +497,10 @@ def encerrar_mdfe_sync(cur, cod_mdfe: int, municipio_encerra: int, usuario: Opti
     return {"success": True, "message": "MDF-e encerrado junto ao SEFAZ."}
 
 
-def cancelar_mdfe_sync(cur, cod_mdfe: int, motivo: str, usuario: Optional[str]) -> dict:
+def cancelar_mdfe_sync(
+    cur, cod_mdfe: int, motivo: str, usuario: Optional[str],
+    *, servidor: str = "", banco: str = "",
+) -> dict:
     motivo = (motivo or "").strip()
     if len(motivo) < 15:
         return {"success": False, "message": "O motivo do cancelamento precisa ter pelo menos 15 caracteres."}
@@ -509,7 +527,13 @@ def cancelar_mdfe_sync(cur, cod_mdfe: int, motivo: str, usuario: Optional[str]) 
     c_stat = nfe_fiscal_common.extrair_tag(resposta, "cStat")
     x_motivo = nfe_fiscal_common.extrair_tag(resposta, "xMotivo")
     if c_stat not in ("135", "136"):
-        return {"success": False, "message": f"SEFAZ recusou o cancelamento (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}."}
+        resultado_rejeicao = {"success": False, "message": f"SEFAZ recusou o cancelamento (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}."}
+        if servidor and banco:
+            resultado_rejeicao["apoio_fiscal"] = apoio_fiscal_service.notificar_rejeicao_sync(
+                servidor, banco, tipo_documento="Cancelamento MDF-e", codigo_rejeicao=c_stat or "?",
+                mensagem_original=x_motivo or "", referencia=m.get("chave_acesso"),
+            )
+        return resultado_rejeicao
 
     historico_novo = f"{datetime.now().strftime('%d/%m/%Y %H:%M')} - Cancelado por {usuario or '?'}: {motivo}\n" + (m.get("historico") or "")
     cur.execute(
@@ -616,15 +640,24 @@ def _com_conexao(servidor: str, banco: str, fn, *args) -> dict:
 
 
 def _emitir_mdfe_com_conexao_sync(servidor, banco, cod_mdfe, usuario):
-    return _com_conexao(servidor, banco, emitir_mdfe_sync, cod_mdfe, usuario)
+    return _com_conexao(
+        servidor, banco,
+        lambda cur: emitir_mdfe_sync(cur, cod_mdfe, usuario, servidor=servidor, banco=banco),
+    )
 
 
 def _encerrar_mdfe_com_conexao_sync(servidor, banco, cod_mdfe, municipio_encerra, usuario):
-    return _com_conexao(servidor, banco, encerrar_mdfe_sync, cod_mdfe, municipio_encerra, usuario)
+    return _com_conexao(
+        servidor, banco,
+        lambda cur: encerrar_mdfe_sync(cur, cod_mdfe, municipio_encerra, usuario, servidor=servidor, banco=banco),
+    )
 
 
 def _cancelar_mdfe_com_conexao_sync(servidor, banco, cod_mdfe, motivo, usuario):
-    return _com_conexao(servidor, banco, cancelar_mdfe_sync, cod_mdfe, motivo, usuario)
+    return _com_conexao(
+        servidor, banco,
+        lambda cur: cancelar_mdfe_sync(cur, cod_mdfe, motivo, usuario, servidor=servidor, banco=banco),
+    )
 
 
 def _consultar_mdfe_com_conexao_sync(servidor, banco, cod_mdfe):

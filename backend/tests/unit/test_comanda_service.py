@@ -731,7 +731,7 @@ class TestCancelarComandaSync:
         conn = _patch(monkeypatch, cur)
         chamado = {}
 
-        def _fake_cancelar(cur_, *, cnpj, uf_sigla, modelo, chave_acesso, protocolo, motivo, tp_amb):
+        def _fake_cancelar(cur_, *, cnpj, uf_sigla, modelo, chave_acesso, protocolo, motivo, tp_amb, servidor="", banco=""):
             chamado.update(cnpj=cnpj, uf_sigla=uf_sigla, modelo=modelo, protocolo=protocolo)
             return {"success": True, "protocolo_cancelamento": "999"}
 

@@ -220,6 +220,39 @@ class TestEmitirCartaCorrecaoSync:
         assert r["success"] is False
         assert "573" in r["message"]
 
+    def test_sefaz_recusa_dispara_apoio_fiscal_quando_servidor_banco_informados(self, monkeypatch):
+        key_pem, cert_pem = _certs_pem()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = "<retEvento><infEvento><cStat>573</cStat><xMotivo>Duplicidade de Evento</xMotivo></infEvento></retEvento>"
+        monkeypatch.setattr(nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        chamada = {}
+
+        def _fake_notificar(servidor, banco, *, tipo_documento, codigo_rejeicao, mensagem_original, referencia=None):
+            chamada.update(servidor=servidor, banco=banco, tipo_documento=tipo_documento, codigo_rejeicao=codigo_rejeicao)
+            return {"titulo": "x", "explicacao_curta": "y", "explicacao_detalhada": "z", "acao_usuario": None,
+                    "notificado_suporte": {"email": True, "whatsapp": False}}
+
+        monkeypatch.setattr(svc.apoio_fiscal_service, "notificar_rejeicao_sync", _fake_notificar)
+        r = svc.emitir_carta_correcao_sync(
+            None, cnpj="1", uf_sigla="RJ", chave_acesso="1" * 44, motivo="Motivo válido com bastante texto",
+            n_seq_evento=1, tp_amb="2", servidor="srv", banco="bd",
+        )
+        assert r["success"] is False
+        assert r["apoio_fiscal"]["notificado_suporte"]["email"] is True
+        assert chamada == {"servidor": "srv", "banco": "bd", "tipo_documento": "Carta de Correção", "codigo_rejeicao": "573"}
+
+    def test_sefaz_recusa_sem_servidor_banco_nao_chama_apoio_fiscal(self, monkeypatch):
+        key_pem, cert_pem = _certs_pem()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = "<retEvento><infEvento><cStat>573</cStat><xMotivo>Duplicidade de Evento</xMotivo></infEvento></retEvento>"
+        monkeypatch.setattr(nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        r = svc.emitir_carta_correcao_sync(
+            None, cnpj="1", uf_sigla="RJ", chave_acesso="1" * 44, motivo="Motivo válido com bastante texto",
+            n_seq_evento=1, tp_amb="2",
+        )
+        assert r["success"] is False
+        assert "apoio_fiscal" not in r
+
     def test_falha_de_comunicacao_nao_propaga_excecao(self, monkeypatch):
         key_pem, cert_pem = _certs_pem()
         _patch_certificado(monkeypatch, key_pem, cert_pem)

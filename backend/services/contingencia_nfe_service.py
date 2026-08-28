@@ -47,7 +47,7 @@ from datetime import datetime
 from typing import Optional
 
 from db.connection import _open_conn
-from services import nfe_emissao_service, nfe_fiscal_common
+from services import apoio_fiscal_service, nfe_emissao_service, nfe_fiscal_common
 from services.permissoes_service import tem_permissao
 
 _TIPOS_VALIDOS = (2, 5)  # FS-IA, FS-DA
@@ -356,6 +356,7 @@ def _validar_pendentes_sync(
                 resultados.append({
                     "codigo": codigo, "success": False,
                     "message": f"SEFAZ recusou a autorização (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}.",
+                    "cstat": c_stat,
                 })
                 continue
             # `dh_recbto` cru do SEFAZ (ISO 8601 com offset) quebra numa
@@ -373,7 +374,22 @@ def _validar_pendentes_sync(
         cur.close()
         conn.close()
         falhas = [r for r in resultados if not r.get("success")]
-        return {"success": not falhas, "resultados": resultados}
+        resposta = {"success": not falhas, "resultados": resultados}
+        # Apoio Fiscal BackOn — resumo agregado (2026-08-28, decisão via
+        # AskUserQuestion), mesmo padrão do Gestor NFCe: 1 notificação só
+        # pro lote inteiro, só cobrindo rejeições REAIS do SEFAZ (têm
+        # `cstat`) — "Nota não está aguardando contingência"/"XML não
+        # encontrado" são falhas de pré-validação local, não fiscais.
+        falhas_sefaz = [f for f in falhas if f.get("cstat")]
+        if falhas_sefaz:
+            resposta["apoio_fiscal_lote"] = apoio_fiscal_service.notificar_rejeicoes_lote_sync(
+                servidor, banco, tipo_documento="Validar Pendentes de Contingência NF-e (lote)",
+                itens_falhos=[
+                    {"referencia": f.get("codigo"), "codigo_rejeicao": f.get("cstat"), "mensagem_original": f.get("message") or ""}
+                    for f in falhas_sefaz
+                ],
+            )
+        return resposta
     except Exception as e:
         try:
             conn.rollback()

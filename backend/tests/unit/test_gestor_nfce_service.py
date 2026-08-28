@@ -471,9 +471,14 @@ class TestInutilizarFaixaSync:
         monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", _fake_transmitir_inutilizacao(inut_resposta=inut_resposta))
         cur = FakeCursor(one=[{"cgc": "12345678000199", "uf": "RJ"}, None])
         _patch(monkeypatch, cur)
+        monkeypatch.setattr(
+            svc.apoio_fiscal_service, "notificar_rejeicoes_lote_sync",
+            lambda *a, **k: {"total": 1, "grupos": [], "notificado_suporte": {"email": True, "whatsapp": False}},
+        )
         r = svc._inutilizar_faixa_sync("srv", "bd", numeros=[10], serie="1", motivo="Erro de digitação encontrado", master=True)
         assert r["success"] is False
         assert "563" in r["resultados"][0]["message"]
+        assert r["apoio_fiscal_lote"]["notificado_suporte"]["email"] is True
 
     def test_falha_comunicacao_nao_propaga_excecao(self, monkeypatch):
         _sem_contingencia(monkeypatch)
@@ -518,7 +523,7 @@ class TestRetransmitirSync:
         _patch(monkeypatch, cur)
         chamadas = []
 
-        def _fake_emitir(req, comanda):
+        def _fake_emitir(req, comanda, **kw):
             chamadas.append(comanda)
             return {"success": True, "protocolo_sefaz": f"prot-{comanda}"}
 
@@ -534,14 +539,25 @@ class TestRetransmitirSync:
         cur = FakeCursor(one=[None, None])
         _patch(monkeypatch, cur)
 
-        def _fake_emitir(req, comanda):
+        def _fake_emitir(req, comanda, **kw):
             if comanda == 2:
-                return {"success": False, "message": "SEFAZ recusou"}
+                return {"success": False, "message": "SEFAZ recusou", "cstat": "539"}
             return {"success": True}
 
         monkeypatch.setattr(comanda_service_mod, "_emitir_nfce_comanda_sync", _fake_emitir)
+        chamada_lote = {}
+
+        def _fake_notificar_lote(servidor, banco, *, tipo_documento, itens_falhos):
+            chamada_lote.update(servidor=servidor, banco=banco, tipo_documento=tipo_documento, itens_falhos=itens_falhos)
+            return {"total": len(itens_falhos), "grupos": [], "notificado_suporte": {"email": True, "whatsapp": False}}
+
+        monkeypatch.setattr(svc.apoio_fiscal_service, "notificar_rejeicoes_lote_sync", _fake_notificar_lote)
         r = svc._retransmitir_sync("srv", "bd", comandas=[1, 2], master=True)
         assert r["success"] is False
+        # Apoio Fiscal BackOn (2026-08-28) — resumo agregado do lote, 1 SÓ
+        # notificação cobrindo a comanda que falhou, nunca por item.
+        assert r["apoio_fiscal_lote"]["notificado_suporte"]["email"] is True
+        assert chamada_lote["itens_falhos"] == [{"referencia": 2, "codigo_rejeicao": "539", "mensagem_original": "SEFAZ recusou"}]
 
 
 # ---------------------------------------------------------------------------
@@ -734,9 +750,14 @@ class TestValidarContingenciaSync:
         _patch_certificado(monkeypatch, key_pem, cert_pem)
         resposta_fake = "<retEnviNFe><infProt><cStat>539</cStat><xMotivo>Duplicidade</xMotivo></infProt></retEnviNFe>"
         monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c, **kw: resposta_fake)
+        monkeypatch.setattr(
+            svc.apoio_fiscal_service, "notificar_rejeicoes_lote_sync",
+            lambda *a, **k: {"total": 1, "grupos": [], "notificado_suporte": {"email": True, "whatsapp": False}},
+        )
         r = svc._validar_contingencia_sync("srv", "bd", comandas=[1], master=True)
         assert r["success"] is False
         assert not any("UPDATE comanda_nfce SET situacao = 'F'" in q[0] for q in cur.queries)
+        assert r["apoio_fiscal_lote"]["notificado_suporte"]["email"] is True
 
     def test_falha_comunicacao_nao_propaga_excecao(self, monkeypatch):
         linha = {"comanda": 1, "num_nfce": 10, "situacao": "G", "xml": self._xml_guardado(10), "chave_acesso": "3" * 44}

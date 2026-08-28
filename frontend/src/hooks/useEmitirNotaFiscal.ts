@@ -17,7 +17,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import type { Connection } from "@/src/utils/storage/connections";
-import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
+import { friendlyCatchError } from "@/src/utils/api";
+import { showApoioFiscalError } from "@/src/utils/apoioFiscal";
+import type { ApoioFiscalInfo } from "@/src/components/ApoioFiscalBackOnModal";
 
 export type DocFiscal = {
   tipo: string;
@@ -41,6 +43,7 @@ export function useEmitirNotaFiscal(params: {
   const [loadingDocFiscal, setLoadingDocFiscal] = useState(false);
   const [emitindoNfce, setEmitindoNfce] = useState(false);
   const [emitindoNfse, setEmitindoNfse] = useState(false);
+  const [apoioFiscalInfo, setApoioFiscalInfo] = useState<ApoioFiscalInfo | null>(null);
 
   const recarregar = useCallback(async () => {
     if (!conn || !comanda) { setDocFiscal(null); return; }
@@ -78,7 +81,10 @@ export function useEmitirNotaFiscal(params: {
       });
       const j = await r.json();
       if (j?.success) { fb.showSuccess(j.message || "NFC-e emitida."); await recarregar(); }
-      else fb.showError(friendlyApiError(j, "Não foi possível emitir a NFC-e."), undefined, 5000);
+      else {
+        const info = showApoioFiscalError(fb, j, "Não foi possível emitir a NFC-e.", 5000);
+        if (info) setApoioFiscalInfo(info);
+      }
       return j;
     } catch (e) {
       fb.showError(friendlyCatchError(e, "Não foi possível emitir a NFC-e."));
@@ -106,7 +112,10 @@ export function useEmitirNotaFiscal(params: {
       });
       const j = await r.json();
       if (j?.success) { fb.showSuccess(j.message || "NFS-e emitida."); await recarregar(); }
-      else fb.showError(friendlyApiError(j, "Não foi possível emitir a NFS-e."), undefined, 5000);
+      else {
+        const info = showApoioFiscalError(fb, j, "Não foi possível emitir a NFS-e.", 5000);
+        if (info) setApoioFiscalInfo(info);
+      }
       return j;
     } catch (e) {
       fb.showError(friendlyCatchError(e, "Não foi possível emitir a NFS-e."));
@@ -116,5 +125,8 @@ export function useEmitirNotaFiscal(params: {
     }
   }, [conn, comanda, session, isMaster, fb, recarregar]);
 
-  return { docFiscal, loadingDocFiscal, emitindoNfce, emitindoNfse, emitirNfce, emitirNfse, recarregar };
+  return {
+    docFiscal, loadingDocFiscal, emitindoNfce, emitindoNfse, emitirNfce, emitirNfse, recarregar,
+    apoioFiscalInfo, fecharApoioFiscal: () => setApoioFiscalInfo(null),
+  };
 }

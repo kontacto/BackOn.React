@@ -18,6 +18,7 @@ import WhatsappButton from "@/src/components/WhatsappButton";
 import { clienteSearchParams } from "@/src/hooks/useClienteForm";
 import { ClienteRow, ProdutoServico } from "@/src/components/pedido/types";
 import { useEmitirNotaFiscal } from "@/src/hooks/useEmitirNotaFiscal";
+import ApoioFiscalBackOnModal from "@/src/components/ApoioFiscalBackOnModal";
 import NotaFiscalCard from "@/src/components/fiscal/NotaFiscalCard";
 
 const SIT_COLOR: Record<string, string> = { A: "#1e88e5", F: "#43a047", PG: "#8e24aa", C: "#e53935" };
@@ -1259,6 +1260,11 @@ export default function OSFormScreen() {
           <Text style={styles.toastText}>{toast.msg}</Text>
         </View>
       ) : null}
+      <ApoioFiscalBackOnModal
+        visible={!!notaFiscal.apoioFiscalInfo}
+        info={notaFiscal.apoioFiscalInfo}
+        onClose={notaFiscal.fecharApoioFiscal}
+      />
     </SafeAreaView>
   );
 }

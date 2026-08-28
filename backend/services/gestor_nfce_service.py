@@ -35,7 +35,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from db.connection import _open_conn
-from services import contingencia_nfce_service, nfe_cancelamento_service, nfe_emissao_service, nfe_fiscal_common
+from services import apoio_fiscal_service, contingencia_nfce_service, nfe_cancelamento_service, nfe_emissao_service, nfe_fiscal_common
 from services.permissoes_service import tem_permissao
 
 _NFE_NS = nfe_fiscal_common.NFE_NS
@@ -309,7 +309,23 @@ def _cancelar_nfce_sync(
         cur.close()
         conn.close()
         falhas = [r for r in resultados if not r.get("success")]
-        return {"success": not falhas, "resultados": resultados}
+        resposta = {"success": not falhas, "resultados": resultados}
+        # Apoio Fiscal BackOn — resumo agregado (2026-08-28, decisão do
+        # usuário via AskUserQuestion): 1 notificação só pro lote inteiro,
+        # nunca 1 por comanda que falhou. Só entram rejeições REAIS do
+        # SEFAZ (têm `cstat`) — falha de pré-validação local ("Comanda sem
+        # NFC-e emitida", "NFC-e já cancelada") não é uma rejeição fiscal,
+        # não faz sentido "traduzir" pro suporte.
+        falhas_sefaz = [f for f in falhas if f.get("cstat")]
+        if falhas_sefaz:
+            resposta["apoio_fiscal_lote"] = apoio_fiscal_service.notificar_rejeicoes_lote_sync(
+                servidor, banco, tipo_documento="Cancelamento NFC-e (lote)",
+                itens_falhos=[
+                    {"referencia": f.get("comanda"), "codigo_rejeicao": f.get("cstat"), "mensagem_original": f.get("message") or ""}
+                    for f in falhas_sefaz
+                ],
+            )
+        return resposta
     except Exception as e:
         try:
             conn.rollback()
@@ -543,6 +559,7 @@ def _inutilizar_faixa_sync(
                 resultados.append({
                     "numero": numero, "success": False,
                     "message": f"SEFAZ recusou a inutilização (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}.",
+                    "cstat": c_stat,
                 })
                 continue
             usuario_texto = nfe_fiscal_common.resolver_usuario_texto_sync(cur, usuario)
@@ -560,7 +577,17 @@ def _inutilizar_faixa_sync(
         cur.close()
         conn.close()
         falhas = [r for r in resultados if not r.get("success")]
-        return {"success": not falhas, "resultados": resultados}
+        resposta = {"success": not falhas, "resultados": resultados}
+        falhas_sefaz = [f for f in falhas if f.get("cstat")]
+        if falhas_sefaz:
+            resposta["apoio_fiscal_lote"] = apoio_fiscal_service.notificar_rejeicoes_lote_sync(
+                servidor, banco, tipo_documento="Inutilização NFC-e (lote)",
+                itens_falhos=[
+                    {"referencia": f"{serie}/{f.get('numero')}", "codigo_rejeicao": f.get("cstat"), "mensagem_original": f.get("message") or ""}
+                    for f in falhas_sefaz
+                ],
+            )
+        return resposta
     except Exception as e:
         try:
             conn.rollback()
@@ -624,10 +651,25 @@ def _retransmitir_sync(
     resultados = []
     for comanda in comandas:
         req = EmitirNfceRequest(servidor=servidor, banco=banco, master=True)
-        r = comanda_service._emitir_nfce_comanda_sync(req, comanda)
+        # `notificar_individualmente=False` — suprime a notificação POR
+        # ITEM que `emitir_nfce_sync` dispararia normalmente (ver
+        # `comanda_service._emitir_nfce_comanda_sync`), já que esta é uma
+        # operação em LOTE: o resumo agregado abaixo cobre todo mundo numa
+        # notificação só.
+        r = comanda_service._emitir_nfce_comanda_sync(req, comanda, notificar_individualmente=False)
         resultados.append({"comanda": comanda, **r})
     falhas = [r for r in resultados if not r.get("success")]
-    return {"success": not falhas, "resultados": resultados}
+    resposta = {"success": not falhas, "resultados": resultados}
+    falhas_sefaz = [f for f in falhas if f.get("cstat")]
+    if falhas_sefaz:
+        resposta["apoio_fiscal_lote"] = apoio_fiscal_service.notificar_rejeicoes_lote_sync(
+            servidor, banco, tipo_documento="Retransmissão NFC-e (lote)",
+            itens_falhos=[
+                {"referencia": f.get("comanda"), "codigo_rejeicao": f.get("cstat"), "mensagem_original": f.get("message") or ""}
+                for f in falhas_sefaz
+            ],
+        )
+    return resposta
 
 
 def _validar_contingencia_sync(
@@ -764,6 +806,7 @@ def _validar_contingencia_sync(
                 resultados.append({
                     "comanda": comanda, "success": False,
                     "message": f"SEFAZ recusou a autorização (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}.",
+                    "cstat": c_stat,
                 })
                 continue
             cur.execute(
@@ -784,7 +827,17 @@ def _validar_contingencia_sync(
         cur.close()
         conn.close()
         falhas = [r for r in resultados if not r.get("success")]
-        return {"success": not falhas, "resultados": resultados}
+        resposta = {"success": not falhas, "resultados": resultados}
+        falhas_sefaz = [f for f in falhas if f.get("cstat")]
+        if falhas_sefaz:
+            resposta["apoio_fiscal_lote"] = apoio_fiscal_service.notificar_rejeicoes_lote_sync(
+                servidor, banco, tipo_documento="Validar Contingência NFC-e (lote)",
+                itens_falhos=[
+                    {"referencia": f.get("comanda"), "codigo_rejeicao": f.get("cstat"), "mensagem_original": f.get("message") or ""}
+                    for f in falhas_sefaz
+                ],
+            )
+        return resposta
     except Exception as e:
         try:
             conn.rollback()

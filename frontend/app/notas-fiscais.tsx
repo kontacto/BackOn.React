@@ -23,6 +23,8 @@ import {
   WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER,
 } from "@/src/theme/webLayout";
 import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
+import { showApoioFiscalError } from "@/src/utils/apoioFiscal";
+import ApoioFiscalBackOnModal, { ApoioFiscalInfo } from "@/src/components/ApoioFiscalBackOnModal";
 import { fetchEmpresaHeader } from "@/src/utils/print-report-header";
 import { printFullHtml } from "@/src/utils/printHtml";
 import { buildDanfeHtml } from "@/src/utils/danfeFacsimile";
@@ -492,6 +494,7 @@ export default function NotasFiscaisScreen() {
   const [cceModalOpen, setCceModalOpen] = useState(false);
   const [motivoCce, setMotivoCce] = useState("");
   const [emitindoCce, setEmitindoCce] = useState(false);
+  const [apoioFiscalInfo, setApoioFiscalInfo] = useState<ApoioFiscalInfo | null>(null);
   const [cartasCce, setCartasCce] = useState<Array<{
     codigo: number; n_seq_evento: number; protocolo: string | null; data_registro: string | null; motivo: string;
   }>>([]);
@@ -530,7 +533,11 @@ export default function NotasFiscaisScreen() {
         body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, motivo: motivoCce, ...auditCtx }),
       });
       const j = await r.json();
-      if (!j?.success) { fb.showError(friendlyApiError(j, "Não foi possível emitir a Carta de Correção.")); return; }
+      if (!j?.success) {
+        const info = showApoioFiscalError(fb, j, "Não foi possível emitir a Carta de Correção.");
+        if (info) setApoioFiscalInfo(info);
+        return;
+      }
       fb.showSuccess(j.message || "Carta de Correção emitida.", undefined, 5000);
       setMotivoCce("");
       await carregarCartasCce();
@@ -1154,6 +1161,7 @@ export default function NotasFiscaisScreen() {
           </Pressable>
         </Pressable>
       </AppModal>
+      <ApoioFiscalBackOnModal visible={!!apoioFiscalInfo} info={apoioFiscalInfo} onClose={() => setApoioFiscalInfo(null)} />
     </SafeAreaView>
   );
 }

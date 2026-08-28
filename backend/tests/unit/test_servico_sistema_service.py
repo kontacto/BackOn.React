@@ -62,10 +62,11 @@ class TestEnsureTable:
                 queries.append(q)
 
         svc._ensure_servico_sistema_atualizacao_table(Cur())
-        # 2 statements: CREATE TABLE (idempotente, instalação nova) + ALTER
-        # TABLE ADD canal (idempotente, cobre instalação já existente sem
-        # a coluna nova — ver comentário no service, 2026-08-28).
-        assert len(queries) == 2
+        # 3 statements: CREATE TABLE (idempotente, instalação nova) + ALTER
+        # TABLE ADD canal + ALTER TABLE ADD cel_suporte (idempotentes,
+        # cobrem instalação já existente sem as colunas novas — ver
+        # comentário no service, 2026-08-28).
+        assert len(queries) == 3
         assert "servico_sistema_atualizacao" in queries[0]
         assert "IF NOT EXISTS" in queries[0]
 
@@ -171,7 +172,7 @@ class TestSaveConfig:
         })
         assert r["success"] is True
         insert_params = [p for q, p in cur.queries if q.strip().upper().startswith("INSERT")][0]
-        assert insert_params[-1] == "P"
+        assert insert_params[-2] == "P"
 
     def test_canal_ausente_default_homologacao(self, monkeypatch, tmp_path):
         cur = FakeCursor(one=[None])
@@ -185,7 +186,7 @@ class TestSaveConfig:
         })
         assert r["success"] is True
         insert_params = [p for q, p in cur.queries if q.strip().upper().startswith("INSERT")][0]
-        assert insert_params[-1] == "H"
+        assert insert_params[-2] == "H"
 
     def test_atualiza_quando_ja_existe_linha(self, monkeypatch, tmp_path):
         cur = FakeCursor(one=[{"codigo": 1}])

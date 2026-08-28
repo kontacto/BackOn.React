@@ -51,7 +51,7 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 
-from services import nfe_fiscal_common
+from services import apoio_fiscal_service, nfe_fiscal_common
 
 _IBGE_POR_UF = nfe_fiscal_common.IBGE_POR_UF
 _NFE_NS = nfe_fiscal_common.NFE_NS
@@ -138,6 +138,7 @@ def _montar_envelope_soap(xml_evento_assinado: bytes) -> bytes:
 
 def emitir_carta_correcao_sync(
     cur, *, cnpj: str, uf_sigla: str, chave_acesso: str, motivo: str, n_seq_evento: int, tp_amb: str,
+    servidor: str = "", banco: str = "",
 ) -> dict:
     """Orquestra a emissão da Carta de Correção (evento 110110) — chamado
     por `notas_fiscais_service._carta_correcao_sync`. `cur` é o cursor já
@@ -194,10 +195,16 @@ def emitir_carta_correcao_sync(
     dh_reg = nfe_fiscal_common.extrair_tag(inf_evento, "dhRegEvento")
     # 135 = "Evento registrado e vinculado a NF-e" (CC-e homologada).
     if c_stat != "135":
-        return {
+        resultado_rejeicao = {
             "success": False,
             "message": f"SEFAZ recusou a Carta de Correção (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}.",
         }
+        if servidor and banco:
+            resultado_rejeicao["apoio_fiscal"] = apoio_fiscal_service.notificar_rejeicao_sync(
+                servidor, banco, tipo_documento="Carta de Correção", codigo_rejeicao=c_stat or "?",
+                mensagem_original=x_motivo or "", referencia=chave_acesso,
+            )
+        return resultado_rejeicao
     return {
         "success": True,
         "message": f"Carta de Correção autorizada pelo SEFAZ — protocolo {n_prot or '?'}.",

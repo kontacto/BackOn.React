@@ -26,6 +26,8 @@ import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
+import { showApoioFiscalError } from "@/src/utils/apoioFiscal";
+import ApoioFiscalBackOnModal, { ApoioFiscalInfo } from "@/src/components/ApoioFiscalBackOnModal";
 
 type Serie = { serie: string; ultimo_numero: number };
 type HistoricoItem = {
@@ -74,6 +76,7 @@ export default function InutilizacaoNfeScreen() {
   const [conn, setConn] = useState<Connection | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [processando, setProcessando] = useState(false);
+  const [apoioFiscalInfo, setApoioFiscalInfo] = useState<ApoioFiscalInfo | null>(null);
   const [ajudaVisivel, setAjudaVisivel] = useState(false);
 
   const [series, setSeries] = useState<Serie[]>([]);
@@ -146,7 +149,8 @@ export default function InutilizacaoNfeScreen() {
         setMotivo("");
         carregar();
       } else {
-        fb.showError(friendlyApiError(j, "Não foi possível inutilizar a faixa."), undefined, 5000);
+        const info = showApoioFiscalError(fb, j, "Não foi possível inutilizar a faixa.", 5000);
+        if (info) setApoioFiscalInfo(info);
       }
     } catch (e) {
       fb.showError(friendlyCatchError(e));
@@ -266,6 +270,7 @@ export default function InutilizacaoNfeScreen() {
       )}
 
       <AjudaPedidoModal visible={ajudaVisivel} onClose={() => setAjudaVisivel(false)} titulo="Inutilização de Faixa NFe" itens={INUTIL_AJUDA_ITENS} />
+      <ApoioFiscalBackOnModal visible={!!apoioFiscalInfo} info={apoioFiscalInfo} onClose={() => setApoioFiscalInfo(null)} />
     </SafeAreaView>
   );
 }

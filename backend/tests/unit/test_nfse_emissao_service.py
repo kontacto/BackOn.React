@@ -370,6 +370,42 @@ class TestEmitirNfseSync:
         assert r["success"] is False
         assert "E0714" in r["message"]
 
+    def test_adn_recusa_dispara_apoio_fiscal_quando_servidor_banco_informados(self, monkeypatch):
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = {"_erro_http": 400, "mensagens": [{"codigo": "E0714", "descricao": "Arquivo enviado com erro na assinatura"}]}
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir_json_mtls", lambda payload, url, k, c: resposta_fake)
+        chamada = {}
+
+        def _fake_notificar(servidor, banco, *, tipo_documento, codigo_rejeicao, mensagem_original, referencia=None):
+            chamada.update(servidor=servidor, banco=banco, tipo_documento=tipo_documento, codigo_rejeicao=codigo_rejeicao)
+            return {"titulo": "x", "explicacao_curta": "y", "explicacao_detalhada": "z", "acao_usuario": None,
+                    "notificado_suporte": {"email": True, "whatsapp": False}}
+
+        monkeypatch.setattr(svc.apoio_fiscal_service, "notificar_rejeicao_sync", _fake_notificar)
+        r = svc.emitir_nfse_sync(
+            None, comanda=1, cnpj_prest="1", cod_municipio="3304557", opcao_simples_nacional=True,
+            regime_especial_tributacao=0, proximo_numero=1, serie="1", tomador=None,
+            itens=[_item()], tp_amb="1", codigo_nbs=_CODIGO_NBS_TESTE,
+            servidor="srv", banco="bd",
+        )
+        assert r["success"] is False
+        assert r["apoio_fiscal"]["notificado_suporte"]["email"] is True
+        assert chamada == {"servidor": "srv", "banco": "bd", "tipo_documento": "NFS-e", "codigo_rejeicao": "E0714"}
+
+    def test_adn_recusa_sem_servidor_banco_nao_chama_apoio_fiscal(self, monkeypatch):
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = {"_erro_http": 400, "mensagens": [{"codigo": "E0714", "descricao": "Arquivo enviado com erro na assinatura"}]}
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir_json_mtls", lambda payload, url, k, c: resposta_fake)
+        r = svc.emitir_nfse_sync(
+            None, comanda=1, cnpj_prest="1", cod_municipio="3304557", opcao_simples_nacional=True,
+            regime_especial_tributacao=0, proximo_numero=1, serie="1", tomador=None,
+            itens=[_item()], tp_amb="1", codigo_nbs=_CODIGO_NBS_TESTE,
+        )
+        assert r["success"] is False
+        assert "apoio_fiscal" not in r
+
     def test_falha_de_comunicacao_nao_propaga_excecao(self, monkeypatch):
         key_pem, cert_pem = _gerar_certificado_teste()
         _patch_certificado(monkeypatch, key_pem, cert_pem)

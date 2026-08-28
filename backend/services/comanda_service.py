@@ -1029,6 +1029,7 @@ def _cancelar_comanda_sync(req: ComandaCancelarRequest, comanda: int) -> dict:
                     protocolo=protocolo,
                     motivo=motivo,
                     tp_amb=nfe_fiscal_common.resolver_tp_amb_sync(cur),
+                    servidor=req.servidor, banco=req.banco,
                 )
                 if not res_fiscal.get("success"):
                     conn.close()
@@ -1140,7 +1141,7 @@ async def cancelar_comanda(req: ComandaCancelarRequest, comanda: int) -> dict:
     return await asyncio.to_thread(_cancelar_comanda_sync, req, comanda)
 
 
-def _emitir_nfce_comanda_sync(req: EmitirNfceRequest, comanda: int) -> dict:
+def _emitir_nfce_comanda_sync(req: EmitirNfceRequest, comanda: int, *, notificar_individualmente: bool = True) -> dict:
     """Emite uma NFC-e real (SEFAZ) pra uma comanda já faturada — Fase 1 do
     pacote de emissão fiscal (ver `nfe_emissao_service.py` e o plano de
     implementação). Resolve tributação por item (`_resolver_tributacao_
@@ -1330,6 +1331,14 @@ def _emitir_nfce_comanda_sync(req: EmitirNfceRequest, comanda: int) -> dict:
             csc_id=str(controle_aux.get("csc") or ""), csc=(controle_aux.get("csc_hash") or ""),
             ibs_cbs_totais_xml=ibs_cbs_totais["xml_totais"], contingencia=contingencia,
             frete_valor=frete_valor, transportador=transportador,
+            # Apoio Fiscal BackOn (2026-08-28) — `notificar_individualmente`
+            # existe pra quem chama esta função DENTRO de um LOTE (ex.:
+            # "Retransmitir" do Gestor NFCe, `gestor_nfce_service.
+            # _retransmitir_sync`) poder suprimir a notificação POR ITEM
+            # (1 e-mail por comanda que falhou spammaria a Adriana) e
+            # mandar um resumo agregado do lote inteiro depois, uma vez só.
+            servidor=(req.servidor if notificar_individualmente else ""),
+            banco=(req.banco if notificar_individualmente else ""),
         )
         if not resultado.get("success"):
             conn.close()
@@ -1527,6 +1536,7 @@ def _emitir_nfse_comanda_sync(req: EmitirNfseRequest, comanda: int) -> dict:
             ibs_cbs_cst=ibs_cbs_cst, ibs_cbs_classtrib=ibs_cbs_classtrib,
             codigo_nbs=(controle_aux.get("codigo_nbs") or ""),
             simples_servico_pct=float(controle.get("simples_servico") or 0),
+            servidor=req.servidor, banco=req.banco,
         )
         if not resultado.get("success"):
             conn.close()

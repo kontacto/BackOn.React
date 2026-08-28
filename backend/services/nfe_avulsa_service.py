@@ -1178,6 +1178,7 @@ def _emitir_nfe_avulsa_sync(
             natureza_operacao=natureza_operacao, indFinal="1" if consumidor_final else "0",
             ibs_cbs_totais_xml=ibs_cbs_totais_xml, contingencia=contingencia, paga_frete=cab.get("paga_frete"),
             transportador=transportador, veiculo=veiculo, volumes=volumes,
+            servidor=servidor, banco=banco,
         )
         if not resultado.get("success"):
             conn.close()
@@ -1215,9 +1216,9 @@ def _emitir_nfe_avulsa_sync(
                 "alqt_icms, reducao_base_icms, base_icms, valor_icms, base_ipi, alqt_ipi, valor_ipi, "
                 "base_sub, valor_sub, base_iss, valor_iss, frete, seguro, despesas, desconto, valor_total, "
                 "tributacao_pis, base_pis, alqt_pis, valor_pis, tributacao_cofins, base_cofins, alqt_cofins, valor_cofins, "
-                "obs_item_nf) "
+                "obs_item_nf, aliquota_interestadual, aliquota_interna_destino, percentual_origem, fundo_pobreza) "
                 "OUTPUT INSERTED.id "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (
                     codigo_n_fiscal, item["codigo_int"], item["_cod_fiscal"], item["_tributacao"],
                     item["qtd"], item["valor_unitario"],
@@ -1228,6 +1229,13 @@ def _emitir_nfe_avulsa_sync(
                     pis_cofins["cst_pis"], pis_cofins["base_pis"], pis_cofins["alqt_pis"], pis_cofins["valor_pis"],
                     pis_cofins["cst_cofins"], pis_cofins["base_cofins"], pis_cofins["alqt_cofins"], pis_cofins["valor_cofins"],
                     item["_obs_item_nf"],
+                    # DIFAL (2026-08-28) — mesmas 4 colunas já lidas por
+                    # apuracao_fiscal_service.py::_calc_difal (Apuração
+                    # Fiscal, modo DIFAL) — persistidas aqui pela 1ª vez
+                    # pra essa view não mostrar zerado numa nota emitida
+                    # por este service.
+                    item.get("aliquota_interestadual") or 0, item.get("aliquota_interna_destino") or 0,
+                    item.get("percentual_origem") or 0, item.get("fundo_pobreza") or 0,
                 ),
             )
             id_item = int(cur.fetchone()["id"])

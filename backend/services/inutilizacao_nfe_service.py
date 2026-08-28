@@ -45,7 +45,7 @@ from datetime import datetime
 from typing import Optional
 
 from db.connection import _open_conn
-from services import nfe_fiscal_common
+from services import apoio_fiscal_service, nfe_fiscal_common
 from services.gestor_nfce_service import _ensure_inutilizacao_nfe_table
 from services.permissoes_service import tem_permissao
 
@@ -233,10 +233,15 @@ def _inutilizar_faixa_nfe_sync(
         if c_stat != "102":
             x_motivo = nfe_fiscal_common.extrair_tag(resposta, "xMotivo")
             conn.close()
-            return {
+            resultado_rejeicao = {
                 "success": False,
                 "message": f"SEFAZ recusou a inutilização (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}.",
             }
+            resultado_rejeicao["apoio_fiscal"] = apoio_fiscal_service.notificar_rejeicao_sync(
+                servidor, banco, tipo_documento="Inutilização NF-e", codigo_rejeicao=c_stat or "?",
+                mensagem_original=x_motivo or "", referencia=f"{serie}/{numero_inicial}-{numero_final}",
+            )
+            return resultado_rejeicao
         n_prot = nfe_fiscal_common.extrair_tag(resposta, "nProt")
         usuario_texto = nfe_fiscal_common.resolver_usuario_texto_sync(cur, usuario)
         data_registro = datetime.now().strftime("%d/%m/%Y às %H:%M:%S")

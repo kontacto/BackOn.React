@@ -346,12 +346,25 @@ class TestInutilizarFaixaNfeSync:
             many=[[]],
         )
         _patch(monkeypatch, cur)
+        chamada = {}
+
+        def _fake_notificar(servidor, banco, *, tipo_documento, codigo_rejeicao, mensagem_original, referencia=None):
+            chamada.update(servidor=servidor, banco=banco, tipo_documento=tipo_documento, codigo_rejeicao=codigo_rejeicao)
+            return {"titulo": "x", "explicacao_curta": "y", "explicacao_detalhada": "z", "acao_usuario": None,
+                    "notificado_suporte": {"email": True, "whatsapp": False}}
+
+        monkeypatch.setattr(svc.apoio_fiscal_service, "notificar_rejeicao_sync", _fake_notificar)
         r = svc._inutilizar_faixa_nfe_sync(
             "srv", "bd", serie="1", numero_inicial=10, numero_final=15,
             motivo="Erro de digitação encontrado", master=True,
         )
         assert r["success"] is False
         assert "563" in r["message"]
+        # Apoio Fiscal BackOn (2026-08-28) — esta função sempre tem
+        # servidor/banco reais (são parâmetros diretos, não opcionais
+        # como nos outros orquestradores), então notifica sempre.
+        assert r["apoio_fiscal"]["notificado_suporte"]["email"] is True
+        assert chamada == {"servidor": "srv", "banco": "bd", "tipo_documento": "Inutilização NF-e", "codigo_rejeicao": "563"}
 
     def test_falha_comunicacao_nao_propaga_excecao(self, monkeypatch):
         key_pem, cert_pem = _gerar_certificado_teste()

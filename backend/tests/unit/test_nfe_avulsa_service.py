@@ -462,6 +462,39 @@ class TestEmitirNfeAvulsaSync:
         dh_param = next(p for p in insert_nf[1] if isinstance(p, _dt.datetime))
         assert dh_param == _dt.datetime(2026, 8, 24, 10, 0, 0)
 
+    def test_sucesso_persiste_colunas_difal_no_item(self, monkeypatch):
+        # Achado 2026-08-28 ("persistir DIFAL"): as 4 colunas de rateio
+        # DIFAL (já existentes em n_fiscal_itens, já lidas por
+        # apuracao_fiscal_service.py::_calc_difal) nunca eram gravadas
+        # pelas notas emitidas por este service — Apuração Fiscal (modo
+        # DIFAL) mostrava zerado mesmo com o XML correto.
+        tributos_difal = {**TRIBUTOS_ROW, "aliquota_interestadual": 12.0, "aliquota_interna_destino": 18.0, "percentual_origem": 0.0, "fundo_pobreza": 2.0}
+        cur = FakeCursor(
+            one=[
+                CAB_ROW, {"codigo": "S01", "origem_destino": "C"}, CONTROLE_ROW, {"descricao": "Venda"},
+                PRODUTO_ROW, None,
+                {"codigo": 555},
+                {"id": 900},
+            ],
+            many=[[ITEM_AUX_ROW], []],
+        )
+        _patch(monkeypatch, cur)
+        _mock_destinatario_ok(monkeypatch)
+        _mock_tributacao_ok(monkeypatch, tributos=tributos_difal)
+        _mock_ibs_cbs_sem(monkeypatch)
+        _mock_emissao_ok(monkeypatch)
+
+        r = svc._emitir_nfe_avulsa_sync("srv", "bd", codigo=1, master=True)
+        assert r["success"] is True
+        insert_item = [q for q in cur.queries if "INSERT INTO n_fiscal_itens" in q[0]][0]
+        assert "aliquota_interestadual" in insert_item[0]
+        assert "aliquota_interna_destino" in insert_item[0]
+        assert "percentual_origem" in insert_item[0]
+        assert "fundo_pobreza" in insert_item[0]
+        assert 12.0 in insert_item[1]
+        assert 18.0 in insert_item[1]
+        assert 2.0 in insert_item[1]
+
     def test_item_com_cfop_proprio_sobrepoe_cabecalho_no_xml(self, monkeypatch):
         # Achado real 2026-08-24: `n_fiscal_itens.cod_fiscal` já era
         # gravado por item (rascunho/persistência sempre suportaram),

@@ -37,6 +37,8 @@ import { formatBRL } from "@/src/utils/format";
 import { fetchEmpresaHeader } from "@/src/utils/print-report-header";
 import { printFullHtml } from "@/src/utils/printHtml";
 import { buildDanfeHtml } from "@/src/utils/danfeFacsimile";
+import { showApoioFiscalError } from "@/src/utils/apoioFiscal";
+import ApoioFiscalBackOnModal, { ApoioFiscalInfo } from "@/src/components/ApoioFiscalBackOnModal";
 
 type TipoMov = { codigo: string; descricao: string; origem_destino: string; cfop: string | null; cfop_fora: string | null };
 
@@ -159,6 +161,7 @@ export default function NfeAvulsaScreen() {
   const [emitindo, setEmitindo] = useState(false);
   const [ajudaVisivel, setAjudaVisivel] = useState(false);
   const [resultado, setResultado] = useState<{ chave_acesso: string; protocolo_sefaz: string; nota_fisc: number } | null>(null);
+  const [apoioFiscalInfo, setApoioFiscalInfo] = useState<ApoioFiscalInfo | null>(null);
   const [baixandoDanfe, setBaixandoDanfe] = useState(false);
 
   const [tiposMov, setTiposMov] = useState<TipoMov[]>([]);
@@ -536,7 +539,8 @@ export default function NfeAvulsaScreen() {
         setResultado({ chave_acesso: j.chave_acesso, protocolo_sefaz: j.protocolo_sefaz, nota_fisc: j.nota_fisc });
         setPromovida(true);
       } else {
-        fb.showError(friendlyApiError(j, "Não foi possível emitir a NF-e."), undefined, 5000);
+        const info = showApoioFiscalError(fb, j, "Não foi possível emitir a NF-e.", 5000);
+        if (info) setApoioFiscalInfo(info);
       }
     } catch (e) {
       fb.showError(friendlyCatchError(e));
@@ -872,6 +876,7 @@ export default function NfeAvulsaScreen() {
       />
 
       <AjudaPedidoModal visible={ajudaVisivel} onClose={() => setAjudaVisivel(false)} titulo="Gerar NFe (NF-e Avulsa)" itens={NFE_AVULSA_AJUDA_ITENS} />
+      <ApoioFiscalBackOnModal visible={!!apoioFiscalInfo} info={apoioFiscalInfo} onClose={() => setApoioFiscalInfo(null)} />
     </SafeAreaView>
   );
 }

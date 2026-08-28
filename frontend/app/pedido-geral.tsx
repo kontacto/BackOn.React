@@ -20,6 +20,7 @@ import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { apiGet, apiSend } from "@/src/utils/api";
 import { produtoImagemUrl } from "@/src/utils/produtoImagem";
 import ImageLightboxModal from "@/src/components/ImageLightboxModal";
+import ApoioFiscalBackOnModal from "@/src/components/ApoioFiscalBackOnModal";
 import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
@@ -1142,6 +1143,11 @@ function PedidoGeralWebScreen({ router }: { router: ReturnType<typeof useRouter>
         itens={AJUDA_PEDIDO_GERAL_ITENS}
       />
       <ImageLightboxModal visible={!!lightboxUrl} onClose={() => setLightboxUrl(null)} imageUrl={lightboxUrl} />
+      <ApoioFiscalBackOnModal
+        visible={!!notaFiscal.apoioFiscalInfo}
+        info={notaFiscal.apoioFiscalInfo}
+        onClose={notaFiscal.fecharApoioFiscal}
+      />
     </SafeAreaView>
   );
 }

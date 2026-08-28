@@ -42,6 +42,7 @@ import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoM
 import { clienteSearchParams } from "@/src/hooks/useClienteForm";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { useEmitirNotaFiscal } from "@/src/hooks/useEmitirNotaFiscal";
+import ApoioFiscalBackOnModal from "@/src/components/ApoioFiscalBackOnModal";
 import NotaFiscalCard from "@/src/components/fiscal/NotaFiscalCard";
 import EquipamentoSearchModal, { EquipamentoRow } from "@/src/components/EquipamentoSearchModal";
 import { OSData } from "@/src/components/os/types";
@@ -1841,6 +1842,11 @@ function OSGeralWebScreen({ router }: { router: ReturnType<typeof useRouter> }) 
       />
       <ScreenToast toast={toast} testID="os-geral-toast" />
       <AjudaPedidoModal visible={ajudaOpen} onClose={() => setAjudaOpen(false)} titulo="O.S. Completa" itens={AJUDA_OS_ITENS} />
+      <ApoioFiscalBackOnModal
+        visible={!!notaFiscalCliente.apoioFiscalInfo}
+        info={notaFiscalCliente.apoioFiscalInfo}
+        onClose={notaFiscalCliente.fecharApoioFiscal}
+      />
     </SafeAreaView>
   );
 }

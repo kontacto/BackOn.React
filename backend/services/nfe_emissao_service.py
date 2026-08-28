@@ -54,7 +54,7 @@ import re
 from datetime import date, datetime, time, timezone
 from typing import Optional
 
-from services import nfe_fiscal_common, nfe_regras_fiscais
+from services import apoio_fiscal_service, nfe_fiscal_common, nfe_regras_fiscais
 
 # Endpoints "autorização" (emissão), versão 4.00, só pro grupo SVRS — mesma
 # limitação documentada em `nfe_cancelamento_service.py`.
@@ -950,6 +950,7 @@ def emitir_nfce_sync(
     forma_pagamento: str, valor_total: float, tp_amb: str, csc_id: str, csc: str,
     ibs_cbs_totais_xml: str = "", contingencia: Optional[dict] = None,
     frete_valor: float = 0, transportador: Optional[dict] = None,
+    servidor: str = "", banco: str = "",
 ) -> dict:
     """Orquestra a emissão de uma NFC-e a partir de uma comanda já faturada
     — assina, transmite ao SEFAZ (grupo SVRS) e devolve o resultado. `cur`
@@ -1083,10 +1084,22 @@ def emitir_nfce_sync(
     dh_recbto = nfe_fiscal_common.extrair_tag(inf_prot, "dhRecbto")
     # 100 = "Autorizado o uso da NF-e" (sucesso).
     if c_stat != "100":
-        return {
+        resultado_rejeicao = {
             "success": False,
             "message": f"SEFAZ recusou a emissão (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}.",
+            "cstat": c_stat,
         }
+        # Apoio Fiscal BackOn (2026-08-28) — tradução pro lojista + aviso
+        # automático de suporte (e-mail sempre, WhatsApp se configurado).
+        # `servidor`/`banco` opcionais (default "") pra não quebrar
+        # chamadas antigas em teste que não passam esse par — só notifica
+        # quando os dois vêm preenchidos (produção sempre passa).
+        if servidor and banco:
+            resultado_rejeicao["apoio_fiscal"] = apoio_fiscal_service.notificar_rejeicao_sync(
+                servidor, banco, tipo_documento="NFC-e", codigo_rejeicao=c_stat or "?",
+                mensagem_original=x_motivo or "", referencia=chave_acesso,
+            )
+        return resultado_rejeicao
     return {
         "success": True,
         "message": f"NFC-e autorizada pelo SEFAZ — protocolo {n_prot or '?'}.",
@@ -1108,6 +1121,7 @@ def emitir_nfe_sync(
     natureza_operacao: str, indFinal: str = "1", ibs_cbs_totais_xml: str = "", contingencia: Optional[dict] = None,
     paga_frete: Optional[int] = None,
     transportador: Optional[dict] = None, veiculo: Optional[dict] = None, volumes: Optional[dict] = None,
+    servidor: str = "", banco: str = "",
 ) -> dict:
     """Orquestra a emissão de uma NF-e modelo 55 — mesmo padrão de
     `emitir_nfce_sync`, mas sem CSC/QR Code (exclusividade de NFC-e) e com
@@ -1210,10 +1224,17 @@ def emitir_nfe_sync(
     n_prot = nfe_fiscal_common.extrair_tag(inf_prot, "nProt")
     dh_recbto = nfe_fiscal_common.extrair_tag(inf_prot, "dhRecbto")
     if c_stat != "100":
-        return {
+        resultado_rejeicao = {
             "success": False,
             "message": f"SEFAZ recusou a emissão (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}.",
+            "cstat": c_stat,
         }
+        if servidor and banco:
+            resultado_rejeicao["apoio_fiscal"] = apoio_fiscal_service.notificar_rejeicao_sync(
+                servidor, banco, tipo_documento="NF-e", codigo_rejeicao=c_stat or "?",
+                mensagem_original=x_motivo or "", referencia=chave_acesso,
+            )
+        return resultado_rejeicao
     return {
         "success": True,
         "message": f"NF-e autorizada pelo SEFAZ — protocolo {n_prot or '?'}.",

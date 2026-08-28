@@ -555,6 +555,45 @@ class TestEmitirNfceSync:
         assert r["success"] is False
         assert "539" in r["message"]
 
+    def test_sefaz_recusa_dispara_apoio_fiscal_quando_servidor_banco_informados(self, monkeypatch):
+        # Apoio Fiscal BackOn (2026-08-28) — a rejeição real do SEFAZ passa
+        # a carregar a chave "apoio_fiscal" (tradução + notificação de
+        # suporte) SOMENTE quando quem chamou informou servidor/banco —
+        # ver services/apoio_fiscal_service.py.
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = "<retEnviNFe><infProt><cStat>539</cStat><xMotivo>Duplicidade</xMotivo></infProt></retEnviNFe>"
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        chamada = {}
+
+        def _fake_notificar(servidor, banco, *, tipo_documento, codigo_rejeicao, mensagem_original, referencia=None):
+            chamada.update(servidor=servidor, banco=banco, tipo_documento=tipo_documento, codigo_rejeicao=codigo_rejeicao)
+            return {"titulo": "x", "explicacao_curta": "y", "explicacao_detalhada": "z", "acao_usuario": None,
+                    "notificado_suporte": {"email": True, "whatsapp": False}}
+
+        monkeypatch.setattr(svc.apoio_fiscal_service, "notificar_rejeicao_sync", _fake_notificar)
+        r = svc.emitir_nfce_sync(
+            None, comanda=1, cnpj_emit="1", nome_emit="X", uf_sigla="RJ", uf_controle_sigla="RJ",
+            proximo_numero=1, serie="1", cliente=None, itens_resolvidos=[self._item()], forma_pagamento="01",
+            valor_total=50, tp_amb="2", csc_id="1", csc="x", servidor="srv", banco="bd",
+        )
+        assert r["success"] is False
+        assert r["apoio_fiscal"]["notificado_suporte"]["email"] is True
+        assert chamada == {"servidor": "srv", "banco": "bd", "tipo_documento": "NFC-e", "codigo_rejeicao": "539"}
+
+    def test_sefaz_recusa_sem_servidor_banco_nao_chama_apoio_fiscal(self, monkeypatch):
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = "<retEnviNFe><infProt><cStat>539</cStat><xMotivo>Duplicidade</xMotivo></infProt></retEnviNFe>"
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        r = svc.emitir_nfce_sync(
+            None, comanda=1, cnpj_emit="1", nome_emit="X", uf_sigla="RJ", uf_controle_sigla="RJ",
+            proximo_numero=1, serie="1", cliente=None, itens_resolvidos=[self._item()], forma_pagamento="01",
+            valor_total=50, tp_amb="2", csc_id="1", csc="x",
+        )
+        assert r["success"] is False
+        assert "apoio_fiscal" not in r
+
     def test_falha_de_comunicacao_nao_propaga_excecao(self, monkeypatch):
         key_pem, cert_pem = _gerar_certificado_teste()
         _patch_certificado(monkeypatch, key_pem, cert_pem)
@@ -887,6 +926,41 @@ class TestEmitirNfeSync:
         )
         assert r["success"] is False
         assert "539" in r["message"]
+
+    def test_sefaz_recusa_dispara_apoio_fiscal_quando_servidor_banco_informados(self, monkeypatch):
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = "<retEnviNFe><infProt><cStat>695</cStat><xMotivo>Grupo ICMS UF dest</xMotivo></infProt></retEnviNFe>"
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        chamada = {}
+
+        def _fake_notificar(servidor, banco, *, tipo_documento, codigo_rejeicao, mensagem_original, referencia=None):
+            chamada.update(servidor=servidor, banco=banco, tipo_documento=tipo_documento, codigo_rejeicao=codigo_rejeicao)
+            return {"titulo": "x", "explicacao_curta": "y", "explicacao_detalhada": "z", "acao_usuario": None,
+                    "notificado_suporte": {"email": True, "whatsapp": False}}
+
+        monkeypatch.setattr(svc.apoio_fiscal_service, "notificar_rejeicao_sync", _fake_notificar)
+        r = svc.emitir_nfe_sync(
+            None, cnpj_emit="1", nome_emit="X", uf_sigla="RJ", proximo_numero=1, serie="1",
+            destinatario=_destinatario_teste(), itens_resolvidos=[self._item()], valor_total=50, tp_amb="2",
+            natureza_operacao="Venda", servidor="srv", banco="bd",
+        )
+        assert r["success"] is False
+        assert r["apoio_fiscal"]["notificado_suporte"]["email"] is True
+        assert chamada == {"servidor": "srv", "banco": "bd", "tipo_documento": "NF-e", "codigo_rejeicao": "695"}
+
+    def test_sefaz_recusa_sem_servidor_banco_nao_chama_apoio_fiscal(self, monkeypatch):
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = "<retEnviNFe><infProt><cStat>539</cStat><xMotivo>Duplicidade</xMotivo></infProt></retEnviNFe>"
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        r = svc.emitir_nfe_sync(
+            None, cnpj_emit="1", nome_emit="X", uf_sigla="RJ", proximo_numero=1, serie="1",
+            destinatario=_destinatario_teste(), itens_resolvidos=[self._item()], valor_total=50, tp_amb="2",
+            natureza_operacao="Venda",
+        )
+        assert r["success"] is False
+        assert "apoio_fiscal" not in r
 
     def test_contingencia_nao_transmite(self, monkeypatch):
         key_pem, cert_pem = _gerar_certificado_teste()

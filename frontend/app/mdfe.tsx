@@ -29,6 +29,8 @@ import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
+import { showApoioFiscalError } from "@/src/utils/apoioFiscal";
+import ApoioFiscalBackOnModal, { ApoioFiscalInfo } from "@/src/components/ApoioFiscalBackOnModal";
 import { printHtml } from "@/src/utils/printHtml";
 import { fetchEmpresaHeader } from "@/src/utils/print-report-header";
 import { buildDamdfeHtml } from "@/src/utils/danfeFacsimile";
@@ -144,6 +146,7 @@ export default function MdfeScreen() {
   const [urlQrcode, setUrlQrcode] = useState<string | null>(null);
   const [tpAmb, setTpAmb] = useState<string | null>(null);
   const [emitindo, setEmitindo] = useState(false);
+  const [apoioFiscalInfo, setApoioFiscalInfo] = useState<ApoioFiscalInfo | null>(null);
   const [consultando, setConsultando] = useState(false);
   const [imprimindo, setImprimindo] = useState(false);
 
@@ -439,7 +442,11 @@ export default function MdfeScreen() {
         body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...auditCtx }),
       });
       const j = await r.json();
-      if (!j?.success) { fb.showError(friendlyApiError(j, "Não foi possível emitir o MDF-e."), undefined, 5000); return; }
+      if (!j?.success) {
+        const info = showApoioFiscalError(fb, j, "Não foi possível emitir o MDF-e.", 5000);
+        if (info) setApoioFiscalInfo(info);
+        return;
+      }
       fb.showSuccess(j.message || "MDF-e emitido.", undefined, 5000);
       await carregarMdfe(codigo);
     } catch (e) {
@@ -469,7 +476,11 @@ export default function MdfeScreen() {
         body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, municipio_encerra: municipioEncerraCod, ...auditCtx }),
       });
       const j = await r.json();
-      if (!j?.success) { fb.showError(friendlyApiError(j, "Não foi possível encerrar o MDF-e."), undefined, 5000); return; }
+      if (!j?.success) {
+        const info = showApoioFiscalError(fb, j, "Não foi possível encerrar o MDF-e.", 5000);
+        if (info) setApoioFiscalInfo(info);
+        return;
+      }
       fb.showSuccess(j.message || "MDF-e encerrado.");
       setEncerrarModalOpen(false);
       await carregarMdfe(codigo);
@@ -490,7 +501,11 @@ export default function MdfeScreen() {
         body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, motivo: motivoCancelamento.trim(), ...auditCtx }),
       });
       const j = await r.json();
-      if (!j?.success) { fb.showError(friendlyApiError(j, "Não foi possível cancelar o MDF-e."), undefined, 5000); return; }
+      if (!j?.success) {
+        const info = showApoioFiscalError(fb, j, "Não foi possível cancelar o MDF-e.", 5000);
+        if (info) setApoioFiscalInfo(info);
+        return;
+      }
       fb.showSuccess(j.message || "MDF-e cancelado.");
       setCancelarModalOpen(false);
       await carregarMdfe(codigo);
@@ -910,6 +925,7 @@ export default function MdfeScreen() {
       </AppModal>
 
       <AjudaPedidoModal visible={ajudaOpen} onClose={() => setAjudaOpen(false)} titulo="MDF-e — Ajuda" itens={MDFE_AJUDA_ITENS} />
+      <ApoioFiscalBackOnModal visible={!!apoioFiscalInfo} info={apoioFiscalInfo} onClose={() => setApoioFiscalInfo(null)} />
     </SafeAreaView>
   );
 }

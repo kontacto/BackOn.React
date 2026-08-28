@@ -382,9 +382,14 @@ class TestValidarPendentesSync:
             "xml": f'<NFe xmlns="{svc.nfe_fiscal_common.NFE_NS}"><infNFe Id="NFe{"3" * 44}" versao="4.00"><ide><nNF>1</nNF></ide></infNFe></NFe>',
         }])
         _patch(monkeypatch, cur)
+        monkeypatch.setattr(
+            svc.apoio_fiscal_service, "notificar_rejeicoes_lote_sync",
+            lambda *a, **k: {"total": 1, "grupos": [], "notificado_suporte": {"email": True, "whatsapp": False}},
+        )
         r = svc._validar_pendentes_sync("srv", "bd", notas=[1], master=True)
         assert r["success"] is False
         assert "110" in r["resultados"][0]["message"]
+        assert r["apoio_fiscal_lote"]["notificado_suporte"]["email"] is True
 
     def test_falha_comunicacao_nao_propaga_excecao(self, monkeypatch):
         key_pem, cert_pem = _gerar_certificado_teste()

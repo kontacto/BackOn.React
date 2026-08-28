@@ -145,6 +145,41 @@ class TestEmitirMdfeSync:
         assert not any("SET situacao='T'" in q for q, p in cur.queries)
         assert not any(q.strip().startswith("UPDATE controle_aux") for q, p in cur.queries)
 
+    def test_sefaz_recusa_dispara_apoio_fiscal_quando_servidor_banco_informados(self, monkeypatch):
+        _sem_rede(monkeypatch, transmitido="<cStat>225</cStat><xMotivo>Falha de schema</xMotivo>")
+        cur = FakeCursor(one=[
+            {"situacao": "A", "veiculo": 3, "motorista": 5}, {"qtd": 1},
+            {"cgc": "12345678000199", "uf": "RJ"},
+            {"cidade": "Rio de Janeiro", "uf": "RJ"},
+            {"codmun": 3304557},
+            {"numero_MDFE": 10, "serie_MDFE": "1"},
+        ])
+        chamada = {}
+
+        def _fake_notificar(servidor, banco, *, tipo_documento, codigo_rejeicao, mensagem_original, referencia=None):
+            chamada.update(servidor=servidor, banco=banco, tipo_documento=tipo_documento, codigo_rejeicao=codigo_rejeicao)
+            return {"titulo": "x", "explicacao_curta": "y", "explicacao_detalhada": "z", "acao_usuario": None,
+                    "notificado_suporte": {"email": True, "whatsapp": False}}
+
+        monkeypatch.setattr(svc.apoio_fiscal_service, "notificar_rejeicao_sync", _fake_notificar)
+        r = svc.emitir_mdfe_sync(cur, 1, "user", servidor="srv", banco="bd")
+        assert r["success"] is False
+        assert r["apoio_fiscal"]["notificado_suporte"]["email"] is True
+        assert chamada == {"servidor": "srv", "banco": "bd", "tipo_documento": "MDF-e", "codigo_rejeicao": "225"}
+
+    def test_sefaz_recusa_sem_servidor_banco_nao_chama_apoio_fiscal(self, monkeypatch):
+        _sem_rede(monkeypatch, transmitido="<cStat>225</cStat><xMotivo>Falha de schema</xMotivo>")
+        cur = FakeCursor(one=[
+            {"situacao": "A", "veiculo": 3, "motorista": 5}, {"qtd": 1},
+            {"cgc": "12345678000199", "uf": "RJ"},
+            {"cidade": "Rio de Janeiro", "uf": "RJ"},
+            {"codmun": 3304557},
+            {"numero_MDFE": 10, "serie_MDFE": "1"},
+        ])
+        r = svc.emitir_mdfe_sync(cur, 1, "user")
+        assert r["success"] is False
+        assert "apoio_fiscal" not in r
+
 
 class TestEncerrarMdfeSync:
     def test_exige_situacao_transmitida(self, monkeypatch):
@@ -172,6 +207,36 @@ class TestEncerrarMdfeSync:
         update = next((q, p) for q, p in cur.queries if "SET situacao='E'" in q)
         assert update[1][0] == 3304557
 
+    def test_sefaz_recusa_dispara_apoio_fiscal_quando_servidor_banco_informados(self, monkeypatch):
+        _sem_rede(monkeypatch, transmitido="<cStat>573</cStat><xMotivo>Duplicidade de Evento</xMotivo>")
+        cur = FakeCursor(one=[
+            {"situacao": "T", "chave_acesso": "33" + "0" * 42, "protocolo_sefaz": "P1", "tp_amb": "2", "historico": None},
+            {"cgc": "12345678000199"},
+        ])
+        chamada = {}
+
+        def _fake_notificar(servidor, banco, *, tipo_documento, codigo_rejeicao, mensagem_original, referencia=None):
+            chamada.update(servidor=servidor, banco=banco, tipo_documento=tipo_documento, codigo_rejeicao=codigo_rejeicao)
+            return {"titulo": "x", "explicacao_curta": "y", "explicacao_detalhada": "z", "acao_usuario": None,
+                    "notificado_suporte": {"email": True, "whatsapp": False}}
+
+        monkeypatch.setattr(svc.apoio_fiscal_service, "notificar_rejeicao_sync", _fake_notificar)
+        r = svc.encerrar_mdfe_sync(cur, 1, 3304557, "user", servidor="srv", banco="bd")
+        assert r["success"] is False
+        assert r["apoio_fiscal"]["notificado_suporte"]["email"] is True
+        assert chamada["tipo_documento"] == "Encerramento MDF-e"
+        assert chamada["codigo_rejeicao"] == "573"
+
+    def test_sefaz_recusa_sem_servidor_banco_nao_chama_apoio_fiscal(self, monkeypatch):
+        _sem_rede(monkeypatch, transmitido="<cStat>573</cStat><xMotivo>Duplicidade de Evento</xMotivo>")
+        cur = FakeCursor(one=[
+            {"situacao": "T", "chave_acesso": "33" + "0" * 42, "protocolo_sefaz": "P1", "tp_amb": "2", "historico": None},
+            {"cgc": "12345678000199"},
+        ])
+        r = svc.encerrar_mdfe_sync(cur, 1, 3304557, "user")
+        assert r["success"] is False
+        assert "apoio_fiscal" not in r
+
 
 class TestCancelarMdfeSync:
     def test_exige_motivo_minimo_15_chars(self, monkeypatch):
@@ -197,6 +262,36 @@ class TestCancelarMdfeSync:
         r = svc.cancelar_mdfe_sync(cur, 1, "motivo bem detalhado do cancelamento", "user")
         assert r["success"] is True
         assert any("SET situacao='C'" in q for q, p in cur.queries)
+
+    def test_sefaz_recusa_dispara_apoio_fiscal_quando_servidor_banco_informados(self, monkeypatch):
+        _sem_rede(monkeypatch, transmitido="<cStat>573</cStat><xMotivo>Duplicidade de Evento</xMotivo>")
+        cur = FakeCursor(one=[
+            {"situacao": "T", "chave_acesso": "33" + "0" * 42, "protocolo_sefaz": "P1", "tp_amb": "2", "historico": None},
+            {"cgc": "12345678000199"},
+        ])
+        chamada = {}
+
+        def _fake_notificar(servidor, banco, *, tipo_documento, codigo_rejeicao, mensagem_original, referencia=None):
+            chamada.update(servidor=servidor, banco=banco, tipo_documento=tipo_documento, codigo_rejeicao=codigo_rejeicao)
+            return {"titulo": "x", "explicacao_curta": "y", "explicacao_detalhada": "z", "acao_usuario": None,
+                    "notificado_suporte": {"email": True, "whatsapp": False}}
+
+        monkeypatch.setattr(svc.apoio_fiscal_service, "notificar_rejeicao_sync", _fake_notificar)
+        r = svc.cancelar_mdfe_sync(cur, 1, "motivo bem detalhado do cancelamento", "user", servidor="srv", banco="bd")
+        assert r["success"] is False
+        assert r["apoio_fiscal"]["notificado_suporte"]["email"] is True
+        assert chamada["tipo_documento"] == "Cancelamento MDF-e"
+        assert chamada["codigo_rejeicao"] == "573"
+
+    def test_sefaz_recusa_sem_servidor_banco_nao_chama_apoio_fiscal(self, monkeypatch):
+        _sem_rede(monkeypatch, transmitido="<cStat>573</cStat><xMotivo>Duplicidade de Evento</xMotivo>")
+        cur = FakeCursor(one=[
+            {"situacao": "T", "chave_acesso": "33" + "0" * 42, "protocolo_sefaz": "P1", "tp_amb": "2", "historico": None},
+            {"cgc": "12345678000199"},
+        ])
+        r = svc.cancelar_mdfe_sync(cur, 1, "motivo bem detalhado do cancelamento", "user")
+        assert r["success"] is False
+        assert "apoio_fiscal" not in r
 
 
 class TestConsultarSituacaoMdfeSync:

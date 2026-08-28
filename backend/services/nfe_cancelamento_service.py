@@ -48,7 +48,7 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 
-from services import nfe_fiscal_common
+from services import apoio_fiscal_service, nfe_fiscal_common
 
 # Código IBGE de UF — tabela pública, não é regra de negócio, só referência
 # de dados (mesma tabela usada em qualquer integração fiscal brasileira).
@@ -160,7 +160,7 @@ def _extrair_tag(xml_texto: str, tag: str) -> Optional[str]:
 
 def cancelar_nfe_sync(
     cur, *, cnpj: str, uf_sigla: str, modelo: str, chave_acesso: str, protocolo: str,
-    motivo: str, tp_amb: str,
+    motivo: str, tp_amb: str, servidor: str = "", banco: str = "",
 ) -> dict:
     """Orquestra o cancelamento (evento 110111) — chamado por
     `comanda_service._cancelar_comanda_sync` quando a comanda tem NF/NFCe
@@ -215,10 +215,17 @@ def cancelar_nfe_sync(
     # 135 = "Evento registrado e vinculado a NF-e" (cancelamento homologado).
     # 136 = "Evento registrado, mas não vinculado a NF-e" (também sucesso).
     if c_stat not in ("135", "136"):
-        return {
+        resultado_rejeicao = {
             "success": False,
             "message": f"SEFAZ recusou o cancelamento (status {c_stat or '?'}): {x_motivo or 'sem detalhe'}.",
+            "cstat": c_stat,
         }
+        if servidor and banco:
+            resultado_rejeicao["apoio_fiscal"] = apoio_fiscal_service.notificar_rejeicao_sync(
+                servidor, banco, tipo_documento="Cancelamento NF/NFC-e", codigo_rejeicao=c_stat or "?",
+                mensagem_original=x_motivo or "", referencia=chave_acesso,
+            )
+        return resultado_rejeicao
     return {
         "success": True,
         "message": f"Cancelamento autorizado pelo SEFAZ — protocolo {n_prot or '?'}.",

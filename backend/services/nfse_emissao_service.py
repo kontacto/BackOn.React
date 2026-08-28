@@ -60,7 +60,7 @@ import re
 from datetime import date, datetime
 from typing import Optional
 
-from services import nfe_fiscal_common
+from services import apoio_fiscal_service, nfe_fiscal_common
 
 # Endpoints do Ambiente de Dados Nacional (Sefin Nacional) — só o caminho de
 # submissão síncrona de DPS. `tp_amb` segue a mesma convenção já usada em
@@ -314,6 +314,7 @@ def emitir_nfse_sync(
     regime_especial_tributacao: int, proximo_numero: int, serie: str, tomador: Optional[dict],
     itens: list[dict], tp_amb: str, ibs_cbs_cst: str = "", ibs_cbs_classtrib: str = "",
     codigo_nbs: str = "", simples_servico_pct: float = 0.0,
+    servidor: str = "", banco: str = "",
 ) -> dict:
     """Orquestra a emissão de uma NFS-e (DPS Nacional) a partir de uma
     comanda já faturada com itens de serviço — monta/assina a DPS, envia ao
@@ -363,7 +364,21 @@ def emitir_nfse_sync(
 
     if resposta.get("_erro_http") or not resposta.get("chaveAcesso"):
         mensagens = resposta.get("mensagens") or resposta.get("message") or resposta
-        return {"success": False, "message": f"ADN recusou a emissão da NFS-e: {mensagens}"}
+        resultado_rejeicao = {"success": False, "message": f"ADN recusou a emissão da NFS-e: {mensagens}"}
+        if servidor and banco:
+            # ADN não tem um `cStat` numérico único como SEFAZ — usa o
+            # `codigo` da 1ª mensagem estruturada da lista quando presente
+            # (ex. "E0160"/"E0166"/"E0714", formato confirmado ao vivo
+            # 2026-08-23), ou um slug genérico quando a resposta não veio
+            # nesse formato (erro HTTP cru, timeout, etc.).
+            primeira_msg = mensagens[0] if isinstance(mensagens, list) and mensagens else {}
+            codigo_adn = (primeira_msg.get("codigo") if isinstance(primeira_msg, dict) else None) or "ADN_GENERICO"
+            texto_adn = (primeira_msg.get("descricao") if isinstance(primeira_msg, dict) else None) or str(mensagens)
+            resultado_rejeicao["apoio_fiscal"] = apoio_fiscal_service.notificar_rejeicao_sync(
+                servidor, banco, tipo_documento="NFS-e", codigo_rejeicao=codigo_adn,
+                mensagem_original=texto_adn,
+            )
+        return resultado_rejeicao
 
     chave_acesso = resposta["chaveAcesso"]
     nfse_xml = None

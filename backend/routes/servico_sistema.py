@@ -21,6 +21,13 @@ class AtualizacaoDados(BaseModel):
     pasta_backend: str = ""
     pasta_frontend: str = ""
     intervalo_minutos: int = 30
+    # ACHADO 2026-08-28 (Apoio Fiscal BackOn, ao mexer neste arquivo por
+    # outro motivo): `canal` nunca tinha sido declarado aqui — como
+    # Pydantic descarta campo não declarado no `model_dump()`, o Canal
+    # escolhido na tela NUNCA chegava no service, que sempre gravava o
+    # default "H". Bug real, corrigido de passagem (ver PENDENCIAS.md).
+    canal: str = "H"
+    cel_suporte: str = ""
 
 
 class AtualizacaoSaveRequest(AuditFields):

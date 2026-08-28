@@ -51,6 +51,7 @@ _CONFIG_PADRAO = {
     "pasta_frontend": "",
     "intervalo_minutos": 30,
     "canal": "H",
+    "cel_suporte": "",
     "commit_atual": None,
     "commit_anterior": None,
     "commit_pendente": None,
@@ -77,6 +78,7 @@ def _ensure_servico_sistema_atualizacao_table(cur) -> None:
         "pasta_frontend NVARCHAR(400) NULL, "
         "intervalo_minutos INT NOT NULL DEFAULT 30, "
         "canal NVARCHAR(1) NOT NULL DEFAULT 'H', "
+        "cel_suporte NVARCHAR(20) NULL, "
         "commit_atual NVARCHAR(40) NULL, "
         "commit_anterior NVARCHAR(40) NULL, "
         "commit_pendente NVARCHAR(40) NULL, "
@@ -95,6 +97,16 @@ def _ensure_servico_sistema_atualizacao_table(cur) -> None:
         "AND name = 'canal') "
         "ALTER TABLE servico_sistema_atualizacao ADD canal NVARCHAR(1) NOT NULL DEFAULT 'H'"
     )
+    # `cel_suporte` adicionado 2026-08-28 (Apoio Fiscal BackOn) — número de
+    # WhatsApp do SUPORTE (Kontacto), não do cliente/lojista. Destino das
+    # notificações automáticas de rejeição fiscal quando o cliente já tem
+    # o serviço de WhatsApp configurado (ver apoio_fiscal_service.py).
+    # Opcional, em branco por padrão — cada instalação configura a dela.
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'cel_suporte') "
+        "ALTER TABLE servico_sistema_atualizacao ADD cel_suporte NVARCHAR(20) NULL"
+    )
 
 
 def _get_config_sync(servidor: str, banco: str) -> dict:
@@ -107,7 +119,7 @@ def _get_config_sync(servidor: str, banco: str) -> dict:
         _ensure_servico_sistema_atualizacao_table(cur)
         conn.commit()
         cur.execute(
-            "SELECT TOP 1 manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, "
+            "SELECT TOP 1 manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte, "
             "commit_atual, commit_anterior, commit_pendente, pendente_desde, ultima_verificacao, ultimo_erro "
             "FROM servico_sistema_atualizacao ORDER BY codigo DESC"
         )
@@ -148,6 +160,12 @@ def _save_config_sync(servidor: str, banco: str, dados: dict) -> dict:
     if canal not in ("H", "P"):
         return {"success": False, "message": "Canal inválido — use Homologação ou Produção."}
 
+    # "Cel Suporte" (Apoio Fiscal BackOn, 2026-08-28) — só dígitos/+,
+    # nenhuma validação forte de formato (normalizado na hora de usar via
+    # services/whatsapp/service.py::normalize_phone, ver
+    # apoio_fiscal_service.py::notificar_rejeicao_sync).
+    cel_suporte = (dados.get("cel_suporte") or "").strip()
+
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
@@ -161,14 +179,14 @@ def _save_config_sync(servidor: str, banco: str, dados: dict) -> dict:
         if existente:
             cur.execute(
                 "UPDATE servico_sistema_atualizacao SET manifest_url=%s, pasta_backend=%s, "
-                "pasta_frontend=%s, intervalo_minutos=%s, canal=%s WHERE codigo=%s",
-                (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, existente["codigo"]),
+                "pasta_frontend=%s, intervalo_minutos=%s, canal=%s, cel_suporte=%s WHERE codigo=%s",
+                (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte, existente["codigo"]),
             )
         else:
             cur.execute(
-                "INSERT INTO servico_sistema_atualizacao (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal) "
-                "VALUES (%s,%s,%s,%s,%s)",
-                (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal),
+                "INSERT INTO servico_sistema_atualizacao (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte) "
+                "VALUES (%s,%s,%s,%s,%s,%s)",
+                (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte),
             )
         conn.commit()
         cur.close()

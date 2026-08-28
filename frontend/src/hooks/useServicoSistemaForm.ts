@@ -29,6 +29,7 @@ export type ServicoSistemaAtualizacaoForm = {
   pasta_frontend: string;
   intervalo_minutos: string;
   canal: Canal;
+  cel_suporte: string;
   commit_atual: string | null;
   commit_anterior: string | null;
   commit_pendente: string | null;
@@ -43,6 +44,7 @@ const FORM_VAZIO: ServicoSistemaAtualizacaoForm = {
   pasta_frontend: "",
   intervalo_minutos: "30",
   canal: "H",
+  cel_suporte: "",
   commit_atual: null,
   commit_anterior: null,
   commit_pendente: null,
@@ -78,6 +80,7 @@ export function useServicoSistemaForm() {
         pasta_frontend: d.pasta_frontend || "",
         intervalo_minutos: String(d.intervalo_minutos ?? 30),
         canal: d.canal === "P" ? "P" : "H",
+        cel_suporte: d.cel_suporte || "",
         commit_atual: d.commit_atual ?? null,
         commit_anterior: d.commit_anterior ?? null,
         commit_pendente: d.commit_pendente ?? null,
@@ -114,6 +117,7 @@ export function useServicoSistemaForm() {
           pasta_frontend: form.pasta_frontend.trim(),
           intervalo_minutos: parseInt(form.intervalo_minutos, 10) || 30,
           canal: form.canal,
+          cel_suporte: form.cel_suporte.trim(),
         },
       });
       if (!j?.success) { fb.showError(friendlyApiError(j, "Falha ao gravar a configuração.")); return false; }

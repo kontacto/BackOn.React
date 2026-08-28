@@ -47,6 +47,12 @@ const SERVICO_SISTEMA_AJUDA_ITENS: HelpItem[] = [
     icon: { lib: "ion", name: "git-branch-outline" },
   },
   {
+    titulo: "Cel Suporte (Apoio Fiscal BackOn)",
+    texto:
+      "Número de WhatsApp do SUPORTE da Kontacto — quando preenchido, toda rejeição fiscal (NFC-e/NF-e/NFS-e/Cancelamento) nesta instalação dispara automaticamente um aviso por WhatsApp pra esse número, além do e-mail que já vai sempre pra suporte@kontacto.com.br. Não é o WhatsApp do cliente/lojista — é o canal interno da equipe de suporte.",
+    icon: { lib: "ion", name: "logo-whatsapp" },
+  },
+  {
     titulo: "Verificar agora",
     texto:
       "Dispara a verificação na hora, sem esperar o próximo ciclo automático — funciona mesmo com o intervalo em 0 (desligado). Só baixa e avisa se houver algo novo, nunca troca a versão em produção sozinho.",
@@ -260,6 +266,27 @@ export default function ServicoSistemaScreen() {
                       ]}
                       compactWeb
                       testID="servico-sistema-canal"
+                    />
+                  </View>
+                </View>
+
+                <Text style={styles.sectionTitle}>Apoio Fiscal BackOn — Cel Suporte</Text>
+                <Text style={styles.helperText}>
+                  Número de WhatsApp do SUPORTE da Kontacto (não do cliente) — recebe uma notificação automática
+                  sempre que uma nota fiscal for rejeitada nesta instalação, além do e-mail já enviado pra
+                  suporte@kontacto.com.br. Deixe em branco para receber só por e-mail.
+                </Text>
+                <View style={styles.rowFields}>
+                  <View style={styles.colNarrow}>
+                    <Text style={styles.label}>Cel Suporte (WhatsApp)</Text>
+                    <TextInput
+                      value={f.form.cel_suporte}
+                      onChangeText={(v) => f.setField("cel_suporte", v)}
+                      keyboardType="phone-pad"
+                      placeholder="(11) 91234-5678"
+                      placeholderTextColor={colors.muted}
+                      style={styles.input}
+                      testID="servico-sistema-cel-suporte"
                     />
                   </View>
                 </View>

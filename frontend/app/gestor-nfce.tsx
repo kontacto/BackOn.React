@@ -79,6 +79,22 @@ type ResultadoLinha = {
   motivo_sefaz?: string;
   protocolo?: string;
 };
+// Apoio Fiscal BackOn — resumo agregado de uma operação em LOTE
+// (2026-08-28, decisão "resumo agregado" via AskUserQuestion): 1 grupo
+// por código de rejeição, nunca 1 tradução por item (evita repetir a
+// mesma explicação N vezes numa lista longa).
+type ApoioFiscalLoteGrupo = {
+  codigo_rejeicao: string;
+  titulo: string;
+  explicacao_curta: string;
+  quantidade: number;
+  referencias: string[];
+};
+type ApoioFiscalLote = {
+  total: number;
+  grupos: ApoioFiscalLoteGrupo[];
+  notificado_suporte: { email: boolean; whatsapp: boolean };
+};
 type ContingenciaStatus = {
   aberta: boolean;
   data_inicio?: string;
@@ -240,7 +256,7 @@ export default function GestorNfceScreen() {
   const [inutilizarNumeros, setInutilizarNumeros] = useState("");
   const [motivoInutilizar, setMotivoInutilizar] = useState("");
 
-  const [resultadoLote, setResultadoLote] = useState<{ titulo: string; linhas: ResultadoLinha[] } | null>(null);
+  const [resultadoLote, setResultadoLote] = useState<{ titulo: string; linhas: ResultadoLinha[]; apoioFiscalLote?: ApoioFiscalLote | null } | null>(null);
   const [xmlVisualizado, setXmlVisualizado] = useState<{ comanda: number; xml: string } | null>(null);
 
   const apiUrl = useCallback((path: string) => `${(conn?.api || "").replace(/\/+$/, "")}${path}`, [conn]);
@@ -352,7 +368,7 @@ export default function GestorNfceScreen() {
       });
       const j = await r.json();
       if (Array.isArray(j?.resultados)) {
-        setResultadoLote({ titulo: tituloResultado, linhas: j.resultados });
+        setResultadoLote({ titulo: tituloResultado, linhas: j.resultados, apoioFiscalLote: j?.apoio_fiscal_lote || null });
       }
       if (j?.success) {
         fb.showSuccess(j.message || mensagemSucessoPadrao, undefined, 5000);
@@ -869,6 +885,33 @@ export default function GestorNfceScreen() {
                 <Ionicons name="close" size={22} color={colors.muted} />
               </Pressable>
             </View>
+            {resultadoLote?.apoioFiscalLote ? (
+              <View
+                style={{
+                  backgroundColor: colors.brandTertiary, borderRadius: radius.md,
+                  padding: spacing.sm, marginBottom: spacing.sm, gap: 6,
+                }}
+                testID="gestor-nfce-apoio-fiscal-lote"
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Ionicons name="shield-checkmark-outline" size={16} color={colors.brandPrimary} />
+                  <Text style={{ fontSize: 13, fontWeight: "600", color: colors.onSurface }}>
+                    Apoio Fiscal BackOn — {resultadoLote.apoioFiscalLote.total} item(ns) não processado(s)
+                  </Text>
+                </View>
+                {resultadoLote.apoioFiscalLote.grupos.map((g) => (
+                  <View key={g.codigo_rejeicao} style={{ gap: 2 }}>
+                    <Text style={{ fontSize: 12, fontWeight: "600", color: colors.onSurface }}>
+                      {g.codigo_rejeicao} — {g.titulo} ({g.quantidade}x)
+                    </Text>
+                    <Text style={{ fontSize: 12, color: colors.muted, lineHeight: 16 }}>{g.explicacao_curta}</Text>
+                  </View>
+                ))}
+                <Text style={{ fontSize: 11, color: colors.muted, marginTop: 2 }}>
+                  Nosso suporte já foi avisado automaticamente sobre este lote.
+                </Text>
+              </View>
+            ) : null}
             <ScrollView style={{ maxHeight: 380 }}>
               {(resultadoLote?.linhas || []).map((l, idx) => (
                 <View key={idx} style={styles.resultadoLinha}>

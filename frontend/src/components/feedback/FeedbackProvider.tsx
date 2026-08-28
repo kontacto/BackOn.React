@@ -35,7 +35,7 @@ type ConfirmState = {
   onConfirm: () => void;
 };
 
-type FeedbackApi = {
+export type FeedbackApi = {
   // `durationMs` opcional: sobrescreve a duração padrão do tipo (ver
   // `DURACAO` abaixo) só nesta chamada — usado por telas com mensagem mais
   // longa/importante de ler (ex.: resultado da consulta de índice no Banco

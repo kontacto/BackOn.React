@@ -6,54 +6,165 @@ inteira antes de continuar — não reanalisar do zero.
 
 ## Estado Atual do Projeto
 
-**Última atualização: 2026-08-28 — Contas a Receber E Contas a Pagar
-(Financeiro), 2 telas novas do zero no mesmo dia + bug real corrigido na
-Transferência.** Fecha a sequência de migração proposta por Leandro
-(Devolução → Transferência Contas a Pagar/Receber → **Duplicatas Pagar/
-Receber** → Impressão de Boletos → Fluxo de Caixa) — os dois lados
-(Receber primeiro, depois Pagar como espelho direto) estão prontos e
-testados ao vivo. Rastreada a fonte real via `backon.vbp` (não `Geral`
-sozinho, que não tem essas telas): lado Receber —
-`Geral/FRMCONNFREC.frm` + `Geral/frmTraNFRec.frm` +
-`Revenda/FrmManDur.frm` (3685 linhas); lado Pagar —
-`Geral/FRMCONNFPAG.frm` + `Geral/frmTraNFPag.frm` +
+**Última atualização: 2026-08-28 — DIFAL/ICMSUFDest corrigido no motor
+de emissão de NF-e + Apoio Fiscal BackOn (tradução de rejeição fiscal +
+notificação automática de suporte).** Duas frentes do mesmo dia, a
+segunda generalizando a primeira. Motivo real, não hipotético: rejeição
+695 do SEFAZ ("Informado indevidamente o grupo de ICMS para a UF de
+destino") mostrada via screenshot real do VB6 — o motor de emissão desta
+migração nunca montava o grupo `<ICMSUFDest>` (DIFAL) em nenhuma
+circunstância. Pesquisado contra fonte oficial primária (texto completo
+da NT 2015.003 + XSD oficial da NFe 4.00, não resumo de terceiros — 2
+suposições iniciais erradas foram pegas e corrigidas ANTES de virar
+código: o grupo é por ITEM dentro de `<det><imposto>`, não um bloco único
+por nota; os totais somados entram em `<ICMSTot>` logo após `vICMSDeson`,
+não perto de `vNF`). Implementado em `backend/services/nfe_regras_
+fiscais.py` (módulo novo, registro extensível — dataclass `RegraFiscal` +
+lista `REGRAS_CONSISTENCIA`, cabeçalho documenta como adicionar uma regra
+nova) e ligado em `nfe_emissao_service.py::emitir_nfe_sync`. 17 testes
+novos + 5 em `test_nfe_emissao_service.py`.
+
+**Generalização, pedido explícito do usuário** ("esse aprendizado tem
+ser propagado para toda nossa carteira de clientes... ajudar suporte a
+não precisar perder muito tempo com solução fiscal, principalmente a
+Adriana"): **Apoio Fiscal BackOn** — `backend/services/apoio_fiscal_
+service.py` (novo), base de conhecimento (`BASE_CONHECIMENTO`, dict
+`codigo→ErroFiscalConhecido`) promovendo pra código os 5 padrões reais
+já confirmados na memória `apoio-fisco-erros-fiscais-reais` (2026-08-23)
++ a rejeição 695 do DIFAL desta mesma sessão. `notificar_rejeicao_sync`
+sempre manda e-mail pra `suporte@kontacto.com.br` (nome fantasia + data/
+hora + rejeição + sugestão, assunto "Rejeição X — fantasia") e, quando o
+cliente já tem WhatsApp configurado (`whatsapp_config.enabled`) E
+preencheu o campo novo "Cel Suporte" (Serviço do Sistema > Atualização),
+manda a mesma notificação por lá também — direto via `whatsapp.providers`
+(bypassa `whatsapp/service.py::send`, que exige `doc_type`/`doc_id` de um
+documento do tenant, não aplicável a uma notificação interna). Cada canal
+é best-effort isolado (falha de e-mail nunca derruba WhatsApp nem a
+resposta da emissão em si).
+
+**Wiring backend, rodada 1: 4 pontos de maior volume** (NFC-e, NF-e,
+Cancelamento NF/NFC-e, NFS-e) — `servidor`/`banco` viraram parâmetros
+opcionais (default `""`) nas 4 funções de orquestração, só notifica
+quando os dois vêm preenchidos. **Rodada 2, mesmo dia** (pedido do
+usuário "vamos continuar com o que ficou de fora", escolhido entre 3
+opções via pergunta direta): mais 5 funções ligadas — Carta de Correção
+(`nfe_correcao_service.py`), Inutilização de Faixa NF-e
+(`inutilizacao_nfe_service.py` — esta já recebia `servidor`/`banco`
+diretos, notifica incondicionalmente), e MDF-e emitir/encerrar/cancelar
+(`mdfe_emissao_service.py`, threading via lambda por cima do wrapper
+genérico `_com_conexao`). Ver "Extensão 2026-08-28" dentro da seção
+"Apoio Fiscal BackOn" mais abaixo pro detalhe completo.
+
+**Rodada 3, mesmo dia** (usuário escolheu "resumo agregado" quando
+perguntado): as operações em LOTE do Gestor NFCe (Cancelar/Inutilizar/
+Retransmitir/Validar Contingência NFC-e) + a função irmã `contingencia_
+nfe_service.py::_validar_pendentes_sync` (Validar Pendentes NF-e) —
+`apoio_fiscal_service.py` ganhou `notificar_rejeicoes_lote_sync`, que
+agrupa por código de rejeição e manda 1 notificação só cobrindo o lote
+inteiro, nunca 1 por item. **Achado real corrigido nesta rodada**:
+`_retransmitir_sync` já estava vazando notificação individual por item
+(reaproveita `comanda_service._emitir_nfce_comanda_sync`, telada desde a
+rodada 1) — corrigido com um novo parâmetro `notificar_individualmente`.
+Ver "Extensão 2026-08-28 — Operações em LOTE" dentro da seção "Apoio
+Fiscal BackOn" mais abaixo pro detalhe completo.
+
+**Rodada 4, mesmo dia** (pedido do usuário "persistir difal"): as 4
+colunas DIFAL — já existentes em `n_fiscal_itens` (schema legado, nunca
+criadas por esta migração) e já lidas ao vivo por `apuracao_fiscal_
+service.py` — passaram a ser GRAVADAS também, nos 2 únicos pontos que
+criam item de NF-e de saída (`nfe_avulsa_service.py`, `nfe_agrupada_
+service.py`). Nenhuma migração de schema foi necessária. **Achado
+adjacente, registrado mas NÃO corrigido** (fora deste pedido específico):
+o INSERT de `nfe_agrupada_service.py` é muito mais minimalista que o de
+NF-e Avulsa — nunca persiste ICMS/IPI/ISS/PIS/COFINS por item, então
+Apuração Fiscal (modo NFE, não só DIFAL) já mostra zerado pra TODA nota
+emitida via Agrupar Comandas, gap maior e preexistente. Ver "Extensão
+2026-08-28 — Persistir DIFAL" dentro da seção "Apoio Fiscal BackOn" mais
+abaixo pro detalhe completo.
+
+**Fica de fora, decisão explícita de não fazer**: WhatsApp pro cliente
+final (só o suporte é notificado por esse canal). **Achado de plano
+corrigido durante a rodada 2**: o rascunho original também listava
+`frontend/app/gestor-nfce.tsx` (ação Cancelar) como ponto de wiring
+frontend de item único — inconsistente, já que essa tela só usa a versão
+em lote; corrigido removendo esse item de lá (o lote ganhou seu próprio
+wiring agregado na rodada 3, descrita acima).
+
+**Achado real de bug, corrigido de passagem**: `AtualizacaoDados`
+(`backend/routes/servico_sistema.py`) nunca declarava o campo `canal` —
+como o Pydantic descarta campo não declarado no `model_dump()`, o Canal
+escolhido na tela (Homologação/Produção, feature da sessão anterior)
+nunca chegava no service, que sempre gravava o default "H". Ou seja: até
+esta correção, **configurar Canal=Produção pela tela nunca funcionou em
+nenhuma instalação**. Corrigido junto (mesmo arquivo, campo `cel_suporte`
+sendo adicionado por outro motivo).
+
+**Frontend**: `frontend/src/utils/apoioFiscal.ts` (`showApoioFiscalError`
+— decide entre abrir o modal traduzido ou cair no erro genérico de
+sempre) + `frontend/src/components/ApoioFiscalBackOnModal.tsx` (2 níveis,
+curta sempre visível/detalhada só se "Quero entender melhor", tier de
+modal "confirmação pontual" ~420px). Ligado em `nfe-avulsa.tsx`,
+`nfe-agrupada.tsx`, `useEmitirNotaFiscal.ts` (Pedido Bar/Geral, O.S.
+Mobile/Completa, `alterar-comanda.tsx`), rodada 2: `notas-fiscais.tsx`
+(Carta de Correção), `inutilizacao-nfe.tsx`, `mdfe.tsx` (emitir/
+encerrar/cancelar), e rodada 3 (resumo agregado): `gestor-nfce.tsx` (o
+modal de "Resultado de uma ação em lote" já existente ganhou um bloco
+novo no topo com o resumo por código de rejeição) e
+`contingencia-nfe.tsx` (1 toast com os grupos concatenados).
+
+**Verificação**: `pytest tests/unit -q` → 2838 passed (baseline + 10
+`test_apoio_fiscal_service.py` (item único) + 5 (lote) + wiring nas 14
+funções — 4 na rodada 1, 5 na rodada 2, 5 na rodada 3 — + 2 na rodada 4,
+persistência DIFAL), mesmas 4 falhas pré-existentes não relacionadas,
+zero regressão. `tsc --noEmit` → mesmos 12 erros pré-existentes, nenhum
+nos arquivos novos/tocados.
+**Ainda não commitado nem publicado** (instrução permanente do projeto é
+só commitar quando pedido explicitamente). **Apoio Fiscal BackOn ainda
+NÃO testado ao vivo** — nenhuma rejeição fiscal real disparada pra
+confirmar e-mail/WhatsApp chegando de verdade; validação real só vai
+acontecer na próxima
+rejeição genuína em produção (não dá pra forçar uma rejeição real do
+SEFAZ só pra testar isso).
+
+<details>
+<summary>Resumo anterior (2026-08-28, Contas a Receber/Pagar), preservado por contexto</summary>
+
+Fecha a sequência de migração proposta por Leandro (Devolução →
+Transferência Contas a Pagar/Receber → **Duplicatas Pagar/Receber** →
+Impressão de Boletos → Fluxo de Caixa) — os dois lados (Receber primeiro,
+depois Pagar como espelho direto) estão prontos e testados ao vivo.
+Rastreada a fonte real via `backon.vbp` (não `Geral` sozinho, que não tem
+essas telas): lado Receber — `Geral/FRMCONNFREC.frm` +
+`Geral/frmTraNFRec.frm` + `Revenda/FrmManDur.frm` (3685 linhas); lado
+Pagar — `Geral/FRMCONNFPAG.frm` + `Geral/frmTraNFPag.frm` +
 `Revenda/frmmandup.frm` (3021 linhas, sem os botões "Imprimir Boleto"/
 "Centro de Resultados" que o lado Receber tem — confirmado por leitura
 completa, não é gap de migração).
 
-**Achado crítico durante o rastreio, corrigido**: `Duplicata_Rec_Nf.
+Achado crítico durante o rastreio, corrigido: `Duplicata_Rec_Nf.
 nf_fiscal`/`Duplicata_Pag_Nf.nf_fiscal` — apesar do nome — guardam o
 `codigo` de `Receber`/`Pagar`, não de `N_fiscal`;
 `transferencia_contas_service.py` (implementado 1 dia antes) gravava o
 valor errado nos 2 lados — corrigido (ver "Transferência Contas a Pagar/
-Receber" mais abaixo).
+Receber" mais abaixo). 2º achado, ao vivo contra ARGEN TESTE, corrigido
+só no lado Receber e já replicado preventivamente no Pagar:
+`Receber.cod_n_fiscal`/`Pagar.cod_n_fiscal` têm `DEFAULT ((0))` no schema
+real — omitir a coluna no `INSERT` do avulso grava `0`, não `NULL`,
+quebrando a guarda de exclusão que distingue "avulso" (apaga) de
+"originado de NF real" (só reabre).
 
-**2º achado, ao vivo contra ARGEN TESTE, corrigido só no lado Receber e
-já replicado preventivamente no Pagar**: `Receber.cod_n_fiscal`/`Pagar.
-cod_n_fiscal` têm `DEFAULT ((0))` no schema real — omitir a coluna no
-`INSERT` do avulso grava `0`, não `NULL`, quebrando a guarda de exclusão
-que distingue "avulso" (apaga) de "originado de NF real" (só reabre).
+Escopo (`AskUserQuestion`), igual nos 2 lados: lançamento avulso + baixa
+manual (funcionalidade NOVA, sem precedente no legado) + exclusão com
+guarda. Boleto avulso confirmado fora de escopo pelo Leandro; Centro de
+Resultados e Emitir Fatura ainda sem resposta dele.
 
-**Escopo (`AskUserQuestion`), igual nos 2 lados**: lançamento avulso +
-baixa manual (**funcionalidade NOVA, sem precedente no legado** — nenhum
-dos dois lados grava `situacao='PG'` em lugar nenhum do `.frm`, só existe
-baixa via retorno CNAB, e só pro lado Receber) + exclusão com guarda.
-Boleto avulso confirmado fora de escopo pelo Leandro ("já existe via
-Geração de Boletos"); Centro de Resultados e Emitir Fatura ainda sem
-resposta dele — ficam de fora dos dois lados até confirmação.
+Backend: 2 services + 2 routes + permissões próprias + 50 testes novos.
+✅ Testados ao vivo direto por API contra ARGEN TESTE, ciclo completo nos
+2 lados — dado de teste ficou de propósito no banco (duplicata Receber
+#9101, duplicata Pagar #9377). Ainda não abertas no navegador de
+verdade — ver "Contas a Receber"/"Contas a Pagar" mais abaixo.
 
-**Backend**: 2 services + 2 routes + permissões próprias (`ACOES_CONTAS_
-RECEBER`/`ACOES_CONTAS_PAGAR`) + 50 testes novos (34 Receber + 16 Pagar,
-Pagar reaproveita `_split_parcelas` do Receber sem duplicar). Suíte
-completa: 2763 passed, 4 falhas pré-existentes não relacionadas, zero
-regressão. **✅ Testados ao vivo direto por API contra ARGEN TESTE, ciclo
-completo nos 2 lados** (avulso→split/arredondamento/vencimento
-mensal→editar→baixa parcial→baixa total→exclusão avulso vs. NF real,
-com cliente/fornecedor reais) — dado de teste ficou de propósito no
-banco (duplicata Receber #9101, duplicata Pagar #9377, ambas marcadas
-"TESTE Claude" e com ciclo completo pago). **Ainda não abertas no
-navegador de verdade** — ver "Contas a Receber"/"Contas a Pagar" mais
-abaixo pro detalhe completo de cada uma.
+</details>
 
 <details>
 <summary>Resumo anterior (2026-08-27, marco Serviço do Sistema), preservado por contexto</summary>
@@ -16367,6 +16478,343 @@ pacote fiscal (CLAUDE.md §12): validado só por montagem isolada de XML +
 testes unitários. Quando o usuário/Leandro quiser validar em homologação
 de verdade, testar especificamente uma venda interestadual real pra
 consumidor final não-contribuinte.
+
+---
+
+## Apoio Fiscal BackOn — tradução de rejeição fiscal + notificação automática de suporte (2026-08-28)
+
+**Status: ✅ IMPLEMENTADO E COM 10 TESTES NOVOS, mesmo dia da correção do
+DIFAL acima.** Generalização pedida pelo usuário depois de ver o achado
+do DIFAL: "esse aprendizado tem ser propagado para toda nossa carteira de
+clientes... o intuito não só ajudar o cliente. é também ajudar nisso
+suporte a não precisar perder muito tempo com solução fiscal,
+principalmente a Adriana do suporte que não domina o assunto." Plan Mode
+usado — plano completo aprovado antes de codar (ver
+`C:\Users\carlo\.claude\plans\virtual-yawning-pearl.md`, se ainda
+existir).
+
+**Duas metades do mesmo mecanismo**:
+1. **Tradução em tempo real pro lojista** — quando o SEFAZ/ADN rejeita
+   uma emissão/cancelamento, a resposta da API ganha uma chave
+   `apoio_fiscal` com título/explicação curta/explicação detalhada (só se
+   pedido "Quero entender melhor")/ação sugerida — mostrado num modal
+   próprio, título "Apoio Fiscal BackOn".
+2. **Notificação automática de suporte** — sempre por e-mail
+   (`suporte@kontacto.com.br`, assunto "Rejeição X — {fantasia}", corpo
+   com nome fantasia/data-hora/rejeição/sugestão), e por WhatsApp também
+   quando o cliente já tem esse serviço configurado (`whatsapp_config.
+   enabled`) e preencheu o "Cel Suporte" novo em Serviço do Sistema >
+   Atualização.
+
+**Backend — `backend/services/apoio_fiscal_service.py` (novo)**: mesmo
+padrão de registro extensível já usado em `nfe_regras_fiscais.py`
+(cabeçalho documenta como adicionar um erro novo — sempre um padrão JÁ
+CONFIRMADO por rejeição real, nunca suposição). `BASE_CONHECIMENTO`
+(dict `codigo→ErroFiscalConhecido`) promove pra código os 5 padrões reais
+da memória `apoio-fisco-erros-fiscais-reais` (2026-08-23: 539/duplicidade,
+897/cNF inválido, E0160/situação Simples Nacional, E0166/regime de
+apuração SN, NBS ausente) + a rejeição 695 do DIFAL desta mesma sessão.
+`FALLBACK_GENERICO` cobre qualquer código ainda não catalogado — nunca
+bloqueia, sempre notifica o suporte mesmo sem tradução específica.
+
+`notificar_rejeicao_sync(servidor, banco, *, tipo_documento,
+codigo_rejeicao, mensagem_original, referencia=None)` — e-mail via
+`email_cobranca_service._enviar_email_sync` (reaproveitado direto, já
+síncrono por baixo do wrapper `async`); WhatsApp via `whatsapp.
+providers.build_provider` + `provider.send_text(...)` **direto**, sem
+passar por `whatsapp/service.py::send` (esse exige `doc_type`/`doc_id` de
+um documento do tenant — cliente/pedido/OS —, não aplicável a uma
+notificação interna pro suporte da Kontacto). Cada canal roda em
+`try/except` isolado — falha de um nunca derruba o outro nem muda a
+resposta da emissão em si (mesmo princípio de isolamento já usado em
+`ensure_all_schema`/`_get_empresa_sync`).
+
+**Wiring — só os 4 pontos de maior volume real**: `nfe_emissao_service.
+py::emitir_nfce_sync`/`emitir_nfe_sync`, `nfe_cancelamento_service.py::
+cancelar_nfe_sync`, `nfse_emissao_service.py::emitir_nfse_sync`. As 4
+funções ganharam `servidor`/`banco` como parâmetros OPCIONAIS (default
+`""`) — só chamam `notificar_rejeicao_sync` quando os dois vêm
+preenchidos, o que preservou as ~30 chamadas já existentes em teste sem
+precisar tocar em nenhuma (produção sempre passa os dois, threading feito
+nos 5 call sites reais: `comanda_service.py` ×3, `nfe_agrupada_service.py`
+×2, `nfe_avulsa_service.py` ×1 — todos já tinham `servidor`/`banco`
+acessíveis via `req`/parâmetro direto). NFS-e via ADN não tem um `cStat`
+numérico único como o SEFAZ — usa o `codigo` da 1ª mensagem estruturada
+da lista de erro (`mensagens[0].codigo`, formato confirmado ao vivo
+2026-08-23, ex. "E0160"/"E0714") ou `"ADN_GENERICO"` quando a resposta não
+vem nesse formato.
+
+**Fora de escopo, registrado explicitamente** (mesmo raciocínio do plano
+aprovado, não decidido sozinho depois):
+- ~~Carta de Correção, Inutilização NF-e/NFC-e, MDF-e (emitir/encerrar/
+  cancelar) — mesmo padrão de wiring, adicionar quando pedido.~~
+  **Implementado no mesmo dia, rodada seguinte** — ver "Extensão 2026-08-28
+  — Carta de Correção/Inutilização/MDF-e" logo abaixo.
+- As operações em LOTE do Gestor NFCe (`gestor_nfce_service.py`:
+  Cancelar/Inutilizar/Retransmitir em lote, Validar Pendentes de
+  Contingência — confirmado no código, `for comanda in comandas: ...
+  cancelar_nfe_sync(...)`) — notificar 1 e-mail por item de um lote que
+  falhou inteiro spammaria a Adriana; precisa de decisão própria (resumo
+  agregado vs. 1 notificação por item) antes de ligar. **Correção feita
+  durante a implementação**: o plano original também listava
+  `frontend/app/gestor-nfce.tsx` (caminho Cancelar) como ponto de wiring
+  frontend — inconsistente, já que essa tela só usa a versão em lote
+  (excluída acima); removido do escopo real, a tela nunca receberia
+  `apoio_fiscal` pra mostrar sem o backend correspondente.
+- Enviar WhatsApp pro cliente final (lojista) — o pedido foi notificar o
+  SUPORTE por WhatsApp, não o lojista; o lojista já vê a explicação na
+  hora, no próprio modal.
+- Um número "Cel Suporte" fixo/hardcoded — fica em branco por padrão,
+  cada instalação configura o dela.
+
+**Achado real de bug, corrigido de passagem** (mesmo arquivo mexido por
+outro motivo): `AtualizacaoDados` (`backend/routes/servico_sistema.py`)
+nunca declarava o campo `canal` — como o Pydantic descarta campo não
+declarado no `model_dump()`, o Canal escolhido na tela (Homologação/
+Produção, feature de sessão anterior) nunca chegava no service, que
+sempre gravava o default "H". **Configurar Canal=Produção pela tela nunca
+funcionou em NENHUMA instalação até esta correção.**
+
+**Frontend**: `frontend/src/utils/apoioFiscal.ts` (`showApoioFiscalError`
+— decide entre abrir o modal traduzido ou cair no `friendlyApiError` de
+sempre, preservando a duração de 5s já usada nessas telas pra mensagem
+com informação importante) + `frontend/src/components/
+ApoioFiscalBackOnModal.tsx` (2 níveis — curta sempre visível, detalhada
+só se "Quero entender melhor" — tier de modal "confirmação pontual"
+~420px, `modalCardWebCompactNarrow`). `FeedbackApi` (tipo local de
+`FeedbackProvider.tsx`) precisou virar `export type` pra ser referenciado
+pela assinatura de `showApoioFiscalError`.
+
+Ligado em: `nfe-avulsa.tsx`, `nfe-agrupada.tsx` (as 2 emissões — NF-e E
+NFS-e podem falhar independentemente, cada uma com seu próprio
+`apoio_fiscal` aninhado em `resultado_nfe`/`resultado_nfse`; prioriza
+mostrar o 1º que rejeitou com tradução no caso raro dos 2 falharem juntos)
+e `useEmitirNotaFiscal.ts` (hook compartilhado — cobre de uma vez só
+Pedido Bar, Pedido Geral, O.S. Mobile, O.S. Completa e
+`alterar-comanda.tsx`, todos via `notaFiscal.apoioFiscalInfo`/
+`notaFiscal.fecharApoioFiscal` já expostos pelo hook).
+
+**Serviço do Sistema > Atualização** ganhou o campo "Cel Suporte"
+(`servico_sistema_atualizacao.cel_suporte`, mesmo padrão exato já usado
+pra `canal` — `CREATE TABLE`+`ALTER TABLE ADD` idempotentes, já
+registrado em `_MIGRACOES` via a mesma função `_ensure_servico_sistema_
+atualizacao_table`) — texto de ajuda explicando que é o WhatsApp do
+SUPORTE, não do cliente/lojista.
+
+**Verificação**: `pytest tests/unit -q` → 2823 passed (2814 baseline +
+10 `test_apoio_fiscal_service.py`, mais os testes de wiring adicionados
+em `test_nfe_emissao_service.py`/`test_nfe_cancelamento_service.py`/
+`test_nfse_emissao_service.py`), mesmas 4 falhas pré-existentes de
+sempre. `tsc --noEmit` → mesmos 12 erros pré-existentes, nenhum nos
+arquivos novos/tocados.
+
+**Ainda não commitado nem publicado** — trabalho desta rodada, feito
+depois do commit `24c0850` (que cobre só Contas a Receber/Pagar + a
+correção do DIFAL). Instrução permanente do projeto: só commitar quando o
+usuário pedir explicitamente. Quando publicado, nenhuma rejeição fiscal
+real terá disparado ainda pra confirmar e-mail/WhatsApp chegando de
+verdade na caixa da Adriana — validação real só acontece na próxima
+rejeição genuína em produção, não dá pra forçar uma rejeição real do
+SEFAZ só pra testar isso.
+
+### Extensão 2026-08-28 — Carta de Correção/Inutilização/MDF-e
+
+**Status: ✅ IMPLEMENTADO, mesmo dia, rodada seguinte.** Pedido do usuário
+("vamos continuar com o que ficou de fora"), escolhido explicitamente
+(via `AskUserQuestion`) entre as 3 frentes fora de escopo — esta era a
+única sem decisão de design pendente (as outras duas seguem de fora:
+lote do Gestor NFCe precisa decidir 1 e-mail por item vs. resumo
+agregado; persistir DIFAL em `n_fiscal_itens` não foi pedida ainda).
+**Protocolo Gauntlet: fluxo simplificado (só Thomé)** — é replicar o
+mesmo mecanismo já desenhado/aprovado na rodada anterior, sem análise de
+negócio/fiscal nova.
+
+**Backend — mesmo padrão dos 4 pontos originais, aplicado a mais 5
+funções**:
+- `nfe_correcao_service.py::emitir_carta_correcao_sync` — ganhou
+  `servidor`/`banco` opcionais (mesmo padrão), thread a partir do único
+  call site (`notas_fiscais_service.py`, já tinha os dois como parâmetro
+  direto da função que abre a conexão).
+- `inutilizacao_nfe_service.py::_inutilizar_faixa_nfe_sync` — **caso
+  ligeiramente diferente dos outros 8**: esta função já recebe
+  `servidor`/`banco` como parâmetros DIRETOS obrigatórios (é ela mesma
+  quem abre a conexão, não um `cur` repassado por quem chama) — não
+  precisou de parâmetro opcional nem de threading por call site, só
+  chamar `notificar_rejeicao_sync` incondicionalmente no ponto de
+  rejeição (cStat 102 = sucesso).
+- `mdfe_emissao_service.py::emitir_mdfe_sync`/`encerrar_mdfe_sync`/
+  `cancelar_mdfe_sync` — mesmo padrão de parâmetro opcional dos 4
+  originais, mas o threading teve uma volta a mais: essas 3 funções são
+  chamadas através de um wrapper genérico `_com_conexao(servidor, banco,
+  fn, *args)` que abre a conexão e chama `fn(cur, *args)` — os 3 wrappers
+  (`_emitir_mdfe_com_conexao_sync` etc.) foram trocados de "passar a
+  função direto" pra "passar uma lambda que já fecha `servidor`/`banco`
+  por cima", evitando precisar generalizar `_com_conexao` (que também é
+  usada por `consultar_situacao_mdfe_sync`/`gerar_xml_mdfe_sync`, que não
+  precisam do parâmetro novo).
+
+**14 testes novos** (`test_nfe_correcao_service.py` +2,
+`test_inutilizacao_nfe_service.py` — 1 teste existente estendido pra
+cobrir a notificação (que aqui é sempre incondicional) +1 novo cenário,
+`test_mdfe_emissao_service.py` +6, cobrindo emitir/encerrar/cancelar × 2
+cada). Suíte completa: 2831 passed (2823 + 8 líquidos, alguns dos 14 só
+estendem asserts em teste já existente), mesmas 4 falhas pré-existentes.
+
+**Frontend**: `notas-fiscais.tsx` (Carta de Correção), `inutilizacao-
+nfe.tsx`, `mdfe.tsx` (emitir/encerrar/cancelar, os 3 pontos de rejeição
+da mesma tela) — mesmo padrão de `showApoioFiscalError`+
+`ApoioFiscalBackOnModal` já usado nos 4 pontos originais. `tsc --noEmit`
+→ mesmos 12 erros pré-existentes, nenhum novo.
+
+**Ainda fora de escopo** (sem mudança desta rodada): operações em lote do
+Gestor NFCe, persistir DIFAL em `n_fiscal_itens`, WhatsApp pro cliente
+final. Nada testado ao vivo — mesma ressalva de sempre, validação real só
+na próxima rejeição genuína em produção.
+
+### Extensão 2026-08-28 — Operações em LOTE do Gestor NFCe (resumo agregado)
+
+**Status: ✅ IMPLEMENTADO, mesmo dia, 3ª rodada.** Pedido do usuário
+("resumo agregado. vamos continuar") — resolve a decisão de design que
+tinha ficado em aberto nas duas rodadas anteriores. **Protocolo Gauntlet:
+acionado (Carlos — desenho do formato de resumo agregado; Thomé —
+implementação)**, já que "como agrupar N rejeições diferentes numa
+notificação só" é uma decisão de UX nova, não uma réplica do padrão já
+aprovado.
+
+**Achado real durante a implementação, corrigido**: `_retransmitir_sync`
+(Gestor NFCe > Retransmitir em lote) reaproveita `comanda_service.
+_emitir_nfce_comanda_sync` — a MESMA função que "Emitir NFC-e" usa, já
+telada com a notificação individual da rodada 1. Como o lote passa
+`servidor`/`banco` REAIS pra essa função, cada comanda que falhasse
+dentro do lote JÁ estava disparando 1 e-mail individual por item —
+exatamente o comportamento que as 3 rodadas anteriores tinham decidido
+evitar, só que ninguém tinha notado porque o wiring da rodada 1 rodou
+antes desta função ser revisitada. Corrigido adicionando um parâmetro
+novo `notificar_individualmente: bool = True` em `_emitir_nfce_comanda_
+sync` — quando `False` (só usado pelo lote), passa `servidor`/`banco`
+vazios pra `emitir_nfce_sync` (suprime a notificação individual), e o
+lote manda o resumo agregado por conta própria depois do loop inteiro.
+
+**Backend — `apoio_fiscal_service.py` ganhou `notificar_rejeicoes_lote_
+sync(servidor, banco, *, tipo_documento, itens_falhos)`**: agrupa por
+`codigo_rejeicao` (nunca por item), resolve a tradução 1 vez por código
+(reaproveita `resolver_erro_fiscal`, mesma `BASE_CONHECIMENTO`), monta 1
+e-mail e 1 mensagem de WhatsApp cobrindo TODOS os itens do lote — cada
+grupo mostra código+título+quantidade+lista de referências (comanda ou
+número). Refatorado de passagem: `_enviar_email_suporte_sync`/
+`_enviar_whatsapp_suporte_sync` extraídos de `notificar_rejeicao_sync`
+(função de 1 item, rodada 1) pra serem reaproveitados pelos dois formatos
+sem duplicar a lógica de canal.
+
+**4 pontos de wiring, todos em `gestor_nfce_service.py` + 1 em
+`contingencia_nfe_service.py`** (as "4 operações em lote" descritas nas
+rodadas anteriores eram na verdade 3 dentro do Gestor NFCe + 1 função
+irmã fora dele, achado ao mapear o código real):
+- `_cancelar_nfce_sync` (Cancelar em lote).
+- `_inutilizar_faixa_sync` (Inutilizar em lote).
+- `_retransmitir_sync` (Retransmitir em lote — com a correção do leak
+  acima).
+- `_validar_contingencia_sync` (Validar Contingência NFC-e em lote).
+- `contingencia_nfe_service.py::_validar_pendentes_sync` (Validar
+  Pendentes de Contingência **NF-e**, modelo 55 — função irmã, mesmo
+  padrão, arquivo diferente).
+
+Todas as 5 seguem o mesmo desenho: cada ponto de rejeição interno ganhou
+`"cstat": c_stat` no dict de resultado (faltava antes — só existia na
+mensagem de texto), e no final da função, `falhas_sefaz = [f for f in
+falhas if f.get("cstat")]` filtra só rejeições REAIS do fisco (nunca
+falhas de pré-validação local tipo "Comanda sem NFC-e emitida"/"Nota não
+está aguardando contingência" — essas não são erro fiscal, não faz
+sentido "traduzir" pro suporte) antes de chamar `notificar_rejeicoes_
+lote_sync` uma vez só, anexando o resultado em `resposta["apoio_fiscal_
+lote"]`.
+
+**19 testes novos/estendidos** — `test_apoio_fiscal_service.py` +5
+(`TestNotificarRejeicoesLoteSync`), mais ajustes em `test_gestor_nfce_
+service.py`/`test_contingencia_nfe_service.py` pra mockar `apoio_fiscal_
+service.notificar_rejeicoes_lote_sync` nos testes que já exercitavam uma
+rejeição real (senão tentariam abrir conexão de banco de verdade — 3
+testes ficaram sensivelmente mais lentos até isso ser corrigido, sinal
+que ajudou a confirmar o problema). Suíte completa: **2836 passed**
+(2831 + 5 líquidos), mesmas 4 falhas pré-existentes, tempo total voltou
+ao normal (~9s, não os ~18s que apareceram antes do fix dos testes lentos
+serem mockados).
+
+**Frontend**: `gestor-nfce.tsx` — o modal de "Resultado de uma ação em
+lote" (já existia, mostra 1 linha por comanda/número com sucesso/falha)
+ganhou um bloco novo no topo, só quando `apoio_fiscal_lote` vem
+preenchido: título com o total de itens não processados + 1 bloco por
+código de rejeição (código, título traduzido, quantidade, explicação
+curta) + aviso "suporte já avisado" — a lista detalhada por item
+continua embaixo, inalterada, como registro cru de cada linha.
+`contingencia-nfe.tsx` (Validar Pendentes NF-e) — tela mais simples, sem
+modal de resultado dedicado; resumo agregado vira 1 toast só, com os
+grupos concatenados numa frase. `tsc --noEmit` → mesmos 12 erros
+pré-existentes, nenhum novo.
+
+**Agora sim, nada mais fica de fora do desenho original** — as únicas
+pendências remanescentes desta frente inteira eram: persistir DIFAL em
+`n_fiscal_itens` (achado relacionado, nunca pedido — ver "Extensão
+2026-08-28 — Persistir DIFAL" logo abaixo, IMPLEMENTADO no mesmo dia),
+WhatsApp pro cliente final (decisão explícita de não fazer), e validar
+tudo contra uma rejeição REAL em produção (impossível de forçar, só
+acontece quando acontecer).
+
+### Extensão 2026-08-28 — Persistir DIFAL em `n_fiscal_itens`
+
+**Status: ✅ IMPLEMENTADO, mesmo dia, 4ª rodada.** Pedido do usuário
+("persistir difal"). **Protocolo Gauntlet: acionado (Kelvin — confirmar
+quais colunas/onde a Apuração Fiscal já espera achá-las; Thomé —
+implementação)** — decisão de negócio/fiscal real, não réplica de padrão
+já aprovado.
+
+**Achado que simplificou o trabalho**: as 4 colunas DIFAL
+(`aliquota_interestadual`/`aliquota_interna_destino`/`percentual_origem`/
+`fundo_pobreza`) **já existem** em `n_fiscal_itens` — são colunas do
+schema legado original (162 colunas, não algo criado por esta migração),
+**já lidas ao vivo** por `apuracao_fiscal_service.py::_apurar_nfe_sync`/
+`_calc_difal` (confirmado contra ARGEN TESTE desde 2026-08-24). Não foi
+preciso nenhuma migração de schema (`_ensure_*`/`schema_ensure.py`) — só
+gravar nas colunas que já existiam e já eram lidas, mas nunca escritas
+pelos services Python. `_calc_difal` recalcula `valor_fcp_difal`/
+`valor_origem`/`valor_destino` em tempo de consulta a partir dessas 4
+colunas + `base_icms` (já persistido) — não precisa de nenhuma coluna de
+valor pré-calculado, só as taxas/percentuais brutos.
+
+**Backend — 2 pontos de INSERT corrigidos** (os únicos 2 que criam linha
+nova em `n_fiscal_itens` pra nota de SAÍDA emitida por este app; `MOV=
+'S01'` é o filtro que a Apuração Fiscal usa, então só esses 2 importam):
+- `nfe_avulsa_service.py` — `itens_resolvidos` já carregava as 4 colunas
+  (adicionadas na rodada 1, pro XML/regra DIFAL) — só precisou estender
+  o `INSERT INTO n_fiscal_itens` (que já é bem completo, ~30 colunas)
+  com mais essas 4.
+- `nfe_agrupada_service.py` — mesma coisa, mas **achado adjacente,
+  registrado e NÃO corrigido** (fora deste pedido específico): o
+  `INSERT INTO n_fiscal_itens` deste service é **drasticamente mais
+  minimalista** que o de NF-e Avulsa — só 6 colunas antes desta rodada
+  (`codigo, codigo_int, qtd, p_unit, valor_total, tributacao`), nunca
+  persiste ICMS/IPI/ISS/PIS/COFINS por item (`csosn`/`cst_pis`/
+  `cst_cofins` são resolvidos mas nunca gravados). Ou seja, **Apuração
+  Fiscal (modo NFE, sem ser DIFAL) já mostra zerado pra TODA nota
+  emitida via Agrupar Comandas em NF-e, não só o DIFAL** — gap maior e
+  preexistente, não introduzido nem corrigido nesta rodada. Fica
+  registrado aqui pra não ser perdido; corrigir isso (se pedido) exigiria
+  replicar o padrão completo de `_alqt_icms`/`_base_icms`/etc. que NF-e
+  Avulsa já tem, não é um acréscimo de 4 colunas como o DIFAL foi.
+
+**Não tocado, fora deste pedido**: `notas_fiscais_service.py`
+("Manutenção de Notas Fiscais", CRUD manual sem emissão) tem seu próprio
+`_ITEM_CAMPOS` (lista dinâmica de colunas editáveis) que também não
+inclui as 4 colunas DIFAL — um usuário editando manualmente um item ali
+não consegue setar DIFAL pela tela. Fora de escopo (pedido era sobre a
+EMISSÃO, não a tela de manutenção manual), registrado como achado
+relacionado.
+
+**4 testes novos** — `test_nfe_avulsa_service.py::test_sucesso_persiste_
+colunas_difal_no_item`, `test_nfe_agrupada_service.py::test_sucesso_
+persiste_colunas_difal_no_item` (cada um confere as 4 colunas no SQL do
+INSERT + os valores nos parâmetros). Suíte completa: **2838 passed**
+(2836 + 2 líquidos), mesmas 4 falhas pré-existentes, zero regressão.
 
 ---
 

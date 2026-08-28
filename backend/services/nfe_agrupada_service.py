@@ -365,6 +365,7 @@ def _emitir_nfe_agrupada_sync(
             tp_amb=nfe_fiscal_common.resolver_tp_amb_sync(cur),
             natureza_operacao=natureza_operacao, indFinal="1" if consumidor_final else "0",
             ibs_cbs_totais_xml=ibs_cbs_totais_xml, contingencia=contingencia, paga_frete=paga_frete,
+            servidor=servidor, banco=banco,
         )
         if not resultado.get("success"):
             conn.close()
@@ -388,9 +389,20 @@ def _emitir_nfe_agrupada_sync(
         codigo_n_fiscal = int(cur.fetchone()["codigo"])
         for item in itens_resolvidos:
             cur.execute(
-                "INSERT INTO n_fiscal_itens (codigo, codigo_int, qtd, p_unit, valor_total, tributacao) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (codigo_n_fiscal, item["codigo_int"], item["qtd"], item["valor_unitario"], item["valor_total"], item["cfop"]),
+                "INSERT INTO n_fiscal_itens (codigo, codigo_int, qtd, p_unit, valor_total, tributacao, "
+                "aliquota_interestadual, aliquota_interna_destino, percentual_origem, fundo_pobreza) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    codigo_n_fiscal, item["codigo_int"], item["qtd"], item["valor_unitario"], item["valor_total"], item["cfop"],
+                    # DIFAL (2026-08-28) — mesmas 4 colunas já lidas por
+                    # apuracao_fiscal_service.py::_calc_difal (Apuração
+                    # Fiscal, modo DIFAL). Ver nota em PENDENCIAS.md sobre
+                    # o restante do item (ICMS/IPI/PIS/COFINS) NÃO ser
+                    # persistido aqui — achado adjacente, fora deste
+                    # pedido específico.
+                    item.get("aliquota_interestadual") or 0, item.get("aliquota_interna_destino") or 0,
+                    item.get("percentual_origem") or 0, item.get("fundo_pobreza") or 0,
+                ),
             )
 
         cur.execute(
@@ -545,6 +557,7 @@ def _emitir_nfse_agrupada_sync(
             ibs_cbs_cst=ibs_cbs_cst, ibs_cbs_classtrib=ibs_cbs_classtrib,
             codigo_nbs=(controle_aux.get("codigo_nbs") or ""),
             simples_servico_pct=float(controle.get("simples_servico") or 0),
+            servidor=servidor, banco=banco,
         )
         if not resultado.get("success"):
             conn.close()

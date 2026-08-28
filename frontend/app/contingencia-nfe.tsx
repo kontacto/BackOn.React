@@ -140,6 +140,18 @@ export default function ContingenciaNfeScreen() {
       const j = await r.json();
       if (j?.success) {
         fb.showSuccess("Nota(s) validada(s) e transmitida(s) ao SEFAZ.", undefined, 5000);
+      } else if (j?.apoio_fiscal_lote) {
+        // Apoio Fiscal BackOn — resumo agregado (2026-08-28): 1 mensagem
+        // só cobrindo todos os itens rejeitados, agrupados por código —
+        // nunca 1 aviso por item. Suporte já foi avisado por e-mail/
+        // WhatsApp em segundo plano.
+        const grupos = (j.apoio_fiscal_lote.grupos || [])
+          .map((g: any) => `${g.quantidade}x ${g.codigo_rejeicao} — ${g.titulo}`)
+          .join("; ");
+        fb.showError(
+          `${j.apoio_fiscal_lote.total} nota(s) não processada(s): ${grupos}. Suporte já avisado.`,
+          undefined, 5000,
+        );
       } else {
         const falha = (j?.resultados || []).find((x: any) => !x.success);
         fb.showError(falha?.message || friendlyApiError(j, "Não foi possível validar as notas pendentes."), undefined, 5000);

@@ -30,6 +30,7 @@ import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/the
 import { friendlyApiError } from "@/src/utils/api";
 import { formatBRL } from "@/src/utils/format";
 import { useEmitirNotaFiscal } from "@/src/hooks/useEmitirNotaFiscal";
+import ApoioFiscalBackOnModal from "@/src/components/ApoioFiscalBackOnModal";
 import NotaFiscalCard from "@/src/components/fiscal/NotaFiscalCard";
 
 function brDate(iso: string | null): string {
@@ -121,7 +122,10 @@ export default function AlterarComandaScreen() {
   const [motivoCancelamento, setMotivoCancelamento] = useState("");
   const [cancelando, setCancelando] = useState(false);
 
-  const { docFiscal, emitindoNfce, emitindoNfse, emitirNfce, emitirNfse, recarregar: recarregarDocFiscal } = useEmitirNotaFiscal({
+  const {
+    docFiscal, emitindoNfce, emitindoNfse, emitirNfce, emitirNfse, recarregar: recarregarDocFiscal,
+    apoioFiscalInfo, fecharApoioFiscal,
+  } = useEmitirNotaFiscal({
     conn, session, comanda: comandaId, isMaster,
   });
 
@@ -771,6 +775,7 @@ export default function AlterarComandaScreen() {
       </AppModal>
 
       <AjudaPedidoModal visible={ajudaVisivel} onClose={() => setAjudaVisivel(false)} titulo="Alterar Comandas" itens={AJUDA_ITENS} />
+      <ApoioFiscalBackOnModal visible={!!apoioFiscalInfo} info={apoioFiscalInfo} onClose={fecharApoioFiscal} />
     </SafeAreaView>
   );
 }

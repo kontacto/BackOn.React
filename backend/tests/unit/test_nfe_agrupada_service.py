@@ -461,6 +461,41 @@ class TestEmitirNfeAgrupadaSync:
         dh_param = next(p for p in insert_nf[1] if isinstance(p, _dt.datetime))
         assert dh_param == _dt.datetime(2026, 8, 19, 10, 0, 0)
 
+    def test_sucesso_persiste_colunas_difal_no_item(self, monkeypatch):
+        # Achado 2026-08-28 ("persistir DIFAL"): mesmas 4 colunas já lidas
+        # por apuracao_fiscal_service.py::_calc_difal, nunca gravadas
+        # pelo INSERT minimalista que este service usa (só 6 colunas,
+        # bem mais enxuto que o de NF-e Avulsa — ver PENDENCIAS.md pra
+        # nota sobre o restante do item, ICMS/IPI/PIS/COFINS, não ser
+        # persistido aqui, fora deste pedido específico).
+        cur = FakeCursor(
+            many=[
+                [{"comanda": 1, "cliente": 10, "situacao": "PG", "valor_venda": 50}],
+                [],
+                [dict(ITEM_MOV)],
+            ],
+            one=[CONTROLE_ROW, {"ok": 1}, {"descricao": "Venda"}, None, {"codigo": 555}],
+        )
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_resolver_destinatario_sync", lambda cur, cliente: DEST_OK)
+        _mock_tributacao_ok(monkeypatch, tributos={
+            "cfop_livro": "5102", "aliquota_interestadual": 12.0,
+            "aliquota_interna_destino": 18.0, "percentual_origem": 0.0, "fundo_pobreza": 2.0,
+        })
+        _mock_ibs_cbs_sem(monkeypatch)
+        _mock_emissao_ok(monkeypatch)
+
+        r = svc._emitir_nfe_agrupada_sync("srv", "bd", comandas=[1], master=True)
+        assert r["success"] is True
+        insert_item = [q for q in cur.queries if "INSERT INTO n_fiscal_itens" in q[0]][0]
+        assert "aliquota_interestadual" in insert_item[0]
+        assert "aliquota_interna_destino" in insert_item[0]
+        assert "percentual_origem" in insert_item[0]
+        assert "fundo_pobreza" in insert_item[0]
+        assert 12.0 in insert_item[1]
+        assert 18.0 in insert_item[1]
+        assert 2.0 in insert_item[1]
+
     def test_ibs_cbs_calculado_antes_de_emitir_sem_reescrever_xml(self, monkeypatch):
         # Regressão 2026-08-20 (mesmo dia): a versão anterior calculava
         # IBS/CBS DEPOIS de emitir e reescrevia n_fiscal.xml sem reassinar

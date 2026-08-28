@@ -33,6 +33,8 @@ import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { friendlyApiError, friendlyCatchError } from "@/src/utils/api";
+import { showApoioFiscalError } from "@/src/utils/apoioFiscal";
+import ApoioFiscalBackOnModal, { ApoioFiscalInfo } from "@/src/components/ApoioFiscalBackOnModal";
 import { formatBRL } from "@/src/utils/format";
 import { fetchEmpresaHeader } from "@/src/utils/print-report-header";
 import { printFullHtml } from "@/src/utils/printHtml";
@@ -139,6 +141,7 @@ export default function NfeAgrupadaScreen() {
   type ResultadoDoc = { chave_acesso: string; protocolo_sefaz: string | null; nota_fisc: number } | null;
   const [resultadoNfe, setResultadoNfe] = useState<ResultadoDoc>(null);
   const [resultadoNfse, setResultadoNfse] = useState<ResultadoDoc>(null);
+  const [apoioFiscalInfo, setApoioFiscalInfo] = useState<ApoioFiscalInfo | null>(null);
   const resultado = resultadoNfe || resultadoNfse; // usado só pra decidir se o modal abre
   const [baixandoDanfe, setBaixandoDanfe] = useState(false);
 
@@ -254,8 +257,18 @@ export default function NfeAgrupadaScreen() {
       const rNfse = j?.resultado_nfse;
       if (rNfe?.success) setResultadoNfe({ chave_acesso: rNfe.chave_acesso, protocolo_sefaz: rNfe.protocolo_sefaz, nota_fisc: rNfe.nota_fisc });
       if (rNfse?.success) setResultadoNfse({ chave_acesso: rNfse.chave_acesso, protocolo_sefaz: rNfse.protocolo_sefaz, nota_fisc: rNfse.nota_fisc });
+      // Apoio Fiscal BackOn — cada resultado (NF-e/NFS-e) roda em sua
+      // própria emissão, então o `apoio_fiscal` (quando houver) vem
+      // aninhado dentro de `resultado_nfe`/`resultado_nfse`, nunca no `j`
+      // de nível superior. Prioriza o primeiro que rejeitou com tradução —
+      // caso raro dos dois falharem ao mesmo tempo, mostra só o 1º.
+      const falhaComApoioFiscal = (!rNfe?.success && rNfe?.apoio_fiscal) ? rNfe
+        : (!rNfse?.success && rNfse?.apoio_fiscal) ? rNfse : null;
       if (j?.success) {
         fb.showSuccess(j.message || "Documento(s) fiscal(is) emitido(s).", undefined, 5000);
+      } else if (falhaComApoioFiscal) {
+        const info = showApoioFiscalError(fb, falhaComApoioFiscal, "Não foi possível emitir.", 5000);
+        if (info) setApoioFiscalInfo(info);
       } else if (rNfe?.success || rNfse?.success) {
         // sucesso parcial — uma das 2 ações deu certo, a outra não; nada
         // foi perdido (cada emissão roda em transação própria), mas o
@@ -465,6 +478,7 @@ export default function NfeAgrupadaScreen() {
       />
 
       <AjudaPedidoModal visible={ajudaVisivel} onClose={() => setAjudaVisivel(false)} titulo="Gerar Nfe Comanda" itens={NFE_AGRUPADA_AJUDA_ITENS} />
+      <ApoioFiscalBackOnModal visible={!!apoioFiscalInfo} info={apoioFiscalInfo} onClose={() => setApoioFiscalInfo(null)} />
     </SafeAreaView>
   );
 }

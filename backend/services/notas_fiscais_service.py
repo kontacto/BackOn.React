@@ -876,6 +876,7 @@ def _carta_correcao_sync(servidor: str, banco: str, codigo: int, motivo: str, us
             motivo=motivo,
             n_seq_evento=qtd + 1,
             tp_amb=nfe_fiscal_common.resolver_tp_amb_sync(cur),
+            servidor=servidor, banco=banco,
         )
         if not res.get("success"):
             cur.close()

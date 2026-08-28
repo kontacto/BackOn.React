@@ -9,6 +9,7 @@ import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { apiGet, apiSend } from "@/src/utils/api";
 import { produtoImagemUrl } from "@/src/utils/produtoImagem";
 import ImageLightboxModal from "@/src/components/ImageLightboxModal";
+import ApoioFiscalBackOnModal from "@/src/components/ApoioFiscalBackOnModal";
 import { usePermissions } from "@/src/permissions";
 import LockedView from "@/src/components/LockedView";
 import { colors, spacing } from "@/src/theme/colors";
@@ -1071,6 +1072,11 @@ export default function PedidoFormScreen() {
       <ScreenToast toast={toast} testID="pedido-form-toast" />
       <AjudaPedidoModal visible={ajudaOpen} onClose={() => setAjudaOpen(false)} />
       <ImageLightboxModal visible={!!lightboxUrl} onClose={() => setLightboxUrl(null)} imageUrl={lightboxUrl} />
+      <ApoioFiscalBackOnModal
+        visible={!!notaFiscal.apoioFiscalInfo}
+        info={notaFiscal.apoioFiscalInfo}
+        onClose={notaFiscal.fecharApoioFiscal}
+      />
     </SafeAreaView>
   );
 }
