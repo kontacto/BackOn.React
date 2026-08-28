@@ -25,6 +25,7 @@ import FornecedorSearchModal, { FornecedorRow } from "@/src/components/Fornecedo
 import { styles as ps } from "@/src/components/pedido/styles";
 import SelectField, { SelectOption } from "@/src/components/SelectField";
 import WebDateField from "@/src/components/WebDateField";
+import LoteBaixaModal from "@/src/components/financeiro/LoteBaixaModal";
 import { getSession } from "@/src/utils/storage/session";
 import { listConnections, Connection } from "@/src/utils/storage/connections";
 import { apiGet, apiSend, friendlyApiError, friendlyCatchError } from "@/src/utils/api";
@@ -52,6 +53,9 @@ const AJUDA_ITENS: HelpItem[] = [
   { titulo: "O que esta tela faz", texto: "Lista as duplicatas a pagar já lançadas (vindas de Nota Fiscal de compra ou digitadas aqui mesmo) e deixa acompanhar/baixar as parcelas.", icon: { lib: "ion", name: "cash-outline" } },
   { titulo: "Lançamento avulso", texto: "Use quando você tem um valor a pagar que não veio de Nota Fiscal — digite fornecedor, valor e vencimento(s) direto.", icon: { lib: "ion", name: "add-circle-outline" } },
   { titulo: "Baixa manual", texto: "Marca uma parcela como paga quando você pagou por dinheiro, PIX ou transferência direta. Uma vez baixada, a parcela não pode mais ser editada.", icon: { lib: "ion", name: "checkmark-done-outline" } },
+  { titulo: "Cancelar baixa", texto: "Desfaz uma baixa feita por engano — a parcela volta pra Aberto e os dados de pagamento são apagados.", icon: { lib: "ion", name: "arrow-undo-outline" } },
+  { titulo: "Pagamento/Cancelamento em Lote", texto: "Dá baixa (ou cancela) em várias parcelas de uma vez, filtrando por período — sem precisar abrir cada duplicata.", icon: { lib: "ion", name: "layers-outline" } },
+  { titulo: "Editar parcela", texto: "Corrige data de vencimento, valor ou observação de uma parcela ainda em aberto. Uma parcela já paga não pode mais ser editada.", icon: { lib: "ion", name: "create-outline" } },
   { titulo: "Vencido", texto: "Parcela em aberto cuja data de vencimento já passou — aparece em destaque vermelho.", icon: { lib: "ion", name: "alert-circle-outline" } },
   { titulo: "Excluir", texto: "Só é possível excluir uma duplicata se NENHUMA parcela dela já tiver sido paga.", icon: { lib: "ion", name: "trash-outline" } },
 ];
@@ -71,13 +75,16 @@ export default function ContasPagarScreen() {
   const [buscando, setBuscando] = useState(false);
   const [ajudaOpen, setAjudaOpen] = useState(false);
   const [busca, setBusca] = useState("");
-  const [situacao, setSituacao] = useState("");
+  const [situacao, setSituacao] = useState("A");
   const [dataIni, setDataIni] = useState<string | null>(todayISO());
   const [dataFim, setDataFim] = useState<string | null>(todayISO());
   const [usarPeriodo, setUsarPeriodo] = useState(false);
   const [items, setItems] = useState<Duplicata[]>([]);
 
   const [tiposMov, setTiposMov] = useState<SelectOption[]>([]);
+  const [contasOpts, setContasOpts] = useState<SelectOption[]>([]);
+  const [formaPagOpts, setFormaPagOpts] = useState<SelectOption[]>([]);
+  const [loteOpen, setLoteOpen] = useState(false);
 
   // ---- Lançamento avulso ----
   const [avulsoOpen, setAvulsoOpen] = useState(false);
@@ -108,8 +115,28 @@ export default function ContasPagarScreen() {
   const [baixaData, setBaixaData] = useState<string | null>(todayISO());
   const [baixaValor, setBaixaValor] = useState("");
   const [baixaDesconto, setBaixaDesconto] = useState("");
+  const [baixaOutrosDesc, setBaixaOutrosDesc] = useState("");
   const [baixaJuros, setBaixaJuros] = useState("");
+  const [baixaOutrosAcresc, setBaixaOutrosAcresc] = useState("");
+  const [baixaTarifa, setBaixaTarifa] = useState("");
+  const [baixaBanco, setBaixaBanco] = useState("");
+  const [baixaAgencia, setBaixaAgencia] = useState("");
+  const [baixaBoleto, setBaixaBoleto] = useState("");
+  const [baixaDocumento, setBaixaDocumento] = useState("");
+  const [baixaConta, setBaixaConta] = useState<number | null>(null);
+  const [baixaFormaPag, setBaixaFormaPag] = useState<string | null>(null);
+  const [baixaObs, setBaixaObs] = useState("");
   const [baixando, setBaixando] = useState(false);
+
+  // ---- Cancelar baixa ----
+  const [cancelandoBaixa, setCancelandoBaixa] = useState<number | null>(null);
+
+  // ---- Editar parcela em aberto ----
+  const [editParcela, setEditParcela] = useState<Parcela | null>(null);
+  const [editDtVenc, setEditDtVenc] = useState<string | null>(null);
+  const [editValor, setEditValor] = useState("");
+  const [editObs, setEditObs] = useState("");
+  const [editando, setEditando] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -132,6 +159,11 @@ export default function ContasPagarScreen() {
         const j = await apiGet(conn, "/api/contas-pagar-tipos-mov");
         if (j?.success) setTiposMov((j.items || []).map((i: any) => ({ value: i.codigo, label: `${i.codigo} - ${i.descricao}` })));
       } catch { /* combo fica vazio, não trava a tela */ }
+      try {
+        const [c, f] = await Promise.all([apiGet(conn, "/api/contas"), apiGet(conn, "/api/forma-pagamento")]);
+        if (c?.success) setContasOpts((c.items || []).map((i: any) => ({ value: i.codigo, label: i.descricao })));
+        if (f?.success) setFormaPagOpts((f.items || []).map((i: any) => ({ value: i.codigo, label: i.descricao })));
+      } catch { /* combos ficam vazios, não trava a tela */ }
     })();
   }, [conn]);
 
@@ -139,14 +171,14 @@ export default function ContasPagarScreen() {
     if (!conn) return;
     setBuscando(true);
     try {
-      const qs: string[] = [];
-      if (situacao) qs.push(`situacao=${encodeURIComponent(situacao)}`);
-      if (busca.trim()) qs.push(`busca=${encodeURIComponent(busca.trim())}`);
+      const params: Record<string, string> = {};
+      if (situacao) params.situacao = situacao;
+      if (busca.trim()) params.busca = busca.trim();
       if (usarPeriodo && dataIni && dataFim) {
-        qs.push(`data_ini=${encodeURIComponent(dataIni)}`);
-        qs.push(`data_fim=${encodeURIComponent(dataFim)}`);
+        params.data_ini = dataIni;
+        params.data_fim = dataFim;
       }
-      const j = await apiGet(conn, `/api/contas-pagar${qs.length ? `?${qs.join("&")}` : ""}`);
+      const j = await apiGet(conn, "/api/contas-pagar", params);
       if (j?.success) {
         setItems(j.items || []);
       } else {
@@ -159,7 +191,8 @@ export default function ContasPagarScreen() {
     }
   }, [conn, situacao, busca, usarPeriodo, dataIni, dataFim, feedback]);
 
-  useEffect(() => { if (conn) carregar(); }, [conn, carregar]);
+  // Situação re-busca sozinha ao trocar o chip; busca por texto/período continuam manuais (Enter/Buscar).
+  useEffect(() => { if (conn) carregar(); }, [conn, situacao]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Busca de fornecedor (avulso) ----
   useEffect(() => {
@@ -269,7 +302,9 @@ export default function ContasPagarScreen() {
     setBaixaVenc(p);
     setBaixaData(todayISO());
     setBaixaValor(String(p.valor).replace(".", ","));
-    setBaixaDesconto(""); setBaixaJuros("");
+    setBaixaDesconto(""); setBaixaOutrosDesc(""); setBaixaJuros(""); setBaixaOutrosAcresc(""); setBaixaTarifa("");
+    setBaixaBanco(""); setBaixaAgencia(""); setBaixaBoleto(""); setBaixaDocumento(""); setBaixaObs("");
+    setBaixaConta(p.conta ?? null); setBaixaFormaPag(p.forma_pag ?? null);
   };
 
   const confirmarBaixa = useCallback(async () => {
@@ -281,7 +316,14 @@ export default function ContasPagarScreen() {
     try {
       const j = await apiSend(conn, "/api/contas-pagar/baixar", "POST", {
         codigo_venc: baixaVenc.codigo, data_pag: baixaData, valor_pag: valorNum,
-        desconto_pag: parseNum(baixaDesconto || "0"), juros_pag: parseNum(baixaJuros || "0"),
+        desconto_pag: parseNum(baixaDesconto || "0"), outros_desc_pag: parseNum(baixaOutrosDesc || "0"),
+        juros_pag: parseNum(baixaJuros || "0"), outros_acres_pag: parseNum(baixaOutrosAcresc || "0"),
+        tarifa_banco: baixaTarifa ? parseNum(baixaTarifa) : null,
+        banco_cedente: baixaBanco ? parseInt(baixaBanco, 10) : null,
+        agencia_cedente: baixaAgencia ? parseInt(baixaAgencia, 10) : null,
+        numero_boleto: baixaBoleto ? parseNum(baixaBoleto) : null,
+        num_doc_pag: baixaDocumento || null,
+        conta: baixaConta, forma_pag: baixaFormaPag, observacao: baixaObs,
         usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
       });
       if (j?.success) {
@@ -297,7 +339,68 @@ export default function ContasPagarScreen() {
     } finally {
       setBaixando(false);
     }
-  }, [conn, baixaVenc, baixaValor, baixaData, baixaDesconto, baixaJuros, detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
+  }, [conn, baixaVenc, baixaValor, baixaData, baixaDesconto, baixaOutrosDesc, baixaJuros, baixaOutrosAcresc,
+      baixaTarifa, baixaBanco, baixaAgencia, baixaBoleto, baixaDocumento, baixaConta, baixaFormaPag, baixaObs,
+      detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
+
+  const cancelarBaixa = useCallback((p: Parcela) => {
+    if (!conn || !detalhe) return;
+    feedback.showConfirm(
+      `Cancelar a baixa da parcela ${p.desmembramento}? Ela volta pra Aberto.`,
+      async () => {
+        setCancelandoBaixa(p.codigo);
+        try {
+          const j = await apiSend(conn, "/api/contas-pagar/cancelar-baixa", "POST", {
+            codigo_venc: p.codigo, usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
+          });
+          if (j?.success) {
+            feedback.showSuccess("Baixa cancelada.");
+            abrirDetalhe(detalhe.header.codigo);
+            carregar();
+          } else {
+            feedback.showError(friendlyApiError(j, "Não foi possível cancelar a baixa."));
+          }
+        } catch (e) {
+          feedback.showError(friendlyCatchError(e));
+        } finally {
+          setCancelandoBaixa(null);
+        }
+      },
+    );
+  }, [conn, detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
+
+  const abrirEditar = (p: Parcela) => {
+    setEditParcela(p);
+    setEditDtVenc(p.dt_vencimento);
+    setEditValor(String(p.valor).replace(".", ","));
+    setEditObs(p.observacao || "");
+  };
+
+  const confirmarEditar = useCallback(async () => {
+    if (!conn || !editParcela || !detalhe) return;
+    const valorNum = parseNum(editValor);
+    if (!valorNum || valorNum <= 0) { feedback.showError("Informe o valor."); return; }
+    if (!editDtVenc) { feedback.showError("Informe a data de vencimento."); return; }
+    setEditando(true);
+    try {
+      const j = await apiSend(conn, "/api/contas-pagar/editar-parcela", "POST", {
+        codigo_venc: editParcela.codigo, dt_vencimento: editDtVenc, valor: valorNum, observacao: editObs,
+        usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
+      });
+      if (j?.success) {
+        feedback.showSuccess("Parcela atualizada.");
+        setEditParcela(null);
+        abrirDetalhe(detalhe.header.codigo);
+        carregar();
+      } else {
+        feedback.showError(friendlyApiError(j, "Não foi possível editar a parcela."));
+      }
+    } catch (e) {
+      feedback.showError(friendlyCatchError(e));
+    } finally {
+      setEditando(false);
+    }
+  }, [conn, editParcela, editDtVenc, editValor, editObs, detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
 
   if (!isWeb) {
     return <LockedView title="Disponível somente na versão web" message="Contas a Pagar está disponível apenas no web." testID="contas-pagar-web-only" />;
@@ -315,6 +418,9 @@ export default function ContasPagarScreen() {
         <Text style={headerTitleStyle()} numberOfLines={1}>Contas a Pagar</Text>
         {can("CONTAS_PAGAR.GRAVAR") || masterPerm ? (
           <IconButtonWithTooltip icon="add-circle-outline" label="Lançamento avulso" color={colors.onBrandPrimary} onPress={abrirAvulso} testID="contas-pagar-avulso-btn" />
+        ) : null}
+        {can("CONTAS_PAGAR.BAIXAR") || masterPerm ? (
+          <IconButtonWithTooltip icon="layers-outline" label="Pagamento/Cancelamento em Lote" color={colors.onBrandPrimary} onPress={() => setLoteOpen(true)} testID="contas-pagar-lote-btn" />
         ) : null}
         <IconButtonWithTooltip icon="information-circle-outline" label="Ajuda" color={colors.onBrandPrimary} onPress={() => setAjudaOpen(true)} testID="contas-pagar-ajuda-btn" />
       </View>
@@ -499,14 +605,33 @@ export default function ContasPagarScreen() {
                         {p.situacao === "PG" ? ` · Pago em ${formatDateBR(p.data_pag)} (${formatBRL(p.valor_pag || 0)})` : " · Aberto"}
                       </Text>
                     </View>
-                    {p.situacao !== "PG" && (can("CONTAS_PAGAR.BAIXAR") || masterPerm) ? (
-                      <Pressable onPress={() => abrirBaixa(p)} style={smallBtnStyle()} testID={`contas-pagar-baixar-${p.codigo}`}>
-                        <Ionicons name="checkmark-done-outline" size={14} color={colors.brandPrimary} />
-                        <Text style={smallBtnLabelStyle()}>Baixar</Text>
-                      </Pressable>
+                    {p.situacao !== "PG" ? (
+                      <View style={{ flexDirection: "row", gap: spacing.xs }}>
+                        {can("CONTAS_PAGAR.GRAVAR") || masterPerm ? (
+                          <Pressable onPress={() => abrirEditar(p)} style={smallBtnStyle()} testID={`contas-pagar-editar-${p.codigo}`}>
+                            <Ionicons name="create-outline" size={14} color={colors.brandPrimary} />
+                            <Text style={smallBtnLabelStyle()}>Editar</Text>
+                          </Pressable>
+                        ) : null}
+                        {can("CONTAS_PAGAR.BAIXAR") || masterPerm ? (
+                          <Pressable onPress={() => abrirBaixa(p)} style={smallBtnStyle()} testID={`contas-pagar-baixar-${p.codigo}`}>
+                            <Ionicons name="checkmark-done-outline" size={14} color={colors.brandPrimary} />
+                            <Text style={smallBtnLabelStyle()}>Baixar</Text>
+                          </Pressable>
+                        ) : null}
+                      </View>
                     ) : p.situacao === "PG" ? (
-                      <View style={[situacaoBadgeStyle(), { backgroundColor: colors.success + "22" }]}>
-                        <Text style={[situacaoBadgeTextStyle(), { color: colors.success }]}>Pago</Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.xs }}>
+                        <View style={[situacaoBadgeStyle(), { backgroundColor: colors.success + "22" }]}>
+                          <Text style={[situacaoBadgeTextStyle(), { color: colors.success }]}>Pago</Text>
+                        </View>
+                        {(can("CONTAS_PAGAR.BAIXAR") || masterPerm) ? (
+                          <Pressable onPress={() => cancelarBaixa(p)} disabled={cancelandoBaixa === p.codigo} style={smallBtnStyle()} testID={`contas-pagar-cancelar-baixa-${p.codigo}`}>
+                            {cancelandoBaixa === p.codigo ? <ActivityIndicator color={colors.brandPrimary} size="small" /> : (
+                              <><Ionicons name="arrow-undo-outline" size={14} color={colors.brandPrimary} /><Text style={smallBtnLabelStyle()}>Cancelar</Text></>
+                            )}
+                          </Pressable>
+                        ) : null}
                       </View>
                     ) : null}
                   </View>
@@ -528,42 +653,132 @@ export default function ContasPagarScreen() {
       {/* ---- Modal: Baixar parcela ---- */}
       <Modal visible={!!baixaVenc} transparent animationType="slide" onRequestClose={() => setBaixaVenc(null)}>
         <Pressable style={[ps.modalBg, isWeb && ps.modalBgWebCompact]} onPress={() => setBaixaVenc(null)}>
+          <Pressable style={[ps.modalCard, isWeb && ps.modalCardWebCompact]} onPress={(e) => e.stopPropagation()}>
+            <ScrollView>
+              <View style={ps.modalHeader}>
+                <Text style={ps.modalTitle}>Dar Baixa — Parcela {baixaVenc?.desmembramento}</Text>
+                <Pressable onPress={() => setBaixaVenc(null)} hitSlop={8}><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
+              </View>
+              <View style={{ gap: spacing.sm }}>
+                <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                  <View style={{ width: 150 }}>
+                    <Text style={fieldLabel()}>Data do Pagamento *</Text>
+                    <WebDateField value={baixaData} onChange={(v) => setBaixaData(v || null)} testID="contas-pagar-baixa-data" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={fieldLabel()}>Forma de Pagamento</Text>
+                    <SelectField value={baixaFormaPag} onChange={(v) => setBaixaFormaPag(v as string)} options={formaPagOpts} compactWeb allowClear testID="contas-pagar-baixa-formapag" />
+                  </View>
+                </View>
+                <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={fieldLabel()}>Conta</Text>
+                    <SelectField value={baixaConta} onChange={(v) => setBaixaConta(v == null ? null : Number(v))} options={contasOpts} compactWeb allowClear testID="contas-pagar-baixa-conta" />
+                  </View>
+                  <View style={{ width: 150 }}>
+                    <Text style={fieldLabel()}>Valor Pago *</Text>
+                    <TextInput value={baixaValor} onChangeText={setBaixaValor} keyboardType="numeric" style={inputStyle()} testID="contas-pagar-baixa-valor" />
+                  </View>
+                </View>
+                <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={fieldLabel()}>Desconto</Text>
+                    <TextInput value={baixaDesconto} onChangeText={setBaixaDesconto} keyboardType="numeric" style={inputStyle()} placeholder="0,00" testID="contas-pagar-baixa-desconto" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={fieldLabel()}>Outros Desconto</Text>
+                    <TextInput value={baixaOutrosDesc} onChangeText={setBaixaOutrosDesc} keyboardType="numeric" style={inputStyle()} placeholder="0,00" testID="contas-pagar-baixa-outrosdesc" />
+                  </View>
+                </View>
+                <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={fieldLabel()}>Juros/Multa</Text>
+                    <TextInput value={baixaJuros} onChangeText={setBaixaJuros} keyboardType="numeric" style={inputStyle()} placeholder="0,00" testID="contas-pagar-baixa-juros" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={fieldLabel()}>Outros Acréscimo</Text>
+                    <TextInput value={baixaOutrosAcresc} onChangeText={setBaixaOutrosAcresc} keyboardType="numeric" style={inputStyle()} placeholder="0,00" testID="contas-pagar-baixa-outrosacresc" />
+                  </View>
+                </View>
+                <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={fieldLabel()}>Tarifa Banco</Text>
+                    <TextInput value={baixaTarifa} onChangeText={setBaixaTarifa} keyboardType="numeric" style={inputStyle()} placeholder="0,00" testID="contas-pagar-baixa-tarifa" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={fieldLabel()}>Nº Boleto</Text>
+                    <TextInput value={baixaBoleto} onChangeText={setBaixaBoleto} keyboardType="numeric" style={inputStyle()} testID="contas-pagar-baixa-boleto" />
+                  </View>
+                </View>
+                <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={fieldLabel()}>Banco</Text>
+                    <TextInput value={baixaBanco} onChangeText={setBaixaBanco} keyboardType="numeric" style={inputStyle()} testID="contas-pagar-baixa-banco" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={fieldLabel()}>Agência</Text>
+                    <TextInput value={baixaAgencia} onChangeText={setBaixaAgencia} keyboardType="numeric" style={inputStyle()} testID="contas-pagar-baixa-agencia" />
+                  </View>
+                </View>
+                <View>
+                  <Text style={fieldLabel()}>Documento</Text>
+                  <TextInput value={baixaDocumento} onChangeText={setBaixaDocumento} style={inputStyle()} testID="contas-pagar-baixa-documento" />
+                </View>
+                <View>
+                  <Text style={fieldLabel()}>Observação</Text>
+                  <TextInput value={baixaObs} onChangeText={setBaixaObs} style={[inputStyle(), { minHeight: 50 }]} multiline testID="contas-pagar-baixa-obs" />
+                </View>
+                <View style={ps.modalBtns}>
+                  <Pressable onPress={() => setBaixaVenc(null)} style={ps.secondaryBtn}><Text>Cancelar</Text></Pressable>
+                  <Pressable onPress={confirmarBaixa} disabled={baixando} style={[ps.primaryBtn, { flex: 1 }]} testID="contas-pagar-baixa-confirmar">
+                    {baixando ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={{ color: colors.onBrandPrimary, fontWeight: "600" }}>Confirmar Baixa</Text>}
+                  </Pressable>
+                </View>
+              </View>
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ---- Modal: Editar parcela ---- */}
+      <Modal visible={!!editParcela} transparent animationType="slide" onRequestClose={() => setEditParcela(null)}>
+        <Pressable style={[ps.modalBg, isWeb && ps.modalBgWebCompact]} onPress={() => setEditParcela(null)}>
           <Pressable style={[ps.modalCard, isWeb && ps.modalCardWebCompactNarrow]} onPress={(e) => e.stopPropagation()}>
             <View style={ps.modalHeader}>
-              <Text style={ps.modalTitle}>Dar Baixa</Text>
-              <Pressable onPress={() => setBaixaVenc(null)} hitSlop={8}><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
+              <Text style={ps.modalTitle}>Editar Parcela {editParcela?.desmembramento}</Text>
+              <Pressable onPress={() => setEditParcela(null)} hitSlop={8}><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
             </View>
             <View style={{ gap: spacing.sm }}>
               <View style={{ flexDirection: "row", gap: spacing.sm }}>
                 <View style={{ width: 150 }}>
-                  <Text style={fieldLabel()}>Data do Pagamento *</Text>
-                  <WebDateField value={baixaData} onChange={(v) => setBaixaData(v || null)} testID="contas-pagar-baixa-data" />
+                  <Text style={fieldLabel()}>Vencimento *</Text>
+                  <WebDateField value={editDtVenc} onChange={(v) => setEditDtVenc(v || null)} testID="contas-pagar-editar-data" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={fieldLabel()}>Valor Pago *</Text>
-                  <TextInput value={baixaValor} onChangeText={setBaixaValor} keyboardType="numeric" style={inputStyle()} testID="contas-pagar-baixa-valor" />
+                  <Text style={fieldLabel()}>Valor *</Text>
+                  <TextInput value={editValor} onChangeText={setEditValor} keyboardType="numeric" style={inputStyle()} testID="contas-pagar-editar-valor" />
                 </View>
               </View>
-              <View style={{ flexDirection: "row", gap: spacing.sm }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={fieldLabel()}>Desconto</Text>
-                  <TextInput value={baixaDesconto} onChangeText={setBaixaDesconto} keyboardType="numeric" style={inputStyle()} placeholder="0,00" testID="contas-pagar-baixa-desconto" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={fieldLabel()}>Juros/Multa</Text>
-                  <TextInput value={baixaJuros} onChangeText={setBaixaJuros} keyboardType="numeric" style={inputStyle()} placeholder="0,00" testID="contas-pagar-baixa-juros" />
-                </View>
+              <View>
+                <Text style={fieldLabel()}>Observação</Text>
+                <TextInput value={editObs} onChangeText={setEditObs} style={[inputStyle(), { minHeight: 60 }]} multiline testID="contas-pagar-editar-obs" />
               </View>
               <View style={ps.modalBtns}>
-                <Pressable onPress={() => setBaixaVenc(null)} style={ps.secondaryBtn}><Text>Cancelar</Text></Pressable>
-                <Pressable onPress={confirmarBaixa} disabled={baixando} style={[ps.primaryBtn, { flex: 1 }]} testID="contas-pagar-baixa-confirmar">
-                  {baixando ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={{ color: colors.onBrandPrimary, fontWeight: "600" }}>Confirmar Baixa</Text>}
+                <Pressable onPress={() => setEditParcela(null)} style={ps.secondaryBtn}><Text>Cancelar</Text></Pressable>
+                <Pressable onPress={confirmarEditar} disabled={editando} style={[ps.primaryBtn, { flex: 1 }]} testID="contas-pagar-editar-confirmar">
+                  {editando ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={{ color: colors.onBrandPrimary, fontWeight: "600" }}>Gravar</Text>}
                 </Pressable>
               </View>
             </View>
           </Pressable>
         </Pressable>
       </Modal>
+
+      <LoteBaixaModal
+        visible={loteOpen} onClose={() => setLoteOpen(false)} conn={conn} apiBase="contas-pagar"
+        entidadeLabel="Fornecedor" contasOpts={contasOpts} formaPagOpts={formaPagOpts}
+        usuarioCod={usuarioCod} classe={classePerm} onDone={carregar}
+      />
 
       <AjudaPedidoModal visible={ajudaOpen} onClose={() => setAjudaOpen(false)} titulo="Contas a Pagar" itens={AJUDA_ITENS} />
     </SafeAreaView>

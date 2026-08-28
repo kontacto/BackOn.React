@@ -15703,7 +15703,11 @@ sozinho, que não tem a 3ª tela desta cadeia):
   pro lançamento avulso — mesma numeração de duplicata (`geranumerodup`/
   `desmembramento_dup`) que a Transferência já usa, sem duplicar lógica.
 
-**Achado importante, confirmado por leitura completa do
+**❌ CORREÇÃO GRAVE, 2026-08-28 (mesmo dia, rodada seguinte) — a afirmação
+abaixo estava ERRADA. Não apagar o texto riscado, é histórico do erro
+real, mas nunca mais tratar como verdade.**
+
+~~**Achado importante, confirmado por leitura completa do
 `FrmManDur.frm` (3685 linhas)**: **não existe baixa manual no legado
 real**. Procurei toda gravação de `situacao='PG'` no arquivo inteiro — só
 existem leituras/guardas ("esta parcela já está paga, não mexo"), nunca
@@ -15713,13 +15717,23 @@ baixa de pedido, não de duplicata). **A única forma real de marcar uma
 parcela como paga no Kontacto legado é via retorno bancário (CNAB)** —
 já portado em `cnab_*_service.py`. **Baixa manual (dinheiro/PIX/
 transferência direta) é funcionalidade NOVA nesta tela**, sem
-precedente — decisão confirmada com o usuário via `AskUserQuestion`
-("sim, incluir agora"). Reaproveita as MESMAS colunas que o retorno CNAB
-já usa em `Duplicata_Rec_Venc` (`data_pag`/`valor_pag`/`desconto_pag`/
-`juros_pag`) — mesmo formato de baixa, origem diferente. Faz o mesmo
-rollup que o retorno CNAB ainda não faz em produção (achado cross-banco
-já registrado em "Bancos" — `parcelas_pagas`/`situacao` da duplicata
-recalculados a cada baixa).
+precedente** — decisão confirmada com o usuário via `AskUserQuestion`
+("sim, incluir agora").~~
+
+**O que estava errado**: a busca por `situacao='PG'` dentro de
+`FrmManDur.frm` (Duplicatas a Receber) de fato não acha nada — mas é
+porque a baixa **nunca viveu nesse arquivo**. Ela mora num `.frm`
+totalmente separado, `Revenda\FrmManPar.frm` ("Baixa de Duplicatas a
+Receber..."), que só foi descoberto quando o usuário colou o screenshot
+do menu real (`Financeiro > Contas a Pagar/Receber` tem **4** telas —
+Notas Fiscais, Duplicatas, Pagamentos/Recebimentos, Cancelar — não 2). O
+espelho do lado Pagar é `Revenda\FrmManPap.frm`. **A baixa manual SEMPRE
+existiu no legado** — não é funcionalidade nova, é uma regra de negócio
+real que eu não tinha rastreado até a raiz antes de implementar (viola a
+seção "Toda ramificação condicional da fonte VB6 tem que ser rastreada
+até a raiz" deste mesmo arquivo CLAUDE.md). Ver seção nova "Baixa de
+Duplicatas — Achado Completo (2026-08-28)" logo abaixo, com o rastreio
+real dos 2 forms e o diff campo-a-campo contra o que foi implementado.
 
 **Melhoria deliberada em relação ao legado**: `frmTraNFRec.frm`'s
 `cmdExcluir_Click` deleta `Receber` direto sem checar duplicata/parcela
@@ -15834,11 +15848,58 @@ sem depender de tela). Falta: (1) abrir `contas-receber.tsx` de verdade
 no browser contra ARGEN TESTE e navegar o fluxo completo pela UI
 (inclusive `ClientSearchModal`/`SelectField`/`WebDateField` renderizando
 certo); (2) confirmar visualmente o destaque de "vencido" e os badges de
-situação. **Editar parcela em aberto** (`_editar_parcela_sync`, já
-confirmado funcionando por API) está implementado no backend mas **sem
-UI própria ainda** — o frontend desta rodada só expõe Baixar/Excluir;
-adicionar um botão "Editar" por parcela quando a UI for revisada, ou
-confirmar com o usuário se é mesmo necessário antes de construir.
+situação.
+
+**Botão "Editar" por parcela adicionado 2026-08-28** (mesmo dia, rodada
+seguinte) — a lacuna registrada acima ("`_editar_parcela_sync` sem UI
+própria") foi fechada: cada parcela em aberto agora mostra "Editar" ao
+lado de "Baixar" (gated por `CONTAS_RECEBER.GRAVAR`, mesmo padrão do
+botão de Lançamento Avulso), abrindo um modal estreito
+(`modalCardWebCompactNarrow`, mesmo tier do modal de Baixa) com
+Vencimento/Valor/Observação → `POST /api/contas-receber/editar-parcela`.
+`tsc --noEmit` confirmado limpo (mesmos 12 erros pré-existentes de
+sempre, nenhum novo).
+
+**✅ TESTADO NO NAVEGADOR 2026-08-28, mesma rodada, contra ARGEN TESTE**
+(o usuário abriu a tela de verdade — a pendência acima de "nunca aberto
+no browser" foi fechada). **Achou e corrigiu 2 bugs reais de UX**,
+confirmados ao vivo:
+1. **Situação padrão ao abrir a tela era "Todas" (6890 duplicatas),
+   deveria ser "Aberto"** — `situacao` inicializava como `""`; trocado
+   pra `"A"` (mesmo default nas duas telas, Receber e Pagar).
+2. **Trocar o chip de Situação (ex.: "Aberto") disparava erro `Campo
+   "servidor": é obrigatório` e a lista não atualizava** — causa raiz:
+   `carregar()` montava a query manualmente
+   (`` `/api/contas-receber${qs.length ? `?${qs.join("&")}` : ""}` ``) e
+   passava pro `apiGet`, que **sempre** acrescenta seu próprio
+   `?servidor=...&banco=...` no final — com `situacao` já presente, a
+   URL final ficava com DOIS `?` (`...?situacao=A?servidor=...`); o
+   navegador trata tudo depois do primeiro `?` como uma query string só,
+   então `servidor` nunca chegava como campo próprio ao backend (virava
+   parte do VALOR de `situacao`). Corrigido usando o parâmetro `params`
+   que `apiGet` já aceita nativamente (`apiGet(conn, "/api/contas-
+   receber", params)`) em vez de embutir a query string manualmente no
+   `path` — `connQS` já mescla servidor/banco com os filtros extras numa
+   única string correta. **Confirmado isolado** — grep no resto de
+   `frontend/app/*.tsx` não achou nenhuma outra tela com esse mesmo
+   padrão de embutir `?...` manualmente dentro do `path` de `apiGet`;
+   bug exclusivo destas 2 telas (introduzido na própria implementação
+   original desta rodada), não um problema sistêmico do helper.
+3. **Trocar de Situação agora rebusca sozinho, sem precisar clicar
+   "Buscar"** (pedido explícito do usuário) — o `useEffect` que disparava
+   `carregar()` dependia de `[conn, carregar]` (reagia a QUALQUER filtro,
+   inclusive `busca` a cada tecla digitada — um auto-buscar não
+   intencional, contra o padrão do resto do projeto de "Enter é o único
+   gatilho de busca por texto"); trocado pra `[conn, situacao]` — só
+   Situação rebusca sozinha; busca por texto e período continuam manuais
+   (botão "Buscar"/Enter), do jeito que o resto do app já funciona.
+Testado ao vivo contra ARGEN TESTE via API direta antes de devolver pro
+usuário: `situacao=A` retorna 117 (contra 6890 de "Todas") — filtro
+backend sempre esteve correto, o bug era só a URL malformada do
+frontend. Aplicado idêntico nas duas telas (Receber e Pagar). `tsc
+--noEmit` limpo de novo depois do fix; bundle do Metro (dev server já
+rodando, porta 8082) confirmado atualizado via hot-reload antes de
+reportar pronto.
 
 ---
 
@@ -15868,10 +15929,16 @@ mesmas regras de negócio, adaptadas pro lado fornecedor.
   migração — não construir esses 2 pra Pagar mesmo se algum dia forem
   liberados pro lado Receber.
 
-**Mesmo achado do lado Receber, confirmado de novo aqui por leitura
+~~**Mesmo achado do lado Receber, confirmado de novo aqui por leitura
 completa do arquivo**: procurei toda gravação de `situacao='PG'` em
 `frmmandup.frm` inteiro — só leituras/guardas, nunca uma escrita. Baixa
-manual é NOVA aqui também.
+manual é NOVA aqui também.~~ **❌ CORREÇÃO GRAVE, 2026-08-28** — mesmo
+erro do lado Receber (ver correção espelhada acima): a baixa vive num
+`.frm` separado, `Revenda\FrmManPap.frm` ("Pagamento de Duplicatas a
+Pagar..."/"Cancelar Pagamentos..." conforme a flag global `CancelaPgP`),
+nunca dentro de `frmmandup.frm`. Baixa manual **sempre existiu** no
+legado do lado Pagar também. Ver "Baixa de Duplicatas — Achado Completo
+(2026-08-28)" logo abaixo.
 
 **Schema real, verificado ao vivo contra ARGEN TESTE antes de escrever
 qualquer SQL** — inclusive replicando desde o início a lição aprendida no
@@ -15931,10 +15998,10 @@ fornecedor 460), ciclo completo pago, `situacao='PG'`, marcada "TESTE
 Claude" na observação.
 
 **Ainda não aberto no navegador** — mesma pendência do lado Receber, só
-testado via API direta até aqui. **Editar parcela em aberto** também
-sem UI própria ainda (mesma decisão do lado Receber — backend pronto,
-botão "Editar" fica pra quando a UI for revisada ou se o usuário
-confirmar que é necessário).
+testado via API direta até aqui. **Botão "Editar" por parcela adicionado
+2026-08-28** (mesmo espelho aplicado ao lado Receber, mesma rodada — ver
+[[Contas a Receber]] acima pro detalhe da implementação) — `tsc --noEmit`
+confirmado limpo, mesma pendência de teste no navegador.
 
 **Fora de escopo, mesma decisão já aplicada ao lado Receber**: Boleto
 avulso (não existe nem no legado pra este lado — não emite boleto pra
@@ -16007,6 +16074,299 @@ Receber #9103 (`Receber` #11492/`Duplicata_Rec_Venc` #17813, nota_fiscal
 999904/série TST, cliente 2393), paga com `conta=3`, usada
 especificamente pra este teste de integração — marcada "TESTE Claude
 integracao fluxo caixa" na observação.
+
+---
+
+## Baixa de Duplicatas — Achado Completo (2026-08-28)
+
+**Motivado pelo usuário colando o screenshot do menu real** (`Financeiro
+> Contas a Pagar` tem 4 sub-telas: Notas Fiscais, Duplicatas, Pagamentos,
+Cancelar Pagamentos — não 2). Corrige as 2 afirmações erradas riscadas
+acima ("baixa manual é funcionalidade nova, sem precedente" — Receber e
+Pagar). Rastreio completo feito via subagente, lendo os `.frm` reais na
+íntegra — **não achado por acaso**: a busca anterior por `situacao='PG'`
+foi feita dentro do `.frm` errado (`FrmManDur.frm`/`frmmandup.frm`, que
+são só "Duplicatas" — manutenção do cabeçalho/parcelas, sem baixa); a
+baixa vive em 2 forms totalmente separados que nunca tinham sido
+localizados.
+
+### Os 2 forms reais
+
+- **`Revenda\FrmManPap.frm`** (`FrmManPap`, 2744 linhas) — Pagamento/
+  Cancelamento de Duplicatas a **Pagar**. Caption e comportamento mudam
+  conforme uma flag global (`CancelaPgP`, `"P"`=Pagamento/`"C"`
+  =Cancelamento, setada por quem abre a tela no MDI) — **não são 2
+  arquivos**, é 1 arquivo com 2 modos. Tabelas: `duplicata_pagar` +
+  `duplicata_pag_venc`.
+- **`Revenda\FrmManPar.frm`** (`FrmManPaR`, 3561 linhas) — Recebimento/
+  Cancelamento de Duplicatas a **Receber**, mesmo padrão de flag global
+  (`CancelaPg`). Tabelas: `duplicata_receber` + `duplicata_rec_venc`.
+
+### Regra real da baixa individual (`Command2_Click`, modo Pagamento)
+
+**Lado Pagar** — grava, além de `Situacao='PG'`: `OBS_VENCIMENTO`,
+`FORMA_PAG`, `CONTA`, `tarifa_banco`, `Data_Pag`, `Banco_Cedente`,
+`Agencia_Cedente`, `num_doc_pag`, `Numero_Boleto`, `Valor_Pag`,
+`Desconto_Pag`, `Juros_Pag`, `Outros_desc_Pag`, `outros_acres_pag`,
+`valor` (reescreve o valor da parcela) — e incrementa
+`duplicata_pagar.Parcelas_Pagas`. Grava em `Logs` (tipo_documento **26**,
+"Baixa do Contas a Pagar.").
+
+**Lado Receber** — mesmos campos, **exceto `num_doc_pag`** (esse campo
+não existe aqui — `Campo(13)` no form de Receber é o NOME DO CLIENTE
+exibido, não um campo digitável de documento). Chama
+`AtualizadrvCartao(...)` depois da baixa (efeito ligado a cartão de
+crédito, sem equivalente no lado Pagar) e, se houver linhas em
+`GridCheques`, grava cheque(s) pré-datado(s) via `GravaChequePre(...)`
+(origem `'R'`). Grava em `Logs` (tipo_documento **25**, "Baixa do Contas
+a Receber.").
+
+**Pagamento parcial gera vencimento residual, real nos 2 lados**: se
+`Valor_Pag` &lt; valor original da parcela, o form gera um NOVO
+vencimento com o saldo restante (mesma `Duplicata`, novo
+`Desmembramento`) e incrementa `num_parcelas` — comportamento que a
+implementação atual **não replica** (hoje uma baixa parcial simplesmente
+marca a parcela como paga com o valor informado, sem gerar residual).
+
+### Regra real do cancelamento (`Command2_Click`, modo `"C"` — botão vira "Excluir"/"Cancelar")
+
+Reverte `Situacao='A'`, zera `Data_Pag`/`Valor_Pag`/`Desconto_Pag`/
+`Juros_Pag`/`Outros_Desc_Pag`/`Outros_Acres_Pag`, decrementa
+`Parcelas_Pagas` no cabeçalho, e volta `duplicata_pagar`/
+`duplicata_receber.Situacao='A'`. **Se a baixa tinha gerado movimento de
+caixa** (`flag_transf_caixa='P'`), reverte `Contas.saldo_atual` e apaga a
+linha de `movimentacoes` correspondente — acoplamento real com Fluxo de
+Caixa que a implementação atual não tem em NENHUM sentido (nem grava,
+nem reverte — ver achado "Fluxo de Caixa NÃO reflete baixa" acima, que
+fica ainda mais relevante à luz disso). Grava em `Logs` (tipo_documento
+**24** Pagar / **23** Receber, "Cancelamento de baixa...").
+
+**Guardas exclusivas do lado Receber, sem equivalente no Pagar**:
+bloqueia cancelar se o vencimento faz parte de um agrupamento de
+comandas no caixa (`movimentacoes_agrupadas` + `COD_TRANSF_COMANDA`);
+se existir cheque pré-datado vinculado (`cheque` `origem='R'`), pergunta
+se remove o(s) cheque(s) também.
+
+### "Pagamento/Cancelamento Por Data" — operação em lote, não implementada em nenhum lado
+
+Painel próprio (`Command6` abre, `Command9`="Mostra" carrega um grid
+filtrado por período, `Command7` executa em lote sobre as linhas
+marcadas). Lado Pagar: filtra por vencimento (modo P) ou data de
+pagamento (modo C), opcionalmente por fornecedor. **Lado Receber é mais
+rico** — filtro adicional por Banco de Faturamento, e um campo
+**"Montante"** exclusivo (`Data(5)`) que permite dar baixa de **um valor
+único somado sobre várias duplicatas em aberto ao mesmo tempo**
+(distribui sequencialmente entre as parcelas marcadas até esgotar o
+valor, gerando vencimento residual na última se sobrar saldo) — mais
+"Somar Tarifa" (`Data(4)`, soma tarifa bancária a cada baixa do lote).
+
+### Guardas de validação encontradas (ausentes na implementação atual)
+
+- **Caixa fechado bloqueia a baixa**: `Data_Pag &lt;= Data_Fecha_Cx` →
+  "Caixa Já Fechado! Transação Não Permitida!" — checagem que a
+  implementação atual não faz.
+- **Forma de Pagamento e Conta são obrigatórios** na baixa (fora do modo
+  cancelamento) — o modal atual (`contas-receber.tsx`/`contas-pagar.tsx`)
+  nem sequer PEDE esses 2 campos hoje, embora o schema (`Parcela.conta`/
+  `Parcela.forma_pag`) já os leia no GET.
+- **Vencimento já liquidado bloqueia nova baixa** com mensagem
+  específica ("Este vencimento já foi liquidado, possivelmente por outro
+  usuário...") — a implementação atual já bloqueia via guarda genérica
+  (`situacao == 'PG'`), efeito equivalente, mensagem diferente.
+- **Valor pago não pode exceder o valor da parcela — só no lado
+  RECEBER** ("O valor não pode ser superior ao do vencimento. Para isso
+  utilize os campos juros ou acréscimos!"). **Não existe essa trava no
+  lado Pagar** (comentário de validação achado desativado/comentado no
+  código-fonte) — assimetria real entre os 2 lados, não replicar a
+  mesma trava nos 2 sem essa distinção.
+
+### "Emitir Recibo" — morto no legado, não implementar
+
+Botão presente na UI do lado Receber (`Command13`), mas o handler inteiro
+está comentado no código-fonte (chamaria `FrmManRecibo`, nunca ativado
+nesta versão) — não produz nenhum efeito real hoje no legado. Não faz
+parte do escopo de nenhuma paridade a implementar.
+
+### Tabela-resumo do que falta (decisão de escopo pendente do usuário)
+
+| Item | Real no legado? | Na implementação atual? |
+|---|---|---|
+| Baixa individual com Data/Valor/Desconto/Juros | Sim (2 lados) | Sim (parcial — ver campos faltando abaixo) |
+| Campos Banco/Agência/Nº Boleto/Forma Pag./Conta/Tarifa Banco/Outros Acresc. na baixa | Sim (2 lados) | **Não** — modal só tem Data/Valor/Desconto/Juros |
+| `num_doc_pag` na baixa | Só lado Pagar | **Não** |
+| Geração de vencimento residual em baixa parcial | Sim (2 lados) | **Não** |
+| **Cancelar Pagamento/Recebimento** (estornar baixa) | Sim (2 lados, mesma tela em modo alternativo) | **Não existe nenhuma UI/endpoint pra isso hoje** |
+| Reversão de `Contas.saldo_atual`/`movimentacoes` ao cancelar | Sim (2 lados) | N/A (a baixa em si também não grava nada em `Contas`/`movimentacoes` hoje — ver achado "Fluxo de Caixa não reflete baixa" acima) |
+| Guarda de caixa fechado | Sim (2 lados) | **Não** |
+| Forma de Pagamento/Conta obrigatórios na baixa | Sim (2 lados) | **Não** (campos nem aparecem no modal) |
+| Valor pago ≤ valor da parcela | Só lado Receber | **Não** (nenhum lado valida isso hoje) |
+| "Pagamento/Cancelamento Por Data" (lote) | Sim (2 lados) | **Não** |
+| Baixa por "Montante" (várias duplicatas de uma vez) | Só lado Receber | **Não** |
+| Cheque pré-datado / integração cartão / guarda de comanda agrupada | Só lado Receber | **Não** — fora do escopo desta tela até hoje |
+| "Emitir Recibo" | Morto no legado (não faz nada) | N/A — não implementar |
+
+**Não implementar nada desta tabela sem decisão explícita do usuário
+sobre o que entra nesta rodada** — mesmo princípio de "Regra 2" da seção
+"Toda ramificação condicional da fonte VB6 tem que ser rastreada até a
+raiz" deste CLAUDE.md: achado com múltiplos caminhos exige código pra
+cada caminho OU exclusão de escopo explicitamente registrada, nunca
+implementação silenciosa parcial.
+
+**✅ IMPLEMENTADO E TESTADO AO VIVO 2026-08-28, mesmo dia** — usuário
+escolheu escopo "Tudo (inclusive lote e Montante)" via `AskUserQuestion`.
+Plan Mode usado pra desenhar a arquitetura antes de codar (schema real
+validado via `INFORMATION_SCHEMA.COLUMNS` ao vivo contra ARGEN TESTE
+ANTES de escrever qualquer SQL — confirmou que `agencia_cedente`/
+`tarifa_banco` são colunas reais nas duas tabelas, ao contrário do que
+uma investigação só por código Python já escrito tinha sugerido).
+
+- **Backend**: núcleo compartilhado em `contas_receber_service.py`
+  (`_baixar_parcela_core`/`_cancelar_baixa_core`/`_gerar_vencimento_
+  residual`/`_rollup_cabecalho`, parametrizados por nome de tabela),
+  importado por `contas_pagar_service.py` (mesmo padrão já usado pra
+  `_split_parcelas`). Campos novos na baixa: `outros_desc_pag`/
+  `outros_acres_pag`/`tarifa_banco`/`banco_cedente`/`agencia_cedente`/
+  `numero_boleto`/`observacao` (+ `num_doc_pag` só Pagar). Vencimento
+  residual em baixa parcial (individual, lote e Montante — helper
+  único). Guarda "valor ≤ parcela" só Receber. `_cancelar_baixa_sync`,
+  `_listar_vencimentos_lote_sync`, `_processar_lote_sync` (isolamento de
+  falha por item), `_baixar_montante_sync` (só Receber). 6 rotas novas
+  por lado (`cancelar-baixa`, `lote/vencimentos`, `lote`, +`montante` só
+  Receber), todas logando via `log_auditoria_service` (nunca a tabela
+  legada `Logs`). 34 testes novos (residual, guarda de valor, cancelamento,
+  lote isolando falha, Montante distribuindo sequencial) — suíte completa
+  2783 passed, mesmas 4 falhas pré-existentes de sempre.
+- **Frontend**: modal de Baixa cresceu de 420px pra 560px (13 campos,
+  Design Desktop — linhas de 2), botão "Cancelar" ao lado do badge
+  "Pago", novo componente compartilhado `frontend/src/components/
+  financeiro/LoteBaixaModal.tsx` (Pagamento/Cancelamento em Lote + modo
+  Montante condicional só Receber), ícone novo no cabeçalho das duas
+  telas. `tsc --noEmit` limpo (mesmos 12 erros pré-existentes).
+- **Testado ao vivo contra ARGEN TESTE, ciclo completo**: duplicata
+  Receber #9104 (cliente 2393) — baixa parcial (30 de 50) gerou vencimento
+  residual correto (saldo 20, mesmo vencimento); guarda de valor máximo
+  bloqueou 999 sobre parcela de 50; cancelamento reverteu tudo
+  corretamente; lote de pagamento processou 3 vencimentos de uma vez
+  (`processados:3, falhas:[]`); lote de cancelamento desfez 2; baixa por
+  Montante (30) sobre 2 parcelas (20+50) quitou a menor inteira e aplicou
+  o resto na maior, gerando novo residual de 40 — `saldo_nao_utilizado:
+  0.0` confirmado. Duplicata Pagar #9379 (fornecedor 460) — confirmado
+  que a guarda de valor NÃO existe aqui (999 sobre parcela de 80 passou
+  normalmente), cancelamento e lote funcionando igual ao lado Receber.
+  Dados de teste deixados no banco de propósito (mesmo padrão já usado
+  neste projeto), marcados "TESTE Claude" nas observações.
+- **Fora de escopo, confirmado infeasível durante a investigação técnica**
+  (ver tabela acima): guarda de caixa fechado e reversão de `Contas.
+  saldo_atual`/`movimentacoes` ao cancelar — infraestrutura que ainda não
+  existe em NENHUM lugar desta migração (nem o lado "escrever no
+  fechamento de caixa", nem o lado "gravar movimentação de caixa" a
+  partir de nenhuma tela, incluindo Entrada/Saída de Caixa manual, que
+  tem a mesma lacuna documentada na própria fonte). Mesmo gap já
+  registrado em "Teste de ecossistema Contas a Pagar/Receber/Fluxo de
+  Caixa" acima — decisão de arquitetura maior, não resolvida por baixo
+  dos panos aqui.
+
+---
+
+## Taxas — DIFAL/ICMSUFDest no motor de emissão de NF-e (2026-08-28)
+
+**Status: ✅ IMPLEMENTADO E COM 22 TESTES NOVOS, mesmo dia.** Motivado pelo
+usuário reportando uma rejeição real do SEFAZ no sistema VB6 (rejeição
+695, "Informado indevidamente o grupo de ICMS para a UF de destino") e
+pedindo Modo Didático na tela Taxas + correção do motor de emissão + um
+desenho **extensível** ("não só essa regra mais as outras que vierem —
+tem que aprender"). Plan Mode usado (ver rastreio completo no plano
+aprovado, se ainda existir em `C:\Users\carlo\.claude\plans\`).
+
+**Achado mais grave que o pedido original**: o grupo `<ICMSUFDest>`
+(DIFAL, Emenda Constitucional 87/2015) **não existia em NENHUM lugar do
+motor de emissão Python** — não era "ajudar a preencher a Taxa certo", era
+uma peça da emissão nunca construída. Qualquer venda interestadual real
+pra consumidor final não-contribuinte sairia sem um grupo que a
+legislação exige.
+
+**Regras confirmadas em fonte oficial, lida na íntegra** (não resumo de
+terceiro — PDF baixado e conferido):
+- **NT 2015.003** (ENCAT/SEFAZ, ago/2015) — as 3 condições que decidem
+  presença/ausência do grupo (`idDest=2` interestadual + `indFinal=1`
+  consumidor final + `indIEDest=9` não contribuinte, TODAS juntas — regras
+  NA01-20/NA01-30), as fórmulas exatas de `vICMSUFDest`/`vICMSUFRemet`
+  (regras NA11-10/NA13-10), e a incompatibilidade de CSOSN com Consumidor
+  Final (regra N12a-70, CSOSN 101/201/202/203/900).
+- **XSD oficial** (`leiauteNFe_v4.00.xsd`, mirror nfephp-org/sped-nfe,
+  baixado e conferido campo a campo) — confirmou 2 coisas que uma busca
+  só por resumo teria errado: (1) o grupo é **por item** (dentro de
+  `<det><imposto>`, ao lado de `<ICMS>`), não um bloco único em `<total>`
+  como eu tinha suposto inicialmente; (2) os totais somados
+  (`vFCPUFDest`/`vICMSUFDest`/`vICMSUFRemet`) entram em `<ICMSTot>` logo
+  depois de `vICMSDeson` — **não perto de `vNF`**, como uma fonte
+  secundária sugeria.
+- FCP (Fundo de Combate à Pobreza) incluído também — posição confirmada
+  no mesmo XSD (`vBCFCPUFDest`/`pFCPUFDest` antes de `pICMSUFDest`;
+  `vFCPUFDest` antes de `vICMSUFDest`).
+
+**Backend — `backend/services/nfe_regras_fiscais.py` (novo)**: módulo
+único e extensível — cabeçalho documenta como registrar uma regra fiscal
+nova (função `_verificar_<nome>` + entrada em `REGRAS_CONSISTENCIA`,
+citando fonte oficial) sem tocar `nfe_emissao_service.py`. Duas regras
+registradas:
+1. `_verificar_taxa_difal_configurada` — bloqueia a emissão (mensagem
+   amigável, antes de gastar a chamada ao SEFAZ) se as 3 condições batem
+   mas a Taxa do item não tem as alíquotas de DIFAL preenchidas (evita
+   nota sair com DIFAL zerado silenciosamente).
+2. `_verificar_csosn_consumidor_final` — bloqueia CSOSN incompatível
+   (101/201/202/203/900) na mesma combinação.
+Candidatas registradas em comentário, NÃO implementadas (mesma fonte já
+lida, ver módulo): NA07-20/NA07-30 (alíquota interestadual x origem do
+produto), NA09-10 (percentual de partilha x ano da emissão).
+
+`montar_grupo_icms_uf_dest_item` monta o XML por item **derivando sempre
+das 3 condições reais** (UF do destinatário vs. emitente, `indFinal`,
+`indIEDest` já resolvidos de `cliente.consumidor_final`/`não_
+contribuinte`) — nunca de um campo/checkbox digitado à mão na Taxa, que
+foi exatamente a causa da rejeição 695 real.
+
+**`nfe_emissao_service.py`**: `_montar_xml_nfe` monta o grupo por item
+dentro do loop de `det_xml`, acumula os 3 totais e repassa pra
+`_montar_icms_tot_xml` (2 parâmetros novos). `emitir_nfe_sync` chama
+`nfe_regras_fiscais.validar_regras_fiscais(...)` logo após confirmar a UF
+reconhecida, antes de montar/assinar/transmitir.
+
+**Threading dos campos DIFAL** — `nfe_avulsa_service.py`/
+`nfe_agrupada_service.py` já resolviam a Taxa inteira via
+`_resolver_tributacao_sync` (`SELECT TOP 1 *`), mas só usavam `cfop_
+livro` dela — as 4 colunas DIFAL (`aliquota_interestadual`/`aliquota_
+interna_destino`/`percentual_origem`/`fundo_pobreza`) nunca eram
+repassadas pro dict do item. Adicionado nos 2 pontos.
+
+**22 testes novos** (`test_nfe_regras_fiscais.py` — 17; `test_nfe_
+emissao_service.py` — 5, inclusive replicando o cenário EXATO do print
+real: Consumidor Final marcado + Contribuinte → grupo ausente). Suíte
+completa: 2805 passed, mesmas 4 falhas pré-existentes de sempre.
+
+**Frontend — Modo Didático (Apoio Fisco)**: `taxas.tsx` — item já
+existente "Grupo de ICMS para UF de Destino (DIFAL)" no Modo Didático
+reescrito com a regra das 3 condições em linguagem clara + citação da
+fonte oficial. `cliente-completo.tsx` — texto de ajuda (`hint`, não tinha
+Modo Didático completo ainda nesta tela) abaixo dos switches "Não
+Contribuinte"/"Consumidor Final", mesma regra do ponto de vista do
+cadastro do cliente. `tsc --noEmit` limpo (mesmos 12 erros pré-existentes
+de sempre).
+
+**Fora de escopo desta rodada, registrado explicitamente**:
+- Persistir as 4 colunas DIFAL em `n_fiscal_itens` (faria o relatório de
+  Apuração Fiscal também bater pra notas emitidas pelos services Python
+  — hoje mostraria DIFAL zerado mesmo com o XML correto) — achado
+  relacionado, não pedido.
+- Regras NA07-20/NA07-30/NA09-10 (candidatas já documentadas no módulo).
+- Suporte a CST (regime normal, não-Simples) na emissão — `_montar_xml_
+  nfe` só monta `<ICMSSN102>` hoje, gap maior e preexistente.
+
+**Nunca testado contra o SEFAZ real** — mesma ressalva de sempre pro
+pacote fiscal (CLAUDE.md §12): validado só por montagem isolada de XML +
+testes unitários. Quando o usuário/Leandro quiser validar em homologação
+de verdade, testar especificamente uma venda interestadual real pra
+consumidor final não-contribuinte.
 
 ---
 

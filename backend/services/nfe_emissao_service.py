@@ -54,7 +54,7 @@ import re
 from datetime import date, datetime, time, timezone
 from typing import Optional
 
-from services import nfe_fiscal_common
+from services import nfe_fiscal_common, nfe_regras_fiscais
 
 # Endpoints "autorização" (emissão), versão 4.00, só pro grupo SVRS — mesma
 # limitação documentada em `nfe_cancelamento_service.py`.
@@ -341,7 +341,10 @@ def _montar_transp_nfce_xml(frete_valor: float, transportador: Optional[dict]) -
     return "".join(partes)
 
 
-def _montar_icms_tot_xml(itens: list[dict], valor_total: float, frete_valor: float = 0) -> str:
+def _montar_icms_tot_xml(
+    itens: list[dict], valor_total: float, frete_valor: float = 0,
+    v_icms_uf_dest_total: float = 0.0, v_icms_uf_remet_total: float = 0.0, v_fcp_uf_dest_total: float = 0.0,
+) -> str:
     """`<total><ICMSTot>...</ICMSTot></total>` completo — achado ao vivo
     2026-08-23 (1ª emissão real de NFC-e): a versão anterior só tinha
     `vNF`/`vFrete`, faltando toda a sequência obrigatória do schema NFe
@@ -351,12 +354,23 @@ def _montar_icms_tot_xml(itens: list[dict], valor_total: float, frete_valor: flo
     somado a partir dos itens; os campos de imposto detalhado ficam em
     0.00 (mesmo alcance simplificado já documentado na docstring do
     módulo — sem PIS/COFINS/ICMS efetivamente calculados aqui, só a
-    sequência de totais que o schema exige presente)."""
+    sequência de totais que o schema exige presente).
+
+    `v_icms_uf_dest_total`/`v_icms_uf_remet_total`/`v_fcp_uf_dest_total` —
+    totais do grupo DIFAL (`nfe_regras_fiscais.montar_grupo_icms_uf_dest_
+    item`, somado por quem chama) — posição confirmada no XSD oficial
+    (`leiauteNFe_v4.00.xsd`, `TICMSTot`): logo depois de `vICMSDeson`, não
+    perto de `vNF`. Campos opcionais (`minOccurs=0`), omitidos quando a
+    nota não tem DIFAL nenhuma."""
     v_prod = sum(float(i.get("valor_total") or 0) for i in itens)
     z = "0.00"
+    icms_uf_dest_xml = nfe_regras_fiscais.montar_totais_icms_uf_dest_xml(
+        v_icms_uf_dest_total, v_icms_uf_remet_total, v_fcp_uf_dest_total,
+    )
     return (
         "<ICMSTot>"
         f"<vBC>{z}</vBC><vICMS>{z}</vICMS><vICMSDeson>{z}</vICMSDeson>"
+        f"{icms_uf_dest_xml}"
         f"<vFCP>{z}</vFCP><vBCST>{z}</vBCST><vST>{z}</vST><vFCPST>{z}</vFCPST><vFCPSTRet>{z}</vFCPSTRet>"
         f"<vProd>{v_prod:.2f}</vProd><vFrete>{frete_valor:.2f}</vFrete><vSeg>{z}</vSeg><vDesc>{z}</vDesc>"
         f"<vII>{z}</vII><vIPI>{z}</vIPI><vIPIDevol>{z}</vIPIDevol>"
@@ -633,8 +647,21 @@ def _montar_xml_nfe(
     uf_dest = (destinatario.get("uf") or "").strip().upper()
     id_dest = "1" if uf_dest == (uf_emit_sigla or "").strip().upper() else "2"
 
+    # Grupo ICMSUFDest (DIFAL) por item — ver nfe_regras_fiscais.py pro
+    # rastreio completo (NT 2015.003 + XSD oficial). Deriva de idDest/
+    # indFinal/indIEDest reais, nunca de campo digitado à mão na Taxa —
+    # é isso que evita a rejeição 695 (grupo presente/ausente indevido).
+    ind_ie_dest = destinatario.get("indIEDest") or "9"
+    v_icms_uf_dest_total = 0.0
+    v_icms_uf_remet_total = 0.0
+    v_fcp_uf_dest_total = 0.0
+
     det_xml = ""
     for i, item in enumerate(itens, start=1):
+        grupo_uf_dest = nfe_regras_fiscais.montar_grupo_icms_uf_dest_item(id_dest, indFinal, ind_ie_dest, item)
+        v_icms_uf_dest_total += grupo_uf_dest["v_icms_uf_dest"]
+        v_icms_uf_remet_total += grupo_uf_dest["v_icms_uf_remet"]
+        v_fcp_uf_dest_total += grupo_uf_dest["v_fcp_uf_dest"]
         det_xml += (
             f'<det nItem="{i}">'
             f'<prod>'
@@ -655,6 +682,7 @@ def _montar_xml_nfe(
             f'</prod>'
             f'<imposto>'
             f'<ICMS><ICMSSN102><orig>{item.get("origem", 0)}</orig><CSOSN>{item.get("csosn", "102")}</CSOSN></ICMSSN102></ICMS>'
+            f'{grupo_uf_dest["xml"]}'
             f'<PIS><PISNT><CST>{item.get("cst_pis", "07")}</CST></PISNT></PIS>'
             f'<COFINS><COFINSNT><CST>{item.get("cst_cofins", "07")}</CST></COFINSNT></COFINS>'
             f'{item.get("ibs_cbs_xml") or ""}'
@@ -716,7 +744,7 @@ def _montar_xml_nfe(
         f'{_montar_emit_xml(cnpj_emit, nome_emit, emitente_end)}'
         f'{dest_xml}'
         f'{det_xml}'
-        f'<total>{_montar_icms_tot_xml(itens, valor_total)}{ibs_cbs_totais_xml}</total>'
+        f'<total>{_montar_icms_tot_xml(itens, valor_total, v_icms_uf_dest_total=v_icms_uf_dest_total, v_icms_uf_remet_total=v_icms_uf_remet_total, v_fcp_uf_dest_total=v_fcp_uf_dest_total)}{ibs_cbs_totais_xml}</total>'
         f'{_montar_transp_completo_nfe_xml(paga_frete=paga_frete, transportador=transportador, veiculo=veiculo, volumes=volumes)}'
         f'<pag><detPag><tPag>90</tPag><vPag>0.00</vPag></detPag></pag>'
         f'</infNFe>'
@@ -1098,6 +1126,19 @@ def emitir_nfe_sync(
     cod_ibge = nfe_fiscal_common.IBGE_POR_UF.get((uf_sigla or "").strip().upper())
     if not cod_ibge:
         return {"success": False, "message": f"UF '{uf_sigla}' não reconhecida."}
+
+    # Regras fiscais de consistência (DIFAL/ICMSUFDest + CSOSN incompatível
+    # etc.) — checadas ANTES de montar/assinar/transmitir, pra não gastar a
+    # chamada ao SEFAZ com um erro já detectável aqui. Ver nfe_regras_
+    # fiscais.py pro rastreio completo e como registrar uma regra nova.
+    uf_dest_check = (destinatario.get("uf") or "").strip().upper()
+    id_dest_check = "1" if uf_dest_check == (uf_sigla or "").strip().upper() else "2"
+    contexto_regras = nfe_regras_fiscais.montar_contexto_validacao(
+        id_dest_check, indFinal, destinatario.get("indIEDest") or "9", itens_resolvidos,
+    )
+    erro_regras = nfe_regras_fiscais.validar_regras_fiscais(contexto_regras)
+    if erro_regras:
+        return erro_regras
 
     em_contingencia = contingencia is not None
     url = None

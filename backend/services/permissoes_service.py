@@ -933,6 +933,13 @@ CATALOGO = [
         _tela("EQUIPAMENTOS", "Equipamentos", ACOES_EQUIPAMENTOS),
         _tela("TELEMARKETING", "Telemarketing", ACOES_TELEMARKETING),
         _tela("NOTAS_FISCAIS", "Notas Fiscais", ACOES_NOTAS_FISCAIS),
+        # "Taxas" (2026-08-28, user-directed) — transferida de dentro do
+        # submenu Tabelas Auxiliares pra cá, mesmo tratamento já aplicado
+        # a NOTAS_FISCAIS acima quando a tela foi movida pro hub Gestor
+        # Fiscal (a tela em si não fica dentro de TRANSACOES no catálogo
+        # de permissões, só a navegação real mudou de hub).
+        _tela("TAXAS", "Taxas NFe/NFSe"),
+        _tela("TAXAS_NFCE", "Taxas NFCe"),
         _menu("TABAUX", "Tabelas Auxiliares", [
             _tela("MARCAS", "Marcas"),
             _tela("MODELOS", "Modelos"),
@@ -953,8 +960,6 @@ CATALOGO = [
             _tela("SEGMENTOS", "Segmentos"),
             _tela("SITUACAO", "Situação"),
             _tela("TAMANHO", "Tamanhos"),
-            _tela("TAXAS", "Taxas NFe/NFSe"),
-            _tela("TAXAS_NFCE", "Taxas NFCe"),
             _tela("GRUPO_PISCOF", "Grupo PIS/COFINS"),
             _tela("TIPO_CLIENTE", "Tipo Cliente/Forn."),
             _tela("TIPO_DOC", "Tipo de Documento"),

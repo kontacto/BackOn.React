@@ -1225,15 +1225,68 @@ class ContasReceberAvulsaRequest(BaseModel):
 
 
 class ContasReceberBaixaRequest(BaseModel):
-    """Baixa manual de 1 parcela (`Duplicata_Rec_Venc`) — funcionalidade
-    NOVA, sem equivalente no legado (que só baixa via retorno CNAB)."""
+    """Baixa manual de 1 parcela (`Duplicata_Rec_Venc`) — réplica de
+    `Revenda/FrmManPar.frm`'s `Command2_Click` (modo Pagamento). Ver
+    services/contas_receber_service.py pro rastreio completo."""
     servidor: str
     banco: str
     codigo_venc: int
     data_pag: str
     valor_pag: float
     desconto_pag: float = 0
+    outros_desc_pag: float = 0
     juros_pag: float = 0
+    outros_acres_pag: float = 0
+    tarifa_banco: Optional[float] = None
+    banco_cedente: Optional[int] = None
+    agencia_cedente: Optional[int] = None
+    numero_boleto: Optional[float] = None
+    conta: Optional[int] = None
+    forma_pag: Optional[str] = None
+    observacao: Optional[str] = None
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasReceberCancelarBaixaRequest(BaseModel):
+    """Cancelamento de baixa (`Duplicata_Rec_Venc`) — réplica de
+    `Revenda/FrmManPar.frm`'s `Command2_Click` (modo `"C"`/Cancelamento)."""
+    servidor: str
+    banco: str
+    codigo_venc: int
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasReceberLoteRequest(BaseModel):
+    """Pagamento/Cancelamento em lote (réplica do painel "Por Data" de
+    `FrmManPar.frm`) — `modo="baixar"` aplica data_pag/forma_pag/conta a
+    todos os vencimentos marcados; `modo="cancelar"` só cancela."""
+    servidor: str
+    banco: str
+    modo: str  # "baixar" | "cancelar"
+    vencimentos: List[int]
+    data_pag: Optional[str] = None
+    conta: Optional[int] = None
+    forma_pag: Optional[str] = None
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasReceberMontanteRequest(BaseModel):
+    """Baixa por "Montante" — exclusiva do lado Receber (`Data(5)` em
+    `FrmManPar.frm`'s painel "Por Data"): distribui um valor único
+    sequencialmente sobre as parcelas marcadas, gerando vencimento
+    residual na última parcela só parcialmente coberta."""
+    servidor: str
+    banco: str
+    cliente: int
+    vencimentos: List[int]
+    montante: float
+    data_pag: str
     conta: Optional[int] = None
     forma_pag: Optional[str] = None
     usuario_alteracao: Optional[int] = None
@@ -1290,13 +1343,49 @@ class ContasPagarAvulsaRequest(BaseModel):
 
 
 class ContasPagarBaixaRequest(BaseModel):
+    """Baixa manual de 1 parcela (`Duplicata_Pag_Venc`) — réplica de
+    `Revenda/FrmManPap.frm`'s `Command2_Click` (modo Pagamento)."""
     servidor: str
     banco: str
     codigo_venc: int
     data_pag: str
     valor_pag: float
     desconto_pag: float = 0
+    outros_desc_pag: float = 0
     juros_pag: float = 0
+    outros_acres_pag: float = 0
+    tarifa_banco: Optional[float] = None
+    banco_cedente: Optional[int] = None
+    agencia_cedente: Optional[int] = None
+    numero_boleto: Optional[float] = None
+    num_doc_pag: Optional[str] = None
+    conta: Optional[int] = None
+    forma_pag: Optional[str] = None
+    observacao: Optional[str] = None
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasPagarCancelarBaixaRequest(BaseModel):
+    """Cancelamento de baixa (`Duplicata_Pag_Venc`) — réplica de
+    `Revenda/FrmManPap.frm`'s `Command2_Click` (modo `"C"`)."""
+    servidor: str
+    banco: str
+    codigo_venc: int
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasPagarLoteRequest(BaseModel):
+    """Pagamento/Cancelamento em lote — espelho de
+    `ContasReceberLoteRequest`, ver lá pro rastreio."""
+    servidor: str
+    banco: str
+    modo: str  # "baixar" | "cancelar"
+    vencimentos: List[int]
+    data_pag: Optional[str] = None
     conta: Optional[int] = None
     forma_pag: Optional[str] = None
     usuario_alteracao: Optional[int] = None

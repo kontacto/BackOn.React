@@ -159,6 +159,19 @@ export default function GestorFiscalScreen() {
         visible: can("MDFE.ABRIR"),
       },
       {
+        // "Taxas" (2026-08-28, user-directed) — transferida de Tabelas
+        // Auxiliares pra cá, mesmo padrão já usado pra "Notas Fiscais"
+        // (ver comentário acima). Continua sendo a mesma tela
+        // (taxas.tsx, cadastro de alíquotas ICMS/PIS/COFINS/IBS/CBS por
+        // UF/CFOP/movimentação, variantes NFe e NFCe) — só mudou de hub.
+        key: "taxas",
+        label: "Taxas",
+        hint: "Alíquotas de ICMS/PIS/COFINS/IBS/CBS por UF, CFOP e movimentação (NFe/NFSe e NFCe)",
+        icon: "calculator-outline",
+        route: "/taxas",
+        visible: can("TAXAS.ABRIR") || can("TAXAS_NFCE.ABRIR"),
+      },
+      {
         // "Apuração Fiscal" (2026-08-24, user-directed) — migração de
         // Geral\FrmCalImp.frm. Relatório item-a-item de PIS/COFINS/ICMS/
         // FCP/DIFAL por NFC-e/NF-e num período, com exportação pra

@@ -5,8 +5,9 @@ from typing import Optional
 from fastapi import APIRouter, Request
 
 from models.schemas import (
-    ContasReceberAvulsaRequest, ContasReceberBaixaRequest,
-    ContasReceberEditarParcelaRequest, ContasReceberExcluirRequest,
+    ContasReceberAvulsaRequest, ContasReceberBaixaRequest, ContasReceberCancelarBaixaRequest,
+    ContasReceberEditarParcelaRequest, ContasReceberExcluirRequest, ContasReceberLoteRequest,
+    ContasReceberMontanteRequest,
 )
 from services import contas_receber_service, log_auditoria_service
 
@@ -59,6 +60,60 @@ async def baixar_parcela(req: ContasReceberBaixaRequest, request: Request):
             usuario=req.usuario_alteracao, classe=req.classe,
             referencia=str(req.codigo_venc),
             descricao=f"Baixa manual de parcela — valor pago R$ {req.valor_pag:.2f}",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/contas-receber/cancelar-baixa")
+async def cancelar_baixa(req: ContasReceberCancelarBaixaRequest, request: Request):
+    result = await contas_receber_service.cancelar_baixa(req.servidor, req.banco, req.model_dump())
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="CONTAS_RECEBER", comando="CANCELAR_BAIXA",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(req.codigo_venc),
+            descricao="Cancelamento de baixa de parcela",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.get("/contas-receber/lote/vencimentos")
+async def listar_vencimentos_lote(
+    servidor: str, banco: str, modo: str = "baixar", cliente: Optional[int] = None,
+    data_ini: Optional[str] = None, data_fim: Optional[str] = None,
+):
+    filtros = {"modo": modo, "cliente": cliente, "data_ini": data_ini, "data_fim": data_fim}
+    return await contas_receber_service.listar_vencimentos_lote(servidor, banco, filtros)
+
+
+@router.post("/contas-receber/lote")
+async def processar_lote(req: ContasReceberLoteRequest, request: Request):
+    result = await contas_receber_service.processar_lote(req.servidor, req.banco, req.model_dump())
+    if result.get("success"):
+        comando = "CANCELAR_LOTE" if req.modo == "cancelar" else "BAIXAR_LOTE"
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="CONTAS_RECEBER", comando=comando,
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(len(req.vencimentos)),
+            descricao=f"{'Cancelamento' if req.modo == 'cancelar' else 'Baixa'} em lote — "
+                      f"{result.get('processados', 0)} processado(s), {len(result.get('falhas', []))} falha(s)",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/contas-receber/montante")
+async def baixar_montante(req: ContasReceberMontanteRequest, request: Request):
+    result = await contas_receber_service.baixar_montante(req.servidor, req.banco, req.model_dump())
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="CONTAS_RECEBER", comando="BAIXAR_MONTANTE",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(req.cliente),
+            descricao=f"Baixa por Montante — R$ {req.montante:.2f}, "
+                      f"{len(result.get('tocados', []))} parcela(s) tocada(s)",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

@@ -137,11 +137,13 @@ class TestBaixarParcela:
         base.update(over)
         return base
 
+    def _parcela(self, **over):
+        base = {"codigo": 1, "duplicata": 900, "situacao": "A", "valor": 50.0, "dt_vencimento": date(2026, 8, 28)}
+        base.update(over)
+        return base
+
     def test_sucesso_parcial_mantem_situacao_aberta(self, monkeypatch):
-        cur = FakeCursor(one=[
-            {"codigo": 1, "duplicata": 900, "situacao": "A"},
-            {"total": 3, "pagas": 1},
-        ])
+        cur = FakeCursor(one=[self._parcela(), {"total": 3, "pagas": 1}])
         conn = _patch(monkeypatch, cur)
         r = svc._baixar_parcela_sync("srv", "bd", self._req())
         assert r["success"] is True
@@ -150,18 +152,38 @@ class TestBaixarParcela:
         assert update_dp == (1, "A", 900)
 
     def test_sucesso_todas_pagas_marca_duplicata_pg(self, monkeypatch):
-        cur = FakeCursor(one=[
-            {"codigo": 1, "duplicata": 900, "situacao": "A"},
-            {"total": 1, "pagas": 1},
-        ])
+        cur = FakeCursor(one=[self._parcela(), {"total": 1, "pagas": 1}])
         _patch(monkeypatch, cur)
         r = svc._baixar_parcela_sync("srv", "bd", self._req())
         assert r["success"] is True
         update_dp = [p for q, p in cur.queries if q.startswith("UPDATE Duplicata_Pagar")][0]
         assert update_dp == (1, "PG", 900)
 
+    def test_grava_campos_novos_inclusive_num_doc_pag(self, monkeypatch):
+        """`num_doc_pag` é exclusivo do lado Pagar (não existe em
+        `Duplicata_Rec_Venc`) — confirmado via INFORMATION_SCHEMA ao vivo,
+        e é o único campo extra em relação ao lado Receber."""
+        cur = FakeCursor(one=[self._parcela(), {"total": 1, "pagas": 1}])
+        _patch(monkeypatch, cur)
+        req = self._req(num_doc_pag="NF-12345", banco_cedente=341, agencia_cedente=1234)
+        r = svc._baixar_parcela_sync("srv", "bd", req)
+        assert r["success"] is True
+        update_venc = [q for q, p in cur.queries if q.startswith("UPDATE Duplicata_Pag_Venc")][0]
+        assert "num_doc_pag" in update_venc
+        valores = [p for q, p in cur.queries if q.startswith("UPDATE Duplicata_Pag_Venc")][0]
+        assert "NF-12345" in valores
+
+    def test_nao_bloqueia_valor_pago_maior_que_parcela(self, monkeypatch):
+        """Diferente do lado Receber — o legado (`FrmManPap.frm`) NÃO tem
+        essa trava (comentário de validação desativado no fonte real)."""
+        cur = FakeCursor(one=[self._parcela(valor=50.0), {"total": 1, "pagas": 1}])
+        conn = _patch(monkeypatch, cur)
+        r = svc._baixar_parcela_sync("srv", "bd", self._req(valor_pag=999.0))
+        assert r["success"] is True
+        assert conn.committed is True
+
     def test_bloqueia_parcela_ja_paga(self, monkeypatch):
-        cur = FakeCursor(one=[{"codigo": 1, "duplicata": 900, "situacao": "PG"}])
+        cur = FakeCursor(one=[self._parcela(situacao="PG")])
         _patch(monkeypatch, cur)
         r = svc._baixar_parcela_sync("srv", "bd", self._req())
         assert r["success"] is False
@@ -173,6 +195,57 @@ class TestBaixarParcela:
         r = svc._baixar_parcela_sync("srv", "bd", self._req())
         assert r["success"] is False
         assert "não encontrada" in r["message"]
+
+
+class TestCancelarBaixa:
+    def test_cancela_parcela_paga(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"codigo": 1, "duplicata": 900, "situacao": "PG"},
+            {"total": 2, "pagas": 0},
+        ])
+        conn = _patch(monkeypatch, cur)
+        r = svc._cancelar_baixa_sync("srv", "bd", {"codigo_venc": 1})
+        assert r["success"] is True
+        assert conn.committed is True
+        update_dp = [p for q, p in cur.queries if q.startswith("UPDATE Duplicata_Pagar")][0]
+        assert update_dp == (0, "A", 900)
+
+    def test_bloqueia_parcela_ainda_nao_paga(self, monkeypatch):
+        cur = FakeCursor(one=[{"codigo": 1, "duplicata": 900, "situacao": "A"}])
+        _patch(monkeypatch, cur)
+        r = svc._cancelar_baixa_sync("srv", "bd", {"codigo_venc": 1})
+        assert r["success"] is False
+        assert "não está paga" in r["message"]
+
+
+class TestProcessarLote:
+    def test_baixa_em_lote_isola_falha_de_1_item(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"valor": 50.0},
+            {"codigo": 1, "duplicata": 900, "situacao": "A", "valor": 50.0, "dt_vencimento": date(2026, 8, 28)},
+            {"total": 1, "pagas": 1},
+            None,
+        ])
+        conn = _patch(monkeypatch, cur)
+        req = {"modo": "baixar", "vencimentos": [1, 2], "data_pag": "2026-08-28", "conta": 3, "forma_pag": "DIN"}
+        r = svc._processar_lote_sync("srv", "bd", req)
+        assert r["success"] is True
+        assert conn.committed is True
+        assert r["processados"] == 1
+        assert len(r["falhas"]) == 1
+        assert r["falhas"][0]["codigo_venc"] == 2
+
+    def test_cancelamento_em_lote(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"codigo": 1, "duplicata": 900, "situacao": "PG"},
+            {"total": 1, "pagas": 0},
+        ])
+        _patch(monkeypatch, cur)
+        req = {"modo": "cancelar", "vencimentos": [1]}
+        r = svc._processar_lote_sync("srv", "bd", req)
+        assert r["success"] is True
+        assert r["processados"] == 1
+        assert r["falhas"] == []
 
 
 class TestEditarParcela:

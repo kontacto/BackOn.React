@@ -168,9 +168,14 @@ class TestBaixarParcela:
         base.update(over)
         return base
 
+    def _parcela(self, **over):
+        base = {"codigo": 1, "duplicata": 900, "situacao": "A", "valor": 50.0, "dt_vencimento": date(2026, 8, 28)}
+        base.update(over)
+        return base
+
     def test_sucesso_parcial_mantem_situacao_aberta(self, monkeypatch):
         cur = FakeCursor(one=[
-            {"codigo": 1, "duplicata": 900, "situacao": "A"},   # SELECT parcela
+            self._parcela(),                                     # SELECT parcela (valor=50, sem residual)
             {"total": 3, "pagas": 1},                            # contagem pós-UPDATE
         ])
         conn = _patch(monkeypatch, cur)
@@ -182,7 +187,7 @@ class TestBaixarParcela:
 
     def test_sucesso_todas_pagas_marca_duplicata_pg(self, monkeypatch):
         cur = FakeCursor(one=[
-            {"codigo": 1, "duplicata": 900, "situacao": "A"},
+            self._parcela(),
             {"total": 1, "pagas": 1},
         ])
         _patch(monkeypatch, cur)
@@ -191,8 +196,29 @@ class TestBaixarParcela:
         update_dr = [p for q, p in cur.queries if q.startswith("UPDATE Duplicata_Receber")][0]
         assert update_dr == (1, "PG", 900)
 
+    def test_grava_campos_novos_da_baixa(self, monkeypatch):
+        """Achado 2026-08-28 (screenshot do menu real): a baixa real do
+        legado (`FrmManPar.frm`) grava banco/agência/tarifa/boleto/outros
+        desc./outros acresc./observação — não só data/valor/desconto/
+        juros/conta/forma. Confirma que os campos novos chegam no UPDATE."""
+        cur = FakeCursor(one=[self._parcela(), {"total": 1, "pagas": 1}])
+        _patch(monkeypatch, cur)
+        req = self._req(
+            outros_desc_pag=2, outros_acres_pag=3, tarifa_banco=1.5,
+            banco_cedente=341, agencia_cedente=1234, numero_boleto=98765,
+            observacao="pago via PIX",
+        )
+        r = svc._baixar_parcela_sync("srv", "bd", req)
+        assert r["success"] is True
+        update_venc = [q for q, p in cur.queries if q.startswith("UPDATE Duplicata_Rec_Venc")][0]
+        assert "outros_desc_pag" in update_venc and "tarifa_banco" in update_venc
+        assert "banco_cedente" in update_venc and "agencia_cedente" in update_venc
+        assert "numero_boleto" in update_venc and "obs_vencimento" in update_venc
+        # num_doc_pag é exclusivo do lado Pagar — não pode aparecer aqui.
+        assert "num_doc_pag" not in update_venc
+
     def test_bloqueia_parcela_ja_paga(self, monkeypatch):
-        cur = FakeCursor(one=[{"codigo": 1, "duplicata": 900, "situacao": "PG"}])
+        cur = FakeCursor(one=[self._parcela(situacao="PG")])
         _patch(monkeypatch, cur)
         r = svc._baixar_parcela_sync("srv", "bd", self._req())
         assert r["success"] is False
@@ -204,6 +230,153 @@ class TestBaixarParcela:
         r = svc._baixar_parcela_sync("srv", "bd", self._req())
         assert r["success"] is False
         assert "não encontrada" in r["message"]
+
+    def test_bloqueia_valor_pago_maior_que_parcela(self, monkeypatch):
+        """Achado real (só lado Receber): "O valor não pode ser superior
+        ao do vencimento. Use os campos Juros/Outros Acréscimo." —
+        `FrmManPar.frm` tem essa trava, `FrmManPap.frm` (Pagar) não."""
+        cur = FakeCursor(one=[self._parcela(valor=50.0)])
+        _patch(monkeypatch, cur)
+        r = svc._baixar_parcela_sync("srv", "bd", self._req(valor_pag=60.0))
+        assert r["success"] is False
+        assert "não pode ser superior" in r["message"]
+
+
+class TestBaixaComResidual:
+    """Pagamento parcial gera vencimento residual (achado real, os dois
+    lados) — `TestBaixarParcela` acima sempre usa valor_pag == valor da
+    parcela pra não disparar esse caminho; aqui testamos ele isolado."""
+
+    def test_valor_pago_menor_gera_residual_e_incrementa_num_parcelas(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"codigo": 1, "duplicata": 900, "situacao": "A", "valor": 100.0, "dt_vencimento": date(2026, 8, 28)},
+            {"m": 2},                              # MAX(desmembramento) já existente = 2
+            {"total": 3, "pagas": 1},               # rollup pós-baixa+residual
+        ])
+        conn = _patch(monkeypatch, cur)
+        req = {"codigo_venc": 1, "data_pag": "2026-08-28", "valor_pag": 40.0,
+               "desconto_pag": 0, "juros_pag": 0, "conta": 3, "forma_pag": "DIN"}
+        r = svc._baixar_parcela_sync("srv", "bd", req)
+        assert r["success"] is True
+        assert conn.committed is True
+        insert_residual = [p for q, p in cur.queries if q.startswith("INSERT INTO Duplicata_Rec_Venc")][0]
+        # (duplicata=900, próximo desmembramento=3, mesma dt_vencimento, saldo=60.0)
+        assert insert_residual == (900, 3, date(2026, 8, 28), 60.0)
+        update_num_parcelas = [q for q, p in cur.queries if "num_parcelas = num_parcelas + 1" in q]
+        assert len(update_num_parcelas) == 1
+
+    def test_valor_pago_igual_nao_gera_residual(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"codigo": 1, "duplicata": 900, "situacao": "A", "valor": 100.0, "dt_vencimento": date(2026, 8, 28)},
+            {"total": 1, "pagas": 1},
+        ])
+        _patch(monkeypatch, cur)
+        req = {"codigo_venc": 1, "data_pag": "2026-08-28", "valor_pag": 100.0,
+               "desconto_pag": 0, "juros_pag": 0}
+        r = svc._baixar_parcela_sync("srv", "bd", req)
+        assert r["success"] is True
+        assert not any(q.startswith("INSERT INTO Duplicata_Rec_Venc") for q, p in cur.queries)
+
+
+class TestCancelarBaixa:
+    def test_cancela_parcela_paga(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"codigo": 1, "duplicata": 900, "situacao": "PG"},
+            {"total": 3, "pagas": 0},
+        ])
+        conn = _patch(monkeypatch, cur)
+        r = svc._cancelar_baixa_sync("srv", "bd", {"codigo_venc": 1})
+        assert r["success"] is True
+        assert conn.committed is True
+        update_venc = [q for q, p in cur.queries if q.startswith("UPDATE Duplicata_Rec_Venc")][0]
+        assert "situacao = 'A'" in update_venc and "data_pag = NULL" in update_venc
+        update_dr = [p for q, p in cur.queries if q.startswith("UPDATE Duplicata_Receber")][0]
+        assert update_dr == (0, "A", 900)
+
+    def test_bloqueia_parcela_ainda_nao_paga(self, monkeypatch):
+        cur = FakeCursor(one=[{"codigo": 1, "duplicata": 900, "situacao": "A"}])
+        _patch(monkeypatch, cur)
+        r = svc._cancelar_baixa_sync("srv", "bd", {"codigo_venc": 1})
+        assert r["success"] is False
+        assert "não está paga" in r["message"]
+
+    def test_parcela_nao_encontrada(self, monkeypatch):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        r = svc._cancelar_baixa_sync("srv", "bd", {"codigo_venc": 999})
+        assert r["success"] is False
+        assert "não encontrada" in r["message"]
+
+
+class TestProcessarLote:
+    def test_baixa_em_lote_isola_falha_de_1_item(self, monkeypatch):
+        """1 vencimento inexistente no meio do lote não aborta os outros
+        — mesmo princípio de isolamento já usado em `ensure_all_schema`."""
+        cur = FakeCursor(one=[
+            {"valor": 50.0},                                                        # item 1: SELECT valor
+            {"codigo": 1, "duplicata": 900, "situacao": "A", "valor": 50.0, "dt_vencimento": date(2026, 8, 28)},
+            {"total": 1, "pagas": 1},                                               # rollup item 1
+            None,                                                                    # item 2: SELECT valor -> não encontrado
+        ])
+        conn = _patch(monkeypatch, cur)
+        req = {"modo": "baixar", "vencimentos": [1, 2], "data_pag": "2026-08-28", "conta": 3, "forma_pag": "DIN"}
+        r = svc._processar_lote_sync("srv", "bd", req)
+        assert r["success"] is True
+        assert conn.committed is True
+        assert r["processados"] == 1
+        assert len(r["falhas"]) == 1
+        assert r["falhas"][0]["codigo_venc"] == 2
+
+    def test_cancelamento_em_lote(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"codigo": 1, "duplicata": 900, "situacao": "PG"},
+            {"total": 1, "pagas": 0},
+        ])
+        _patch(monkeypatch, cur)
+        req = {"modo": "cancelar", "vencimentos": [1]}
+        r = svc._processar_lote_sync("srv", "bd", req)
+        assert r["success"] is True
+        assert r["processados"] == 1
+        assert r["falhas"] == []
+
+
+class TestBaixarMontante:
+    def test_distribui_sequencialmente_ate_esgotar(self, monkeypatch):
+        """Montante de 80 sobre 2 parcelas de 50 cada — quita a 1ª
+        inteira (50), aplica os 30 restantes na 2ª (residual de 20)."""
+        cur = FakeCursor(one=[
+            {"codigo": 1, "situacao": "A", "valor": 50.0},                          # parcela 1 (pré-check)
+            {"codigo": 1, "duplicata": 900, "situacao": "A", "valor": 50.0, "dt_vencimento": date(2026, 8, 28)},
+            {"total": 1, "pagas": 1},                                               # rollup parcela 1
+            {"codigo": 2, "situacao": "A", "valor": 50.0},                          # parcela 2 (pré-check)
+            {"codigo": 2, "duplicata": 901, "situacao": "A", "valor": 50.0, "dt_vencimento": date(2026, 9, 1)},
+            {"m": 1},                                                                # MAX(desmembramento) residual
+            {"total": 2, "pagas": 1},                                               # rollup parcela 2 (com residual)
+        ])
+        conn = _patch(monkeypatch, cur)
+        req = {"vencimentos": [1, 2], "montante": 80.0, "data_pag": "2026-08-28", "conta": 3, "forma_pag": "DIN"}
+        r = svc._baixar_montante_sync("srv", "bd", req)
+        assert r["success"] is True
+        assert conn.committed is True
+        assert r["tocados"] == [1, 2]
+        assert r["saldo_nao_utilizado"] == 0.0
+        insert_residual = [p for q, p in cur.queries if q.startswith("INSERT INTO Duplicata_Rec_Venc")][0]
+        assert insert_residual == (901, 2, date(2026, 9, 1), 20.0)
+
+    def test_para_quando_saldo_esgota(self, monkeypatch):
+        cur = FakeCursor(one=[
+            {"codigo": 1, "situacao": "A", "valor": 50.0},
+            {"codigo": 1, "duplicata": 900, "situacao": "A", "valor": 50.0, "dt_vencimento": date(2026, 8, 28)},
+            {"total": 1, "pagas": 1},
+        ])
+        conn = _patch(monkeypatch, cur)
+        req = {"vencimentos": [1, 2], "montante": 50.0, "data_pag": "2026-08-28"}
+        r = svc._baixar_montante_sync("srv", "bd", req)
+        assert r["success"] is True
+        assert r["tocados"] == [1]
+        assert r["saldo_nao_utilizado"] == 0.0
+        # vencimento 2 nunca foi tocado — saldo zerou antes de chegar nele.
+        assert not any("codigo = 2" in str(p) for q, p in cur.queries if "SELECT" in q)
 
 
 class TestEditarParcela:

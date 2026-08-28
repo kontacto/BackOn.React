@@ -21,16 +21,22 @@ Boletos/Cobranças), Centro de Resultados (rateio) e "Emitir Fatura" ficam
 de fora — usuário vai confirmar com Leandro antes de decidir escopo
 dessas 3 sub-telas.
 
-**Baixa manual é funcionalidade NOVA, sem precedente no legado** — rastreei
-`FrmManDur.frm` inteiro (3685 linhas) atrás de qualquer gravação de
-`situacao='PG'` e só existem leituras/guardas ("esta parcela já está paga,
-não mexo"); a única baixa real no Kontacto legado vem do retorno bancário
-(CNAB, já portado em `cnab_*_service.py`). Reaproveita as MESMAS colunas
-que o retorno CNAB já usa (`data_pag`, `valor_pag`, `desconto_pag`,
-`juros_pag`) — mesmo formato de baixa, origem diferente.
+**Baixa/Cancelamento/Lote/Montante — CORREÇÃO 2026-08-28**: a afirmação
+anterior ("baixa manual é funcionalidade NOVA, sem precedente") estava
+ERRADA — eu tinha rastreado só `FrmManDur.frm`/`frmmandup.frm` (que são
+as telas "Duplicatas", só manutenção, sem baixa mesmo). A baixa/
+cancelamento vive em 2 forms separados, nunca antes localizados:
+`Revenda/FrmManPar.frm` (Receber) e `Revenda/FrmManPap.frm` (Pagar), cada
+um com 2 modos (flag global `CancelaPg`/`CancelaPgP`: `"P"`=Pagamento,
+`"C"`=Cancelamento). Ver PENDENCIAS.md > "Baixa de Duplicatas — Achado
+Completo (2026-08-28)" pro rastreio completo campo-a-campo, e a decisão
+de escopo desta rodada (inclui lote "Por Data" e Montante; exclui guarda
+de caixa fechado e reversão de saldo/movimentações — infraestrutura que
+ainda não existe nesta migração, ver a mesma seção).
 
 **Regra real replicada de `FrmManDur.frm`**: parcela com `situacao='PG'` é
-imutável — nunca editada nem excluída por esta tela.
+imutável — nunca editada por `_editar_parcela_sync`, só através de
+cancelar a baixa e refazer.
 
 **Melhoria deliberada em relação ao legado**: `frmTraNFRec.frm`'s
 `cmdExcluir_Click` deleta `Receber` direto sem checar se já existe
@@ -305,8 +311,123 @@ def _criar_avulsa_sync(servidor: str, banco: str, req: dict) -> dict:
 
 
 # =============================================================================
-# Baixa manual — funcionalidade NOVA (ver docstring do módulo).
+# Baixa / Cancelamento / Lote "Por Data" / Montante — réplica de
+# `Revenda/FrmManPar.frm` (Receber) e `Revenda/FrmManPap.frm` (Pagar), ver
+# docstring do módulo. O núcleo (`_baixar_parcela_core`/
+# `_cancelar_baixa_core`/`_gerar_vencimento_residual`/`_rollup_cabecalho`)
+# é parametrizado por nome de tabela — `contas_pagar_service.py` importa e
+# reaproveita, sem duplicar a lógica (mesmo padrão já usado pra
+# `_split_parcelas`).
 # =============================================================================
+
+def _rollup_cabecalho(cur, tabela_venc: str, tabela_cabecalho: str, dup_codigo: int) -> str:
+    """Recalcula `parcelas_pagas`/`situacao` do cabeçalho a partir das
+    parcelas reais — usado depois de toda baixa/cancelamento (individual,
+    lote ou montante), garante consistência mesmo em cenários que o
+    `Situacao='A'` fixo do VB6 não cobre (ex.: cancelar 1 de 3 parcelas
+    pagas de uma duplicata que nunca chegou a `'PG'`)."""
+    cur.execute(
+        f"SELECT COUNT(*) AS total, SUM(CASE WHEN situacao = 'PG' THEN 1 ELSE 0 END) AS pagas "
+        f"FROM {tabela_venc} WHERE duplicata = %s",
+        (dup_codigo,),
+    )
+    contagem = cur.fetchone()
+    nova_situacao = "PG" if contagem["pagas"] == contagem["total"] else "A"
+    cur.execute(
+        f"UPDATE {tabela_cabecalho} SET parcelas_pagas = %s, situacao = %s WHERE codigo = %s",
+        (contagem["pagas"], nova_situacao, dup_codigo),
+    )
+    return nova_situacao
+
+
+def _gerar_vencimento_residual(cur, tabela_venc: str, tabela_cabecalho: str, dup_codigo: int, dt_vencimento, saldo: float) -> None:
+    """Pagamento parcial gera um novo vencimento com o saldo restante —
+    réplica real do legado (`valor = <Campo(8)>`/`Valor_Pag = <Campo(16)>`
+    distintos, ambos os forms): mesma duplicata, próximo `desmembramento`,
+    mesma `dt_vencimento` da parcela original (o legado não redefine outra
+    data). Incrementa `num_parcelas` no cabeçalho."""
+    cur.execute(f"SELECT ISNULL(MAX(desmembramento), 0) AS m FROM {tabela_venc} WHERE duplicata = %s", (dup_codigo,))
+    novo_desm = (cur.fetchone()["m"] or 0) + 1
+    cur.execute(
+        f"INSERT INTO {tabela_venc} (duplicata, desmembramento, dt_vencimento, valor, situacao) "
+        "VALUES (%s,%s,%s,%s,'A')",
+        (dup_codigo, novo_desm, dt_vencimento, round(saldo, 2)),
+    )
+    cur.execute(f"UPDATE {tabela_cabecalho} SET num_parcelas = num_parcelas + 1 WHERE codigo = %s", (dup_codigo,))
+
+
+def _baixar_parcela_core(cur, tabela_venc: str, tabela_cabecalho: str, req: dict,
+                          validar_valor_max: bool, campos_extra: tuple = ()) -> dict:
+    """Núcleo da baixa — assume cursor/transação já abertos por quem
+    chama (baixa individual, lote, ou montante); não comita/fecha
+    conexão. `campos_extra` lista colunas específicas de um dos lados
+    (hoje só `num_doc_pag`, exclusivo do Pagar — não existe em
+    `Duplicata_Rec_Venc`)."""
+    codigo_venc = req["codigo_venc"]
+    cur.execute(
+        f"SELECT codigo, duplicata, situacao, valor, dt_vencimento FROM {tabela_venc} WHERE codigo = %s",
+        (codigo_venc,),
+    )
+    parcela = cur.fetchone()
+    if not parcela:
+        return {"success": False, "message": "Parcela não encontrada."}
+    if parcela["situacao"] == "PG":
+        return {"success": False, "message": "Esta parcela já está paga."}
+
+    valor_pag = float(req["valor_pag"])
+    valor_parcela = float(parcela["valor"] or 0)
+    if validar_valor_max and valor_pag > valor_parcela + 0.005:
+        return {"success": False, "message": (
+            "O valor não pode ser superior ao do vencimento. "
+            "Use os campos Juros/Outros Acréscimo."
+        )}
+
+    campos = [
+        "situacao = 'PG'", "data_pag = %s", "valor_pag = %s", "desconto_pag = %s",
+        "outros_desc_pag = %s", "juros_pag = %s", "outros_acres_pag = %s", "tarifa_banco = %s",
+        "banco_cedente = %s", "agencia_cedente = %s", "numero_boleto = %s", "conta = %s",
+        "forma_pag = %s", "obs_vencimento = %s",
+    ]
+    valores = [
+        req["data_pag"], valor_pag, req.get("desconto_pag") or 0, req.get("outros_desc_pag") or 0,
+        req.get("juros_pag") or 0, req.get("outros_acres_pag") or 0, req.get("tarifa_banco"),
+        req.get("banco_cedente"), req.get("agencia_cedente"), req.get("numero_boleto"),
+        req.get("conta"), req.get("forma_pag"), req.get("observacao") or "",
+    ]
+    if "num_doc_pag" in campos_extra:
+        campos.append("num_doc_pag = %s")
+        valores.append(req.get("num_doc_pag"))
+    valores.append(codigo_venc)
+    cur.execute(f"UPDATE {tabela_venc} SET {', '.join(campos)} WHERE codigo = %s", tuple(valores))
+
+    dup_codigo = parcela["duplicata"]
+    if valor_pag < valor_parcela - 0.005:
+        saldo = round(valor_parcela - valor_pag, 2)
+        _gerar_vencimento_residual(cur, tabela_venc, tabela_cabecalho, dup_codigo, parcela["dt_vencimento"], saldo)
+
+    _rollup_cabecalho(cur, tabela_venc, tabela_cabecalho, dup_codigo)
+    return {"success": True}
+
+
+def _cancelar_baixa_core(cur, tabela_venc: str, tabela_cabecalho: str, codigo_venc: int) -> dict:
+    """Núcleo do cancelamento — mesmo princípio de `_baixar_parcela_core`
+    (cursor já aberto, não comita). Zera exatamente os campos que o
+    legado zera (`Command2_Click`, modo `"C"`) — não limpa banco/agência/
+    forma/conta/tarifa/boleto/documento/observação, réplica fiel."""
+    cur.execute(f"SELECT codigo, duplicata, situacao FROM {tabela_venc} WHERE codigo = %s", (codigo_venc,))
+    parcela = cur.fetchone()
+    if not parcela:
+        return {"success": False, "message": "Parcela não encontrada."}
+    if parcela["situacao"] != "PG":
+        return {"success": False, "message": "Esta parcela não está paga."}
+    cur.execute(
+        f"UPDATE {tabela_venc} SET situacao = 'A', data_pag = NULL, valor_pag = 0, desconto_pag = 0, "
+        "outros_desc_pag = 0, juros_pag = 0, outros_acres_pag = 0 WHERE codigo = %s",
+        (codigo_venc,),
+    )
+    _rollup_cabecalho(cur, tabela_venc, tabela_cabecalho, parcela["duplicata"])
+    return {"success": True}
+
 
 def _baixar_parcela_sync(servidor: str, banco: str, req: dict) -> dict:
     try:
@@ -315,41 +436,186 @@ def _baixar_parcela_sync(servidor: str, banco: str, req: dict) -> dict:
         return {"success": False, "message": f"Falha conexão: {e}"}
     try:
         cur = conn.cursor(as_dict=True)
-        cur.execute(
-            "SELECT codigo, duplicata, situacao FROM Duplicata_Rec_Venc WHERE codigo = %s",
-            (req["codigo_venc"],),
+        resultado = _baixar_parcela_core(
+            cur, "Duplicata_Rec_Venc", "Duplicata_Receber", req, validar_valor_max=True,
         )
-        parcela = cur.fetchone()
-        if not parcela:
+        if not resultado["success"]:
             cur.close(); conn.close()
-            return {"success": False, "message": "Parcela não encontrada."}
-        if parcela["situacao"] == "PG":
-            cur.close(); conn.close()
-            return {"success": False, "message": "Esta parcela já está paga."}
-
-        cur.execute(
-            "UPDATE Duplicata_Rec_Venc SET situacao = 'PG', data_pag = %s, valor_pag = %s, "
-            "desconto_pag = %s, juros_pag = %s, conta = %s, forma_pag = %s WHERE codigo = %s",
-            (req["data_pag"], req["valor_pag"], req.get("desconto_pag") or 0, req.get("juros_pag") or 0,
-             req.get("conta"), req.get("forma_pag"), req["codigo_venc"]),
-        )
-
-        dup_codigo = parcela["duplicata"]
-        cur.execute(
-            "SELECT COUNT(*) AS total, SUM(CASE WHEN situacao = 'PG' THEN 1 ELSE 0 END) AS pagas "
-            "FROM Duplicata_Rec_Venc WHERE duplicata = %s",
-            (dup_codigo,),
-        )
-        contagem = cur.fetchone()
-        nova_situacao = "PG" if contagem["pagas"] == contagem["total"] else "A"
-        cur.execute(
-            "UPDATE Duplicata_Receber SET parcelas_pagas = %s, situacao = %s WHERE codigo = %s",
-            (contagem["pagas"], nova_situacao, dup_codigo),
-        )
-
+            return resultado
         conn.commit()
         cur.close(); conn.close()
         return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+def _cancelar_baixa_sync(servidor: str, banco: str, req: dict) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        resultado = _cancelar_baixa_core(cur, "Duplicata_Rec_Venc", "Duplicata_Receber", req["codigo_venc"])
+        if not resultado["success"]:
+            cur.close(); conn.close()
+            return resultado
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+def _listar_vencimentos_lote_sync(servidor: str, banco: str, filtros: dict) -> dict:
+    """Alimenta o modal de Pagamento/Cancelamento em Lote — réplica do
+    painel "Por Data" (`Command9_Click`/"Mostra"): modo `baixar` lista
+    parcelas em aberto por `dt_vencimento`, modo `cancelar` lista pagas
+    por `data_pag`."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": []}
+    try:
+        cur = conn.cursor(as_dict=True)
+        modo = filtros.get("modo") or "baixar"
+        where = ["1=1"]
+        params: list = []
+        if modo == "cancelar":
+            where.append("v.situacao = 'PG'")
+            if filtros.get("data_ini") and filtros.get("data_fim"):
+                where.append("v.data_pag BETWEEN %s AND %s")
+                params.extend([filtros["data_ini"], filtros["data_fim"]])
+        else:
+            where.append("v.situacao = 'A'")
+            if filtros.get("data_ini") and filtros.get("data_fim"):
+                where.append("v.dt_vencimento BETWEEN %s AND %s")
+                params.extend([filtros["data_ini"], filtros["data_fim"]])
+        if filtros.get("cliente"):
+            where.append("dr.cliente = %s")
+            params.append(filtros["cliente"])
+        sql = (
+            "SELECT v.codigo, v.duplicata, v.desmembramento, v.dt_vencimento, v.valor, v.situacao, "
+            "v.data_pag, dr.cliente, COALESCE(c.fantasia, c.nome) AS cliente_nome "
+            "FROM Duplicata_Rec_Venc v JOIN Duplicata_Receber dr ON dr.codigo = v.duplicata "
+            "LEFT JOIN Cliente c ON c.codigo = dr.cliente "
+            f"WHERE {' AND '.join(where)} ORDER BY v.dt_vencimento, v.codigo"
+        )
+        cur.execute(sql, tuple(params))
+        items = []
+        for r in cur.fetchall():
+            items.append({
+                "codigo": r["codigo"], "duplicata": r["duplicata"], "desmembramento": r.get("desmembramento"),
+                "dt_vencimento": str(r["dt_vencimento"]) if r.get("dt_vencimento") else None,
+                "valor": float(r.get("valor") or 0), "situacao": r.get("situacao"),
+                "data_pag": str(r["data_pag"]) if r.get("data_pag") else None,
+                "cliente": r.get("cliente"), "cliente_nome": r.get("cliente_nome"),
+            })
+        cur.close(); conn.close()
+        return {"success": True, "items": items}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": []}
+
+
+def _processar_lote_sync(servidor: str, banco: str, req: dict) -> dict:
+    """Pagamento/Cancelamento em lote — 1 transação, mas cada vencimento
+    isolado em seu próprio try/except (não aborta o lote inteiro por 1
+    falha pontual, mesmo princípio já usado em `ensure_all_schema`). Lote
+    de pagamento sempre quita o valor CHEIO de cada parcela marcada (sem
+    parcial — réplica de `Command7_Click`'s uso direto do valor do
+    vencimento)."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        modo = req.get("modo") or "baixar"
+        processados = 0
+        falhas: list = []
+        for codigo_venc in (req.get("vencimentos") or []):
+            try:
+                if modo == "cancelar":
+                    r = _cancelar_baixa_core(cur, "Duplicata_Rec_Venc", "Duplicata_Receber", codigo_venc)
+                else:
+                    cur.execute("SELECT valor FROM Duplicata_Rec_Venc WHERE codigo = %s", (codigo_venc,))
+                    row = cur.fetchone()
+                    if not row:
+                        falhas.append({"codigo_venc": codigo_venc, "message": "Parcela não encontrada."})
+                        continue
+                    item_req = {
+                        "codigo_venc": codigo_venc, "data_pag": req.get("data_pag"),
+                        "valor_pag": float(row["valor"] or 0),
+                        "conta": req.get("conta"), "forma_pag": req.get("forma_pag"),
+                    }
+                    r = _baixar_parcela_core(cur, "Duplicata_Rec_Venc", "Duplicata_Receber", item_req, validar_valor_max=False)
+                if r["success"]:
+                    processados += 1
+                else:
+                    falhas.append({"codigo_venc": codigo_venc, "message": r["message"]})
+            except Exception as e:
+                falhas.append({"codigo_venc": codigo_venc, "message": str(e)})
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": True, "processados": processados, "falhas": falhas}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+def _baixar_montante_sync(servidor: str, banco: str, req: dict) -> dict:
+    """Baixa por "Montante" — exclusiva do lado Receber (`Data(5)` de
+    `FrmManPar.frm`). Distribui `req['montante']` sequencialmente sobre
+    `req['vencimentos']` (ordem recebida = prioridade), quitando cada
+    parcela até o limite do saldo restante; se sobrar parte do saldo
+    numa parcela sem cobrir 100%, `_baixar_parcela_core` já gera o
+    vencimento residual sozinho (mesma lógica da baixa individual)."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        saldo_restante = round(float(req["montante"]), 2)
+        tocados: list = []
+        for codigo_venc in (req.get("vencimentos") or []):
+            if saldo_restante <= 0:
+                break
+            cur.execute(
+                "SELECT codigo, situacao, valor FROM Duplicata_Rec_Venc WHERE codigo = %s",
+                (codigo_venc,),
+            )
+            parcela = cur.fetchone()
+            if not parcela or parcela["situacao"] == "PG":
+                continue
+            valor_parcela = float(parcela["valor"] or 0)
+            valor_aplicado = round(min(saldo_restante, valor_parcela), 2)
+            item_req = {
+                "codigo_venc": codigo_venc, "data_pag": req.get("data_pag"), "valor_pag": valor_aplicado,
+                "conta": req.get("conta"), "forma_pag": req.get("forma_pag"),
+            }
+            r = _baixar_parcela_core(cur, "Duplicata_Rec_Venc", "Duplicata_Receber", item_req, validar_valor_max=False)
+            if r["success"]:
+                saldo_restante = round(saldo_restante - valor_aplicado, 2)
+                tocados.append(codigo_venc)
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": True, "tocados": tocados, "saldo_nao_utilizado": saldo_restante}
     except Exception as e:
         try:
             conn.rollback(); conn.close()
@@ -489,6 +755,22 @@ async def criar_avulsa(servidor: str, banco: str, req: dict) -> dict:
 
 async def baixar_parcela(servidor: str, banco: str, req: dict) -> dict:
     return await asyncio.to_thread(_baixar_parcela_sync, servidor, banco, req)
+
+
+async def cancelar_baixa(servidor: str, banco: str, req: dict) -> dict:
+    return await asyncio.to_thread(_cancelar_baixa_sync, servidor, banco, req)
+
+
+async def listar_vencimentos_lote(servidor: str, banco: str, filtros: dict) -> dict:
+    return await asyncio.to_thread(_listar_vencimentos_lote_sync, servidor, banco, filtros)
+
+
+async def processar_lote(servidor: str, banco: str, req: dict) -> dict:
+    return await asyncio.to_thread(_processar_lote_sync, servidor, banco, req)
+
+
+async def baixar_montante(servidor: str, banco: str, req: dict) -> dict:
+    return await asyncio.to_thread(_baixar_montante_sync, servidor, banco, req)
 
 
 async def editar_parcela(servidor: str, banco: str, req: dict) -> dict:

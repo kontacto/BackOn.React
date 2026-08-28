@@ -733,6 +733,52 @@ class TestMontarXmlNfe:
         assert "<vol><qVol>2</qVol><esp>CAIXA</esp><marca>MARCA X</marca><nVol>001</nVol><pesoL>9.800</pesoL><pesoB>10.500</pesoB></vol>" in xml
         etree.fromstring(xml_bytes)
 
+    def test_icmsufdest_ausente_quando_mesma_uf(self):
+        """Réplica do XSD oficial + NT 2015.003 — id_dest=1 (mesma UF) é
+        uma das 3 condições que faltam, o grupo não pode aparecer."""
+        item = self._item()
+        item.update({"aliquota_interestadual": 12, "aliquota_interna_destino": 18, "percentual_origem": 0})
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(uf="RJ"), itens=[item], valor_total=50.0, tp_amb="2", numero=1, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), natureza_operacao="Venda",
+        )
+        assert "ICMSUFDest" not in xml_bytes.decode("utf-8")
+
+    def test_icmsufdest_presente_quando_3_condicoes_batem(self):
+        """Interestadual (uf=SP≠RJ) + indFinal='1' (default) + indIEDest='9'
+        (default de `_destinatario_teste`) — as 3 condições da NT 2015.003
+        fecham, o grupo tem que aparecer por item, com o total somado em
+        `<ICMSTot>`."""
+        item = self._item()
+        item.update({"aliquota_interestadual": 12, "aliquota_interna_destino": 18, "percentual_origem": 0})
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(uf="SP"), itens=[item], valor_total=50.0, tp_amb="2", numero=1, serie="1",
+            data_emissao=datetime.datetime.now(datetime.timezone.utc), natureza_operacao="Venda",
+        )
+        xml = xml_bytes.decode("utf-8")
+        assert "<ICMSUFDest>" in xml
+        assert "<vICMSUFDest>3.00</vICMSUFDest>" in xml  # 50 * 0.06 * 1.0
+        # Total somado em <ICMSTot>, logo depois de vICMSDeson (posição
+        # confirmada no XSD oficial, não perto de vNF).
+        assert "<vICMSDeson>0.00</vICMSDeson><vICMSUFDest>3.00</vICMSUFDest>" in xml
+        etree.fromstring(xml_bytes)
+
+    def test_icmsufdest_ausente_quando_destinatario_e_contribuinte(self):
+        """Cenário exato do print real (rejeição 695): interestadual +
+        Consumidor Final, mas indIEDest='1' (contribuinte, não '9') — o
+        grupo tem que ficar ausente mesmo com a Taxa tendo alíquotas."""
+        item = self._item()
+        item.update({"aliquota_interestadual": 12, "aliquota_interna_destino": 18, "percentual_origem": 0})
+        xml_bytes, _ = svc._montar_xml_nfe(
+            chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
+            destinatario=_destinatario_teste(uf="SP", ie="123", indIEDest="1"), itens=[item], valor_total=50.0,
+            tp_amb="2", numero=1, serie="1", data_emissao=datetime.datetime.now(datetime.timezone.utc),
+            natureza_operacao="Venda",
+        )
+        assert "ICMSUFDest" not in xml_bytes.decode("utf-8")
+
     def test_volumes_parcial_so_inclui_campos_presentes(self):
         xml_bytes, _ = svc._montar_xml_nfe(
             chave_acesso="3" * 44, cod_ibge="33", cnpj_emit="1", nome_emit="X", uf_emit_sigla="RJ",
@@ -780,6 +826,36 @@ class TestEmitirNfeSync:
         )
         assert r["success"] is False
         assert "certificado" in r["message"].lower()
+
+    def test_bloqueia_por_regra_fiscal_taxa_sem_difal(self):
+        """Interestadual + Consumidor Final + Não Contribuinte, mas o item
+        não tem as alíquotas de DIFAL cadastradas — bloqueado ANTES de
+        gastar a chamada ao SEFAZ (nfe_regras_fiscais.py)."""
+        r = svc.emitir_nfe_sync(
+            None, cnpj_emit="1", nome_emit="X", uf_sigla="RJ", proximo_numero=1, serie="1",
+            destinatario=_destinatario_teste(uf="SP"), itens_resolvidos=[self._item()], valor_total=50, tp_amb="2",
+            natureza_operacao="Venda", indFinal="1",
+        )
+        assert r["success"] is False
+        assert "Taxa" in r["message"]
+
+    def test_nao_bloqueia_por_regra_fiscal_quando_operacao_interna(self, monkeypatch):
+        """Mesma falta de alíquotas DIFAL no item, mas operação interna
+        (mesma UF) — regra de DIFAL não se aplica, segue até o SEFAZ
+        normalmente."""
+        key_pem, cert_pem = _gerar_certificado_teste()
+        _patch_certificado(monkeypatch, key_pem, cert_pem)
+        resposta_fake = (
+            "<retEnviNFe><infProt><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e</xMotivo>"
+            "<nProt>135260000012345</nProt><dhRecbto>2026-08-19T10:00:00-03:00</dhRecbto></infProt></retEnviNFe>"
+        )
+        monkeypatch.setattr(svc.nfe_fiscal_common, "transmitir", lambda envelope, url, k, c: resposta_fake)
+        r = svc.emitir_nfe_sync(
+            None, cnpj_emit="1", nome_emit="X", uf_sigla="RJ", proximo_numero=1, serie="1",
+            destinatario=_destinatario_teste(uf="RJ"), itens_resolvidos=[self._item()], valor_total=50, tp_amb="2",
+            natureza_operacao="Venda",
+        )
+        assert r["success"] is True
 
     def test_sucesso_com_sefaz_mockado(self, monkeypatch):
         key_pem, cert_pem = _gerar_certificado_teste()

@@ -262,7 +262,7 @@ const TAXAS_AJUDA_ITENS: HelpItem[] = [
   },
   {
     titulo: "Grupo de ICMS para UF de Destino (DIFAL)",
-    texto: "Usado quando a venda é para consumidor final localizado em outro estado. Define quanto do ICMS fica com o estado de origem e quanto fica com o estado de destino da mercadoria.",
+    texto: "Só preencha estes campos quando as 3 coisas abaixo forem verdade AO MESMO TEMPO pra essa venda: (1) é pra outro estado, (2) o cliente é Consumidor Final, e (3) o cliente é Não Contribuinte (não tem Inscrição Estadual de revenda). Fora dessa combinação — por exemplo, Consumidor Final marcado mas o cliente TEM Inscrição Estadual (é Contribuinte) — deixe todos esses campos zerados. Preencher fora da hora (ou deixar vazio quando deveria estar preenchido) faz a Nota Fiscal ser rejeitada pelo SEFAZ. Fonte oficial: Emenda Constitucional 87/2015 e Nota Técnica 2015.003 da NF-e.",
     icon: { lib: "ion", name: "swap-vertical-outline" },
   },
   {

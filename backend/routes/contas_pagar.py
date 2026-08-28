@@ -5,8 +5,8 @@ from typing import Optional
 from fastapi import APIRouter, Request
 
 from models.schemas import (
-    ContasPagarAvulsaRequest, ContasPagarBaixaRequest,
-    ContasPagarEditarParcelaRequest, ContasPagarExcluirRequest,
+    ContasPagarAvulsaRequest, ContasPagarBaixaRequest, ContasPagarCancelarBaixaRequest,
+    ContasPagarEditarParcelaRequest, ContasPagarExcluirRequest, ContasPagarLoteRequest,
 )
 from services import contas_pagar_service, log_auditoria_service
 
@@ -59,6 +59,45 @@ async def baixar_parcela(req: ContasPagarBaixaRequest, request: Request):
             usuario=req.usuario_alteracao, classe=req.classe,
             referencia=str(req.codigo_venc),
             descricao=f"Baixa manual de parcela — valor pago R$ {req.valor_pag:.2f}",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/contas-pagar/cancelar-baixa")
+async def cancelar_baixa(req: ContasPagarCancelarBaixaRequest, request: Request):
+    result = await contas_pagar_service.cancelar_baixa(req.servidor, req.banco, req.model_dump())
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="CONTAS_PAGAR", comando="CANCELAR_BAIXA",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(req.codigo_venc),
+            descricao="Cancelamento de baixa de parcela",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.get("/contas-pagar/lote/vencimentos")
+async def listar_vencimentos_lote(
+    servidor: str, banco: str, modo: str = "baixar", fornecedor: Optional[int] = None,
+    data_ini: Optional[str] = None, data_fim: Optional[str] = None,
+):
+    filtros = {"modo": modo, "fornecedor": fornecedor, "data_ini": data_ini, "data_fim": data_fim}
+    return await contas_pagar_service.listar_vencimentos_lote(servidor, banco, filtros)
+
+
+@router.post("/contas-pagar/lote")
+async def processar_lote(req: ContasPagarLoteRequest, request: Request):
+    result = await contas_pagar_service.processar_lote(req.servidor, req.banco, req.model_dump())
+    if result.get("success"):
+        comando = "CANCELAR_LOTE" if req.modo == "cancelar" else "BAIXAR_LOTE"
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="CONTAS_PAGAR", comando=comando,
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(len(req.vencimentos)),
+            descricao=f"{'Cancelamento' if req.modo == 'cancelar' else 'Baixa'} em lote — "
+                      f"{result.get('processados', 0)} processado(s), {len(result.get('falhas', []))} falha(s)",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

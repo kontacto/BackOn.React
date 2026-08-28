@@ -43,7 +43,8 @@ export default function TabelasAuxiliaresScreen() {
     { key: "segmentos", label: "Segmentos", hint: "Segmentos de mercado do cliente", icon: "layers-outline" as const, route: "/segmentos", visible: can("SEGMENTOS.ABRIR") },
     { key: "situacao", label: "Situação", hint: "Situações genéricas usadas em diversos cadastros", icon: "checkmark-circle-outline" as const, route: "/situacao", visible: can("SITUACAO.ABRIR") },
     { key: "tamanho", label: "Tamanhos", hint: "Tamanhos/grades de produtos", icon: "resize-outline" as const, route: "/tamanho", visible: can("TAMANHO.ABRIR") },
-    { key: "taxas", label: "Taxas", hint: "Alíquotas de ICMS/PIS/COFINS/IBS/CBS por UF, CFOP e movimentação (NFe/NFSe e NFCe)", icon: "calculator-outline" as const, route: "/taxas", visible: can("TAXAS.ABRIR") || can("TAXAS_NFCE.ABRIR") },
+    // "Taxas" transferida pra Gestor Fiscal, 2026-08-28, user-directed —
+    // mesmo padrão já usado pra "Notas Fiscais" (ver gestor-fiscal.tsx).
     { key: "grupo-pis-cofins", label: "Grupo PIS/COFINS", hint: "Agrupamento de produtos/serviços para PIS e COFINS", icon: "document-text-outline" as const, route: "/grupo-pis-cofins", visible: can("GRUPO_PISCOF.ABRIR") },
     { key: "tipo-cliente", label: "Tipo Clientes/Fornecedores", hint: "Classificação do cliente (usado no Cadastro Completo)", icon: "person-outline" as const, route: "/tipo-cliente", visible: can("TIPO_CLIENTE.ABRIR") },
     { key: "tipo-doc", label: "Tipo de Documento", hint: "Tipos de documento fiscal/administrativo", icon: "document-outline" as const, route: "/tipo-doc", visible: can("TIPO_DOC.ABRIR") },

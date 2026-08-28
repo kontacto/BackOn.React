@@ -334,6 +334,13 @@ def _emitir_nfe_agrupada_sync(
                 "valor_total": valor_item, "origem": int(item.get("origem") or 0),
                 "csosn": "102" if simples_nacional_cliente else "400", "cst_pis": "07", "cst_cofins": "07",
                 "cod_icms": cod_icms, "ibs_cbs_xml": (ibs_cbs_item or {}).get("xml_item") or "",
+                # Colunas DIFAL de `taxas`, já resolvidas em `tributos` —
+                # ver nfe_regras_fiscais.py (achado 2026-08-28: grupo
+                # ICMSUFDest nunca era montado por faltar esse threading).
+                "aliquota_interestadual": tributos.get("aliquota_interestadual") or 0,
+                "aliquota_interna_destino": tributos.get("aliquota_interna_destino") or 0,
+                "percentual_origem": tributos.get("percentual_origem") or 0,
+                "fundo_pobreza": tributos.get("fundo_pobreza") or 0,
                 "_ibs_cbs_item": ibs_cbs_item,
             })
 

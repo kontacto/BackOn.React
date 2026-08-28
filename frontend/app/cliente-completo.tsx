@@ -1101,6 +1101,13 @@ function ClienteCompletoWebScreen({
                       testID="cliente-completo-consumidor-final-switch"
                     />
                   </View>
+                  <Text style={styles.hint}>
+                    Quando este cliente é Consumidor Final E Não Contribuinte (marcado acima) AO MESMO TEMPO, uma
+                    venda para outro estado ativa o Diferencial de Alíquota (DIFAL) — a Taxa cadastrada (Gestor
+                    Fiscal &gt; Taxas) para o CFOP/UF desta venda precisa ter o "Grupo de ICMS para UF de destino"
+                    preenchido, senão a Nota Fiscal é rejeitada pelo SEFAZ. Fora dessa combinação, esses campos da
+                    Taxa devem ficar zerados.
+                  </Text>
                   <View style={styles.switchRow}>
                     <Text style={styles.switchLabel}>Tributa ISS Fora do Município</Text>
                     <Switch

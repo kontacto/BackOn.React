@@ -16,13 +16,16 @@ Fonte VB6 rastreada (linhagem real `backon.vbp`):
   não se emite boleto pra pagar, e a tela de rateio de custo do lado
   Pagar nunca foi exposta nesta tela específica).
 
-**Mesmo achado do lado Receber, confirmado de novo aqui**: procurei toda
-gravação de `situacao='PG'` em `frmmandup.frm` inteiro — só leituras/
-guardas, nunca uma escrita. Baixa manual é NOVA aqui também (não é
-exclusividade do lado Receber) — mesma decisão de escopo já aprovada
-pelo usuário se estende naturalmente, mesmo desenho de colunas
-(`data_pag`/`valor_pag`/`desconto_pag`/`juros_pag`/`conta`/`forma_pag`,
-todas existem em `Duplicata_Pag_Venc` com os mesmos nomes).
+**Baixa/Cancelamento/Lote — CORREÇÃO 2026-08-28** (mesmo erro do lado
+Receber, ver aquele módulo pro detalhe completo): a baixa/cancelamento
+não vive em `frmmandup.frm` (só manutenção, sem baixa mesmo) — vive num
+form separado, `Revenda/FrmManPap.frm` (2 modos via flag global
+`CancelaPgP`: `"P"`=Pagamento, `"C"`=Cancelamento). Núcleo compartilhado
+(`_baixar_parcela_core`/`_cancelar_baixa_core`/`_gerar_vencimento_
+residual`/`_rollup_cabecalho`) importado de `contas_receber_service.py`
+— mesmo padrão já usado pra `_split_parcelas`. **Sem Montante** —
+exclusivo do lado Receber, confirmado pela fonte (`Data(5)` só existe no
+painel "Por Data" de `FrmManPar.frm`).
 
 **Schema real, verificado ao vivo contra ARGEN TESTE** antes de escrever
 qualquer SQL — inclusive o `DEFAULT ((0))` de `Pagar.cod_n_fiscal` (mesmo
@@ -36,7 +39,7 @@ from datetime import datetime
 
 from db.connection import _open_conn
 from services.transferencia_contas_service import _controle_flags_sync, _resolver_numero_duplicata_sync
-from services.contas_receber_service import _split_parcelas
+from services.contas_receber_service import _split_parcelas, _baixar_parcela_core, _cancelar_baixa_core
 
 
 # =============================================================================
@@ -266,7 +269,10 @@ def _criar_avulsa_sync(servidor: str, banco: str, req: dict) -> dict:
 
 
 # =============================================================================
-# Baixa manual — funcionalidade NOVA (ver docstring do módulo).
+# Baixa / Cancelamento / Lote "Por Data" — réplica de
+# `Revenda/FrmManPap.frm`, núcleo compartilhado com o lado Receber (ver
+# docstring do módulo). Sem trava de "valor máximo" (confirmado ausente
+# no lado Pagar) e sem Montante (exclusivo Receber).
 # =============================================================================
 
 def _baixar_parcela_sync(servidor: str, banco: str, req: dict) -> dict:
@@ -276,41 +282,131 @@ def _baixar_parcela_sync(servidor: str, banco: str, req: dict) -> dict:
         return {"success": False, "message": f"Falha conexão: {e}"}
     try:
         cur = conn.cursor(as_dict=True)
-        cur.execute(
-            "SELECT codigo, duplicata, situacao FROM Duplicata_Pag_Venc WHERE codigo = %s",
-            (req["codigo_venc"],),
+        resultado = _baixar_parcela_core(
+            cur, "Duplicata_Pag_Venc", "Duplicata_Pagar", req, validar_valor_max=False,
+            campos_extra=("num_doc_pag",),
         )
-        parcela = cur.fetchone()
-        if not parcela:
+        if not resultado["success"]:
             cur.close(); conn.close()
-            return {"success": False, "message": "Parcela não encontrada."}
-        if parcela["situacao"] == "PG":
-            cur.close(); conn.close()
-            return {"success": False, "message": "Esta parcela já está paga."}
-
-        cur.execute(
-            "UPDATE Duplicata_Pag_Venc SET situacao = 'PG', data_pag = %s, valor_pag = %s, "
-            "desconto_pag = %s, juros_pag = %s, conta = %s, forma_pag = %s WHERE codigo = %s",
-            (req["data_pag"], req["valor_pag"], req.get("desconto_pag") or 0, req.get("juros_pag") or 0,
-             req.get("conta"), req.get("forma_pag"), req["codigo_venc"]),
-        )
-
-        dup_codigo = parcela["duplicata"]
-        cur.execute(
-            "SELECT COUNT(*) AS total, SUM(CASE WHEN situacao = 'PG' THEN 1 ELSE 0 END) AS pagas "
-            "FROM Duplicata_Pag_Venc WHERE duplicata = %s",
-            (dup_codigo,),
-        )
-        contagem = cur.fetchone()
-        nova_situacao = "PG" if contagem["pagas"] == contagem["total"] else "A"
-        cur.execute(
-            "UPDATE Duplicata_Pagar SET parcelas_pagas = %s, situacao = %s WHERE codigo = %s",
-            (contagem["pagas"], nova_situacao, dup_codigo),
-        )
-
+            return resultado
         conn.commit()
         cur.close(); conn.close()
         return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+def _cancelar_baixa_sync(servidor: str, banco: str, req: dict) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        resultado = _cancelar_baixa_core(cur, "Duplicata_Pag_Venc", "Duplicata_Pagar", req["codigo_venc"])
+        if not resultado["success"]:
+            cur.close(); conn.close()
+            return resultado
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+def _listar_vencimentos_lote_sync(servidor: str, banco: str, filtros: dict) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": []}
+    try:
+        cur = conn.cursor(as_dict=True)
+        modo = filtros.get("modo") or "baixar"
+        where = ["1=1"]
+        params: list = []
+        if modo == "cancelar":
+            where.append("v.situacao = 'PG'")
+            if filtros.get("data_ini") and filtros.get("data_fim"):
+                where.append("v.data_pag BETWEEN %s AND %s")
+                params.extend([filtros["data_ini"], filtros["data_fim"]])
+        else:
+            where.append("v.situacao = 'A'")
+            if filtros.get("data_ini") and filtros.get("data_fim"):
+                where.append("v.dt_vencimento BETWEEN %s AND %s")
+                params.extend([filtros["data_ini"], filtros["data_fim"]])
+        if filtros.get("fornecedor"):
+            where.append("dp.fornecedor = %s")
+            params.append(filtros["fornecedor"])
+        sql = (
+            "SELECT v.codigo, v.duplicata, v.desmembramento, v.dt_vencimento, v.valor, v.situacao, "
+            "v.data_pag, dp.fornecedor, COALESCE(f.fantasia, f.nome) AS fornecedor_nome "
+            "FROM Duplicata_Pag_Venc v JOIN Duplicata_Pagar dp ON dp.codigo = v.duplicata "
+            "LEFT JOIN Fornecedor f ON f.codigo_int = dp.fornecedor "
+            f"WHERE {' AND '.join(where)} ORDER BY v.dt_vencimento, v.codigo"
+        )
+        cur.execute(sql, tuple(params))
+        items = []
+        for r in cur.fetchall():
+            items.append({
+                "codigo": r["codigo"], "duplicata": r["duplicata"], "desmembramento": r.get("desmembramento"),
+                "dt_vencimento": str(r["dt_vencimento"]) if r.get("dt_vencimento") else None,
+                "valor": float(r.get("valor") or 0), "situacao": r.get("situacao"),
+                "data_pag": str(r["data_pag"]) if r.get("data_pag") else None,
+                "fornecedor": r.get("fornecedor"), "fornecedor_nome": r.get("fornecedor_nome"),
+            })
+        cur.close(); conn.close()
+        return {"success": True, "items": items}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": []}
+
+
+def _processar_lote_sync(servidor: str, banco: str, req: dict) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        modo = req.get("modo") or "baixar"
+        processados = 0
+        falhas: list = []
+        for codigo_venc in (req.get("vencimentos") or []):
+            try:
+                if modo == "cancelar":
+                    r = _cancelar_baixa_core(cur, "Duplicata_Pag_Venc", "Duplicata_Pagar", codigo_venc)
+                else:
+                    cur.execute("SELECT valor FROM Duplicata_Pag_Venc WHERE codigo = %s", (codigo_venc,))
+                    row = cur.fetchone()
+                    if not row:
+                        falhas.append({"codigo_venc": codigo_venc, "message": "Parcela não encontrada."})
+                        continue
+                    item_req = {
+                        "codigo_venc": codigo_venc, "data_pag": req.get("data_pag"),
+                        "valor_pag": float(row["valor"] or 0),
+                        "conta": req.get("conta"), "forma_pag": req.get("forma_pag"),
+                    }
+                    r = _baixar_parcela_core(cur, "Duplicata_Pag_Venc", "Duplicata_Pagar", item_req, validar_valor_max=False)
+                if r["success"]:
+                    processados += 1
+                else:
+                    falhas.append({"codigo_venc": codigo_venc, "message": r["message"]})
+            except Exception as e:
+                falhas.append({"codigo_venc": codigo_venc, "message": str(e)})
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": True, "processados": processados, "falhas": falhas}
     except Exception as e:
         try:
             conn.rollback(); conn.close()
@@ -446,6 +542,18 @@ async def criar_avulsa(servidor: str, banco: str, req: dict) -> dict:
 
 async def baixar_parcela(servidor: str, banco: str, req: dict) -> dict:
     return await asyncio.to_thread(_baixar_parcela_sync, servidor, banco, req)
+
+
+async def cancelar_baixa(servidor: str, banco: str, req: dict) -> dict:
+    return await asyncio.to_thread(_cancelar_baixa_sync, servidor, banco, req)
+
+
+async def listar_vencimentos_lote(servidor: str, banco: str, filtros: dict) -> dict:
+    return await asyncio.to_thread(_listar_vencimentos_lote_sync, servidor, banco, filtros)
+
+
+async def processar_lote(servidor: str, banco: str, req: dict) -> dict:
+    return await asyncio.to_thread(_processar_lote_sync, servidor, banco, req)
 
 
 async def editar_parcela(servidor: str, banco: str, req: dict) -> dict:

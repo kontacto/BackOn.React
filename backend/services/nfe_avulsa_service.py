@@ -1117,6 +1117,13 @@ def _emitir_nfe_avulsa_sync(
                 "csosn": "102" if simples_nacional_cliente else "400",
                 "cst_pis": pis_cofins["cst_pis"], "cst_cofins": pis_cofins["cst_cofins"],
                 "ibs_cbs_xml": (ibs_cbs_item or {}).get("xml_item") or "",
+                # Colunas DIFAL de `taxas`, já resolvidas em `tributos` —
+                # ver nfe_regras_fiscais.py (achado 2026-08-28: grupo
+                # ICMSUFDest nunca era montado por faltar esse threading).
+                "aliquota_interestadual": tributos.get("aliquota_interestadual") or 0,
+                "aliquota_interna_destino": tributos.get("aliquota_interna_destino") or 0,
+                "percentual_origem": tributos.get("percentual_origem") or 0,
+                "fundo_pobreza": tributos.get("fundo_pobreza") or 0,
                 # campos já confirmados/editados pelo usuário no rascunho (ICMS/IPI/ISS) —
                 # não recalculados aqui (decisão 1), só repassados pra gravação em n_fiscal_itens.
                 "_alqt_icms": item.get("alqt_icms"), "_reducao_base_icms": item.get("reducao_base_icms"),
