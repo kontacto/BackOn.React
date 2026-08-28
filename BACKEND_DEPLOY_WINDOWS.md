@@ -258,12 +258,21 @@ decisão do usuário) — agora é a tela **"Serviço do Sistema" > "Atualizaç�
 intervalo e roda o schedule DENTRO do próprio processo do backend (sem
 precisar de uma segunda Tarefa Agendada). Baixar/trocar versão continua
 reaproveitando os scripts em `updater/` (agora com 3 modos — ver
-`updater/README.md`) — só QUEM os invoca mudou. O passo manual abaixo
-(`git pull` + reinstalar + reiniciar) continua sendo necessário só pra
-**primeira instalação** de uma máquina nova, antes de existir um backend
-rodando pra configurar a tela (ver "🛠 Rodar como serviço Windows" logo
-abaixo). Ver PENDENCIAS.md > "Serviço do Sistema — Atualização" pro
-desenho completo — `updater/install-updater-task.ps1` (a Tarefa Agendada
+`updater/README.md`) — só QUEM os invoca mudou.
+
+**Duas formas de fazer a 1ª instalação, escolha conforme o caso**:
+- **Máquina de cliente real, sem git** (o caso comum): use
+  `updater\bootstrap-install.ps1` — baixa a release publicada da
+  Kontacto, sobe o backend e registra a Tarefa Agendada numa tacada só,
+  sem precisar clonar o repositório nem instalar dependências na mão. Ver
+  `updater/README.md` > "Instalação — 1ª vez numa máquina nova" pro
+  passo a passo completo.
+- **Máquina de desenvolvimento/interna** (precisa do repositório git em
+  si, não só das releases publicadas): segue o passo manual abaixo
+  (`git pull` + reinstalar + reiniciar), como sempre.
+
+Ver PENDENCIAS.md > "Serviço do Sistema — Atualização" pro desenho
+completo — `updater/install-updater-task.ps1` (a Tarefa Agendada
 independente) continua existindo no repositório, mas não é mais o
 caminho recomendado.
 

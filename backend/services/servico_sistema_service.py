@@ -50,6 +50,7 @@ _CONFIG_PADRAO = {
     "pasta_backend": "",
     "pasta_frontend": "",
     "intervalo_minutos": 30,
+    "canal": "H",
     "commit_atual": None,
     "commit_anterior": None,
     "commit_pendente": None,
@@ -75,12 +76,24 @@ def _ensure_servico_sistema_atualizacao_table(cur) -> None:
         "pasta_backend NVARCHAR(400) NULL, "
         "pasta_frontend NVARCHAR(400) NULL, "
         "intervalo_minutos INT NOT NULL DEFAULT 30, "
+        "canal NVARCHAR(1) NOT NULL DEFAULT 'H', "
         "commit_atual NVARCHAR(40) NULL, "
         "commit_anterior NVARCHAR(40) NULL, "
         "commit_pendente NVARCHAR(40) NULL, "
         "pendente_desde DATETIME NULL, "
         "ultima_verificacao DATETIME NULL, "
         "ultimo_erro NVARCHAR(500) NULL)"
+    )
+    # `canal` adicionado 2026-08-28 (Homologação/Produção) — instalação já
+    # existente (ex.: a máquina real do Juan/Kontacto) pode ter a tabela
+    # sem essa coluna; ADD separado cobre esse caso, além do CREATE acima
+    # cobrir instalação nova. Default 'H' (Homologação) — seguro por
+    # padrão, nenhuma instalação passa a aplicar em Produção sem
+    # configuração explícita.
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'canal') "
+        "ALTER TABLE servico_sistema_atualizacao ADD canal NVARCHAR(1) NOT NULL DEFAULT 'H'"
     )
 
 
@@ -94,7 +107,7 @@ def _get_config_sync(servidor: str, banco: str) -> dict:
         _ensure_servico_sistema_atualizacao_table(cur)
         conn.commit()
         cur.execute(
-            "SELECT TOP 1 manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, "
+            "SELECT TOP 1 manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, "
             "commit_atual, commit_anterior, commit_pendente, pendente_desde, ultima_verificacao, ultimo_erro "
             "FROM servico_sistema_atualizacao ORDER BY codigo DESC"
         )
@@ -127,6 +140,14 @@ def _save_config_sync(servidor: str, banco: str, dados: dict) -> dict:
     if intervalo_minutos < 0 or (0 < intervalo_minutos < 5):
         return {"success": False, "message": "O intervalo deve ser 0 (desliga a verificação automática) ou no mínimo 5 minutos."}
 
+    # Canal — 'H' (Homologação, equipe) ou 'P' (Produção, clientes).
+    # Adicionado 2026-08-28, ver docstring do módulo/CLAUDE.md > "Padrões
+    # de UI" pro desenho completo (Homologação só aplica pela tela cheia;
+    # Produção só aplica pelo botão "Atualizar Sistema" do Sidebar).
+    canal = (dados.get("canal") or "H").strip().upper()
+    if canal not in ("H", "P"):
+        return {"success": False, "message": "Canal inválido — use Homologação ou Produção."}
+
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
@@ -140,14 +161,14 @@ def _save_config_sync(servidor: str, banco: str, dados: dict) -> dict:
         if existente:
             cur.execute(
                 "UPDATE servico_sistema_atualizacao SET manifest_url=%s, pasta_backend=%s, "
-                "pasta_frontend=%s, intervalo_minutos=%s WHERE codigo=%s",
-                (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, existente["codigo"]),
+                "pasta_frontend=%s, intervalo_minutos=%s, canal=%s WHERE codigo=%s",
+                (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, existente["codigo"]),
             )
         else:
             cur.execute(
-                "INSERT INTO servico_sistema_atualizacao (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos) "
-                "VALUES (%s,%s,%s,%s)",
-                (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos),
+                "INSERT INTO servico_sistema_atualizacao (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal) "
+                "VALUES (%s,%s,%s,%s,%s)",
+                (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal),
             )
         conn.commit()
         cur.close()
@@ -180,12 +201,13 @@ def _get_status_sync(servidor: str, banco: str) -> dict:
         cur = conn.cursor(as_dict=True)
         _ensure_servico_sistema_atualizacao_table(cur)
         conn.commit()
-        cur.execute("SELECT TOP 1 commit_pendente FROM servico_sistema_atualizacao ORDER BY codigo DESC")
+        cur.execute("SELECT TOP 1 commit_pendente, canal FROM servico_sistema_atualizacao ORDER BY codigo DESC")
         row = cur.fetchone()
         cur.close()
         conn.close()
         pendente = bool(row and row.get("commit_pendente"))
-        return {"success": True, "pendente": pendente}
+        canal = (row.get("canal") if row else None) or "H"
+        return {"success": True, "pendente": pendente, "canal": canal}
     except Exception as e:
         try:
             conn.close()
@@ -200,6 +222,10 @@ def _escrever_config_ps1(dados: dict) -> None:
     `currentBackendDir`/`currentFrontendDir` novos, opcionais)."""
     pasta_backend = dados.get("pasta_backend") or ""
     install_dir = str(Path(pasta_backend).resolve().parent) if pasta_backend else str(_UPDATER_DIR)
+    # `canal` traduzido pro texto que `apply_update.ps1` espera
+    # (`Homologacao`/`Producao`) — ver `Invoke-Download` nesse script pro
+    # ponto que lê isso e decide se respeita `manifest.estavel`.
+    canal_ps1 = "Producao" if (dados.get("canal") or "H").strip().upper() == "P" else "Homologacao"
     payload = {
         "manifestUrl": dados.get("manifest_url") or "",
         "installDir": install_dir,
@@ -209,6 +235,7 @@ def _escrever_config_ps1(dados: dict) -> None:
         "healthCheckTimeoutSeconds": 30,
         "healthCheckRetries": 10,
         "keepReleases": 2,
+        "canal": canal_ps1,
     }
     _UPDATER_DIR.mkdir(parents=True, exist_ok=True)
     _UPDATER_CONFIG_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -262,7 +289,15 @@ def _ler_pending_commit() -> Optional[str]:
     if not _UPDATER_STATE_PATH.is_file():
         return None
     try:
-        state = json.loads(_UPDATER_STATE_PATH.read_text(encoding="utf-8"))
+        # "utf-8-sig", não "utf-8" — achado real 2026-08-26: `apply_update.
+        # ps1` grava `state.json` via `Set-Content -Encoding UTF8`, que no
+        # Windows PowerShell 5.1 (o interpretador real usado aqui, não o
+        # pwsh 7) sempre inclui um BOM. Lendo com "utf-8" puro, o BOM sobra
+        # como caractere ﻿ antes do "{", `json.loads` falha, e a
+        # exceção era engolida em silêncio — o commit pendente nunca era
+        # visto pelo lado Python mesmo com o download tendo funcionado.
+        # "utf-8-sig" remove o BOM se presente e funciona igual sem ele.
+        state = json.loads(_UPDATER_STATE_PATH.read_text(encoding="utf-8-sig"))
         return state.get("pendingCommit")
     except Exception:
         return None

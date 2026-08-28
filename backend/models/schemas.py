@@ -1152,6 +1152,25 @@ class DevolucaoRegistrarRequest(BaseModel):
     plataforma: Optional[str] = None
 
 
+class TransfContasItem(BaseModel):
+    """1 linha marcada pra transferir — `codnota` é o código da Nota
+    Fiscal (flag="Contas a Receber"/"Contas a Pagar") ou da Comanda
+    (flag="Comanda"), réplica de `FrmTransfContas.frm`."""
+    codnota: int
+    flag: str
+
+
+class TransfContasTransferirRequest(BaseModel):
+    """Transfere 1+ Notas Fiscais/Comandas pro Contas a Pagar/Receber
+    formal — ver services/transferencia_contas_service.py."""
+    servidor: str
+    banco: str
+    itens: List[TransfContasItem]
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
 class DevolucaoConsultaRequest(BaseModel):
     """Consulta de devoluções já registradas — réplica simplificada de
     `FrmConDev.frm`."""
@@ -1167,6 +1186,140 @@ class DevolucaoCancelarRequest(BaseModel):
     servidor: str
     banco: str
     master: Optional[bool] = False
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasReceberListRequest(BaseModel):
+    """Lista de duplicatas a receber (`Duplicata_Receber`) — ver
+    services/contas_receber_service.py pro rastreio completo da fonte
+    (`Geral/frmTraNFRec.frm` + `Revenda/FrmManDur.frm`)."""
+    servidor: str
+    banco: str
+    situacao: Optional[str] = None  # "A" aberto, "V" vencido, "PG" pago — derivado, não a coluna crua
+    cliente: Optional[int] = None
+    busca: Optional[str] = None
+    data_ini: Optional[str] = None
+    data_fim: Optional[str] = None
+
+
+class ContasReceberAvulsaRequest(BaseModel):
+    """Lançamento manual avulso — réplica de `frmTraNFRec.frm`'s
+    `CmdGravar_Click` (caminho `TemNF=False`, sem Nota Fiscal real por
+    trás) + `Command7_Click` ("Gerar Duplicata", split de parcelas)."""
+    servidor: str
+    banco: str
+    cliente: int
+    numero: int
+    serie: Optional[str] = ""
+    tipo_mov: str
+    dt_emissao: str
+    valor: float
+    parcelas: int = 1
+    dt_primeiro_vencimento: str
+    observacao: Optional[str] = None
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasReceberBaixaRequest(BaseModel):
+    """Baixa manual de 1 parcela (`Duplicata_Rec_Venc`) — funcionalidade
+    NOVA, sem equivalente no legado (que só baixa via retorno CNAB)."""
+    servidor: str
+    banco: str
+    codigo_venc: int
+    data_pag: str
+    valor_pag: float
+    desconto_pag: float = 0
+    juros_pag: float = 0
+    conta: Optional[int] = None
+    forma_pag: Optional[str] = None
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasReceberEditarParcelaRequest(BaseModel):
+    servidor: str
+    banco: str
+    codigo_venc: int
+    dt_vencimento: str
+    valor: float
+    observacao: Optional[str] = None
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasReceberExcluirRequest(BaseModel):
+    servidor: str
+    banco: str
+    codigo_duplicata: int
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasPagarListRequest(BaseModel):
+    servidor: str
+    banco: str
+    situacao: Optional[str] = None
+    fornecedor: Optional[int] = None
+    busca: Optional[str] = None
+    data_ini: Optional[str] = None
+    data_fim: Optional[str] = None
+
+
+class ContasPagarAvulsaRequest(BaseModel):
+    servidor: str
+    banco: str
+    fornecedor: int
+    numero: int
+    serie: Optional[str] = ""
+    tipo_mov: str
+    dt_emissao: str
+    valor: float
+    parcelas: int = 1
+    dt_primeiro_vencimento: str
+    observacao: Optional[str] = None
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasPagarBaixaRequest(BaseModel):
+    servidor: str
+    banco: str
+    codigo_venc: int
+    data_pag: str
+    valor_pag: float
+    desconto_pag: float = 0
+    juros_pag: float = 0
+    conta: Optional[int] = None
+    forma_pag: Optional[str] = None
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasPagarEditarParcelaRequest(BaseModel):
+    servidor: str
+    banco: str
+    codigo_venc: int
+    dt_vencimento: str
+    valor: float
+    observacao: Optional[str] = None
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasPagarExcluirRequest(BaseModel):
+    servidor: str
+    banco: str
+    codigo_duplicata: int
     usuario_alteracao: Optional[int] = None
     classe: Optional[int] = None
     plataforma: Optional[str] = None

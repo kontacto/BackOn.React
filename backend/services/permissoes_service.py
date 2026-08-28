@@ -418,6 +418,31 @@ ACOES_INUTILIZACAO_NFE = [
 ]
 
 # Ações da tela de cadastro de Bancos (Financeiro > Cobranças, FrmManBan.frm).
+ACOES_TRANSF_CONTAS = [
+    ("ABRIR", "Abrir tela"),
+    ("TRANSFERIR", "Transferir para Contas a Pagar/Receber"),
+]
+
+# Ações de Contas a Receber (`Geral\frmTraNFRec.frm` + `Revenda\FrmManDur.frm`
+# — rastreio completo em PENDENCIAS.md > "Contas a Receber"). "BAIXAR" é
+# funcionalidade NOVA (baixa manual sem boleto/CNAB) — sem precedente no
+# legado, que só marca situacao='PG' via retorno bancário.
+ACOES_CONTAS_RECEBER = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Lançar duplicata avulsa"),
+    ("BAIXAR", "Dar baixa em parcela"),
+    ("EXCLUIR", "Excluir duplicata"),
+]
+
+# Espelho de ACOES_CONTAS_RECEBER pro lado Pagar (`Geral\frmTraNFPag.frm` +
+# `Revenda\frmmandup.frm` — rastreio em PENDENCIAS.md > "Contas a Pagar").
+ACOES_CONTAS_PAGAR = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Lançar duplicata avulsa"),
+    ("BAIXAR", "Dar baixa em parcela"),
+    ("EXCLUIR", "Excluir duplicata"),
+]
+
 ACOES_BANCOS = [
     ("ABRIR", "Abrir tela"),
     ("GRAVAR", "Gravar"),
@@ -1071,8 +1096,18 @@ CATALOGO = [
         _tela("DEVOLUCAO", "Gestor de Devolução", ACOES_DEVOLUCAO),
     ]),
     _menu("FINANCEIRO", "Financeiro", [
-        _tela("CONTAS_PAGAR", "Contas a Pagar"),
-        _tela("CONTAS_RECEBER", "Contas a Receber"),
+        _tela("CONTAS_PAGAR", "Contas a Pagar", ACOES_CONTAS_PAGAR),
+        _tela("CONTAS_RECEBER", "Contas a Receber", ACOES_CONTAS_RECEBER),
+        # "Transferência p/Contas Pagar/Receber" (FrmTransfContas.frm) —
+        # promove Notas Fiscais/Comandas já pagas (ainda não lançadas) pro
+        # livro-razão formal (Receber/Duplicata_Receber/... ou Pagar/
+        # Duplicata_Pagar/...). Item PRÓPRIO no menu Financeiro no legado
+        # (irmão de "Fluxo de Caixa", não dentro dele) — ver
+        # PENDENCIAS.md > "Transferência Contas a Pagar/Receber". Distinta
+        # das telas CONTAS_PAGAR/CONTAS_RECEBER acima (essas seriam a
+        # listagem/gestão das duplicatas já lançadas, ainda não
+        # implementadas — não confundir as duas).
+        _tela("TRANSF_CONTAS", "Transferir Contas", ACOES_TRANSF_CONTAS),
         _menu("FLUXO_CAIXA", "Fluxo de Caixa", [
             _tela("PLANO_CONTAS", "Plano de Contas"),
             _tela("CENTRO_CUSTO", "Centro de Custo"),

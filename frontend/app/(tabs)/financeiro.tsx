@@ -55,6 +55,14 @@ export default function FinanceiroScreen() {
         visible: can("CONTAS_RECEBER.ABRIR"),
       },
       {
+        key: "transferencia-contas",
+        label: "Transferência Contas a Pagar/Receber",
+        hint: "Promove Notas Fiscais e Comandas já pagas para o Contas a Pagar/Receber",
+        icon: "swap-horizontal-outline",
+        route: "/transferencia-contas",
+        visible: can("TRANSF_CONTAS.ABRIR"),
+      },
+      {
         key: "fluxo-caixa",
         label: "Fluxo de Caixa",
         hint: "Movimentação e previsão de caixa",

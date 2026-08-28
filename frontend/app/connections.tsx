@@ -27,9 +27,24 @@ import { colors, radius, spacing } from "@/src/theme/colors";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { AppImage } from "@/src/components/AppImage";
 import { AppModal } from "@/src/components/AppModal";
+import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
+import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 
-const EMPTY_IMG =
-  "https://images.unsplash.com/photo-1667372459510-55b5e2087cd0?crop=entropy&cs=srgb&fm=jpg&q=85";
+// Modo Didático — pedido explícito do usuário, 2026-08-27 ("modo
+// educativo"), na PRIMEIRA tela que qualquer instalação nova mostra
+// (antes até do login) — quem preenche isso pela 1ª vez pode nunca ter
+// mexido no sistema, então os termos técnicos (Servidor, Banco, API)
+// merecem explicação em linguagem simples, não só o placeholder de
+// exemplo já existente em cada campo.
+const AJUDA_ITENS: HelpItem[] = [
+  { titulo: "O que é uma Conexão?", texto: "É o \"endereço\" completo de uma empresa/loja: onde fica o banco de dados dela e onde está rodando o sistema (Backend). Cada Conexão é uma empresa diferente — numa mesma máquina você pode ter várias, e escolher qual usar a cada login.", icon: { lib: "ion", name: "link-outline" } },
+  { titulo: "Empresa", texto: "Só um nome/apelido pra você reconhecer essa Conexão na lista (ex.: o nome da loja). Não afeta nada tecnicamente.", icon: { lib: "ion", name: "business-outline" } },
+  { titulo: "Servidor", texto: "O endereço do SQL Server onde o banco de dados dessa empresa está instalado — o mesmo servidor que o sistema antigo (VB6) já usa nessa máquina. Pode ser um IP (192.168.0.10) ou um nome de instância (NOMEDAMAQUINA\\SQLEXPRESS).", icon: { lib: "ion", name: "server-outline" } },
+  { titulo: "Banco", texto: "O nome do banco de dados dessa empresa dentro do SQL Server (ex.: KontactoDB). Se você não souber esse nome, quem instalou/restaurou o banco no cliente sabe.", icon: { lib: "ion", name: "file-tray-stacked-outline" } },
+  { titulo: "API", texto: "O endereço onde o Backend (o \"motor\" do sistema) está rodando. Numa instalação normal, é sempre http://localhost:8081 se você estiver usando o navegador na MESMA máquina onde o Backend foi instalado.", icon: { lib: "ion", name: "hardware-chip-outline" } },
+  { titulo: "Logo e Imagens (opcionais)", texto: "Só afetam a aparência do sistema (logo do cliente na tela Principal, fotos de produtos) — pode deixar em branco e preencher depois, sem travar o uso do sistema.", icon: { lib: "ion", name: "image-outline" } },
+];
+
 
 export default function ConnectionsScreen() {
   const router = useRouter();
@@ -50,6 +65,7 @@ export default function ConnectionsScreen() {
   const feedback = useFeedback();
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<Connection | null>(null);
+  const [ajudaOpen, setAjudaOpen] = useState(false);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -281,6 +297,14 @@ export default function ConnectionsScreen() {
               <Text style={styles.headerNewBtnText}>Nova Conexão</Text>
             </Pressable>
           ) : null}
+          <IconButtonWithTooltip
+            icon="information-circle-outline"
+            label="Ajuda"
+            onPress={() => setAjudaOpen(true)}
+            color={colors.onSurface}
+            style={{ marginLeft: spacing.sm }}
+            testID="connections-ajuda-btn"
+          />
         </View>
       </View>
 
@@ -292,7 +316,7 @@ export default function ConnectionsScreen() {
         <ScrollView contentContainerStyle={[styles.emptyWrap, Platform.OS === "web" && styles.emptyWrapWeb]} testID="connections-empty-state">
           <View style={Platform.OS === "web" ? styles.webFrame : undefined}>
             <View style={[styles.webEmptyCard, Platform.OS === "web" && styles.webCardShadow]}>
-            <AppImage source={{ uri: EMPTY_IMG }} style={styles.emptyImg} contentFit="cover" />
+            <AppImage source={require("../assets/images/kontacto-icon.png")} style={styles.emptyImg} contentFit="contain" />
             <Text style={styles.emptyTitle}>Nenhuma conexão configurada</Text>
             <Text style={styles.emptySub}>
               {isInitial
@@ -535,6 +559,8 @@ export default function ConnectionsScreen() {
           </View>
         </View>
       </AppModal>
+
+      <AjudaPedidoModal visible={ajudaOpen} onClose={() => setAjudaOpen(false)} titulo="Conexões" itens={AJUDA_ITENS} />
     </SafeAreaView>
   );
 }
@@ -612,10 +638,16 @@ const styles = StyleSheet.create({
     maxWidth: 240,
     justifyContent: "center",
   },
+  // Marca da Kontacto (`kontacto-icon.png`, 377×378px — quase quadrado),
+  // não mais uma foto de banco de imagens genérica (Unsplash, `EMPTY_IMG`
+  // removido) — pedido explícito do usuário, 2026-08-27: "colocar a logo
+  // da Kontacto nessa tela". `contentFit="contain"` (não "cover") porque
+  // é uma marca, não pode cortar; sem `borderRadius` — o recorte fazia
+  // sentido pra enquadrar uma foto retangular, não uma marca com fundo
+  // transparente.
   emptyImg: {
-    width: 220,
-    height: 160,
-    borderRadius: radius.lg,
+    width: 140,
+    height: 140,
     marginBottom: spacing.xl,
   },
   emptyTitle: {

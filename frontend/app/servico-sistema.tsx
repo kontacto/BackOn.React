@@ -10,6 +10,7 @@ import LockedView from "@/src/components/LockedView";
 import IconButtonWithTooltip from "@/src/components/IconButtonWithTooltip";
 import AjudaPedidoModal, { HelpItem } from "@/src/components/pedido/AjudaPedidoModal";
 import { useServicoSistemaForm } from "@/src/hooks/useServicoSistemaForm";
+import SelectField from "@/src/components/SelectField";
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 
@@ -38,6 +39,12 @@ const SERVICO_SISTEMA_AJUDA_ITENS: HelpItem[] = [
     texto:
       "De quanto em quanto tempo o sistema verifica sozinho se há uma versão nova. Mínimo de 5 minutos — ou 0 pra desligar a verificação automática (nesse caso, só o botão \"Verificar agora\" checa).",
     icon: { lib: "ion", name: "time-outline" },
+  },
+  {
+    titulo: "Canal — Homologação ou Produção",
+    texto:
+      "Homologação (equipe): baixa toda versão publicada, mesmo ainda em teste — e só pode ser aplicada aqui nesta tela, pelo botão \"Aplicar agora\" abaixo. Produção (clientes): só baixa versões já marcadas como estáveis pela equipe — e só pode ser aplicada pelo botão \"Atualizar Sistema\" no menu lateral (visível só quando há algo pendente, pra Supervisor/Gerente/Master). Cada canal tem exatamente 1 jeito de aplicar — nunca os dois ao mesmo tempo.",
+    icon: { lib: "ion", name: "git-branch-outline" },
   },
   {
     titulo: "Verificar agora",
@@ -236,6 +243,27 @@ export default function ServicoSistemaScreen() {
                   testID="servico-sistema-pasta-frontend"
                 />
 
+                <Text style={styles.sectionTitle}>Canal</Text>
+                <Text style={styles.helperText}>
+                  Homologação (equipe): recebe toda versão publicada e só é aplicada por esta tela. Produção
+                  (clientes): só recebe versões já marcadas como estáveis, e só é aplicada pelo botão "Atualizar
+                  Sistema" no menu lateral.
+                </Text>
+                <View style={styles.rowFields}>
+                  <View style={styles.colNarrow}>
+                    <SelectField
+                      value={f.form.canal}
+                      onChange={(v) => f.setField("canal", v === "P" ? "P" : "H")}
+                      options={[
+                        { value: "H", label: "Homologação (equipe)" },
+                        { value: "P", label: "Produção (clientes)" },
+                      ]}
+                      compactWeb
+                      testID="servico-sistema-canal"
+                    />
+                  </View>
+                </View>
+
                 <Text style={styles.sectionTitle}>Verificação automática</Text>
                 <Text style={styles.helperText}>
                   A cada quantos minutos o sistema verifica sozinho se há uma atualização nova — quando encontrar, já
@@ -293,21 +321,28 @@ export default function ServicoSistemaScreen() {
                     <Text style={styles.destaqueTitulo}>
                       Atualização disponível (commit {f.form.commit_pendente}) — pronta para aplicar.
                     </Text>
-                    <Pressable
-                      onPress={handleAplicar}
-                      disabled={f.aplicando}
-                      style={[styles.primaryBtn, f.aplicando && { opacity: 0.7 }]}
-                      testID="servico-sistema-aplicar"
-                    >
-                      {f.aplicando ? (
-                        <>
-                          <ActivityIndicator color="#fff" size="small" />
-                          <Text style={styles.primaryBtnText}>Aplicando…</Text>
-                        </>
-                      ) : (
-                        <Text style={styles.primaryBtnText}>Aplicar agora</Text>
-                      )}
-                    </Pressable>
+                    {f.form.canal === "P" ? (
+                      <Text style={styles.helperText}>
+                        Canal Produção — esta atualização é aplicada pelo botão "Atualizar Sistema" no menu
+                        lateral (visível pra Supervisor/Gerente/Master), não por aqui.
+                      </Text>
+                    ) : (
+                      <Pressable
+                        onPress={handleAplicar}
+                        disabled={f.aplicando}
+                        style={[styles.primaryBtn, f.aplicando && { opacity: 0.7 }]}
+                        testID="servico-sistema-aplicar"
+                      >
+                        {f.aplicando ? (
+                          <>
+                            <ActivityIndicator color="#fff" size="small" />
+                            <Text style={styles.primaryBtnText}>Aplicando…</Text>
+                          </>
+                        ) : (
+                          <Text style={styles.primaryBtnText}>Aplicar agora</Text>
+                        )}
+                      </Pressable>
+                    )}
                   </View>
                 ) : (
                   <Text style={styles.helperText}>Nenhuma atualização pendente no momento.</Text>

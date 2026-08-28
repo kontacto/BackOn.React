@@ -205,6 +205,48 @@ class TestBuscarProdutoPesoVariavel:
         assert r["peso_kg"] is None
 
 
+class TestBuscarProdutoImagem:
+    """KPDV — imagem do produto exibida no rodapé do menu lateral ao
+    adicionar um item (2026-08-27). Só resolvida pra tipo="P" (produto);
+    serviço nunca tem foto."""
+
+    def _stub_colaboradores(self, monkeypatch, resolve_fn):
+        monkeypatch.setattr(svc, "_resolve_produto_completo", resolve_fn)
+        monkeypatch.setattr(svc, "_preco_promocional", lambda *a, **k: None)
+        monkeypatch.setattr(svc, "_preco_por_qtd", lambda *a, **k: None)
+        monkeypatch.setattr(svc, "_limites_desconto", lambda *a, **k: {"desc_g": 0, "desc_s": 0, "desc_v": 0})
+
+    _PRODUTO_RESOLVIDO = {
+        "tipo": "P", "codigo": "00123", "cod_fab": "FAB1", "descricao": "Produto X",
+        "valor": 50.0, "unidade": "UN", "custo": 30.0, "peso_variado": False,
+    }
+    _SERVICO_RESOLVIDO = {
+        "tipo": "S", "codigo": "S001", "cod_fab": "S001", "descricao": "Serviço X",
+        "valor": 100.0, "unidade": "HR", "custo": 100.0, "peso_variado": False,
+    }
+
+    def test_produto_com_imagem_principal(self, monkeypatch):
+        cur = FakeCursor(one=[{"qtd": 10.0}, {"codigo": 42}])
+        _patch(monkeypatch, cur)
+        self._stub_colaboradores(monkeypatch, lambda cur, codigo: dict(self._PRODUTO_RESOLVIDO))
+        r = svc._buscar_produto_sync("srv", "bd", "00123", 1)
+        assert r["imagem_codigo"] == 42
+
+    def test_produto_sem_imagem(self, monkeypatch):
+        cur = FakeCursor(one=[{"qtd": 10.0}, None])
+        _patch(monkeypatch, cur)
+        self._stub_colaboradores(monkeypatch, lambda cur, codigo: dict(self._PRODUTO_RESOLVIDO))
+        r = svc._buscar_produto_sync("srv", "bd", "00123", 1)
+        assert r["imagem_codigo"] is None
+
+    def test_servico_nunca_tem_imagem(self, monkeypatch):
+        cur = FakeCursor(one=[])
+        _patch(monkeypatch, cur)
+        self._stub_colaboradores(monkeypatch, lambda cur, codigo: dict(self._SERVICO_RESOLVIDO))
+        r = svc._buscar_produto_sync("srv", "bd", "S001", 1)
+        assert r["imagem_codigo"] is None
+
+
 class TestAbrirVenda:
     def test_cria_comanda_situacao_aberta(self, monkeypatch):
         cur = FakeCursor(one=[{"comanda": 501}])

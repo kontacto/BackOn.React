@@ -62,7 +62,10 @@ class TestEnsureTable:
                 queries.append(q)
 
         svc._ensure_servico_sistema_atualizacao_table(Cur())
-        assert len(queries) == 1
+        # 2 statements: CREATE TABLE (idempotente, instalação nova) + ALTER
+        # TABLE ADD canal (idempotente, cobre instalação já existente sem
+        # a coluna nova — ver comentário no service, 2026-08-28).
+        assert len(queries) == 2
         assert "servico_sistema_atualizacao" in queries[0]
         assert "IF NOT EXISTS" in queries[0]
 
@@ -144,6 +147,46 @@ class TestSaveConfig:
         conn_file = svc._CONN_FILE
         assert json.loads(conn_file.read_text(encoding="utf-8")) == {"servidor": "srv", "banco": "bd"}
 
+    def test_rejeita_canal_invalido(self, monkeypatch):
+        r = svc._save_config_sync("srv", "bd", {
+            "manifest_url": "https://x/manifest.json?sig=abc",
+            "pasta_backend": "C:\\BackOn\\current-backend",
+            "pasta_frontend": "C:\\BackOn\\current-frontend",
+            "intervalo_minutos": 30,
+            "canal": "X",
+        })
+        assert r["success"] is False
+        assert "Canal" in r["message"]
+
+    def test_grava_canal_producao(self, monkeypatch, tmp_path):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_CONN_FILE", tmp_path / "updater_conn.json")
+        r = svc._save_config_sync("srv", "bd", {
+            "manifest_url": "https://x/manifest.json?sig=abc",
+            "pasta_backend": "C:\\BackOn\\current-backend",
+            "pasta_frontend": "C:\\BackOn\\current-frontend",
+            "intervalo_minutos": 30,
+            "canal": "p",  # minúsculo — normalizado pra 'P'
+        })
+        assert r["success"] is True
+        insert_params = [p for q, p in cur.queries if q.strip().upper().startswith("INSERT")][0]
+        assert insert_params[-1] == "P"
+
+    def test_canal_ausente_default_homologacao(self, monkeypatch, tmp_path):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_CONN_FILE", tmp_path / "updater_conn.json")
+        r = svc._save_config_sync("srv", "bd", {
+            "manifest_url": "https://x/manifest.json?sig=abc",
+            "pasta_backend": "C:\\BackOn\\current-backend",
+            "pasta_frontend": "C:\\BackOn\\current-frontend",
+            "intervalo_minutos": 30,
+        })
+        assert r["success"] is True
+        insert_params = [p for q, p in cur.queries if q.strip().upper().startswith("INSERT")][0]
+        assert insert_params[-1] == "H"
+
     def test_atualiza_quando_ja_existe_linha(self, monkeypatch, tmp_path):
         cur = FakeCursor(one=[{"codigo": 1}])
         _patch(monkeypatch, cur)
@@ -161,16 +204,16 @@ class TestSaveConfig:
 
 class TestGetStatus:
     def test_pendente_true_quando_ha_commit_pendente(self, monkeypatch):
-        cur = FakeCursor(one=[{"commit_pendente": "bbb2222"}])
+        cur = FakeCursor(one=[{"commit_pendente": "bbb2222", "canal": "P"}])
         _patch(monkeypatch, cur)
         r = svc._get_status_sync("srv", "bd")
-        assert r == {"success": True, "pendente": True}
+        assert r == {"success": True, "pendente": True, "canal": "P"}
 
     def test_pendente_false_sem_linha(self, monkeypatch):
         cur = FakeCursor(one=[None])
         _patch(monkeypatch, cur)
         r = svc._get_status_sync("srv", "bd")
-        assert r == {"success": True, "pendente": False}
+        assert r == {"success": True, "pendente": False, "canal": "H"}
 
 
 class TestAplicarAtualizacao:
@@ -225,6 +268,30 @@ class TestReverterAtualizacao:
         r = svc._reverter_atualizacao_sync("srv", "bd")
         assert r["success"] is True
         assert ("disparar", "Rollback") in chamadas
+
+
+class TestLerPendingCommit:
+    def test_le_state_json_com_bom_utf8(self, monkeypatch, tmp_path):
+        # `apply_update.ps1` grava state.json via `Set-Content -Encoding
+        # UTF8` — no Windows PowerShell 5.1 isso sempre inclui um BOM.
+        # Bug real 2026-08-26: lendo com "utf-8" puro (não "utf-8-sig"),
+        # o BOM quebrava o json.loads e a exceção era engolida em
+        # silêncio, escondendo um commit pendente real.
+        state_file = tmp_path / "state.json"
+        bom = b"\xef\xbb\xbf"
+        state_file.write_bytes(bom + json.dumps({"pendingCommit": "abc1234"}).encode("utf-8"))
+        monkeypatch.setattr(svc, "_UPDATER_STATE_PATH", state_file)
+        assert svc._ler_pending_commit() == "abc1234"
+
+    def test_le_state_json_sem_bom(self, monkeypatch, tmp_path):
+        state_file = tmp_path / "state.json"
+        state_file.write_text(json.dumps({"pendingCommit": "def5678"}), encoding="utf-8")
+        monkeypatch.setattr(svc, "_UPDATER_STATE_PATH", state_file)
+        assert svc._ler_pending_commit() == "def5678"
+
+    def test_sem_arquivo_devolve_none(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(svc, "_UPDATER_STATE_PATH", tmp_path / "nao-existe.json")
+        assert svc._ler_pending_commit() is None
 
 
 class TestVerificarAgora:

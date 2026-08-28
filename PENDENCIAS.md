@@ -6,8 +6,78 @@ inteira antes de continuar — não reanalisar do zero.
 
 ## Estado Atual do Projeto
 
-**Última atualização: 2026-08-26 — frente de trabalho: Serviço do Sistema
-> aba "Atualização" (Configurações, EM ANDAMENTO).** Pivô explícito do
+**Última atualização: 2026-08-28 — Contas a Receber E Contas a Pagar
+(Financeiro), 2 telas novas do zero no mesmo dia + bug real corrigido na
+Transferência.** Fecha a sequência de migração proposta por Leandro
+(Devolução → Transferência Contas a Pagar/Receber → **Duplicatas Pagar/
+Receber** → Impressão de Boletos → Fluxo de Caixa) — os dois lados
+(Receber primeiro, depois Pagar como espelho direto) estão prontos e
+testados ao vivo. Rastreada a fonte real via `backon.vbp` (não `Geral`
+sozinho, que não tem essas telas): lado Receber —
+`Geral/FRMCONNFREC.frm` + `Geral/frmTraNFRec.frm` +
+`Revenda/FrmManDur.frm` (3685 linhas); lado Pagar —
+`Geral/FRMCONNFPAG.frm` + `Geral/frmTraNFPag.frm` +
+`Revenda/frmmandup.frm` (3021 linhas, sem os botões "Imprimir Boleto"/
+"Centro de Resultados" que o lado Receber tem — confirmado por leitura
+completa, não é gap de migração).
+
+**Achado crítico durante o rastreio, corrigido**: `Duplicata_Rec_Nf.
+nf_fiscal`/`Duplicata_Pag_Nf.nf_fiscal` — apesar do nome — guardam o
+`codigo` de `Receber`/`Pagar`, não de `N_fiscal`;
+`transferencia_contas_service.py` (implementado 1 dia antes) gravava o
+valor errado nos 2 lados — corrigido (ver "Transferência Contas a Pagar/
+Receber" mais abaixo).
+
+**2º achado, ao vivo contra ARGEN TESTE, corrigido só no lado Receber e
+já replicado preventivamente no Pagar**: `Receber.cod_n_fiscal`/`Pagar.
+cod_n_fiscal` têm `DEFAULT ((0))` no schema real — omitir a coluna no
+`INSERT` do avulso grava `0`, não `NULL`, quebrando a guarda de exclusão
+que distingue "avulso" (apaga) de "originado de NF real" (só reabre).
+
+**Escopo (`AskUserQuestion`), igual nos 2 lados**: lançamento avulso +
+baixa manual (**funcionalidade NOVA, sem precedente no legado** — nenhum
+dos dois lados grava `situacao='PG'` em lugar nenhum do `.frm`, só existe
+baixa via retorno CNAB, e só pro lado Receber) + exclusão com guarda.
+Boleto avulso confirmado fora de escopo pelo Leandro ("já existe via
+Geração de Boletos"); Centro de Resultados e Emitir Fatura ainda sem
+resposta dele — ficam de fora dos dois lados até confirmação.
+
+**Backend**: 2 services + 2 routes + permissões próprias (`ACOES_CONTAS_
+RECEBER`/`ACOES_CONTAS_PAGAR`) + 50 testes novos (34 Receber + 16 Pagar,
+Pagar reaproveita `_split_parcelas` do Receber sem duplicar). Suíte
+completa: 2763 passed, 4 falhas pré-existentes não relacionadas, zero
+regressão. **✅ Testados ao vivo direto por API contra ARGEN TESTE, ciclo
+completo nos 2 lados** (avulso→split/arredondamento/vencimento
+mensal→editar→baixa parcial→baixa total→exclusão avulso vs. NF real,
+com cliente/fornecedor reais) — dado de teste ficou de propósito no
+banco (duplicata Receber #9101, duplicata Pagar #9377, ambas marcadas
+"TESTE Claude" e com ciclo completo pago). **Ainda não abertas no
+navegador de verdade** — ver "Contas a Receber"/"Contas a Pagar" mais
+abaixo pro detalhe completo de cada uma.
+
+<details>
+<summary>Resumo anterior (2026-08-27, marco Serviço do Sistema), preservado por contexto</summary>
+
+Marco real: 1ª instalação de cliente bem-sucedida do fluxo "Serviço do
+Sistema > Atualização". O técnico Juan (Kontacto) instalou uma máquina de
+cliente do zero usando `updater/bootstrap-install.ps1` contra o Storage
+Account de distribuição real (`sys1`) — 2 bugs reais achados e corrigidos
+ao vivo (script novo nunca tinha sido commitado/enviado ao GitHub; SAS de
+leitura gerada com escopo de blob em vez de container) — ver "Serviço do
+Sistema — Atualização" mais abaixo pro detalhe completo. Backend+Frontend
+no ar confirmados na máquina real. Ainda em aberto nessa frente: "Aplicar
+agora"/"Reverter" (atualizar uma instalação já rodando) sem teste ao
+vivo. Outras frentes ativas na mesma sessão: redesenho completo do
+painel "Fechar Venda" do KPDV (rastreio de `FrmPafOFF.frm`, várias
+rodadas de ajuste ao vivo) e revisão de design do Gestor de Devolução
+(campos de período padronizados + Modo Didático revisto).
+
+</details>
+
+<details>
+<summary>Resumo anterior (2026-08-26), preservado por contexto</summary>
+
+Pivô explícito do
 usuário sobre a frente anterior: "vamos deixar pausado essa atualização
 automática para ser amadurecido... vamos criar uma tela de Serviço do
 Sistema em Configurações" — a automação 100% orientada a Tarefa Agendada
@@ -74,6 +144,8 @@ frente de trabalho relevante, nunca empilhada (o histórico completo mora
 no resto do arquivo, abaixo, organizado por tela/módulo). Ver CLAUDE.md
 > "Início de sessão sempre orienta sobre onde o projeto parou" pra regra
 que exige ler isto no começo de toda sessão nova.
+
+</details>
 
 ## 🟡 2026-08-26 — Atualizador automático de instalações de cliente (PAUSADO — ver "Serviço do Sistema — Atualização" abaixo)
 
@@ -233,10 +305,11 @@ do backend novo subir — nenhum trabalho adicional necessário aqui).
 
 ## 🟡 2026-08-26 — Serviço do Sistema — Atualização
 
-**Status: EM ANDAMENTO — backend completo e testado (2707 passed),
-scripts PowerShell reescritos em 3 modos e com parse-check OK, tela nova
-escrita e sem erro de tipo, mas SEM teste ao vivo em navegador e SEM
-Storage Account de distribuição real pra testar o ciclo ponta a ponta.**
+**Status: 🟢 1ª instalação de cliente real CONCLUÍDA COM SUCESSO
+(2026-08-27, pelo Juan)** — ciclo completo bootstrap→backend no ar
+validado ponta a ponta contra o Storage Account real (`sys1`). Ainda em
+aberto: "Aplicar agora"/"Reverter" (atualização de uma instalação já
+rodando) seguem sem teste ao vivo — ver ressalva mais abaixo.
 
 **Atualização mesmo dia — Modo Didático + "Verificar agora" + Intervalo
 0 = desligado.** Usuário pediu Modo Didático na tela (ícone "i" no
@@ -262,6 +335,99 @@ confirmação — não reinicia nada, diferente de Aplicar/Reverter) na
 seção "Verificação automática". 5 testes novos (22 no total),
 `pytest tests/unit -q` → 2707 passed, mesmas 4 falhas pré-existentes.
 `tsc --noEmit` seguiu limpo (mesmos 12 erros pré-existentes do projeto).
+
+**Atualização mesmo dia — 1ª publicação e verificação real, ao vivo,
+contra um Storage Account real (`sys1`, container `releases`) criado pelo
+usuário.** Instalado `Az.Storage`, criado o container + SAS de leitura
+(container-level, permissão só "Ler", validade até 2030), commitado o
+trabalho pendente da sessão (`3aae877`) e publicado de verdade via
+`publish_release.ps1` — funcionou de ponta a ponta na 1ª tentativa (zip
+backend+frontend, sha256, upload, `manifest.json`). **3 bugs reais
+achados e corrigidos testando o lado cliente ao vivo** (nenhum de regra
+de negócio — todos de ambiente Windows/encoding, só aparecem rodando de
+verdade, nunca em teste unitário):
+1. **Scripts sem BOM quebravam sob Windows PowerShell 5.1** — o backend
+   invoca `powershell.exe` (5.1), não `pwsh` (7, usado no parse-check
+   anterior); 5.1 sem BOM adivinha a codificação e corrompe acentos em
+   português, quebrando o parser ("'}' de fechamento ausente" num arquivo
+   sintaticamente correto). Corrigido gravando `apply_update.ps1`/
+   `install-updater-task.ps1`/`publish_release.ps1` (e depois
+   `bootstrap-install.ps1`, já criado com BOM desde o início) com BOM
+   UTF-8 explícito.
+2. **`Get-FileHash` "não reconhecido" dentro do processo real do
+   backend** — módulo `Microsoft.PowerShell.Utility` não carregava
+   (PSModulePath reduzido nesse processo específico, mesmo sendo cmdlet
+   nativo). Corrigido trocando por SHA256 via .NET puro
+   (`System.Security.Cryptography.SHA256`) em `Get-Sha256Lower` — não
+   depende de nenhum módulo do PowerShell, funciona em qualquer ambiente.
+3. **Leitura de `state.json` quebrada em Python por causa do BOM que o
+   PRÓPRIO `Set-Content -Encoding UTF8` do PowerShell 5.1 grava** —
+   `_ler_pending_commit()` lia com `encoding="utf-8"` puro, o BOM
+   quebrava `json.loads`, a exceção era engolida em silêncio
+   (`except Exception: return None`), e o commit pendente nunca era
+   visto pelo backend mesmo com o download tendo funcionado de verdade.
+   Corrigido pra `"utf-8-sig"` + 3 testes de regressão novos.
+
+Depois dos 3 fixes, o ciclo **verificar → detectar → marcar pendente →
+badge** foi confirmado funcionando de ponta a ponta contra o Blob real
+(`POST verificar-agora` → `{"pendente": true, "commit": "3aae877"}`,
+config/status refletindo corretamente). 25 testes no arquivo (2707+3),
+suíte completa seguiu passando.
+
+**"Aplicar agora"/"Reverter" NÃO testados ao vivo ainda** — achado um
+risco real antes de tentar: `Restart-BackendTask` mata qualquer
+`python.exe` com "uvicorn" no comando (sem filtrar por pasta/instalação),
+e como não existe Tarefa Agendada `BackOn-Backend` na máquina de teste
+atual, derrubaria o backend de desenvolvimento sem conseguir subir de
+novo sozinho. Ficou combinado com o usuário testar isso só com
+confirmação explícita — ainda pendente.
+
+**Gap real de bootstrap identificado e resolvido — `updater\bootstrap-
+install.ps1` (novo)**: numa máquina genuinamente nova, `apply_update.ps1`
+sozinho não consegue completar sua própria 1ª execução — o passo de
+reiniciar (`Restart-BackendTask`) tenta religar uma Tarefa Agendada que
+ainda não existe, o health check falha, e o script reporta erro mesmo
+com os arquivos corretamente baixados/extraídos. `bootstrap-install.ps1`
+resolve isso numa tacada só: roda `apply_update.ps1 -Mode DownloadOnly`
+(reaproveitado, não duplicado) → cria as junctions direto → registra a
+Tarefa Agendada de DENTRO da junction (caminho estável, nunca precisa
+reregistrar depois) → inicia a Tarefa → health check → só então grava
+`state.json`. Idempotente (pode rodar de novo sem duplicar nada).
+Documentado em `updater/README.md` > "Instalação — 1ª vez numa máquina
+nova" e referenciado em `BACKEND_DEPLOY_WINDOWS.md` (distinguindo
+explicitamente do fluxo de bootstrap de máquina de desenvolvimento, que
+precisa do git e continua manual).
+
+**TESTADO AO VIVO 2026-08-27 — 1ª instalação real de cliente, ponta a
+ponta, pelo Juan (técnico Kontacto).** 2 bugs reais achados e corrigidos
+durante o teste (nenhum de regra de negócio):
+1. **`bootstrap-install.ps1` nunca tinha sido commitado/enviado ao
+   GitHub** — criado na sessão anterior, mas ficou como arquivo local
+   não rastreado; o Juan copiou a pasta `updater\` do GitHub e o arquivo
+   simplesmente não existia lá (`git status` confirmou: `??
+   updater/bootstrap-install.ps1`). Corrigido commitando+enviando (junto
+   com os outros scripts do `updater/` que também tinham mudanças locais
+   nunca enviadas — `apply_update.ps1`/`README.md`/
+   `install-updater-task.ps1`/`publish_release.ps1`).
+2. **SAS de leitura gerada com escopo errado (blob, não container)** —
+   o Juan gerou a própria `manifestUrl` (ninguém tinha passado uma
+   pronta pra ele — só o `Guia de Instalacao.md`), muito provavelmente
+   clicando em "Gerar SAS" direto em cima do arquivo `manifest.json` no
+   Portal do Azure em vez de com o container `releases` selecionado —
+   `manifest.json` baixava normal (a SAS cobria exatamente aquele
+   arquivo), mas `backend-3aae877.zip` dava 403 (fora do escopo da SAS).
+   Resolvido regenerando a SAS no nível do container (`New-
+   AzStorageContainerSASToken -Container "releases"`, já documentado em
+   `updater/publish/README.md`). De brinde, `Get-ReleaseAsset` (`apply_
+   update.ps1`) ganhou leitura do corpo real do erro do Azure Storage no
+   catch — antes só mostrava "(403) Proibido" genérico do PowerShell,
+   escondendo a causa raiz real; próxima falha parecida já se
+   autodiagnostica no log.
+
+Depois dos 2 fixes: download+sha256+extração+venv+registro da Tarefa
+Agendada `BackOn-Backend`+start+health check funcionaram de ponta a
+ponta na máquina real do Juan — confirmado "testou e está no ar".
+**Primeira instalação de cliente 100% bem-sucedida deste novo fluxo.**
 
 **Protocolo Gauntlet: acionado (Carlos — processo/fluxo/segurança; Thomé —
 implementação).**
@@ -388,6 +554,180 @@ publicar, migração de schema (já resolvida por `schema_ensure.py`).
    precisa ser atualizado pra apontar pra "Serviço do Sistema" como o
    mecanismo atual, mantendo o antigo só como alternativa manual/
    avançada.
+
+**Atualização 2026-08-28 — botão "Atualizar Sistema" no Sidebar (grupo
+"Pendências do Sistema"), aplica direto sem entrar na tela.** Pedido do
+usuário: além da tela completa (Configurações > Serviço do Sistema >
+Atualização, que segue Master-only pra CONFIGURAR chave do blob/pastas/
+intervalo), criar um atalho de ação direta no menu lateral — ver CLAUDE.md
+> "Padrões de UI" > seção 10 ("Pendências do Sistema") pro desenho
+completo do grupo (reutilizável, mais itens virão).
+
+- `frontend/src/hooks/useAplicarAtualizacao.ts` (novo) — resolve a
+  conexão do jeito mais simples possível (mesmo padrão de
+  `useAtualizacaoPendente.ts`, já que o Sidebar é montado uma vez no
+  layout raiz, fora de contexto de tela) e chama
+  `POST /servico-sistema/atualizacao/aplicar` reaproveitando
+  `useAuditContext()` (hook já existente, não usado ainda nas telas de
+  Contas a Pagar/Receber implementadas mais cedo hoje — considerar
+  migrar pra ele numa rodada futura, por consistência, não urgente).
+- `frontend/src/navigation/Sidebar.tsx` — novo grupo `shortcuts`
+  (tipo `ShortcutItem`), renderizado só quando há pelo menos 1 item
+  visível (nunca uma seção vazia). Visível quando
+  `useAtualizacaoPendente()` E `isManagerFuncao` — "os três magníficos"
+  (Supervisor/Gerente/Master, apelido do usuário) mapeiam **direto** pro
+  `isManagerFuncao` já existente em `permissions/index.tsx`
+  (`isMaster || cod_funcao === 1 || cod_funcao === 2`), confirmado
+  contra o comentário já existente no código ("Gerente por função:
+  cod_funcao 01/02") — nenhuma permissão nova precisou ser criada.
+- Confirmação (`showConfirm`, mesmo texto/padrão já usado em
+  `servico-sistema.tsx::handleAplicar`) antes de disparar — reinicia o
+  backend, então pede confirmação clara ("qualquer pessoa usando o
+  sistema perde a conexão por alguns segundos").
+- `tsc --noEmit`: 12 erros, mesmos de sempre, nenhum novo nos 2 arquivos
+  tocados/criados.
+- **Não testado ao vivo de propósito** — clicar de verdade reinicia o
+  backend real que está servindo esta própria sessão de testes; e hoje
+  não há nenhuma atualização pendente configurada em nenhuma conexão de
+  teste conhecida (`ARGEN-TESTE` confirmado `pendente: false` mais
+  acima), então o botão nem apareceria. Testar quando houver uma
+  atualização real pendente numa instalação de teste, ou simular
+  manualmente gravando um `commit_pendente` fake no banco pra validar
+  só a UI (sem deixar aplicar de verdade).
+
+**Atualização 2026-08-28, mesmo dia — regra de acesso formalizada +
+2º item implementado.** Usuário reforçou: "o acesso a essas pendências
+sempre dependerá de permissão de acesso ou os três magníficos" (exemplo
+próprio: sem acesso à tela de Transferência, não recebe o aviso dela) —
+formalizado em CLAUDE.md > "Padrões de UI" > seção 10 como fórmula única
+`can("<TELA>.<ACAO>") || isManagerFuncao` pra TODO item do grupo.
+
+- **"Transferência Pendente (N)"** — 2º item do grupo, implementado.
+  `frontend/src/hooks/useTransferenciaPendenteCount.ts` (novo, mesmo
+  padrão de polling de `useAtualizacaoPendente.ts`, reaproveita
+  `GET /transferencia-contas/pendentes` já existente). Diferente de
+  "Atualizar Sistema" — não dispara nada direto, **navega** pra
+  `/transferencia-contas` (transferir exige revisão/seleção manual pelo
+  usuário, não é ação de 1 clique). Visível quando
+  `can("TRANSF_CONTAS.ABRIR") || isManagerFuncao`. **Testado ao vivo
+  contra ARGEN TESTE**: `GET /transferencia-contas/pendentes` retornou
+  8 itens reais no momento do teste — o item apareceria de verdade pra
+  quem tem a permissão. `tsc --noEmit`: mesmos 12 erros de sempre,
+  nenhum novo.
+- **"Transferência para o Fluxo de Caixa" — NÃO implementado, bloqueado
+  por escopo maior que só Sidebar.** É `FrmTransfCaixa.frm` (tela irmã
+  de `FrmTransfContas.frm`, move saldo entre Contas de caixa/banco) —
+  nunca migrada: sem service, sem rota, sem tela, sem permissão no
+  catálogo. Adicionar ao Sidebar exigiria construir a feature inteira
+  primeiro (rastreio VB6 + backend + frontend), não é um acréscimo
+  pontual — não implementado sem confirmar prioridade/escopo com o
+  usuário antes.
+
+**Atualização 2026-08-28, ainda mesmo dia — 1º teste ao vivo no
+navegador (screenshot do usuário), 3 ajustes + 1 investigação.**
+
+- **Itens de "Pendências do Sistema" ficaram ícone-só sempre** (antes só
+  no modo recolhido) + tooltip sempre disponível — "Transferência
+  Pen..." estava cortando no menu expandido. Ver CLAUDE.md > "Padrões de
+  UI" > seção 10.
+- **Investigado "Atualizar Sistema não aparece pro Gerente" — NÃO é
+  bug.** Usuário logado (ADELINO CARLOS MESQUITA MARQUES, ARGEN TESTE)
+  tem `funcionarios.cod_funcao='01'` (confirmado via SQL direto), que
+  bate em `funcoes.codigo='01'` = "GERENTE" — `isManagerFuncao` calcula
+  certo (`parseInt("01",10) === 1` → `true`). A ausência do ícone é
+  porque **não há atualização pendente** — `GET /servico-sistema/
+  atualizacao/status` confirmado `pendente: false` pra ARGEN TESTE no
+  momento do teste (mesma checagem já feita antes). Achado colateral,
+  documentado em CLAUDE.md > seção 12: o "Grupo: GERENTE" mostrado no
+  card de boas-vindas é `usuario.classe_descricao` (classe de
+  permissão), **campo diferente** de `funcionario.cod_funcao` (função/
+  cargo, o que `isManagerFuncao` de fato usa) — os dois só bateram aqui
+  por coincidência de nomenclatura.
+- **Card "Bem-vindo" (empresa/avatar/nome/grupo) replicado no final do
+  Sidebar** — `frontend/src/hooks/useSessionWelcome.ts` (novo), mesma
+  derivação que `useDashboard.ts` já usa na Tela Principal, versão
+  enxuta. Fixo na base via `View style={{flex:1}}` espaçador, avatar+
+  nome+grupo quando expandido, só avatar+tooltip quando recolhido.
+- `tsc --noEmit`: mesmos 12 erros de sempre, nenhum novo, em todos os
+  arquivos tocados/criados desta rodada.
+
+**Correção 2026-08-28, ainda mesmo dia — card "Bem-vindo" movido pro
+TOPO.** Usuário: "não ficou bom na parte inferior. colocar na parte
+superior, logo acima do menu lateral. incluir o nome da conexão logo
+abaixo do grupo." Card reposicionado pra logo abaixo do botão de
+recolher/expandir, acima de Cadastros/Transações/etc (removido o
+espaçador `flex:1` que empurrava pro rodapé). Adicionada 3ª linha com o
+nome da conexão (`session.empresa`, ex.: "ARGEN TESTE") abaixo de
+"Grupo: X", tanto no card expandido quanto no tooltip do modo recolhido.
+`tsc --noEmit`: mesmos 12 erros de sempre, nenhum novo.
+
+**Correção 2026-08-28, mesmo dia — 2 ajustes finos + remoção de
+duplicação:**
+1. Codnome (`nome_guerra`) substitui o nome completo no card do Sidebar,
+   mesma formatação (não é mais uma linha secundária) — "exibir o
+   codnome do usuário... no lugar do nome com a mesma formatação".
+2. `WelcomeHero` **removido do branch web** de `app/(tabs)/principal.tsx`
+   — "retirar o card de boas vindas da tela principal". Ficava duplicado
+   (mesma informação já fixa no topo do Sidebar). **Mobile não foi
+   tocado** — não tem Sidebar (ver "Platform Scope" em CLAUDE.md), então
+   o branch mobile continua com seu próprio `WelcomeHero`, sem mudança.
+
+`tsc --noEmit`: mesmos 12 erros de sempre, nenhum novo, em ambos os
+arquivos.
+
+**Correção 2026-08-28, mesmo dia — avatar centralizado no menu
+recolhido.** `welcomeCard` nunca tinha ganhado a variante `collapsed`
+que os demais itens da sidebar já tinham (`itemCollapsed`/
+`shortcutItem`) — o avatar ficava colado à esquerda com o padding
+horizontal de 12px do modo expandido, em vez de centralizado nos 56px
+estreitos do menu recolhido. Corrigido com `welcomeCardCollapsed`
+(`justifyContent:"center", paddingHorizontal:0`), aplicado só quando
+`collapsed` — expandido continua exatamente como estava. `tsc --noEmit`:
+mesmos 12 erros de sempre, nenhum novo.
+
+**Nova frente 2026-08-28, mesmo dia — Canal Homologação/Produção.**
+Pedido do usuário: "precisamos criar as variantes de Homologação
+(Atualização para equipe) Produção (Atualização para Clientes). A
+atualização de Homologação só será feito pela tela de atualização e a
+Produção pelo botão no menu lateral." Desenho completo em CLAUDE.md >
+"Padrões de UI" > seção 13 — resumo aqui:
+
+- **Um manifest só** (`manifest.json`), ganhou o campo `estavel: bool`.
+  `updater/publish/publish_release.ps1` ganhou o switch `-Estavel` —
+  sem ele (padrão), a release só é vista pelo canal Homologação; com
+  ele, pelos dois. Fluxo: publicar sem `-Estavel`, validar em
+  Homologação, republicar o MESMO commit com `-Estavel` pra liberar em
+  Produção.
+- **Checagem no PowerShell, não no Python** — `apply_update.ps1`'s
+  `Invoke-Download` lê `$cfg.canal` (escrito por `_escrever_config_
+  ps1`) e, em Produção, ignora releases com `estavel: false` (retorna
+  como se não houvesse nada novo). O lado Python (`servico_sistema_
+  service.py`) nunca vê o manifest — só dispara o script e lê `state.
+  json` depois, então a lógica de canal PRECISA morar no PowerShell.
+- **Nova coluna `servico_sistema_atualizacao.canal`** (`'H'`/`'P'`,
+  default `'H'`) — adicionada estendendo a MESMA função `_ensure_
+  servico_sistema_atualizacao_table` já registrada em `schema_ensure.
+  py`, não uma nova (pergunta do usuário respondida ao vivo: "e como as
+  bases já instaladas vão pegar essa modificação?" — automaticamente,
+  no primeiro request pós-deploy, sem nenhum passo manual, mesmo
+  mecanismo de auto-atualização integral já documentado no projeto).
+- **Config screen** ganhou seletor "Canal" (`SelectField compactWeb`) +
+  item novo no Modo Didático. Quando canal='P' e há commit pendente, o
+  botão "Aplicar agora" é SUBSTITUÍDO por um aviso apontando pro botão
+  do Sidebar — nunca os dois caminhos disponíveis ao mesmo tempo.
+- **Sidebar**: `useAtualizacaoPendente` mudou de retornar `boolean` pra
+  `{pendente, canal}` — "Atualizar Sistema" agora exige
+  `pendente && canal==='P' && isManagerFuncao` (antes só `pendente &&
+  isManagerFuncao`).
+- **Backend**: `_save_config_sync` valida `canal` (só `'H'`/`'P'`), 3
+  testes novos + 2 ajustados pro novo shape de `_get_status_sync`/
+  `_ensure_*`. Suíte completa: 2766 passed, mesmas 4 falhas
+  pré-existentes de sempre.
+- `tsc --noEmit` (frontend) e parse-check (`[scriptblock]::Create`) dos
+  2 `.ps1` tocados: tudo limpo, nenhum erro novo.
+- **Nunca testado ao vivo** — precisa de um Storage Account de
+  distribuição real com pelo menos 2 releases publicadas (uma sem
+  `-Estavel`, outra com) pra validar o ciclo completo nos dois canais.
 
 ## 🟡 2026-08-26 — Fotos de Produto
 
@@ -4548,6 +4888,43 @@ regressão.
 ---
 
 ## Gestor de Devolução
+
+### Revisão de design + Modo Didático (2026-08-27)
+
+**Protocolo Gauntlet: fluxo simplificado — Carlos (revisão de design) +
+João (conteúdo didático, papel novo introduzido nesta sessão a pedido do
+usuário: "incluir o João da equipe nessa revisão para tornar a devolução
+mais didática possível").**
+
+Pedido do usuário: revisar o Gestor de Devolução quanto a design,
+padronizar campos de período, e reforçar o Modo Didático.
+
+- **Campos de período padronizados**: `dataIni`/`dataFim` (aba Buscar) e
+  `consultaDataIni`/`consultaDataFim` (aba Consulta) usavam
+  `width: 160` e rótulos "Data De"/"Data Até" — divergia do padrão já
+  estabelecido em outras telas (`requisicao.tsx` e outras, `colNarrow` =
+  140px, rótulos "De"/"Até"). Corrigido nos dois pares — regra "data
+  inicial repete na final" já estava certa em ambos, não precisou de
+  mudança.
+- **Modo Didático — conteúdo revisto com o João**: `AJUDA_ITENS`
+  reorganizado como passo-a-passo (1-2-3) em vez de 6 itens soltos; o
+  ponto que mais confundia — escolher "Registrar Devolução" vs "Emitir
+  NF-e de Devolução" — antes estava espalhado em 2 entradas sem
+  comparação direta, virou uma única entrada que já responde "qual eu
+  escolho". Além do modal de Ajuda, essa mesma explicação ganhou uma
+  linha de texto **em contexto**, direto acima dos 2 botões (só aparece
+  quando as duas ações estão disponíveis) — decisão mais importante da
+  tela não fica mais escondida atrás só do ícone "i".
+- **Reforço no mesmo dia**: "como combinamos em todas as telas que
+  possuir período, colocar data atual no período" — os 2 pares De/Até
+  (Buscar e Consulta) nasciam em `null`; agora inicializam com
+  `todayIso()` (mesmo padrão já usado em ~15 outras telas). Regra
+  formalizada como seção `[GLOBAL]` própria em CLAUDE.md (nunca tinha
+  sido escrita antes, só seguida por convenção informal) — ver "Filtro
+  de período" > "Todo campo de período nasce com a data de hoje".
+- `tsc --noEmit` limpo pra `devolucao.tsx` (mesmos erros pré-existentes
+  em outros arquivos não relacionados, sem regressão).
+- Não testado ao vivo num navegador ainda — só revisão de código/tipos.
 
 **Status: 🟢 Fase 1 enxuta implementada e TESTADA AO VIVO (2026-08-05)**
 contra GERDELL/BARESTELA — ciclo completo (buscar → registrar com Vale →
@@ -15123,6 +15500,516 @@ chamada de Incluir/Alterar/Listar, sem passo de migração manual.
 
 ---
 
+## Transferência Contas a Pagar/Receber (Financeiro)
+
+**Status: 🟢 Backend implementado e testado (unitário) 2026-08-27 —
+frontend implementado no mesmo dia, sem teste ao vivo num navegador
+ainda.** Pedido do usuário: "vamos implantar em Financeiro a tela de
+Transferência Contas a Pagar/Receber" — dentro da sequência de migração
+proposta por Leandro (equipe VB6): Devolução → **Transferência Contas a
+Pagar/Receber** → Duplicatas Pagar/Receber → Impressão de Boletos → Fluxo
+de Caixa.
+
+**Fonte VB6 (rastreada via agente de pesquisa)**: `Geral\
+FrmTransfContas.frm`, caption real "Transferência para o Contas a Pagar /
+Receber...", rotina principal `Mod_Pagar.bas` (`NF_RECEBE`, `Nf_PAGA`,
+`transferecomanda`). **Disambiguação importante, confirmada antes de
+codar**: esta NÃO é a tela de mover saldo entre Contas de caixa/banco —
+essa é `FrmTransfCaixa.frm` (tela irmã, mesmo menu Financeiro, usa
+`movimentacoes.transferencia='2'`, já mapeada no `contas_service.py` como
+mecanismo de OUTRA tela) — confundir as duas teria implementado a
+feature errada.
+
+**O que a tela faz**: lista Notas Fiscais já emitidas
+(`N_fiscal.pagar='S'`, `situacao='A'`, ainda não lançadas no livro-razão
+formal) e Comandas do Bar já pagas (`situacao='PG'`, ainda não
+transferidas) — o usuário marca as linhas e clica Transferir, sem
+digitação manual nenhuma (fiel ao legado: o `.frm` não tem NENHUM campo
+de entrada livre, só grid + botão). Nota de Saída (`LEFT(mov,1)='S'`) vira
+Contas a Receber; Nota de Entrada (`'E'`) vira Contas a Pagar.
+
+**3 decisões de escopo confirmadas pelo usuário via `AskUserQuestion`**
+(nunca implementadas por suposição, seguindo a regra do projeto de nunca
+estreitar achado multi-ramificação silenciosamente):
+1. **"Os dois lados juntos"** — implementar Contas a Receber E Contas a
+   Pagar na mesma leva (não só o lado Receber primeiro).
+2. **"Replicar as 2 regras condicionais por completo"** —
+   `controle.agrupa_nf_receber` (soma no mesmo registro de duplicata
+   aberta em vez de criar um novo) e `controle.geranumerodup` +
+   `controle.numero_dup` + `controle.desmembramento_dup` (sequencia o
+   número da duplicata a partir de um contador central em vez de usar o
+   próprio número da nota).
+3. **"Incluir agora"** — a trava de segurança de Nota ligada a uma
+   Comanda já transferida por outro caminho (`comanda_nf` +
+   `comanda.transf_caixa`), com a mensagem de erro real do legado.
+
+**Schema real, verificado ao vivo contra ARGEN TESTE**
+(`INFORMATION_SCHEMA.COLUMNS`, mesmo processo de sempre) antes de escrever
+qualquer SQL:
+- **Receita**: `Receber` → `receber_custo` (rateio por centro de custo) →
+  `Duplicata_Receber` → `Duplicata_Rec_Venc` (1 linha por vencimento) →
+  `Duplicata_Rec_Nf` (liga duplicata↔nota). Mesma família já usada pelo
+  módulo de Boletos/CNAB.
+- **Pagar**: `Pagar` → `pagar_custo` → `Duplicata_Pagar` →
+  `Duplicata_Pag_Venc` → `Duplicata_Pag_Nf` — família espelhada, nunca
+  tocada nesta migração antes desta tela. **Não é simétrica em tudo** —
+  `Duplicata_Pagar.duplicata` é `float`, `Duplicata_Receber.duplicata` é
+  `int`; `Duplicata_Pag_Venc` não tem `multa_atraso`/`registrado`/
+  `impresso`/`transf_banco` que `Duplicata_Rec_Venc` tem, mas tem
+  `banco_pag`/`agencia_pag`/`chegou_dup` que o lado Receber não tem —
+  respeitado tal como o schema real é, sem inventar simetria que não
+  existe.
+
+**Simplificação consciente e registrada, não omissão silenciosa**: o
+split/merge fino de uma nota ligada a uma Comanda PARCIALMENTE
+transferida (`Verifica_CM_Contas`/`Dados_CM_Contas` em `Mod_Pagar.bas`) não
+foi replicado — o agente de pesquisa só trouxe a descrição desse ramo, não
+o SQL exato, e implementar sem o SQL real violaria a regra do projeto de
+nunca supor regra de negócio. O caminho comum (Comanda paga → ainda não
+lançada, ou já transferida por completo → bloqueia) está implementado por
+completo; só o meio-termo (parcial) fica de fora.
+
+**Backend**:
+- `backend/services/transferencia_contas_service.py` — `listar_pendentes`
+  (UNION dos 3 tipos: Contas a Receber / Comanda / Contas a Pagar),
+  `_nf_recebe_sync` (réplica de `NF_RECEBE`), `_nf_paga_sync` (réplica de
+  `Nf_PAGA`), `_transferir_comanda_sync` (réplica simplificada de
+  `transferecomanda`, caminho comum), `_transferir_sync` (dispara vários
+  itens numa transação só, isola falha por item — 1 item ruim não derruba
+  os outros que já eram válidos, mesmo princípio de `ensure_all_schema`).
+- `backend/routes/transferencia_contas.py` — `GET
+  /api/transferencia-contas/pendentes`, `POST
+  /api/transferencia-contas/transferir` (log de auditoria na camada de
+  rota, não no service — mesmo padrão de `routes/devolucao.py`).
+- `backend/models/schemas.py` — `TransfContasItem`,
+  `TransfContasTransferirRequest`.
+- Permissão nova `TRANSF_CONTAS` (menu FINANCEIRO), ações `ABRIR`/
+  `TRANSFERIR` — distinta dos stubs `CONTAS_PAGAR`/`CONTAS_RECEBER` já
+  existentes em `financeiro.tsx` (esses são de telas FUTURAS de navegação/
+  gestão de duplicata em si, ainda não construídas — não confundir com
+  esta tela, que só promove pra dentro dessas tabelas).
+- Registrado em `server.py` (import + `include_router`).
+- **Testes**: `backend/tests/unit/test_transferencia_contas_service.py` —
+  14 testes (sucesso/nota não encontrada/já transferida/duplicidade
+  bloqueada/bloqueio de comanda já transferida/agrupamento/geração de
+  número sequencial, pro lado Receber; sucesso/duplicidade, pro lado
+  Pagar; sucesso/bloqueio já transferida/bloqueio não paga, pra Comanda;
+  isolamento de falha por item + flag desconhecida, pro orquestrador).
+  Suíte completa rodada após a implementação: `2727 passed` (2713 base +
+  14 novos), mesmas 4 falhas pré-existentes e não-relacionadas de sempre
+  (`test_cnab_itau_service`, `test_os_equipamento_service` ×3) — zero
+  regressão.
+
+**Frontend**: `frontend/app/transferencia-contas.tsx` — full-page, header
+com voltar/título/ícone de Ajuda (Modo Didático,
+`AjudaPedidoModal`/`IconButtonWithTooltip`), lista dos pendentes agrupada
+visualmente por `flag` (badge colorido por tipo), checkbox por linha +
+"Marcar todos"/"Desmarcar todos", barra de total selecionado + botão
+Transferir (spinner+gerúndio enquanto processa, regra `[GLOBAL]` de
+feedback visual >3s), busca client-side simples por cliente/fornecedor ou
+número (não é filtro de período — a fonte real não tem nenhum campo de
+filtro, só grid+botão, então nenhum foi inventado). Erros traduzidos via
+`friendlyApiError`/`friendlyCatchError`. Tile novo em
+`(tabs)/financeiro.tsx` (`can("TRANSF_CONTAS.ABRIR")`, ordenado
+alfabeticamente com os demais, mesmo padrão do resto do hub).
+`tsc --noEmit` limpo nos 2 arquivos tocados (mesmos erros pré-existentes
+de sempre no resto do projeto, nenhum novo).
+
+**Nunca testado ao vivo** — só leitura de schema real + testes unitários
+mockados até aqui. Antes de considerar esta tela pronta pra uso em
+produção: (1) abrir no navegador contra ARGEN TESTE (ou outra conexão de
+teste com Notas Fiscais/Comandas pendentes reais) e clicar no fluxo
+completo — buscar, marcar, transferir, conferir que as tabelas
+`Receber`/`Pagar`/`Duplicata_*` realmente recebem os dados certos; (2)
+confirmar que `controle.agrupa_nf_receber`/`geranumerodup` existem e têm
+o comportamento esperado numa instalação real (só verificados via
+`INFORMATION_SCHEMA`, nunca exercitados com dado de verdade); (3) se/
+quando o split/merge de Comanda parcialmente transferida virar necessário,
+pedir ao usuário o SQL real de `Verifica_CM_Contas`/`Dados_CM_Contas`
+antes de implementar.
+
+**Bug real corrigido 2026-08-28, achado ao especificar "Contas a
+Receber" em cima desta tabela**: `Duplicata_Rec_Nf.nf_fiscal`/
+`Duplicata_Pag_Nf.nf_fiscal` — apesar do nome da coluna — armazenam o
+`codigo` do registro em `Receber`/`Pagar`, **não** o `codigo` de
+`N_fiscal`. Confirmado contra 2 fontes legadas independentes: o JOIN de
+`Geral/FRMCONNFREC.frm` (`duplicata_rec_nf.nf_fiscal = Receber.Codigo`) e
+o `INSERT` de `Revenda/FrmManDur.frm`/`Geral/frmTraNFRec.frm`'s
+`Command7_Click` (grava `Campo(0)` = `Receber.Codigo` nessa coluna).
+`_nf_recebe_sync`/`_nf_paga_sync` gravavam `codigo_nota` (o `N_fiscal.
+codigo` de origem) em vez de `receber_codigo`/`pagar_codigo` — qualquer
+consulta que tentasse resolver "qual NF está ligada a esta duplicata"
+juntando de volta com `Receber`/`Pagar` batia com o registro errado (ou
+nenhum). **Corrigido** nas 2 funções + testes reforçados com asserção do
+valor exato gravado (antes só checavam que o INSERT rodava, não o
+parâmetro — por isso o bug passou despercebido no teste original). Suíte
+completa continua em zero regressão.
+
+**✅ Primeiro teste ao vivo NO NAVEGADOR de verdade desta tela, 2026-08-28
+(via screenshot do usuário) — achados reais de UI corrigidos na hora**:
+- Botões "Marcar todos"/"Desmarcar todos" viraram pills com borda (antes
+  texto puro, pouco óbvio como controle clicável).
+- Tela passou a carregar com **todos os itens já marcados** por padrão
+  (antes carregava tudo desmarcado).
+- **Bloco de total + botão "Transferir" movido pro TOPO** da lista, ao
+  lado de Marcar/Desmarcar Todos — antes ficava no rodapé, só visível
+  depois de rolar a lista inteira. Virou regra `[GLOBAL]` própria (ver
+  CLAUDE.md > "Padrões de UI" > seção 11, "Totais e botões de ação de
+  lista sempre no topo") — vale pra toda lista selecionável+total+ação
+  deste projeto daqui pra frente, não só esta tela.
+- Confirmado ao vivo que a tela renderiza corretamente com dado real de
+  ARGEN TESTE (8 pendentes reais visíveis no print, valores/badges por
+  tipo corretos).
+
+---
+
+## Contas a Receber (Financeiro)
+
+**Status: 🟢 Backend implementado e testado (unitário) 2026-08-28 —
+frontend implementado no mesmo dia, sem teste ao vivo num navegador
+ainda.** Continuação da sequência Leandro: Devolução → Transferência
+Contas a Pagar/Receber → **Duplicatas Pagar/Receber** → Impressão de
+Boletos → Fluxo de Caixa. Esta rodada cobre só o lado **Receber** —
+Pagar fica pra próxima (decisão do usuário via `AskUserQuestion`,
+"especificar e implementar Receber primeiro").
+
+**Fonte VB6 rastreada** (linhagem real `backon.vbp` — não `Geral`
+sozinho, que não tem a 3ª tela desta cadeia):
+- `Geral/FRMCONNFREC.frm` ("Consulta de Notas Fiscais a Receber") — busca
+  sobre `Receber` por código/número/cliente/valor/tipo mov/data, com
+  checkboxes "NFs sem Duplicata"/"NFs com Duplicata".
+- `Geral/frmTraNFRec.frm` ("Notas Fiscais a Receber...") — CRUD de
+  `Receber`, incluindo **lançamento manual avulso** (`CmdGravar_Click`
+  com `TemNF=False` — cliente/número/série/tipo mov/datas/valor
+  digitados à mão, sem Nota Fiscal real por trás) + botão "Gerar
+  Duplicata" (`Command7_Click`, split de parcelas).
+- `Revenda/FrmManDur.frm` ("Duplicatas a Receber...", 3685 linhas) —
+  referenciado por `backon.vbp` como `..\Revenda\FrmManDur.frm` (não
+  existe cópia em `Geral`, esta é a versão viva real) — manutenção de
+  `Duplicata_Receber`/`Duplicata_Rec_Venc`, boleto avulso, centro de
+  resultados, emitir fatura.
+
+**Regras de negócio replicadas fielmente**:
+- **Split de parcelas** (`Command7_Click`): valor total ÷ Nº parcelas,
+  arredondado a 2 casas — a **última parcela absorve a diferença de
+  arredondamento**. Vencimento de cada parcela avança 1 mês, mesmo dia;
+  se o dia não existir no mês seguinte (ex.: 31 num mês de 30 dias),
+  decrementa até achar data válida.
+- **Parcela paga é imutável** (`FrmManDur.frm`'s `Command2_Click`): ao
+  gravar/editar/excluir, uma parcela com `situacao='PG'` nunca é tocada
+  — replicado em `_editar_parcela_sync`/`_excluir_sync`.
+- **Reaproveita os helpers já existentes** de `transferencia_contas_
+  service.py` (`_controle_flags_sync`/`_resolver_numero_duplicata_sync`)
+  pro lançamento avulso — mesma numeração de duplicata (`geranumerodup`/
+  `desmembramento_dup`) que a Transferência já usa, sem duplicar lógica.
+
+**Achado importante, confirmado por leitura completa do
+`FrmManDur.frm` (3685 linhas)**: **não existe baixa manual no legado
+real**. Procurei toda gravação de `situacao='PG'` no arquivo inteiro — só
+existem leituras/guardas ("esta parcela já está paga, não mexo"), nunca
+uma escrita. `backon.vbp` também não referencia nenhuma tela de "Baixa de
+Duplicata" separada (só `Tubolit\frmbaixaped.frm`, que é outra coisa —
+baixa de pedido, não de duplicata). **A única forma real de marcar uma
+parcela como paga no Kontacto legado é via retorno bancário (CNAB)** —
+já portado em `cnab_*_service.py`. **Baixa manual (dinheiro/PIX/
+transferência direta) é funcionalidade NOVA nesta tela**, sem
+precedente — decisão confirmada com o usuário via `AskUserQuestion`
+("sim, incluir agora"). Reaproveita as MESMAS colunas que o retorno CNAB
+já usa em `Duplicata_Rec_Venc` (`data_pag`/`valor_pag`/`desconto_pag`/
+`juros_pag`) — mesmo formato de baixa, origem diferente. Faz o mesmo
+rollup que o retorno CNAB ainda não faz em produção (achado cross-banco
+já registrado em "Bancos" — `parcelas_pagas`/`situacao` da duplicata
+recalculados a cada baixa).
+
+**Melhoria deliberada em relação ao legado**: `frmTraNFRec.frm`'s
+`cmdExcluir_Click` deleta `Receber` direto sem checar duplicata/parcela
+paga vinculada. Nesta migração, excluir uma duplicata **bloqueia se
+qualquer parcela já estiver paga** (mesmo princípio de "Delete guards
+required" já padrão no projeto) — e, ao excluir com sucesso, o `Receber`
+vinculado volta pra `situacao='A'` (se veio de NF real, permitindo gerar
+duplicata de novo) ou é apagado junto (se foi lançamento avulso desta
+própria tela, sem NF real por trás).
+
+**Escopo desta rodada, decidido via `AskUserQuestion`**:
+- ✅ Lançamento avulso — incluído.
+- ✅ Baixa manual — incluído (funcionalidade nova, ver acima).
+- ❌ **Boleto avulso — resposta do Leandro, 2026-08-28: "fica fora. já
+  existe via Geração de Boletos."** Confirmado definitivamente fora de
+  escopo desta tela — não reabrir essa pergunta; o caminho real pra
+  emitir boleto continua sendo Financeiro > Cobranças > Geração de
+  Boletos (`geracao_boletos_service.py`).
+- ⏸️ Centro de Resultados (rateio), Emitir Fatura — **ainda sem resposta**
+  do Leandro (a mensagem só endereçou Boleto avulso). Não presumir nem
+  "sim" nem "não" pra essas duas até resposta explícita.
+
+**Backend**: `backend/services/contas_receber_service.py` (listar,
+detalhe, criar avulsa, baixar parcela, editar parcela, excluir, lookup de
+tipos de movimentação elegíveis) + `backend/routes/contas_receber.py` +
+modelos novos em `backend/models/schemas.py`
+(`ContasReceberListRequest`/`AvulsaRequest`/`BaixaRequest`/
+`EditarParcelaRequest`/`ExcluirRequest`). Permissão `CONTAS_RECEBER`
+ganhou ações próprias (`ACOES_CONTAS_RECEBER`: ABRIR/GRAVAR/BAIXAR/
+EXCLUIR — antes usava o `ACOES_PADRAO` genérico). Schema verificado ao
+vivo contra ARGEN TESTE (`INFORMATION_SCHEMA.COLUMNS`) antes de escrever
+qualquer SQL — `Duplicata_Rec_Venc` tem 38 colunas reais, incluindo as de
+baixa (`data_pag`/`valor_pag`/`desconto_pag`/`outros_desc_pag`/
+`juros_pag`/`outros_acres_pag`) já confirmadas em uso pelo motor CNAB
+Bradesco. 34 testes novos (`test_contas_receber_service.py`) cobrindo
+split/arredondamento/avanço de mês, bloqueio de parcela paga, rollup de
+situação da duplicata, guarda de exclusão (avulso vs. NF real) — suíte
+completa em 2747 passed, as mesmas 4 falhas pré-existentes e não
+relacionadas de sempre (`test_cnab_itau_service`,
+`test_os_equipamento_service` ×3, confirmado via `git stash` que já
+falhavam antes desta rodada).
+
+**Frontend**: `frontend/app/contas-receber.tsx` — substitui o placeholder
+"Coming Soon" que existia antes. Full-page, header com voltar/título/
+ícone "+" (Lançamento avulso, gated por `CONTAS_RECEBER.GRAVAR`)/Ajuda
+(Modo Didático). Accordion "Buscar e Filtrar" (chips de situação Todas/
+Aberto/Vencido/Pago, busca por cliente/nº, filtro opcional por período de
+vencimento com `WebDateField`, regra `[GLOBAL]` de data inicial repetindo
+na final). Lista de duplicatas com indicador visual de vencido (ponto/
+texto vermelho). Modal de Lançamento Avulso (busca de cliente via
+`ClientSearchModal`, `SelectField compactWeb` pro Tipo de Movimentação
+vindo de `/api/contas-receber-tipos-mov` — réplica do combo filtrado
+`LEFT(codigo,1)='S' AND TRANSF_PAGAR='S'` do legado). Modal de Detalhe
+(parcelas com botão "Baixar" por linha quando ainda aberta, badge "Pago"
+quando já baixada, botão "Excluir Duplicata" gated por
+`CONTAS_RECEBER.EXCLUIR`). Modal de Baixa (data/valor/desconto/juros).
+Erros traduzidos via `friendlyApiError`/`friendlyCatchError`.
+`tsc --noEmit` limpo (mesmos 12 erros pré-existentes de sempre no resto
+do projeto — nenhum arquivo novo/tocado desta rodada aparece na lista).
+
+**✅ TESTADO AO VIVO 2026-08-28 contra ARGEN TESTE** — direto pela API
+(backend reiniciado pra carregar o código novo; navegador ainda não foi
+aberto, ver nota no fim). Ciclo completo exercitado com dado real:
+1. `GET /contas-receber` — retornou duplicatas reais já existentes
+   (originadas de Comanda via Transferência, `desmembramento="CM"`),
+   confirma que a listagem lê certo o que outras telas já gravaram.
+2. `GET /contas-receber-tipos-mov` — retornou os 4 tipos reais filtrados
+   (`S01`/`S06`/`S16`/`S24`), confirma a réplica do combo do legado.
+3. Lançamento avulso (3 parcelas, R$100, vencimento inicial 31/01/2026)
+   — split gravou 33.33/33.33/33.34 (soma exata 100.00) e o vencimento
+   avançou 31/01 → **28/02** (fevereiro não tem 31, decrementou certo) →
+   **31/03** (voltou pro dia 31 assim que o mês voltou a ter esse dia) —
+   confirma `_avancar_vencimento_mensal` byte a byte contra dado real,
+   inclusive o caso de 2 meses seguidos com o mesmo ajuste.
+4. Editar parcela em aberto — funcionou, persistiu vencimento/valor/obs
+   novos.
+5. Baixa parcial (1 de 3 parcelas) — `parcelas_pagas=1`, duplicata
+   continua `situacao='A'` (rollup parcial correto).
+6. Guardas confirmados nos dois: editar parcela já paga → bloqueado
+   ("Alterações não permitidas"); excluir com 1 parcela paga → bloqueado
+   ("existem parcelas já pagas").
+7. Baixa das 2 parcelas restantes — `parcelas_pagas=3`,
+   `situacao='PG'` (rollup total correto).
+8. Lançamento avulso novo (1 parcela, nunca baixado) → excluído → `GET`
+   devolveu "Duplicata não encontrada" — confirmado por SQL direto que o
+   `Receber` correspondente foi de fato APAGADO (branch avulso da guarda).
+
+**Bug real encontrado e corrigido durante este teste ao vivo**:
+`Receber.cod_n_fiscal` tem `DEFAULT ((0))` no schema real (confirmado via
+`INFORMATION_SCHEMA.COLUMNS`) — omitir a coluna no `INSERT` do lançamento
+avulso fazia o SQL Server preencher `0`, não `NULL`, mesmo a coluna sendo
+nullable. `_excluir_sync` decide avulso-vs-NF-real checando
+`cod_n_fiscal IS NULL` — com `0` em vez de `NULL`, todo avulso seria
+tratado como "veio de NF real" (só reabre `situacao='A'`, nunca apaga o
+`Receber`), deixando lixo órfão pra trás a cada exclusão. Reproduzido ao
+vivo (duplicata de teste #9100/`Receber` #11489 ficou órfã após
+"excluída"), corrigido gravando `cod_n_fiscal = NULL` explicitamente no
+INSERT do avulso (não confiar em omissão + default de coluna), limpo
+manualmente o registro órfão, reiniciado o backend, e todo o ciclo acima
+foi refeito do zero já com o fix — passou limpo em todos os 8 passos.
+Suíte completa continua em 2747 passed, zero regressão.
+
+**Dado de teste que ficou no banco, de propósito** (mesmo padrão já usado
+antes neste projeto, ex.: veículo `TST0002` em MDF-e): duplicata #9101
+(`Receber` #11490, nota_fiscal 999902/série TST, cliente 2393) — ciclo
+completo pago, `situacao='PG'`, serve de referência viva do fluxo
+completo funcionando. Marcada em `observacao` como "TESTE Claude".
+
+**Ainda não aberto no navegador** — só testado via API direta (mesmo
+método já padrão neste projeto pra isolar bug de backend vs. frontend
+sem depender de tela). Falta: (1) abrir `contas-receber.tsx` de verdade
+no browser contra ARGEN TESTE e navegar o fluxo completo pela UI
+(inclusive `ClientSearchModal`/`SelectField`/`WebDateField` renderizando
+certo); (2) confirmar visualmente o destaque de "vencido" e os badges de
+situação. **Editar parcela em aberto** (`_editar_parcela_sync`, já
+confirmado funcionando por API) está implementado no backend mas **sem
+UI própria ainda** — o frontend desta rodada só expõe Baixar/Excluir;
+adicionar um botão "Editar" por parcela quando a UI for revisada, ou
+confirmar com o usuário se é mesmo necessário antes de construir.
+
+---
+
+## Contas a Pagar (Financeiro)
+
+**Status: 🟢 Backend + frontend implementados e TESTADOS AO VIVO contra
+ARGEN TESTE 2026-08-28, no mesmo dia de Contas a Receber.** Fecha o lado
+Pagar da sequência Leandro (Devolução → Transferência Contas a Pagar/
+Receber → **Duplicatas Pagar/Receber** → Impressão de Boletos → Fluxo de
+Caixa) — espelho direto de [[Contas a Receber]] acima, mesma arquitetura,
+mesmas regras de negócio, adaptadas pro lado fornecedor.
+
+**Fonte VB6 rastreada** (linhagem real `backon.vbp`):
+- `Geral/FRMCONNFPAG.frm` ("Consulta de Notas Fiscais a Pagar...") —
+  busca sobre `Pagar`, mesmo padrão de `FRMCONNFREC.frm`.
+- `Geral/frmTraNFPag.frm` ("Notas Fiscais a Pagar...") — CRUD de `Pagar` +
+  lançamento avulso. Confirmado ao ler a fonte: o combo de Tipo de
+  Movimentação usa `transf_pagar='S' and left(Codigo,1)='E'` (linha 1547)
+  — Entrada, espelho exato do `'S'` (Saída) do lado Receber.
+- `Revenda/frmmandup.frm` ("Duplicatas a Pagar...", 3021 linhas,
+  referenciado por `backon.vbp` — não existe em `Geral`) — manutenção de
+  `Duplicata_Pagar`/`Duplicata_Pag_Venc`. **Achado real, não presumido**:
+  contei os botões via `Tag` — 15 aqui contra 18 do lado Receber — este
+  lado **nunca teve** botão "Imprimir Boleto" nem "Centro de Resultados"
+  no legado (faz sentido: não se emite boleto pra pagar; a tela de rateio
+  de custo do lado Pagar nunca foi exposta aqui). Não é lacuna de
+  migração — não construir esses 2 pra Pagar mesmo se algum dia forem
+  liberados pro lado Receber.
+
+**Mesmo achado do lado Receber, confirmado de novo aqui por leitura
+completa do arquivo**: procurei toda gravação de `situacao='PG'` em
+`frmmandup.frm` inteiro — só leituras/guardas, nunca uma escrita. Baixa
+manual é NOVA aqui também.
+
+**Schema real, verificado ao vivo contra ARGEN TESTE antes de escrever
+qualquer SQL** — inclusive replicando desde o início a lição aprendida no
+lado Receber: `Pagar.cod_n_fiscal` também tem `DEFAULT ((0))`, gravado
+como `NULL` explícito no avulso desde a primeira versão do código (não
+precisou de correção depois, ao contrário do Receber). `Duplicata_Pagar.
+duplicata` é `float` (confirmado, já esperado pelo achado documentado em
+`transferencia_contas_service.py`); `Duplicata_Pag_Venc` tem 30 colunas
+reais (contra 38 do lado Receber) — sem `multa_atraso`/`mora_dia`/
+`registrado`/`impresso`/`num_doc_cedente`/`portador`/`motivo_ocorrencia`,
+mas com `banco_pag`/`agencia_pag`/`num_doc_pag`/`chegou_dup` que o lado
+Receber não tem — respeitado tal como o schema real é.
+
+**Backend**: `backend/services/contas_pagar_service.py` (importa
+`_split_parcelas` de `contas_receber_service.py` e
+`_controle_flags_sync`/`_resolver_numero_duplicata_sync` de
+`transferencia_contas_service.py` — zero duplicação das regras
+compartilhadas) + `backend/routes/contas_pagar.py` + modelos em
+`backend/models/schemas.py` (`ContasPagarListRequest`/`AvulsaRequest`/
+`BaixaRequest`/`EditarParcelaRequest`/`ExcluirRequest`). Permissão
+`CONTAS_PAGAR` ganhou `ACOES_CONTAS_PAGAR` (ABRIR/GRAVAR/BAIXAR/EXCLUIR,
+espelho de `ACOES_CONTAS_RECEBER`). 16 testes novos
+(`test_contas_pagar_service.py`), incluindo asserção explícita de que
+`cod_n_fiscal` é gravado como `NULL` (não omitido) — lição do bug do lado
+Receber já embutida no teste desde o início. Suíte completa: 2763
+passed, mesmas 4 falhas pré-existentes de sempre, zero regressão.
+
+**Frontend**: `frontend/app/contas-pagar.tsx` — substitui o placeholder
+"Coming Soon". Estrutura idêntica a `contas-receber.tsx`, trocando
+Cliente por **Fornecedor** — reaproveita `FornecedorSearchModal.tsx`
+(componente já existente, criado originalmente pro campo Fabricante/
+Distribuidor do Produto Completo) em vez de duplicar lógica de busca.
+`tsc --noEmit` limpo (mesmos 12 erros pré-existentes de sempre, nenhum
+novo).
+
+**✅ TESTADO AO VIVO 2026-08-28 contra ARGEN TESTE, direto por API**
+(mesmo método do lado Receber) — ciclo completo com fornecedor real
+(`codigo_int=460`, AR CONDICIONADO RIO PRETO LTDA):
+1. Lookup de tipos de movimentação — 11 tipos reais de Entrada
+   (`E01`..`E25`), confirma o filtro certo.
+2. Lançamento avulso (3 parcelas, R$100) — split 33.33/33.33/33.34,
+   vencimento 31/01→28/02→31/03, **`cod_n_fiscal: null` desde a primeira
+   tentativa** (fix do lado Receber aplicado preventivamente, sem
+   precisar de 2ª rodada de correção desta vez).
+3. Editar parcela em aberto — funcionou.
+4. Baixa parcial → `parcelas_pagas=1`, duplicata continua `'A'`.
+5. Guardas: editar parcela paga → bloqueado; excluir com parcela paga →
+   bloqueado.
+6. Baixa das 2 parcelas restantes → `parcelas_pagas=3`,
+   `situacao='PG'`.
+7. Avulso novo (nunca baixado) → excluído → `Pagar` correspondente
+   confirmado APAGADO por SQL direto (branch avulso da guarda).
+
+**Dado de teste que ficou no banco, de propósito** (mesmo padrão do lado
+Receber): duplicata #9377 (`Pagar` #8327, nota_fiscal 999901/série TST,
+fornecedor 460), ciclo completo pago, `situacao='PG'`, marcada "TESTE
+Claude" na observação.
+
+**Ainda não aberto no navegador** — mesma pendência do lado Receber, só
+testado via API direta até aqui. **Editar parcela em aberto** também
+sem UI própria ainda (mesma decisão do lado Receber — backend pronto,
+botão "Editar" fica pra quando a UI for revisada ou se o usuário
+confirmar que é necessário).
+
+**Fora de escopo, mesma decisão já aplicada ao lado Receber**: Boleto
+avulso (não existe nem no legado pra este lado — não emite boleto pra
+pagar), Centro de Resultados, Emitir Fatura — os 2 últimos ainda sem
+confirmação do Leandro nem pro lado Receber, então também ficam de fora
+aqui até resposta.
+
+---
+
+## Teste de ecossistema Contas a Pagar/Receber/Fluxo de Caixa — 2026-08-28
+
+**Pedido do usuário**: "testar o ecossistema pagar/receber/fluxo de caixa
+na conexão Argen teste" — teste integrado dos 3 pilares do Financeiro,
+não só cada tela isolada.
+
+**Fluxo de Caixa, os 4 sub-cadastros, todos confirmados ao vivo contra
+ARGEN TESTE**:
+- `GET /api/financeiro/plano-contas` — retornou o plano de contas REAL da
+  empresa (21 classes, ~250 subclasses, ex.: "DESPESAS ADMINISTRATIVAS",
+  "DESPESAS PESSOAL", "RECEITA OPERACIONAL").
+- `GET /api/financeiro/centro-custo` — 4 centros reais (ARGEN COM/ARGEN
+  SEM/FIXO/VARIAVEL), com vínculo de classe/subclasse de entrada e saída.
+- `GET /api/contas-caixa` — 6 contas reais (ARGEN/CAIXINHA/EMPREITEIRO/
+  FORNECEDOR/FUNCIONARIO/INVESTIMENTO), com saldo real (ex.: ARGEN
+  R$5.175.974,06).
+- `GET /api/conta-funcionario?funcionario=5` — retornou as contas
+  visíveis pro funcionário real ADELINO (Gerente): ARGEN + CAIXINHA.
+- **Achado de rota, corrigido só na investigação (não no código)**: as
+  URLs corretas são `/api/financeiro/plano-contas` e
+  `/api/financeiro/centro-custo` (não `/api/plano-contas`/
+  `/api/centro-custo` — esses 2 últimos existem mas são endpoints de
+  LOOKUP genérico em `lookups_service.py`, coincidentemente com nome
+  parecido; usados por outras telas como combobox, não a tela CRUD real).
+  Vale lembrar disso ao testar essa área de novo no futuro.
+
+**Achado real — Fluxo de Caixa NÃO reflete baixa de Contas a Receber/
+Pagar (nem qualquer outra operação hoje).** Testado ao vivo: criei uma
+duplicata avulsa (R$77,00), dei baixa referenciando explicitamente
+`conta=3` (CAIXINHA, saldo real antes: R$33.983,50) — a baixa gravou
+`conta=3` corretamente na parcela (dado capturado certo, confirmado via
+`GET /contas-receber/9103`), mas o `saldo_atual` de CAIXINHA em
+`GET /api/contas-caixa` **não mudou nem um centavo** depois. Rastreei a
+causa: `contas_service.py`'s `saldo_atual` é uma **coluna armazenada**
+em `Contas`, só recalculada quando a própria tela Contas edita
+`saldo_inicial` (desloca `saldo_atual` pela mesma diferença — "recalculo
+automático" já documentado). **Nenhuma tela migrada até hoje atualiza
+esse saldo como efeito colateral de uma transação** — nem minha baixa
+manual nova, nem `entrada_saida_caixa_service.py` (Cadastros > Entrada/
+Saída de Caixa, confirmado por leitura: grava numa tabela própria de
+staging, não em `movimentacoes`, com um comentário próprio no arquivo
+dizendo que "a transferência de fato pra `movimentacoes`" é outra etapa,
+fora do escopo dessa função). **Isto não é um bug introduzido agora — é
+exatamente o gap já registrado na análise de escopo do ecossistema
+(seção "Estado Atual"/análise Carlos, 2026-08-28, mais acima): "Fluxo de
+Caixa" hoje é só um hub de cadastros auxiliares, a tela de extrato/saldo
+projetado em si nunca foi construída.** Registrar aqui formaliza o
+achado com teste ao vivo, mas a decisão de quando construir um "razão"
+de verdade (saldo recalculado a partir de `movimentacoes`/baixas reais)
+continua em aberto — não implementar sem confirmar prioridade/desenho
+com o usuário, já que é uma peça nova de arquitetura (não um bug de
+1 tela), potencialmente afetando `entrada_saida_caixa_service.py` e as 2
+telas de Contas a Pagar/Receber ao mesmo tempo.
+
+**Resto do ciclo de Contas a Receber/Pagar rechecado, tudo OK** — lista,
+detalhe, avulso, editar, baixa, guardas de exclusão — sem regressão
+desde o teste anterior no mesmo dia.
+
+**Dado de teste adicional deixado no banco, de propósito**: duplicata
+Receber #9103 (`Receber` #11492/`Duplicata_Rec_Venc` #17813, nota_fiscal
+999904/série TST, cliente 2393), paga com `conta=3`, usada
+especificamente pra este teste de integração — marcada "TESTE Claude
+integracao fluxo caixa" na observação.
+
+---
+
 ## Inventário — levantamento original (histórico, ver Fase 1 acima pro estado atual)
 
 O usuário pediu explicitamente: **primeiro
@@ -22435,6 +23322,1169 @@ e (7) Fechamento de Caixa só passaram por build limpo + revisão de
 código — **nenhum dos três foi confirmado visualmente rodando o app
 ainda**. Primeira coisa a testar na próxima sessão, nesta ordem (mais
 antigo primeiro).
+
+### Foto de produto no menu lateral (2026-08-27) — IMPLEMENTADO, testado ao vivo em 2 rodadas, 3ª rodada aguardando confirmação
+
+Pedido explícito do usuário: "no KPDV, vamos exibir a imagem do produto
+adicionado abaixo do menu lateral" — usuário mandou um screenshot
+primeiro que na verdade era de `frontend/app/produtos.tsx` (app web), não
+do KPDV; confirmado o engano via `AskUserQuestion` antes de mexer em
+qualquer código, evitando construir a coisa errada.
+
+**Achado real antes de implementar**: nenhuma tela do KPDV hoje se parece
+com o screenshot original (não existe listagem "Produtos (N)" com cards —
+só o `AutoSuggestBox` de busca inline em `VendaView.xaml`). E o KPDV não
+tinha NENHUM precedente de carregar imagem remota via HTTP (sem
+`BitmapImage`/`ImageSource` em código nenhum do projeto até agora) — essa
+é a primeira vez.
+
+**Desenho**: a foto exibida é a do ÚLTIMO ITEM ADICIONADO à venda (não um
+resultado de busca solto), no `PaneFooter` do `ui:NavigationView`
+(confirmado por reflection contra o DLL real do WPF-UI 4.3.0 instalado —
+`PaneFooter` é o slot de conteúdo LIVRE, fixo no rodapé do pane;
+`FooterMenuItems` existe também mas só aceita itens de menu estilizados
+como botão, não serve pra imagem+legenda livre).
+
+- **Backend** (`backend/services/checkout_service.py::_buscar_produto_sync`):
+  novo campo `imagem_codigo` na resposta de `GET /api/checkout/produto`
+  (resolvido só pra `tipo="P"`, nunca serviço) — mesma consulta
+  `produto_imagem WHERE codigo_int=%s AND principal=1 AND situacao='A'`
+  já usada em `produtos_service.py`/`itens_service.py`, não duplicada
+  como LEFT JOIN aqui porque `_resolve_produto_completo` já resolve por 4
+  colunas diferentes; mais simples resolver a imagem à parte com o
+  `codigo_int` definitivo em mãos. 6 testes novos
+  (`TestBuscarProdutoImagem`), `pytest tests/unit -q` → 2713 passed,
+  mesmas 4 falhas pré-existentes não relacionadas.
+- **KPDV** (`C:\Desenv\KPDV`, repositório irmão — NÃO fica dentro de
+  APPIAREACT): `CheckoutProdutoResponse.ImagemCodigo` (novo campo, DTO já
+  usa `JsonNamingPolicy.SnakeCaseLower`, mapeia sozinho a partir de
+  `imagem_codigo` sem atributo manual); `ApiClient.GetBytesAsync` (método
+  novo — os 4 métodos existentes só desserializam JSON via
+  `ReadFromJsonAsync`, nenhum baixava bytes crus; best-effort, devolve
+  `null` em qualquer falha em vez de lançar `ApiConnectionException`, já
+  que foto nunca pode travar o fluxo de adicionar item); `Services/
+  ProdutoImagemService.cs` (novo — baixa+decodifica `BitmapImage`,
+  `Freeze()` pra poder atribuir a partir de qualquer thread); mesmo
+  padrão de `CancellationTokenSource` já usado em `BuscarAsync`
+  (`VendaViewModel`) pra cancelar o download de uma foto anterior se um
+  2º item for adicionado rápido demais. `VendaViewModel` ganhou
+  `ImagemUltimoItem`/`DescricaoUltimoItem` (resetados também em
+  `InicializarAsync`, pra não vazar a foto de uma venda anterior pra
+  próxima). `MainWindow.xaml`'s `NavigationView.PaneFooter` — `DataContext`
+  ligado à MESMA instância de `VendaViewModel` reaproveitada pela sessão
+  inteira (`MainWindow.xaml.cs`, já que `NavView` é IRMÃ de `ConteudoAtual`
+  na árvore visual, não herda `DataContext` da `VendaView` sozinha).
+- **Build limpo** (`dotnet build KPDV.slnx`, 0 erros, mesmos 2 warnings
+  pré-existentes não relacionados — `NU1510`).
+- **TESTADO AO VIVO no mesmo dia** — usuário rodou o app de verdade
+  (Venda #17884) e mandou screenshot real confirmando que o painel
+  funciona (imagem carregou de verdade, "1/2 GALETO NA BRASA"). 3 ajustes
+  pedidos na sequência, já implementados e com build limpo: (1) painel
+  aumentado (90→220px) e legenda de texto removida ("a imagem não precisa
+  da descrição junto"); (2) achado real e corrigido na mesma sessão — a
+  busca de produto (`AutoSuggestBox`) não tinha rolagem quando havia mais
+  resultados do que cabiam na tela ("a pesquisa se perde. não tem rolagem
+  para baixo") — causa raiz confirmada por reflection sobre o DLL real do
+  WPF-UI: `MaxSuggestionListHeight` tem padrão `0` (sem limite = sem
+  scroll), corrigido fixando `320`; (3) na listagem de itens, "Total"
+  alinhado à direita (achado real: `HorizontalAlignment="Right"` já
+  existia mas sem efeito, porque o `TextBlock` não tinha um contêiner que
+  se esticasse pra dar espaço de sobra — envolvido num `Grid`) e fonte
+  sem negrito (Descrição/Total).
+- **2ª rodada de feedback ao vivo, mesmo dia** — usuário reportou que a
+  lista "não ficou como eu pedi" e mandou novo screenshot (Venda #17885)
+  mostrando o cabeçalho "Total" como uma caixa branca com texto
+  CENTRALIZADO, destoando visualmente dos outros cabeçalhos (fundo
+  colorido + borda inferior + negrito). **Causa raiz real** (só ficou
+  clara olhando o XAML de novo, não pelo screenshot sozinho):
+  `GridViewColumn.HeaderContainerStyle` sem `BasedOn` REPÕE o estilo
+  inteiro daquele cabeçalho (não mescla com o `Style TargetType=
+  "GridViewColumnHeader"` global já existente no arquivo, linha ~71) —
+  perdia o `ControlTemplate` customizado inteiro (fundo, borda, negrito) e
+  caía no header padrão do Windows, daí a caixa branca/texto centralizado.
+  Corrigido com `BasedOn="{StaticResource {x:Type GridViewColumnHeader}}"`
+  no `Style` do `HeaderContainerStyle` — agora herda o template certo, só
+  sobrescreve `HorizontalContentAlignment`.
+  - **2º achado, mesma investigação**: mesmo com o header corrigido, ainda
+    haveria uma faixa morta à direita da tabela — as larguras fixas de
+    TODAS as colunas somadas (180+55+80+90+34=439px) ficam bem menores que
+    a largura real do `ListView` (que se estica pra preencher o painel
+    "Demonstrativo do Cupom Fiscal"), e o fundo/borda do cabeçalho do
+    `GridView` se estica até a largura real do controle — deixando uma
+    faixa vazia depois de "Total" que fazia a coluna parecer "não alinhada
+    à direita" mesmo já estando alinhada dentro da sua própria largura
+    estreita. Corrigido dando à coluna "Descrição" uma largura RESPONSIVA
+    (`Width` bindado a `ListaItens.ActualWidth` via novo conversor
+    `LarguraDescricaoColunaConverter`, `Converters/CommonConverters.cs` —
+    `restante = ActualWidth − (55+80+90+34) − folga`), em vez de um valor
+    fixo — a tabela agora ocupa a largura real do painel em qualquer
+    tamanho de janela (`MinWidth="960"` da `FluentWindow`), sem faixa
+    morta depois de "Total".
+  - **Pedido simultâneo do usuário**: "a imagem deve ficar mais para
+    cima" + "sobe mais essa parte da tela. Alinhar com o primeiro item do
+    menu lateral" — o painel de foto saiu de `NavigationView.PaneFooter`
+    (rodapé fixo do pane) pra `NavigationView.PaneHeader` (confirmado por
+    reflection sobre o mesmo DLL: `NavigationView` tem os dois slots,
+    `PaneHeader`/`PaneFooter`, ambos `object` livre — `PaneHeader`
+    renderiza ACIMA de `MenuItems`, logo o painel agora fica junto ao
+    primeiro item, "Venda", como pedido).
+  - Build limpo (`dotnet build KPDV.slnx`, 0 erros) e app relançado —
+    aguardando confirmação visual do usuário sobre esta 2ª rodada
+    (screenshot ainda não recebido no momento deste registro).
+- **3ª rodada de feedback ao vivo, mesmo dia** — usuário confirmou por
+  screenshot (Venda #17886) que o cabeçalho "Total"/imagem no topo do menu
+  ficaram certos, e pediu 3 ajustes adicionais:
+  1. **"deixar o menu lateral fixo expandido"** — `NavView` ganhou
+     `IsPaneOpen="True"` (explícito, já era o padrão do controle) +
+     `IsPaneToggleVisible="False"` (confirmado por reflection —
+     `NavigationView` tem essa propriedade dedicada) — remove o botão "☰"
+     que permitia recolher o pane, ele fica sempre expandido.
+  2. **"subir a tela para alinhar com a imagem"** (screenshot com setas
+     apontando pro topo dos cards "CLIENTE"/"DEMONSTRATIVO DO CUPOM
+     FISCAL", mais abaixo que o topo do painel de foto no menu lateral) —
+     `ScrollViewer` externo de `VendaView.xaml` teve o padding superior
+     reduzido (24→10) e a linha do ícone de Ajuda encolhida (margin
+     inferior 10→2), subindo o início do conteúdo principal.
+  3. **"tela de pedido cortando card à direita"** (screenshot da tela
+     Pedidos, coluna "Fiado" cortada na borda direita da janela) — achado
+     real: as 5 colunas (Mesa/Comanda/Balcão/Entrega/Fiado) tinham largura
+     FIXA (280px cada, ~1490px somadas) dentro de um `ScrollViewer`
+     horizontal que o usuário nunca percebeu que dava pra rolar. Trocado
+     por `UniformGrid Rows="1"` (conta só filhos VISÍVEIS — respeita os
+     mesmos chips "Colunas" já existentes — e distribui a largura REAL
+     disponível em partes iguais, nunca corta, encolhe/cresce com a
+     janela).
+  - Build limpo (`dotnet build KPDV.slnx`, 0 erros) e app relançado.
+  - **Item 2 ("subir a tela para alinhar com a imagem") CONFIRMADO
+    PARCIALMENTE, depois corrigido de verdade** — 1º screenshot seguinte
+    (Venda #17887, crop com sidebar) mostrava "CLIENTE"/"DEMONSTRATIVO"
+    quase no topo; mas um 2º screenshot mais justo (Venda #17888, crop só
+    do conteúdo) revelou que "CLIENTE" e "DEMONSTRATIVO DO CUPOM FISCAL"
+    ainda começavam em alturas DIFERENTES entre si (~30px de diferença) —
+    usuário insistiu: "sobe essa parte da tela alinhar com o card da
+    imagem". Causa raiz real: a linha própria do ícone de Ajuda (Grid
+    separado ANTES do Grid de 2 colunas) ainda empurrava tudo pra baixo,
+    minimizar padding/margin não bastava. **Correção definitiva**: a linha
+    própria foi REMOVIDA por completo — o ícone de Ajuda passou a viver
+    DENTRO do cabeçalho do card "DEMONSTRATIVO DO CUPOM FISCAL" (3ª coluna
+    daquele Grid interno, ao lado de "Comanda Nº X"), então não existe mais
+    nenhuma linha extra entre o topo do ScrollViewer e o início dos 2
+    cards — os dois começam direto no Padding do próprio Card. Build limpo,
+    app relançado, aguardando confirmação desta versão.
+  - Item 1 (menu fixo) e 3 (colunas Pedidos) ainda sem screenshot de
+    confirmação dedicado.
+- Ponto ainda não verificado: comportamento do `PaneHeader`
+  com o menu lateral RECOLHIDO (só ícones) — ficou moot depois do item 1
+  acima (`IsPaneToggleVisible="False"` — o pane não recolhe mais nunca).
+
+### Painel de Pedidos (Bar) — reagrupamento de filtros + auditoria de paridade com o web (2026-08-27)
+
+**Protocolo Gauntlet: fluxo simplificado — Thomé (implementação/
+portabilidade técnica) + Carlos (julgamento de UX no reagrupamento),
+motivo: migração de paridade contra referência já decidida no web
+(`PainelPedidoCard.tsx`/`pedidos.tsx`), sem decisão de negócio/fiscal
+nova.**
+
+Pedido do usuário, olhando o app rodando (screenshot da faixa Situação/
+Colunas/Totais): "melhore esse agrupamento. está muito embolado. aumente
+os botões harmonicamente" + "não foi migrado para essa tela todos os
+recursos do pedido bar web. ex: Tooltip no nome do cliente... mover um
+card de coluna e etc. Faça uma busca criteriosa para migrar todas os
+recursos."
+
+**Auditoria feita**: leitura completa de `PainelPedidoCard.tsx` (web,
+~950 linhas) comparada função-a-função contra `PedidosViewModel.cs`/
+`PedidoCardViewModel.cs`/`PedidosView.xaml`/`PedidosView.xaml.cs`
+(KPDV). Achado real: a Fase 2b do KPDV já é MUITO mais completa do que o
+usuário lembrava — filtro persistido em disco (`PedidosFiltrosStore.cs`,
+equivalente ao `pedidosFilters.ts` do web), ordenação "parado desce pro
+fim da coluna" (`PedidoCardViewModel.IsStale`), Taxa de Serviço
+idempotente, múltiplas formas de pagamento, Modificadores, impressão
+automática por Finalidade, impressão de recibo completo, e drag-and-drop
+entre colunas via `DragDrop.DoDragDrop` nativo do WPF — **já
+implementado de verdade**, não um placeholder.
+
+**Gaps reais confirmados e corrigidos**:
+1. **Tooltip no nome do cliente truncado** — `PainelPedidoCard.tsx` tem
+   hover com o nome completo (`nomeTooltip`); KPDV não tinha nada.
+   Corrigido: `ToolTip="{Binding ClienteNome}"` no `TextBlock` de
+   `#pedido · cliente` (`PedidosView.xaml`, `CardPedidoTemplate`) — WPF
+   tooltip nativo, mesmo efeito do hover customizado do web. Mesmo
+   tratamento aplicado à descrição do item dentro do accordion "Ver
+   itens" (também truncava sem tooltip).
+2. **"Mover card de coluna" parecia não migrado, mas na verdade só não
+   tinha NENHUM sinal visual** — o drag-and-drop (Fase 2b,
+   `PedidosView.xaml.cs::Card_PreviewMouseMove`/`Coluna_Drop`) já existe
+   e funciona (confirmado lendo o code-behind), mas nada no card
+   indicava que dava pra arrastar — usuário reportou como "não migrado"
+   porque não tinha como descobrir sozinho. Corrigido: ícone `Drag24`
+   (confirmado via reflection no `Wpf.Ui.dll`) no canto superior direito
+   de cada card, com `Cursor="SizeAll"` + tooltip explicando — puramente
+   indicativo (não é ele quem inicia o arrasto, o mecanismo já funciona
+   a partir de qualquer ponto do card).
+3. **Faixa de filtros "embolada"** — reagrupada por completo:
+   "Situação"/"Colunas Visíveis"/"Totais" viraram 3 seções dentro de UM
+   `ui:Card` (antes eram 2 blocos soltos empilhados), separadas por
+   divisores finos + rótulo em maiúsculas; chips de Situação/Colunas
+   cresceram de `Padding="10,4"`/fonte 11 pra `Padding="16,8"`/fonte
+   12.5, com 8px de espaço entre eles (era 4px). Totalizadores deixaram
+   de ser texto solto lado a lado e viraram "pills" coloridas por tipo
+   (reaproveita `TipoMesaBrush`/`TipoComandaBrush`/etc. já existentes +
+   os mesmos ícones de `PedidoCardViewModel.IconeTipo` — `Table24`/
+   `Receipt24`/`BuildingShop24`/`VehicleBicycle24`/`Book24`), com
+   borda inferior colorida e tooltip explicando cada uma; "Total Geral"
+   ganhou destaque próprio (fundo tintado com a cor da marca).
+   `Grid.Row="2"` (antes a faixa de totais separada) ficou vazio/
+   colapsado (`Height="Auto"`) — sem impacto de layout, confirmado que
+   nenhuma outra referência a essa linha ficou órfã.
+4. **Não migrado de propósito, fora do escopo desta rodada**: "Abrir
+   pedido" continua desabilitado — decisão explícita já registrada
+   ("o KPDV não tem tela de edição completa de Pedido"), não é um gap
+   de migração, é escopo consciente da Fase 1/2. Não foi tocado.
+- Build limpo (`dotnet build KPDV.slnx`, 0 erros), app relançado —
+  aguardando confirmação visual do usuário.
+
+### "Fechar Venda" — ciclo de foco 100% por teclado no pagamento (2026-08-27)
+
+**Protocolo Gauntlet: fluxo simplificado — Thomé (implementação de
+fluxo de teclado, sem decisão de negócio/fiscal nova).**
+
+Pedido do usuário, screenshot do modal "Fechar Venda (F4)": "forma de
+pagamento sem busca, sem foco, tela pequena, tem que ser combobox com
+navegador pela seta, ao dar enter tem que selecionar o valor para pode
+confirmar ou editar o valor deu enter no valor tem que ir para o botão.
+Caso o valor não cubra a comanda fazer o ciclo de focus novamente."
+
+**Achado real**: o combobox com busca+setas (`FormaPagBusca`,
+`AutoSuggestBox`) e o "ciclo de foco em caso de pagamento insuficiente"
+(`VendaViewModel.PedirFocoFormaPag`, evento já existente desde
+2026-08-26) **já existiam** — o gap real era 3 elos faltando na corrente:
+1. **Nada focava o campo Forma de Pagamento quando o painel ABRIA** — o
+   usuário tinha que clicar manualmente antes de poder usar teclado/
+   setas, por isso pareceu "sem busca, sem foco" (a busca existia, só
+   não tinha como alcançá-la sem mouse). Corrigido: `VendaView`
+   assina `PainelAtivo` (não só o atalho F4 — cobre também o clique no
+   botão "Fechar Venda" da barra de Ações, mesmo Command) e chama
+   `FocarUltimaFormaPagamento()` assim que o painel abre.
+2. **Enter na Forma de Pagamento não levava o foco pro campo Valor** —
+   escolhia a forma e parava aí, o usuário tinha que clicar no campo
+   Valor manualmente. Corrigido: novo `FocarValorDaLinha(box)` (acha o
+   `Wpf.Ui.Controls.TextBox` irmão no mesmo `Grid` — `AutoSuggestBox`
+   confirmado por reflection que NÃO herda de `TextBox`, então não tem
+   risco de pegar o campo errado) — foca e já seleciona o texto inteiro
+   (`SelectAll()`), pronto pra sobrescrever digitando ou aceitar com
+   outro Enter, chamado nos dois caminhos de confirmação da forma
+   (destaque por seta E resultado único).
+3. **Enter no campo Valor não fazia nada** — o `ui:TextBox` não tinha
+   nenhum `PreviewKeyDown`. Novo `ValorPagBox_PreviewKeyDown`: se
+   `DiferencaPagamento <= 0` (pagamento cobre o total, ou paga a mais —
+   troco é cenário normal), leva o foco pro botão "Confirmar (Enter)"
+   (não fatura sozinho — a confirmação final continua sendo um Enter/
+   clique explícito nele, `ButtonBase` já ativa com Enter quando
+   focado, sem código extra); senão, **abre uma NOVA linha de pagamento**
+   (`AdicionarLinhaPagamentoCommand` — já pré-preenche `Valor` com o
+   restante exato, `Math.Max(DiferencaPagamento, 0)`, comportamento que
+   já existia) e foca a Forma de Pagamento dela — reinicia o mesmo ciclo
+   Forma→Valor pra completar com uma 2ª forma, implementando literalmente
+   "fazer o ciclo de focus novamente".
+- **"Tela pequena"** — não foi tocado nesta rodada (o modal já é
+  `Width="560"`, mesmo tier "seleção" padrão do resto do app); se o
+  usuário confirmar que ainda sente falta de espaço depois do fluxo de
+  teclado resolvido, revisitar largura/altura específica do campo Forma
+  de Pagamento.
+- Build limpo (`dotnet build KPDV.slnx`, 0 erros), app relançado —
+  aguardando confirmação visual do usuário testando o ciclo completo
+  (Forma→Valor→Confirmar, e o caso de pagamento dividido/insuficiente).
+- **Bug real achado no mesmo teste ao vivo — usuário: "MESMA COISA"
+  (nenhuma mudança visível ao abrir o painel).** Causa raiz: `Focar
+  UltimaFormaPagamento()` (chamada pela nova assinatura de `PainelAtivo`)
+  rodava no MESMO tick síncrono em que o painel acabava de trocar de
+  `Collapsed` pra `Visible` — `UpdateLayout()` disparava cedo demais
+  (WPF ainda não tinha terminado de processar a mudança de Visibility na
+  árvore visual, mesmo estando na UI thread), então `ItemContainerGenerator.
+  ContainerFromItem` sempre voltava `null` e o foco não ia pra lugar
+  nenhum, silenciosamente. Corrigido adiando a busca+foco via `Dispatcher.
+  BeginInvoke(DispatcherPriority.ContextIdle, ...)` dentro do próprio
+  `FocarUltimaFormaPagamento()` — cobre os 3 chamadores (abrir o painel,
+  adicionar nova linha, ciclo de pagamento insuficiente) com uma correção
+  só. Build limpo, app relançado de novo — aguardando novo teste.
+
+### "Fechar Venda" — redesenho completo a partir de `FrmPafOFF.frm` (2026-08-27)
+
+**Protocolo Gauntlet: acionado (Carlos — regra de negócio/fluxo de
+pagamento; Thomé — implementação). Rastreio de fonte VB6 com
+ramificação condicional (regra `[GLOBAL]` "Toda ramificação condicional
+da fonte VB6 tem que ser rastreada até a raiz") — RESOLVIDO nesta
+rodada, ver achados abaixo.**
+
+Depois de 2 rodadas de ajuste pontual (foco, ciclo Forma→Valor→Confirmar)
+o usuário testou ao vivo e reportou "MESMA COISA" (screenshot mostrando
+`AutoSuggestBox` ainda sem indicação visual nenhuma) e, na sequência,
+apontou uma FOTO da tela real do legado ("Emissão de Cupom Fiscal") como
+referência: "campo pequeno tela pequena. não tem que ter '+ Forma de
+pagamento (F8)' tem que listar todas as formas de pagamentos. conforme
+Vb6."
+
+**Rastreio da fonte** (Explore agent, achado completo — não adivinhado da
+foto): a tela real é `C:\Desenv\VB6\SQLSERVER\Geral\FrmPafOFF.frm`
+(`FrmPafOFF`, projeto `Kontacto\backon.vbp`) — um form gigante (13.900+
+linhas, "Emissão de Cupom Fiscal") que também cobre registro de itens/
+desconto/cliente/NFC-e; a seção relevante é o frame `FrmFormaPag`. **Não
+é o mesmo form já rastreado antes** (`Geral\frmforpag.frm`/`FrmForPag`,
+usado por Pedido Bar/Completo/O.S. — parametrizado por
+`Type_FormaPagPedOS`, sem nenhuma relação com `FrmPafOFF`).
+
+**Achados confirmados na fonte** (não presumidos):
+- **8 tipos reais** (`forma_pagamento.tipo`): `DI`=Dinheiro, `CH`=Cheque,
+  `CC`=Cartão Crédito, `CD`=Cartão Débito, `DU`=Duplicata (a aba da UI
+  rotulada "Faturado" no legado na verdade é DU, não FI), `TI`=Tíquete,
+  `VA`=Vale, `FI`=Financiado/Faturado genérico — `FI`/`TI` não têm campo
+  extra nenhum (foco pula direto pro Confirmar).
+- **Combo "Forma de Pagamento" vem do banco** — `SELECT * FROM
+  forma_pagamento WHERE situacao='A' ORDER BY descricao`, colunas
+  `codigo/descricao/descricao_ecf/parcela_max/parcelador/prazo/usa_tef/
+  tipo/vale_devolucao/exige_documentos`.
+- **"Código Vale de Devolução" NÃO é fixo por tipo** — é um flag **por
+  LINHA** (`forma_pagamento.vale_devolucao`, bit), então 2 formas do
+  MESMO tipo podem divergir. A implementação anterior do KPDV (2026-08-26)
+  chutava por tipo (`["DI","DU","VA"]`) porque essa coluna ainda não
+  estava exposta pelo endpoint — **corrigido** (ver abaixo).
+- **Vencimento** = data de hoje + `forma_pagamento.prazo` dias, editável,
+  mostrado só pra CH/CC/CD/VA/DU (nunca DI/TI/FI).
+- **Parcelas** só existe pra CC/CD, obrigatório quando visível.
+- **Grade "Formas de Pagamento lançadas..." (`GridFP`)** é genuína
+  divisão em linhas (split payment) — um único botão "Confirmar" tanto
+  ADICIONA uma linha (se ainda falta valor) quanto FINALIZA a venda
+  inteira (se o valor pago já cobre o total) — mesmo botão, 2
+  comportamentos conforme o estado.
+- **Cartão (CC/CD) não pode exceder o total** (a menos de um flag
+  `PermiteTrocoCartao`, não migrado — fora de escopo); **Dinheiro pode
+  pagar a mais** (vira troco, já suportado pelo KPDV).
+
+**Implementado nesta rodada**:
+1. **Backend** (`backend/services/lookups_service.py::_list_forma_pagamento_completo_sync`)
+   — endpoint `/api/forma-pagamento-completo` passou a expor `prazo`/
+   `parcela_max`/`vale_devolucao` (antes só `codigo/descricao/tipo`).
+   `pytest tests/unit -q` → 2713 passed, mesmas 4 falhas pré-existentes
+   não relacionadas.
+2. **KPDV** — `FormaPagamentoCompletoDto` ganhou os 3 campos novos
+   (mapeamento automático via `JsonNamingPolicy.SnakeCaseLower`, sem
+   atributo manual). `LinhaPagamento.cs`: `AceitaValeDevolucao` virou
+   `[ObservableProperty]` gravado de verdade em `EscolherForma` (não mais
+   chutado por tipo); novos `Vencimento`(`DateTime?`, auto-preenchido)/
+   `Parcelas`(`int`, default 1)/`MostraVencimento`/`MostraParcelas`.
+   `AbrirPainelFecharVendaAsync` corrigido pra também chamar
+   `EscolherForma` na linha padrão (antes só copiava Código/Descrição à
+   mão, pulando Vale de Devolução/Vencimento/Parcelas mesmo quando a
+   forma "DINHEIRO" sugerida os tinha).
+3. **XAML** (`VendaView.xaml`, painel Fechar Venda) — redesenhado por
+   completo: largura 560→780px, cabeçalho de colunas fixo (FORMA DE
+   PAGAMENTO/VALOR/VENCIMENTO/PARC., réplica das colunas de `GridFP`),
+   cada linha ganhou `DatePicker` (Vencimento) e campo Parcelas
+   condicionais, campos maiores (Height 40, FontSize 14). Botão "+ Forma
+   de pagamento (F8)" **removido** (pedido explícito do usuário) — F8
+   continua funcionando como atalho de teclado (code-behind já tratava
+   isso fora do botão), só a affordance visual saiu; o caminho principal
+   pra abrir uma 2ª linha agora é automático (Enter no Valor com saldo
+   ainda faltando, já implementado na rodada anterior).
+4. **Bug real corrigido — "MESMA COISA"**: `AutoSuggestBox` da Forma de
+   Pagamento ganhou `GotFocus="FormaPagBusca_GotFocus"` — abre a lista
+   INTEIRA assim que o campo recebe foco (antes só reagia a tecla
+   digitada/seta, então um campo recém-focado e vazio não mostrava nada,
+   parecendo "sem busca, sem foco" mesmo com o combobox tecnicamente
+   funcional).
+5. **Não migrado nesta rodada, registrado como pendência explícita**
+   (fora do escopo pedido, dependência de um subsistema inteiro de
+   TEF/administradora de cartão): seleção de bandeira/administradora de
+   cartão, validação `Cartao_Verifica_Parcelamento`/lookup de parcelas
+   por parcelador "L", limite de cartão não exceder total
+   (`PermiteTrocoCartao`), e a lógica de auto-gerar um vale residual
+   quando o vale de devolução usado vale mais que o pagamento. O backend
+   (`checkout_service.py`) já suporta boa parte disso (`_verifica_
+   parcelamento_cartao`, `_validar_vale_devolucao`/`_consumir_vale_
+   devolucao`, `list_parcelas`) — é a UI do KPDV que ainda não expõe.
+- Build limpo (`dotnet build KPDV.slnx`, 0 erros), app relançado —
+  aguardando confirmação visual do usuário.
+- **2ª rodada de feedback ao vivo, mesmo dia** — usuário reportou 2
+  problemas no screenshot seguinte:
+  1. **"O COMBOBOX DA FORMA DE PAGAMENTO NÃO DEVE PERMITIR DIGITAÇÃO. SÓ
+     NAVEGAÇÃO POR SETA COM A LISTA EM ORDEM ALFABÉTICA"** — reverte a
+     parte de busca-por-texto do redesign 2026-08-26 especificamente pra
+     esta tela (Fechar Venda). `ui:AutoSuggestBox` (texto livre + busca
+     local) trocado por `ComboBox` comum (`IsEditable=False`, padrão do
+     controle — não digita, cada seta já troca a seleção na hora), mesmo
+     controle já usado em `PedidosView.xaml`/`ConfiguracoesView.xaml`
+     neste projeto. Lista já chega alfabética do backend (`ORDER BY
+     descricao`), sem sort extra necessário. `LinhaPagamento.cs` perdeu
+     `Buscar()`/`ResultadosBusca`/`CodigoDestacado` (infraestrutura de
+     busca que não faz mais sentido sem campo de texto) e ganhou `Todas`
+     (lista completa, fonte do `ItemsSource` do combo). Código-behind:
+     `FormaPagBusca_*`/`MoverDestaqueFormaPag` removidos (mortos),
+     substituídos por `FormaPagCombo_SelectionChanged`/
+     `FormaPagCombo_PreviewKeyDown` — o ciclo Enter→foca Valor e o ciclo
+     de "pagamento insuficiente→foca forma de pagamento" (`FocarUltima
+     FormaPagamento`) foram adaptados pra procurar `ComboBox` em vez de
+     `AutoSuggestBox` na árvore visual.
+  2. **"O DESIGN DA TELA ESTÁ COM FALHA"** — cabeçalho de colunas
+     ("FORMA DE PAGAMENTO"/"VALOR") aparecia colado, sem respeitar as
+     larguras das colunas. **Causa raiz confirmada por reflection** sobre
+     o DLL real do WPF-UI: `Card.HorizontalContentAlignment` tem padrão
+     `"Left"` (não `"Stretch"` como a maioria dos controles) — o
+     `ContentPresenter` interno do Card media o conteúdo pelo tamanho do
+     CONTEÚDO em vez da largura real do Card (780px), fazendo toda
+     coluna `Width="*"` dos `Grid`s internos colapsar pra praticamente 0
+     em vez de esticar. Corrigido com `HorizontalContentAlignment=
+     "Stretch"` explícito no `ui:Card` do painel Fechar Venda. **Nenhum
+     outro `ui:Card` deste projeto até agora dependia de coluna `*` pra
+     caber** — por isso o sintoma nunca tinha aparecido antes; vale
+     re-checar se o mesmo sintoma surgir em outro `ui:Card` no futuro
+     (grep por `Width="*"` dentro de um `ui:Card` sem
+     `HorizontalContentAlignment` explícito).
+  - Build limpo (`dotnet build KPDV.slnx`, 0 erros), app relançado —
+    aguardando confirmação visual desta 2ª correção.
+- **3ª rodada de feedback ao vivo, mesmo dia** — 2 screenshots (forma
+  "IFOOD" curta vs "CARTÃO DE DÉBITO" longa) revelaram que a 1ª correção
+  do layout (`HorizontalContentAlignment="Stretch"` no `ui:Card`) não
+  bastou: "A TELA FICA MUDANDO DE TAMANHO CONFORME O TAMANHO DE CARACTER
+  SELECIONADO DA FORMA DE PAGAMENTO" + "O DESIGN DA TELA CONTINUA MAL
+  FEITA COM BOTÃO DESALINHADO. USAR NOSSO ESPECIALISTA EM DESIGN DA
+  EQUIPE KONTACTO." **Causa raiz real**: a coluna "Forma de Pagamento"
+  (cabeçalho E linha) usava `Width="*"` hospedando um `ComboBox` sem
+  largura própria — cada troca de item selecionado mudava a largura
+  medida da coluna e, em cascata, do painel inteiro. Em vez de continuar
+  investigando o comportamento de medição do `ui:Card` (template
+  compilado, sem fonte XAML disponível pra inspecionar) por uma 2ª
+  rodada, a correção foi trocar de abordagem: **`ui:Card` → `Border`**
+  (primitivo do WPF, comportamento de medição 100% previsível, sem
+  surpresa de 3ª parte) + **coluna "Forma de Pagamento" fixa em 300px**
+  (nunca mais `*`) nos dois `Grid`s (cabeçalho e linha) — elimina de vez
+  qualquer dependência do texto selecionado no tamanho do layout. Visual
+  preservado via `CornerRadius="{StaticResource ControlCornerRadius}"`
+  (mesmo resource de 6px já usado no resto do app) + `Effect=
+  "{StaticResource CardShadow}"` (Border aceita `Effect` igual qualquer
+  `UIElement`). O pedido "abrir a lista com a seta pra baixo, navegar
+  pelos itens" já é comportamento NATIVO de um `ComboBox` padrão
+  (confirmado, não precisou de código extra).
+  - Build limpo (`dotnet build KPDV.slnx`, 0 erros), app relançado —
+    aguardando confirmação visual desta 3ª correção.
+- **Correção 4 — usuário rebateu a resposta anterior**: "O COMPORTAMENTO
+  DA COMBOBOX É ABRIR A LISTA E NÃO PERCORRER OS ITENS NO CAMPO. TEM QUE
+  PERCORRER NA LISTA, AO DAR ENTER NA LISTA SELECIONA O ITEM NO CAMPO E
+  PASSA PARA O VALOR." O padrão NATIVO de `ComboBox` fechado (seta troca
+  o item na hora, sem abrir nada) não era o pedido — corrigido em
+  `FormaPagCombo_PreviewKeyDown`: 1ª seta (↑/↓) com a lista fechada ABRE
+  o dropdown (`IsDropDownOpen=True`) em vez de ciclar silenciosamente;
+  com a lista já aberta, as setas seguintes navegam o destaque
+  normalmente (comportamento nativo do `ComboBox` aberto — já atualiza
+  `SelectedItem`/dispara `SelectionChanged` a cada item destacado, sem
+  código extra). Enter fecha a lista e move o foco pro Valor — não
+  depende do commit nativo do Enter do `ComboBox` (marcar
+  `e.Handled=true` no `PreviewKeyDown` arriscaria impedir a lógica
+  interna do próprio controle de rodar); como o item já foi aplicado via
+  `SelectionChanged` durante a navegação, não precisa de commit
+  adicional nenhum.
+  - Build limpo (`dotnet build KPDV.slnx`, 0 erros), app relançado —
+    aguardando confirmação visual desta 4ª correção.
+- **Correção 5** — usuário confirmou por screenshot que a lista agora
+  ABRE na 1ª seta, mas "não navega com as setas. só com o mouse clicando
+  em cima do item". Causa real: abrir o dropdown programaticamente
+  (`IsDropDownOpen=True` setado de fora) não move o foco de teclado pra
+  dentro do `Popup` do jeito que a abertura NATIVA por teclado (F4/
+  Alt+Down) faria — sem esse foco interno, as setas seguintes não tinham
+  o que navegar dentro da lista. Corrigido driblando o Popup por
+  completo: a navegação agora é feita no código
+  (`combo.SelectedIndex` avança/recua a cada seta, sempre com
+  `e.Handled=true`), não mais depositada na navegação interna do
+  controle — o destaque visual na lista aberta segue `SelectedIndex`
+  independente de quem o mudou. `SelectionChanged` já aplica a forma
+  a cada índice navegado, sem esperar Enter.
+  - Build limpo (`dotnet build KPDV.slnx`, 0 erros), app relançado —
+    aguardando confirmação visual desta 5ª correção.
+- **Correção 6** — usuário reportou por screenshot que "continua não
+  navegando na lista do combobox" — a correção 5 (navegar via código,
+  `combo.SelectedIndex`) ainda não bastava. **Causa raiz real, mais
+  precisa que o diagnóstico da correção 5**: abrir o `Popup` — mesmo
+  programaticamente — faz o WPF mover o foco de teclado
+  (`Keyboard.FocusedElement`) pro `ComboBoxItem` destacado dentro dele, e
+  o `Popup` é sua PRÓPRIA fonte de roteamento de input
+  (`PresentationSource` separada da janela principal) — a partir daí, a
+  tecla seguinte tunela a partir do `Popup`, nunca mais passando pelo
+  `PreviewKeyDown` do `ComboBox` (que fica fora do `Popup`) — o handler
+  simplesmente parava de ser chamado depois da 1ª seta. A correção 5 tinha
+  acertado a MECÂNICA da navegação (mover `SelectedIndex` em código em vez
+  de depender da navegação nativa do controle), mas não esse sequestro de
+  foco pelo `Popup`. Corrigido em `FormaPagCombo_PreviewKeyDown`
+  (`VendaView.xaml.cs`): (1) toda seta agora navega, inclusive a 1ª (antes
+  a 1ª só abria, sem navegar); (2) depois de CADA navegação, o handler
+  reivindica o foco de volta pro `ComboBox` num passo de Dispatcher
+  separado (`combo.Dispatcher.BeginInvoke(DispatcherPriority.Input, ...)`,
+  que roda depois do `Popup` terminar sua própria tentativa de foco),
+  garantindo que a tecla seguinte sempre volte a cair neste mesmo handler,
+  não importa quantas vezes o `Popup` tente puxar o foco pra dentro dele.
+  - Build limpo (`dotnet build KPDV.slnx`, 0 erros) — aguardando
+    confirmação visual desta 6ª correção antes de considerar o combobox
+    de Forma de Pagamento resolvido por completo.
+- **Correção 7** — usuário confirmou por vídeo (`VID_20260827_205719955.mp4`)
+  que a correção 6 (reconquistar foco reativamente via
+  `Dispatcher.BeginInvoke`) ainda não resolveu: "isso eu já fiz e não
+  conseguiu resolver o problema da combobox". **Causa raiz mais precisa,
+  achada nesta 7ª rodada**: não é só o `Popup` abrir que rouba o foco — é
+  o próprio `Selector` (classe-base de `ComboBox`/`ListBox`) que, a CADA
+  `SelectedIndex` mudar (inclusive mudado por código, como o handler já
+  fazia desde a correção 5), tenta mover o foco de teclado pro
+  `ComboBoxItem` recém-selecionado — comportamento embutido, SÍNCRONO, do
+  próprio `Selector`, disparado de novo a cada seta, correndo contra (e
+  vencendo) a reconquista de foco reativa da correção 6, que só roda
+  DEPOIS (`DispatcherPriority.Input`) — perdendo a corrida sempre que o
+  `ComboBoxItem` já tinha sido gerado a tempo no `Popup`. **Resolvido na
+  raiz desta vez, não mais reativamente**: `VendaView.xaml` ganhou
+  `ComboBox.ItemContainerStyle` com `Focusable="False"` em
+  `ComboBoxItem` — sem alvo de foco válido dentro do `Popup`, o `Selector`
+  estruturalmente NÃO TEM pra onde mover o foco, então ele nunca sai do
+  `ComboBox`, eliminando a causa em vez de reagir ao sintoma depois que
+  ele já aconteceu. Não quebra o destaque visual (`IsSelected` segue
+  `SelectedIndex` independente de foco, propriedade puramente do
+  `Selector`) nem o clique do mouse (seleciona via hit-test, não via
+  foco — já funcionava mesmo nas correções anteriores). A reconquista de
+  foco via Dispatcher da correção 6 foi MANTIDA como rede de segurança
+  adicional, não é mais o mecanismo principal.
+  - Build limpo (`dotnet build KPDV.slnx`, clean+rebuild do zero, 0
+    erros novos) — aguardando confirmação visual desta 7ª correção.
+  - **Nota à parte, mesma rodada**: usuário reportou "PROJETO COM 2
+    ERROS" — eram 2x `CS0103: O nome "BtnConfirmarFecharVenda" não
+    existe no contexto atual` na Lista de Erros do Visual Studio.
+    Confirmado que era falso-positivo — `BtnConfirmarFecharVenda` existe
+    tanto no XAML (`x:Name`) quanto no `.g.cs` gerado, e um `dotnet build`
+    limpo (clean+rebuild) já compilava sem erro nenhum antes mesmo dessa
+    checagem. Causa: cache de IntelliSense do VS desatualizado depois de
+    uma edição feita por fora do editor do VS (via ferramenta externa,
+    não pelo próprio IDE) — resolvido fechando e reabrindo a solução no
+    VS. Vale como referência se o mesmo padrão ("erro fantasma" que some
+    com dotnet build limpo mas aparece na Lista de Erros do VS) aparecer
+    de novo depois de uma edição externa ao IDE.
+- **Correção 8** — usuário confirmou que a correção 7 resolveu a
+  navegação em si (o CAMPO já muda de forma a cada seta), mas reportou um
+  problema novo, mais fino: "ela não navega com as setas. a forma de
+  pagamento mudando campo, mas não fica em destaque na lista de itens da
+  combobox" — ou seja, o valor selecionado muda, só o destaque visual
+  DENTRO da lista aberta não acompanha. A frase da correção 7 ("não
+  quebra o destaque visual") estava errada. **Causa real**: o template
+  padrão de `ComboBoxItem` normalmente pinta o destaque de navegação por
+  teclado via um gatilho de FOCO (`IsFocused`/`IsKeyboardFocusWithin`),
+  não de `IsSelected` — ao tirar `Focusable` do item na correção 7 (ainda
+  necessária, resolve o sequestro de foco), esse gatilho nunca mais
+  dispara pra NENHUM item, já que nenhum item pode mais ser focado.
+  `IsSelected` continua acompanhando `SelectedIndex` perfeitamente (é
+  propriedade pura do `Selector`, não depende de foco — por isso o CAMPO
+  já funcionava) — só o destaque visual dentro do Popup dependia do
+  gatilho errado. Corrigido assumindo o destaque nós mesmos: o mesmo
+  `ComboBox.ItemContainerStyle` (`VendaView.xaml`) ganhou um
+  `Style.Trigger` direto em `IsSelected` pintando `Background`/
+  `BorderBrush` com as MESMAS cores já usadas pro destaque de seleção de
+  produto nesta mesma tela (`KpdvBrandTintBrush`/`KpdvBrandBrush`, já
+  usadas no estilo de `ListViewItem` da busca de produto, mesmo arquivo)
+  — reaproveitando a linguagem visual já estabelecida em vez de inventar
+  uma cor nova.
+  - Build limpo (`dotnet build KPDV.slnx`, 0 erros novos) — aguardando
+    confirmação visual desta 8ª correção.
+
+### Recibo/Cupom do KPDV — layout tabular com logo e negrito (réplica do VB6, 2026-08-27)
+
+**Status: 🟡 implementado, NUNCA testado numa impressora térmica real.**
+Pedido do usuário, com foto comparativa (cupom do KPDV WPF vs. cupom do
+VB6 — confirmado por pergunta direta qual era qual, já que a frase
+inicial saiu invertida): "eu quero no mesmo layout do vb 6" — trocar o
+recibo do KPDV (`ReciboTexto.cs`, formato "lista simples" até então) por
+um formato tabular com colunas, cabeçalho "Número:"/"Emissão:", "QTD
+TOTAL DE ITENS"/"VALOR TOTAL"/"VALOR PAGO"/"CONSUMIDOR", **logo da
+empresa** no topo e **negrito** no título/totais.
+
+**Fonte não é o `.frm` desta vez** — busca por texto literal
+("QTD TOTAL DE ITENS"/"VALOR PAGO"/etc.) em `FrmPafOFF.frm` não achou
+nada: esse cupom tabular é gerado pela própria **impressora fiscal/driver
+ECF** a partir de comandos estruturados, não por VB6 desenhando string —
+não tem onde rastrear campo-a-campo. A fonte de verdade virou a
+**foto do cupom real** que o usuário forneceu (mesmo princípio já usado
+quando um screenshot substitui o `.frm` ausente).
+
+**Partes com leitura incerta da foto (rotacionada/cortada), sinalizadas
+no próprio código-fonte (`ReciboTexto.cs`) e aqui**: o texto exato
+"Número:"/"Emissao:" (pode ser outra palavra), a ordem exata das colunas
+Código/Un/Descrição/Qtd/Vl.Unit/Vl.Total (o valor "V1 Unit"/"V1 Tot" da
+foto foi lido como "Vl.Unit"/"Vl.Total", abreviação de "Valor" bem mais
+comum em cupom brasileiro que "V1"). **Precisa de confirmação contra uma
+impressão real** antes de considerar o texto final.
+
+**Implementado**:
+- `KPDV/src/KPDV/Utils/ReciboTexto.cs` — reescrito: linha
+  Código+Descrição (`LinhaCodigoDescricao`, 11 chars fixos pro código +
+  resto pra descrição, mesmo princípio de truncar já usado em
+  `Centralizar`), "QTD TOTAL DE ITENS"/"VALOR TOTAL" (negrito)/"VALOR
+  PAGO" (negrito, soma das formas de pagamento)/"CONSUMIDOR". Negrito via
+  ESC/POS embutido direto na string (`\x1B\x45\x01`/`\x1B\x45\x00` — CP850
+  mapeia bytes de controle 1-pra-1, atravessa
+  `ImpressaoTermicaService`'s `Cp850.GetBytes` intacto, sem precisar
+  mudar a assinatura pra binário). **Diverge de propósito** do
+  `frontend/src/utils/reciboTexto.ts` do Checkout web — aquele continua
+  no formato antigo, só o cupom do KPDV (impressão direta, sem fila)
+  ganhou o layout novo.
+- `KPDV/src/KPDV/Utils/EscPosImage.cs` (novo) — converte a logo
+  (PNG/JPG cru) em comando ESC/POS raster (`GS v 0`) via APIs de imaging
+  do próprio WPF (`BitmapImage`/`FormatConvertedBitmap`/`TransformedBitmap`
+  pra escalar + `Gray8` pra threshold simples, 384 dots de largura padrão
+  58mm/203dpi — **ajustar pra 576 se a instalação usar bobina 80mm**, sem
+  como confirmar isso sem testar numa impressora real). Falha ao
+  decodificar nunca derruba a impressão — sai sem logo, não sem venda.
+- `KPDV/src/KPDV/Services/ImpressaoTermicaService.cs` — `ImprimirTexto`
+  ganhou parâmetro opcional `logoEscPos` (bytes do comando raster),
+  prepended ANTES do texto CP850 no payload RAW enviado ao spooler.
+- `KPDV/src/KPDV/ViewModels/VendaViewModel.cs`
+  (`ImprimirVendaAutomaticoAsync`) — decodifica `empresa.LogoBase64`
+  (base64→bytes) e converte via `EscPosImage.Build` antes de chamar
+  `ImprimirTexto`; passa `it.CodFab`/`it.Unidade` (novos campos) e
+  `NumeroDocumento = comanda` pro recibo.
+- `KPDV/src/KPDV/Models/ControleModels.cs` (`EmpresaHeaderDto`) — novos
+  `LogoBase64`/`LogoMime`, mapeados automaticamente do JSON
+  `logo_base64`/`logo_mime` que `GET /api/controle/empresa` **já**
+  devolvia pro cabeçalho A4/web (`controle_service.py`) — nenhuma mudança
+  de backend precisou aqui, só o DTO do KPDV não consumia esses 2 campos
+  ainda.
+- `KPDV/src/KPDV/Models/CheckoutModels.cs` (`ItemVendaDto`) — novos
+  `CodFab`/`Unidade`.
+- `backend/services/checkout_service.py` (`_obter_venda_sync` — a query de
+  itens de `GET /api/checkout/{comanda}`) — adicionado `p.codigo_fab AS
+  cod_fab, p.uni AS uni` no `SELECT` de itens (a coluna "Código" do cupom
+  tabular usa `codigo_fab`, não `codigo_int` que esse endpoint já
+  devolvia) — extensão aditiva de endpoint já compartilhado, mesmo padrão
+  usado em outras rodadas desta migração. Vazio pra Serviço (sem
+  `codigo_fab`/`uni`). Testes existentes (`test_checkout_service.py`, 66
+  testes) continuam passando sem alteração — endpoint aditivo, nenhum
+  consumidor antigo quebra.
+- Build limpo (`dotnet build KPDV.slnx`, 0 erros) + suíte completa do
+  backend (`pytest tests/unit`, 2727 passed, mesmas 4 falhas
+  pré-existentes não-relacionadas) — zero regressão.
+- **1ª rodada de teste ao vivo, mesmo dia** — usuário imprimiu de
+  verdade e pediu 1 ajuste: "totais e forma de pagto juntos" — o `Hr`
+  (linha tracejada) que separava o bloco de Totais do bloco "FORMA DE
+  PAGAMENTO" foi removido, os dois ficam no mesmo bloco visual agora
+  (Obs, quando presente, também entrou nesse mesmo bloco). Build limpo.
+
+- **2ª rodada de teste ao vivo, mesmo dia** — foto comparativa nova
+  mostrou a logo IMPRESSA SOZINHA, empilhada acima do texto (bloco cheio
+  de largura própria) — usuário: "a logo tem que está do lado das
+  informações da empresa, assim como no Vb 6. diminua a fonte e os
+  espaçamentos do cupom. veja como o cupom do vb 6 é bem menor, faça
+  aproveitamento de espaço." Um comando ESC/POS de texto puro não
+  consegue colocar imagem e texto na MESMA linha (`GS v 0` sempre ocupa a
+  largura inteira do papel) — resolvido renderizando o cabeçalho INTEIRO
+  (logo + nome/endereço/telefone/CNPJ/Número/Emissão) como UMA imagem só
+  via WPF (`Grid` 2 colunas, `RenderTargetBitmap` → `EscPosImage`, fontes
+  pequenas de propósito — 13px fantasia, 10px resto):
+  - `KPDV/src/KPDV/Utils/CupomHeaderRenderer.cs` (novo) — compõe o `Grid`
+    (logo 84 dots à esquerda, texto compacto à direita) e renderiza.
+  - `KPDV/src/KPDV/Utils/EscPosImage.cs` — ganhou overload
+    `Build(BitmapSource, ...)` (evita round-trip de re-codificar pra PNG
+    só pra decodificar nesse mesmo passo de novo); o `Build(byte[], ...)`
+    original agora só decodifica e delega pro novo overload.
+  - `KPDV/src/KPDV/Utils/ReciboTexto.cs` — extraído
+    `ComporLinhasCabecalhoEmpresa(empresa)` (endereço/cidade/telefone/
+    CNPJ, sem centralizar/negrito), reaproveitado tanto pelo cabeçalho de
+    TEXTO (`Build`, com `Centralizar`) quanto pelo de IMAGEM
+    (`CupomHeaderRenderer`, sem — texto alinhado à esquerda, mais denso).
+    Novo flag `ReciboTextoDados.CabecalhoJaImpressoComoImagem` — quando
+    `true`, `Build` PULA as linhas de nome/endereço/telefone/CNPJ/Número/
+    Emissão (já foram pra dentro da imagem). Default `false` preserva o
+    comportamento de sempre pra instalação sem logo cadastrada (cabeçalho
+    volta a ser só texto).
+  - `KPDV/src/KPDV/ViewModels/VendaViewModel.cs` — decodifica a logo (se
+    houver) num `BitmapSource`, chama `CupomHeaderRenderer.Build`
+    (`App.Current.Dispatcher.Invoke`, já que `RenderTargetBitmap` precisa
+    rodar numa thread com `Dispatcher`), e só então monta `ReciboTextoDados`
+    com `CabecalhoJaImpressoComoImagem` batendo com o sucesso/falha do
+    render. Falha em qualquer etapa (base64 inválido, render quebrado)
+    cai pro cabeçalho de texto de sempre, nunca bloqueia a venda.
+  - **Fonte do cupom inteiro reduzida** (não só o cabeçalho, que virou
+    imagem): `ReciboTexto.Build` agora envolve TODO o texto com `ESC M 1`
+    (Fonte B da impressora térmica, mais condensada que a Fonte A padrão
+    — suportada pela maioria das ESC/POS) / `ESC M 0` (reset no final) —
+    reduz o tamanho visual do cupom inteiro sem precisar redesenhar as 42
+    colunas (`Largura`) usadas em todo o texto.
+  - Build limpo (`dotnet build KPDV.slnx`, 0 erros).
+  - **Leitura incerta, precisa de confirmação ao vivo**: tamanho de fonte
+    do cabeçalho-imagem (13px/10px, chute pra bater com a densidade da
+    foto do VB6), largura da logo dentro do cabeçalho (84 dots), e se a
+    Fonte B da impressora realmente reduz o corpo do texto na prática
+    (varia por modelo/driver — nem toda impressora suporta Fonte B, nesse
+    caso o comando é ignorado silenciosamente e o texto sai do mesmo
+    tamanho de antes, sem quebrar nada, só sem o efeito esperado).
+
+- **3ª rodada de teste ao vivo, mesmo dia — REVERTIDO.** Nova foto: "a
+  logo e as informações da empresa muito pequeno agora. separar o número
+  da comanda e a emissão como antes... melhor voltar como estava antes
+  para eu orientar melhor." O cabeçalho-imagem (13px/10px) saiu pequeno
+  demais/difícil de ler — 2 tentativas erradas de calibração de tamanho
+  em sequência (a 1ª empilhada+grande demais na largura, a 2ª minúscula)
+  levaram o usuário a preferir voltar pro estado anterior conhecido em
+  vez de arriscar uma 3ª rodada de chute. **Revertido por completo**:
+  `CupomHeaderRenderer.cs` deletado, `EscPosImage.cs` voltou a só decodificar
+  `byte[]` (sem o overload `BitmapSource`), `ReciboTexto.cs` voltou a
+  sempre imprimir o cabeçalho como TEXTO (sem `CabecalhoJaImpressoComoImagem`,
+  sem a Fonte B condensada `ESC M 1`/`ESC M 0`), `VendaViewModel.cs` voltou
+  a decodificar e imprimir a logo SOZINHA (acima do texto, como já
+  funcionava desde a 1ª rodada desta seção). Usuário confirmou via
+  `AskUserQuestion`: **ficar com a versão revertida por enquanto**, não
+  tentar uma 3ª calibração de cabeçalho composto nesta sessão — retomar
+  só quando ele quiser orientar com mais calma/precisão (ex.: valores
+  exatos de fonte/largura, não mais "leitura de foto"). Build pendente de
+  confirmação — app do KPDV estava aberto (arquivo bloqueado) no momento
+  do revert; nenhum erro de C#/XAML apareceu antes disso, só o erro de
+  cópia (MSB3027) de sempre quando o app está rodando.
+
+- **4ª rodada, mesmo dia — fonte de verdade real em vez de foto.** Usuário
+  deu uma referência muito melhor: "faça o mesmo modelo do pedido web.
+  sem o valor por pessoa. no lugar o orçamento será comanda no kpdv" —
+  junto com print da própria tela "Imprimir Pedido" (web). Em vez de
+  seguir tentando ler foto de cupom impresso, `ReciboTexto.cs` foi
+  reescrito pra replicar literalmente
+  `frontend/src/components/pedido/ReciboPedidoModal.tsx::buildTextoPuro()`
+  (MESMO formato 42-colunas/texto puro já validado e em produção no
+  recibo de Pedido web) — fonte real em código, não leitura de foto.
+  - **Removido** (não fazia parte do modelo web, era chute da rodada
+    VB6-por-foto): "QTD TOTAL DE ITENS", "VALOR PAGO" (redundante com
+    TOTAL — cada forma de pagamento já mostra seu próprio valor), header
+    "CONSUMIDOR", colunas Código/Unidade por item (o modelo web só mostra
+    a descrição), "Número:"/"Emissão:" como linhas separadas (agora é só
+    o título "Comanda nº X", uma linha só, igual o "Orçamento nº X"/
+    "Pedido nº X" do web).
+  - **2 adaptações deliberadas em cima do modelo, pedido explícito do
+    usuário**: (1) label sempre "Comanda" (o web varia entre "Orçamento"/
+    "Pedido" conforme a situação — KPDV não tem esse conceito, é sempre
+    Comanda); (2) "Valor p/ pessoa" removido do recibo de Comanda
+    especificamente.
+  - **Achado real durante a implementação**: `ReciboTextoDados`/
+    `ReciboTexto.Build` são COMPARTILHADOS por 2 consumidores diferentes —
+    `VendaViewModel.ImprimirVendaAutomaticoAsync` (recibo de Comanda, o
+    que esta rodada inteira tratou) E `PedidosViewModel` (Painel de
+    Pedidos, recibo de PEDIDO — que já tinha `situacaoLabel = situacao ==
+    "A" ? "Orçamento" : "Pedido"`, JÁ implementado fielmente ao modelo web,
+    inclusive com `QtdPessoas`/"Valor p/ pessoa" genuinamente em uso).
+    Remover `QtdPessoas` do DTO compartilhado quebraria esse outro
+    consumidor, que precisa do campo. Corrigido mantendo `QtdPessoas` no
+    DTO compartilhado — só `VendaViewModel` (Comanda) nunca o define, então
+    a linha simplesmente não aparece lá, sem precisar de 2 builders
+    diferentes. `PedidosViewModel` continua com "Orçamento"/"Pedido"
+    (não convertido pra "Comanda" — esse rótulo é específico do fluxo de
+    Comanda/Checkout, não do Painel de Pedidos).
+  - **Mantido por julgamento próprio** (não fazia parte do modelo web, mas
+    não foi pedido pra sair, e tem valor real): Troco (venda em dinheiro
+    do KPDV fecha na hora, diferente do Pedido web que só às vezes tem
+    forma de pagamento definida); fallback "CLIENTES DIVERSOS" quando não
+    há cliente nomeado (comanda de balcão quase sempre cai nesse caso —
+    o modelo web pula a seção de cliente inteira quando não tem, mas isso
+    faria o cupom de Comanda sair sem nenhuma identificação de cliente na
+    maioria das vendas reais); bloco de Totais+Forma de Pagamento
+    permanece sem `Hr` entre eles (pedido explícito anterior, "totais e
+    forma de pagto juntos", não revertido); negrito no título e no TOTAL
+    (pedido explícito anterior, "negritos nas txts de título e totais",
+    não revertido — o modelo web em si não usa negrito nessa versão texto
+    puro, é só usado pela fila de impressão silenciosa sem comandos
+    ESC/POS).
+  - `it.CodFab`/`it.Unidade` (`ItemVendaDto`) e `cod_fab`/`uni`
+    (`checkout_service.py`, backend) ficaram sem uso depois desta
+    simplificação — deixados no código (aditivos, não quebram nada),
+    não revertidos por não terem sido pedidos pra sair e a limpeza não
+    valer o retrabalho de mais uma rodada de teste de backend só por
+    estética.
+  - Build verificado (`dotnet build` pra pasta separada, já que o app
+    continuava aberto/travando a cópia do `.exe` de sempre) — 0 erros.
+    Falta build final na pasta `bin/` normal + confirmação visual contra
+    uma impressão real assim que o app for fechado e reaberto.
+
+- **5ª rodada, mesmo dia — "Vendedor" vs "Atendente".** Usuário: "o cupom
+  do pedido do KPDV tem que ter o mesmo layout do pedido bar web" —
+  confirmando que o recibo de PEDIDO (`PedidosViewModel`, Painel de
+  Pedidos) também deve seguir `buildTextoPuro()`. Auditando o
+  `PedidosViewModel` contra o modelo web linha por linha, achado 1
+  divergência real: o modelo web imprime `"Vendedor: {nome}"`, mas
+  `ReciboTexto.Build` (compartilhado) sempre imprimia `"Atendente: {nome}"`
+  hardcoded — certo pro recibo de Comanda (`VendaViewModel`, onde o campo
+  É um atendente de verdade), errado pro recibo de Pedido (onde o mesmo
+  campo é um vendedor). Corrigido com um novo campo `ReciboTextoDados.
+  RotuloAtendente` (default `"Atendente"`, preservando o comportamento da
+  Comanda sem precisar tocar em `VendaViewModel`) — `PedidosViewModel`
+  passa `RotuloAtendente = "Vendedor"` explicitamente.
+  - **Confirmado pelo usuário, mesma rodada**: "pode até compartilhar com
+    o cupom da tela de vendas [Comanda]. mas os campos inerentes no
+    pedido tem que permanecer no cupom pedido kpdv" — endossa a decisão
+    já tomada na 4ª rodada de manter `QtdPessoas`/"Valor p/ pessoa" e o
+    rótulo "Orçamento"/"Pedido" (situação-condicional) no
+    `PedidosViewModel`, mesmo com o `Build()` compartilhado entre os 2
+    recibos — nenhum campo específico do Pedido pode desaparecer só
+    porque o motor de montagem é o mesmo.
+  - **Build CONFIRMADO na pasta normal** (`dotnet build KPDV.slnx`, app
+    fechado desta vez) — 0 erros. Ainda sem teste ao vivo/foto de
+    confirmação de nenhum dos 2 cupons (Comanda e Pedido) depois desta
+    rodada de redesenho completo.
+
+- **6ª rodada, mesmo dia — título do recibo sempre "Pedido".** Usuário:
+  "nos pedidos bar web e KPDV o título 'Orçamento' na conta, trocar para
+  'Pedido'" — o título do RECIBO IMPRESSO deixa de variar por situação
+  (`situacao === 'A' ? "Orçamento" : "Pedido"`) e passa a ser sempre
+  "Pedido", tanto no web quanto no KPDV. **Simplificação só do texto
+  impresso** — a regra de negócio interna ("todo pedido aberto é um
+  orçamento", CLAUDE.md > "Regras Globais de Pré-venda") não muda, só o
+  RÓTULO que aparece no cupom pro cliente final.
+  - `frontend/src/components/pedido/ReciboPedidoModal.tsx` —
+    `situacaoLabel` deixou de ser condicional (`const situacaoLabel =
+    "Pedido"`), demais usos (`buildHtml`/`buildTextoPuro`/preview JSX)
+    inalterados, já que continuam lendo a mesma variável.
+  - `KPDV/src/KPDV/ViewModels/PedidosViewModel.cs` — mesma mudança,
+    `titulo` monta direto com `"Pedido nº {card.Pedido}"` (variável
+    `situacaoLabel` removida, não tinha mais motivo de existir com valor
+    fixo).
+  - Build KPDV limpo (`dotnet build KPDV.slnx`, 0 erros); `tsc --noEmit`
+    sem erro novo no arquivo web tocado.
+
+- **7ª rodada, mesmo dia — densidade da lista de itens (não o cupom
+  impresso, a TELA).** Usuário mandou print da própria `VendaView`
+  (lista "DEMONSTRATIVO DO CUPOM FISCAL", painel direito da tela de
+  Venda) comparado ao "Demonstrativo do Cupom Fiscal" do legado
+  (`FrmPafOFF.frm`): "diminuir a fonte e os espaçamentos entre os cards
+  da lista. deixar o mais parecido com um cupom... faça mais rico e
+  bonito que o vb6" — ou seja, mais denso que a versão atual, mas sem
+  regredir pro texto monoespaçado cru do legado (manter zebra, badge de
+  Qtd, cores já construídas).
+  - `VendaView.xaml`: `GridViewColumnHeader` (cabeçalho da grade) —
+    `FontSize` 12→11, `Padding` 10,8→8,5. `ListViewItem` (linha da
+    grade) — `Padding` 10,12→8,6, `Margin` 0,2→0,1. Colunas: Descrição
+    14→12.5px (nota de desconto 10→9px), badge de Qtd 13→11.5px
+    (`Padding` do badge 8,3→6,2, `CornerRadius` 10→9), Unit. 13→11.5px,
+    Total 15→13px (ganhou `FontWeight="Bold"` que não tinha antes — só a
+    cor já destacava, agora peso+cor).
+  - Escopo desta rodada é só a densidade da GRADE de itens na TELA — não
+    mexe no cupom térmico impresso (`ReciboTexto.cs`, já redesenhado nas
+    rodadas 4-6 acima) nem no card "Destaque do último item lançado"
+    (fonte grande ali é proposital, pedido em rodada anterior — "dê mais
+    destaque").
+  - Build verificado (pasta separada, app continuava aberto) — 0 erros.
+    Sem confirmação visual ainda.
+
+- **9ª rodada, mesmo dia — logo+fonte, 3ª tentativa, agora calibrada
+  contra print real e nítido.** Usuário perguntou "qual o tamanho da
+  fonte que está sendo usada no cupom?" (resposta: nenhum — texto RAW
+  puro, sai no tamanho padrão de fábrica da impressora, Fonte A) e depois
+  confirmou "é a logo também" — voltando a pedir os 2 ajustes que tinham
+  sido revertidos na 3ª rodada (Correção 3 acima), desta vez com uma
+  referência muito melhor: um print NÍTIDO (não foto rotacionada) do
+  recibo real do Pedido Bar web, "segue a impressão do pedido de bar".
+  - **Fonte condensada reativada**: `ReciboTexto.cs` voltou a envolver o
+    corpo inteiro do cupom com `ESC M 1`/`ESC M 0` (Fonte B da
+    impressora).
+  - **Cabeçalho composto (logo+texto) recriado**, `CupomHeaderRenderer.cs`
+    + `EscPosImage.Build(BitmapSource, ...)` (mesmo desenho da 2ª
+    tentativa) — mas com o ACHADO REAL desta rodada, olhando o print
+    nítido: nome da empresa e as linhas de endereço/telefone/CNPJ usam o
+    MESMO tamanho de fonte no modelo web (`rs.bold`/`rs.left`, ambos
+    12px CSS) — só o PESO (negrito vs. normal) diferencia o nome, não um
+    tamanho maior. As 2 tentativas anteriores (13/10, depois 16/12)
+    erravam nisso, usando tamanhos DIFERENTES pros dois sem essa
+    referência. Agora: 1 tamanho só (13px), negrito só no nome
+    (`FonteCabecalho`, `CupomHeaderRenderer.cs`).
+  - `ReciboTextoDados.CabecalhoJaImpressoComoImagem` (flag) e
+    `ReciboTexto.ComporLinhasCabecalhoEmpresa` (agora `public` de novo)
+    recriados — mesmo desenho da 2ª tentativa, `Build()` pula as linhas
+    de texto do cabeçalho quando a imagem foi gerada com sucesso.
+  - **Estendido também pro recibo de PEDIDO** (`PedidosViewModel.cs`) —
+    achado real: esse consumidor NUNCA tinha suporte a logo nenhuma
+    (nem a versão antiga "logo sozinha acima do texto") — só texto puro
+    sempre. Como a própria foto de referência desta rodada é justamente
+    o recibo de Pedido ("segue a impressão do **pedido de bar**"), o
+    cabeçalho composto foi adicionado ali também, mesmo padrão do
+    `VendaViewModel` (decodifica logo, chama `CupomHeaderRenderer.Build`
+    via `Dispatcher.Invoke`, passa os bytes pro 3º parâmetro de
+    `ImprimirTexto`).
+  - Build limpo (`dotnet build KPDV.slnx`, app fechado) — 0 erros. Ainda
+    sem confirmação visual desta 3ª tentativa — mas desta vez calibrada
+    contra uma referência real, não foto/leitura aproximada.
+  - **Ajuste fino, mesmo dia**: "diminui o tamanho da fonte um pouco.
+    manter a ocupação do cupom" — `FonteCabecalho` (`CupomHeaderRenderer.cs`)
+    13→12, sem mexer em `LarguraDots`/`LogoLarguraDots` (a largura/
+    "ocupação" do cupom, que o usuário pediu pra preservar). Build limpo.
+
+- **10ª rodada, mesmo dia — 2 bugs reais no combobox Forma de Pagamento
+  (Fechar Venda), achados por foto+descrição do usuário.** "só clicar na
+  seta pra baixo... marca no meio da lista, no caso Faturado, era pra
+  marcar o primeiro item" + "ao dar enter na forma de pagto ele finaliza
+  a venda" + descrição do ciclo esperado (Forma→Valor→Forma com saldo
+  restante, múltiplas formas).
+  - **Bug 1 — seleção "vazando" entre linhas de pagamento.** Causa raiz
+    real (achada lendo `LinhaPagamento.cs`): TODA linha de pagamento
+    recebe a MESMA referência de coleção pro `Todas` (`Todas =
+    todasFormas` no construtor — uma única `FormasPagamentoDisponiveis`
+    compartilhada por todas as linhas, inclusive as adicionadas depois
+    via `AdicionarLinhaPagamentoCommand`). O WPF cria uma `CollectionView`
+    PADRÃO por INSTÂNCIA de coleção (não por `ComboBox`) — como várias
+    linhas compartilham a mesma instância de coleção, compartilham
+    também a MESMA `CollectionView`, e por padrão
+    (`IsSynchronizedWithCurrentItem=null`) cada `ComboBox` sincroniza seu
+    `SelectedItem` com o `CurrentItem` dessa view COMPARTILHADA —
+    escolher uma forma numa linha move o `CurrentItem` global, e
+    qualquer OUTRA linha sem forma escolhida ainda (`FormaPagCodigo=""`)
+    passa a "herdar" esse destaque por tabela, não pelo próprio binding
+    dela. Corrigido com `IsSynchronizedWithCurrentItem="False"` no
+    `FormaPagCombo` (`VendaView.xaml`) — cada `ComboBox` passa a depender
+    só do próprio `SelectedValue`, sem vazamento entre linhas.
+  - **Bug 2 — Enter na Forma de Pagamento (ou no Valor) finaliza a venda
+    direto, quebrando o ciclo Forma→Valor→Forma inteiro.** Causa raiz
+    (confirmada lendo `VendaView.xaml.cs`): `PreviewKeyDown` tunela do
+    TOPO (a `UserControl` inteira, roteamento global de teclas de
+    função) até o elemento focado — o handler raiz roda ANTES de
+    `FormaPagCombo_PreviewKeyDown`/`ValorPagBox_PreviewKeyDown` (que
+    também tratam Enter — o 1º confirma a forma escolhida e foca o
+    Valor, o 2º já implementava o ciclo completo de múltiplas formas
+    descrito pelo usuário: se `DiferencaPagamento<=0` foca o botão
+    Confirmar, senão chama `AdicionarLinhaPagamentoCommand`
+    (pré-preenchendo `Valor` com o saldo restante) e foca a nova linha —
+    **essa lógica já existia, implementada numa rodada anterior, só
+    nunca tinha conseguido RODAR de verdade**). O handler raiz marcava
+    `e.Handled=true` incondicionalmente pra QUALQUER Enter dentro do
+    painel Fechar Venda, e como handlers registrados via XAML
+    (`PreviewKeyDown="..."`) não rodam depois de `Handled=true` a menos
+    que registrados com `handledEventsToo`, os handlers dos campos NUNCA
+    chegavam a executar — todo Enter finalizava a venda direto, não
+    importa em qual campo o foco estivesse. Corrigido: novo helper
+    `EstaDentroDe(elemento, ancestral)` (sobe a árvore visual) — o
+    handler raiz agora IGNORA o Enter (deixa o tunelamento continuar)
+    quando o foco atual está dentro de `ListaLinhasPagamento` (a grade
+    de linhas Forma de Pagamento/Valor), só finalizando a venda quando o
+    Enter vem de fora dessa grade (ex.: foco no botão Confirmar).
+  - Build verificado (pasta separada, app continuava aberto) — 0 erros.
+    Sem confirmação visual ainda — mas o Bug 2 em especial é uma causa
+    raiz de arquitetura (roteamento de evento), não um chute de
+    calibração como as rodadas de logo/fonte acima.
+
+- **11ª rodada, mesmo dia — aumentar logo/fonte + reduzir margens.**
+  Usuário, olhando o cupom já com o cabeçalho lado-a-lado funcionando:
+  "aumente a logo, e a fonte das letras do cupom. não mexa na orientação
+  do texto do cabeçalho. só aumente a fonte e a logo proporcionalmente" +
+  "diminua as margens laterais do cupom para o texto ocupar mais espaço
+  no papel".
+  - `CupomHeaderRenderer.cs`: `LogoLarguraDots` 90→115 (+28%),
+    `FonteCabecalho` 12→15 (+25%) — mesma proporção nos dois, layout
+    (logo à esquerda/texto à direita) intocado.
+  - `ReciboTexto.cs`: `Largura` (colunas do corpo do cupom) 42→48,
+    `MargemEsquerda` 2 espaços→1. Raciocínio: com a Fonte B condensada já
+    ativa (rodada 9), 42 colunas deixava de aproveitar parte da largura
+    física real do papel — a Fonte B renderiza cada caractere mais
+    estreito que a Fonte A, que foi o valor original calibrado pra essa.
+    48 é o valor típico de Fonte B condensada numa bobina 58mm.
+  - Build verificado (pasta separada, app continuava aberto) — 0 erros.
+    Valores de `Largura=48`/`LogoLarguraDots=115`/`FonteCabecalho=15`
+    ainda são estimativa — primeira vez que a largura de coluna do CORPO
+    do cupom (não só o cabeçalho-imagem) é ajustada nesta migração,
+    precisa de confirmação ao vivo se 48 colunas realmente cabem sem
+    cortar/quebrar linha na bobina real.
+
+## Impressão do Pedido Bar/Item não saía (web) — diagnóstico ao vivo, 2026-08-27
+
+Usuário reportou: "a impressão do pedido bar e item do pedido no app web
+não sai". Investigação ao vivo na máquina real (instalação "Baixo Brisa",
+`servidor=DESKTOP-TDK482U`/`banco=BD_BAIXOBRISA`, impressora `GERDELL`).
+
+- **Falso alarme descartado**: o backend e o print-agent apareciam como 2
+  processos `python.exe` cada (`Get-CimInstance Win32_Process`), levantando
+  suspeita de duplicação (2 agentes competindo pela mesma fila). Achado
+  real ao checar `ParentProcessId`: NÃO são instâncias duplicadas — é o
+  próprio venv Python desta máquina (instalado via Python Install Manager,
+  `pythoncore-3.14-64`) cujo `python.exe` do venv é um LANÇADOR leve que
+  spawna o interpretador real como processo FILHO. 2 PIDs = 1 processo
+  lógico só, sempre foi assim nesta máquina — não é bug, não precisa
+  "corrigir" isso.
+- **Achado real via log do agente**
+  (`print-agent/logs/agent-20260827.log`): durante uma falha momentânea de
+  conexão com o backend (`WinError 10061`, conexão recusada — aconteceu
+  de propósito durante os testes de reinício acima), o
+  `agente_impressao.py` **encerra o processo inteiro** (exit code -1) em
+  vez de logar o erro e continuar tentando no próximo ciclo de polling
+  (3s). O supervisor (`start-print-agent.ps1`) relança automaticamente
+  depois de 10s, então o agente SE RECUPERA sozinho — mas fica sem
+  processar a fila por ~10-15s a cada vez que o backend pisca, em vez de
+  só perder 1 ciclo de 3s. Se o backend ficou instável por mais tempo
+  antes desta sessão (não confirmado — não há como saber o estado de
+  antes sem um log de época), esse padrão de "crash total em vez de retry
+  gracioso" pode ter contribuído pro sintoma original relatado.
+  - **Não corrigido ainda** — registrar como pendência: `agente_
+    impressao.py`'s loop principal deveria capturar exceção de conexão
+    (`requests.exceptions.ConnectionError` e afins) around a chamada de
+    polling e só logar+continuar, não deixar propagar até derrubar o
+    processo inteiro.
+- **Ação tomada**: processo do backend e do print-agent foram reiniciados
+  do zero (supervisors `start-backend.ps1`/`start-print-agent.ps1`
+  relançados limpos). Estado atual confirmado saudável: backend responde
+  `HTTP 200` em `/docs`, print-agent sem crash-loop nos últimos ciclos de
+  polling observados.
+- **Pendente**: usuário ainda precisa confirmar ao vivo (clicar Imprimir
+  de novo, Pedido completo e Item) se a impressão física volta a
+  funcionar agora que os processos foram reiniciados — a causa raiz
+  ORIGINAL do "não sai" (antes desta sessão de diagnóstico) não foi
+  100% isolada, só o comportamento de recuperação frágil do agente foi.
+
+## Ajustes no Painel de Pedidos (KPDV) — 2026-08-27/28
+
+Usuário mandou 4 prints do Painel de Pedidos web (referência) + lista de 5
+ajustes pro `PedidosView`/`VendaView` do KPDV. 4 de 5 implementados nesta
+rodada — o 5º ficou ambíguo como instrução isolada, registrado como
+pendência de esclarecimento abaixo.
+
+- **"Colocar os filtros em um accordion"** — `PedidosView.xaml`/
+  `PedidosViewModel.cs`: novo `FiltrosExpandido` (bool, default `true` —
+  aberto por padrão, igual o `defaultExpanded` do
+  `AccordionSection.tsx` web) + `AlternarFiltrosExpandidoCommand`.
+  Cabeçalho clicável "BUSCAR E FILTRAR" com chevron alterna a
+  visibilidade do bloco SITUAÇÃO+COLUNAS VISÍVEIS — TOTAIS fica FORA do
+  accordion, sempre visível (é resultado, não filtro).
+- **"No lugar da imagem do produto, colocar a logo da empresa do
+  controle"** — `VendaViewModel.cs`: `ImagemUltimoItem` (foto do último
+  produto vendido, exibida no topo do menu lateral) REMOVIDA por
+  completo — nunca confirmada funcionando ao vivo (painel aparecia
+  sempre em branco em toda captura de tela desta sessão inteira, "1ª
+  imagem remota via HTTP, não testado ao vivo" já registrado
+  anteriormente). Substituída por `LogoEmpresa`, carregada UMA vez
+  (`CarregarLogoEmpresaAsync`, junto com `CarregarModulosAsync` ao
+  entrar na tela) a partir de `controle.logo_empresa` — mesma fonte já
+  testada e funcionando no cabeçalho do cupom impresso. `MainWindow.xaml`
+  (`PaneHeader`) e `MainWindow.xaml.cs` atualizados (`PainelFotoUltimoItem`
+  → `PainelLogoEmpresa`). `ProdutoImagemService`/`_produtoImagem` NÃO
+  removido do DI/constructor (fica injetado mas sem uso ativo — retirar
+  por completo tocaria `App.xaml.cs`, fora do escopo desta rodada
+  pontual; considerar limpeza numa rodada futura se ninguém mais vier a
+  usar essa classe).
+- **"Padronizar os tamanhos (largura e altura) dos cards de totais"** —
+  os 6 cards do bloco TOTAIS (Mesa/Comanda/Balcão/Entrega/Fiado/TOTAL
+  GERAL) ganharam `Width="150" Height="54"` fixos (antes se
+  auto-dimensionavam pelo conteúdo, ficando desalinhados entre si).
+- **"A lista de pedido está sem barra de rolagem"** — as 5
+  `ScrollViewer` das colunas (Mesa/Comanda/Balcão/Entrega/Fiado)
+  passaram de `VerticalScrollBarVisibility="Auto"` pra `"Visible"` —
+  mesmo achado/fix já aplicado em `VendaView.xaml`'s `ListaItens`
+  (2026-08-11): "Auto" só desenha quando o WPF mede que precisa, e esse
+  cálculo às vezes não torna a barra perceptível mesmo com conteúdo
+  cortado.
+- **Build**: `dotnet build KPDV.slnx` (app fechado) — 0 erros.
+
+**Pendente de esclarecimento — item não implementado**: "O card
+informando que não tem item lançado." (1ª linha da lista do usuário,
+sem verbo/ação clara). `PedidosView.xaml` já tem 2 mensagens desse tipo
+— "Nenhum pedido." (nível coluna, quando a coluna inteira está vazia) e
+"Nenhum item lançado ainda." (dentro do accordion "Ver itens" de cada
+card, quando o PEDIDO em si ainda não tem item) — ambas já existiam
+antes desta rodada. Não ficou claro se o pedido é: (a) esse texto está
+FALTANDO em algum lugar que devia aparecer e não aparece, (b) o
+estilo/posição dele deveria mudar pra bater com o print do web
+(que mostrou "Nenhum item lançado ainda." e a lista de itens reais
+juntos no mesmo card — possivelmente um artefato do próprio web, não um
+padrão a copiar), ou (c) outra coisa. Perguntar ao usuário antes de
+mexer, pra não implementar em cima de suposição.
+
+- **8ª rodada, mesmo dia — bug real de destaque duplo na busca de
+  produto.** Foto do usuário: "a busca de produto inicia na segunda linha
+  e quando navego, fica marcado 2 produtos" — 2 linhas destacadas ao mesmo
+  tempo (uma com fundo azul claro, outra com borda preta). **Causa raiz**:
+  `SuggestionItemStyle` (item de sugestão do `BuscaProduto`/`BuscaCliente`)
+  tinha um `Trigger Property="IsSelected"` herdado do
+  `DefaultAutoSuggestBoxItemContainerStyle` original que este estilo
+  copiou (ver comentário grande já existente no arquivo, "Deliberadamente
+  NÃO usa o mecanismo nativo") — esse `IsSelected` é gerenciado
+  INTERNAMENTE pelo `AutoSuggestBox` do WPF-UI, sem relação com as setas
+  do usuário (daí a lista "iniciar" destacada numa linha que o usuário
+  nunca escolheu), e pintava o MESMO fundo que o cursor por teclado
+  próprio (`Tag`/`CodigoDestacado`, borda preta) — com os 2 triggers
+  ativos, 2 linhas diferentes ficavam destacadas ao mesmo tempo sempre
+  que o `IsSelected` nativo divergia do `CodigoDestacado` controlado por
+  código (o caso comum, já que nunca sincronizamos os dois de propósito).
+  Corrigido removendo o `Trigger IsSelected` — só `IsMouseOver` (hover
+  real do mouse) e `Tag` (cursor por teclado) continuam pintando destaque.
+  - Build verificado (pasta separada, app continuava aberto) — 0 erros.
+    Sem confirmação visual ainda.
+
+### Listas de busca (AutoSuggestBox) — fonte/espaçamento reduzido, texto colando no preço `[GLOBAL, KPDV]`
+
+**Adicionado 2026-08-27, user-directed** ("regra global: listas de busca
+devem ser com fonte e espaçamento reduzida as informações tem que caber
+na lista"). Achado real por foto: na busca de Produto/Serviço
+(`BuscaProduto`, `VendaView.xaml`), uma descrição comprida ("PRATO - 1/2
+GALETO NA BRASA") colava direto no preço ("$29.90"), sem espaço nem
+truncamento — sintoma visível também na busca de Cliente (mesmo padrão de
+template, mesma causa).
+
+- **Causa raiz**: `ContentPresenter` do `ControlTemplate` de
+  `SuggestionItemStyle` não tinha `HorizontalAlignment` explícito — sem
+  isso, o `Grid` de cada `DataTemplate` (coluna `*` de Descrição) media
+  pelo conteúdo em vez de esticar pra largura real do item, então
+  `TextTrimming="CharacterEllipsis"` nunca tinha o que truncar. Mesma
+  causa raiz já identificada nesta sessão pro `ui:Card` do painel Fechar
+  Venda (`HorizontalContentAlignment` padrão "Left", não "Stretch", em
+  vários controles do WPF-UI) — reforça que é um padrão recorrente dessa
+  lib, vale checar de novo se aparecer em outro lugar.
+- **Corrigido**: `HorizontalContentAlignment="Stretch"` em
+  `SuggestionItemStyle` + `HorizontalAlignment="Stretch"` explícito no
+  `ContentPresenter` + `HorizontalAlignment="Stretch"` no `Grid` raiz de
+  cada `DataTemplate` (`BuscaCliente` e `BuscaProduto`).
+- **Fonte/espaçamento reduzidos** (pedido explícito, regra `[GLOBAL]` pra
+  toda lista de busca deste app): Código/tipo 11px→10px, Descrição/Preço
+  sem FontSize próprio (herdavam 16px do campo de busca) →13px explícito,
+  `Padding` do item 4→2, `Margin` do `Grid` 4→2, `Margin` inferior entre
+  itens 2→1. Gap fixo de 8px entre Descrição e Preço/Tipo (`Margin`
+  direita na coluna de descrição) — mesmo com o Stretch corrigido, garante
+  que nunca mais colem.
+- **Escopo "regra global"**: como este projeto (KPDV) ainda não tem seu
+  próprio `CLAUDE.md`, a regra fica registrada aqui — toda lista de busca
+  NOVA neste app (AutoSuggestBox ou equivalente) deve nascer com fonte
+  reduzida (10-13px, nunca herdar o FontSize do campo de busca sem querer)
+  e `HorizontalContentAlignment`/`HorizontalAlignment="Stretch"`
+  explícitos em cada nível da cadeia Item→ContentPresenter→Grid raiz do
+  `DataTemplate` — não repetir a omissão que causou este bug.
+- Build (`dotnet build KPDV.slnx`) não pôde ser confirmado nesta rodada —
+  o `.exe` estava em uso (app aberto pelo usuário testando ao vivo),
+  erro de CÓPIA de arquivo (MSB3027), não de compilação — nenhum erro de
+  C#/XAML apareceu na saída. Precisa fechar o app e buildar de novo antes
+  de considerar validado.
+
+- **10ª rodada, 2026-08-28 — TOTAL GERAL do Painel de Pedidos KPDV não
+  batia com o web (mesmo banco), janela precisa abrir maximizada, cupom
+  aumentado mais um pouco.** Usuário mandou 2 prints lado a lado (web:
+  Total R$624,69 = Mesa 11 + Comanda 44 + Balcão 0 + Entrega 0 + Fiado
+  569,69; KPDV, mesmo banco: TOTAL GERAL $1.429,38 com os MESMOS 5 valores
+  por coluna) + "ao entrar no KPDV tela tem que ficar maximizada" +
+  "aumentar mais um pouco a logo e a fonte do texto do cupom
+  proporcionalmente".
+  - **Causa raiz do total errado**: `PedidosViewModel.DistribuirNasColunas`
+    somava `ValorTotalGeral += p.Total` FORA do `switch`, pra TODO pedido
+    de `_todosCarregados` — inclusive os com `TipoClienteDescricao` que não
+    bate em nenhuma das 5 colunas (cliente sem tipo reconhecido). O
+    comentário do código dizia "mesmo comportamento do web", mas isso
+    nunca foi checado contra a fonte real — `frontend/app/pedidos.tsx:529`
+    define `totalGeral = ORDEM_COLUNAS_TIPO.reduce((acc,k) =>
+    acc+porTipo[k].valor, 0)`, ou seja, o total do web soma SÓ os 5 tipos
+    conhecidos, nunca todo pedido carregado. A diferença ($1.429,38 −
+    $624,69 = $804,69) são pedidos "órfãos" de tipo, presentes na resposta
+    da API mas fora de qualquer coluna. **Corrigido**: `ValorTotalGeral +=
+    p.Total` movido pra DENTRO de cada `case` do switch (Mesa/Comanda/
+    Balcão/Entrega/Fiado) — pedido fora das 5 colunas não entra mais no
+    total geral, replicando `pedidos.tsx:529` exatamente.
+  - **Janela maximizada ao abrir**: `MainWindow.xaml` ganhou
+    `WindowState="Maximized"` (não existia nenhuma configuração de
+    `WindowState` antes — nem XAML nem code-behind, sempre abria no
+    `Height="800" Width="1280"` fixo declarado ali mesmo).
+  - **Cupom, ajuste fino 3**: `CupomHeaderRenderer.cs` — `LogoLarguraDots`
+    115→132 (+15%), `FonteCabecalho` 15→17 (+13%), mesma proporção da
+    rodada anterior (90→115/+28%, 12→15/+25%), layout logo-à-esquerda/
+    texto-à-direita intacto.
+  - **Build**: app fechado (`Stop-Process`, PID confirmado via
+    `Get-Process` antes de matar) + `dotnet build KPDV.slnx` — 0 erros.
+  - **Nada testado ao vivo ainda nesta rodada** — próxima sessão com o
+    usuário deve confirmar: TOTAL GERAL batendo com o web, janela abrindo
+    maximizada, e o novo tamanho do cupom impresso.
 
 ## Persistência de schema INTEGRAL (não pontual) — `backend/services/schema_ensure.py` (2026-08-11) — IMPLEMENTADO
 

@@ -9,10 +9,20 @@ import { apiGet } from "@/src/utils/api";
 // PENDENCIAS.md > "Serviço do Sistema — Atualização". Visível pra
 // QUALQUER usuário logado (avisa a equipe, mesmo que só o master consiga
 // agir) — sem gate de master aqui, o gate fica na tela em si.
-const POLL_MS = 120_000; // 2 min — leve, só {pendente: bool}, não a config inteira
+const POLL_MS = 120_000; // 2 min — leve, só {pendente, canal}, não a config inteira
 
-export function useAtualizacaoPendente(): boolean {
-  const [pendente, setPendente] = useState(false);
+export type AtualizacaoPendenteInfo = {
+  pendente: boolean;
+  // "H" (Homologação) | "P" (Produção) — ver CLAUDE.md > "Padrões de UI"
+  // > seção 13. O botão "Atualizar Sistema" do Sidebar só serve pro canal
+  // Produção (Homologação aplica só pela tela cheia) — quem consome este
+  // hook pra decidir a visibilidade do botão precisa checar os dois
+  // campos, não só `pendente`.
+  canal: "H" | "P";
+};
+
+export function useAtualizacaoPendente(): AtualizacaoPendenteInfo {
+  const [info, setInfo] = useState<AtualizacaoPendenteInfo>({ pendente: false, canal: "H" });
 
   useEffect(() => {
     let cancelado = false;
@@ -24,7 +34,7 @@ export function useAtualizacaoPendente(): boolean {
         const c = (await listConnections()).find((x) => x.empresa === s.empresa);
         if (!c) return;
         const j = await apiGet({ servidor: c.servidor, banco: c.banco, api: c.api }, "/api/servico-sistema/atualizacao/status");
-        if (!cancelado && j?.success) setPendente(!!j.pendente);
+        if (!cancelado && j?.success) setInfo({ pendente: !!j.pendente, canal: j.canal === "P" ? "P" : "H" });
       } catch {
         // silencioso — badge é só um aviso, nunca deve gerar erro visível
       }
@@ -35,5 +45,5 @@ export function useAtualizacaoPendente(): boolean {
     return () => { cancelado = true; clearInterval(t); };
   }, []);
 
-  return pendente;
+  return info;
 }

@@ -11,6 +11,16 @@ print-agent/config.json
 print-agent/.venv/
 print-agent/logs/
 
+# Serviço do Sistema > Atualização — mesma razão: são artefatos de
+# ESTADO desta máquina específica (qual servidor/banco checar, qual
+# release/commit está aplicado agora), gerados em runtime pelo próprio
+# backend/apply_update.ps1, nunca escritos à mão nem parte do código-
+# fonte. config.exemplo.json continua versionado como template.
+backend/updater_conn.json
+updater/config.json
+updater/state.json
+updater/logs/
+
 # Dependencies
 node_modules/
 /node_modules

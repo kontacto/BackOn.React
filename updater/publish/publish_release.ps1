@@ -28,13 +28,24 @@
 .PARAMETER ContainerName
   Nome do container no Blob. Padrão: "releases".
 
+.PARAMETER Estavel
+  Marca esta release como pronta pra Produção (`manifest.estavel = true`).
+  Sem esse switch, a release fica marcada como só-Homologação —
+  instalações configuradas com Canal "Produção" (Serviço do Sistema >
+  Atualização) ignoram o commit até ele ser republicado com `-Estavel`.
+  Instalações em Canal "Homologação" sempre baixam a última release
+  publicada, com ou sem este switch — só afeta quem está em Produção.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\publish_release.ps1
+.EXAMPLE
+  powershell -ExecutionPolicy Bypass -File .\publish_release.ps1 -Estavel
 #>
 
 param(
     [string]$Commit = $null,
-    [string]$ContainerName = "releases"
+    [string]$ContainerName = "releases",
+    [switch]$Estavel
 )
 
 $ErrorActionPreference = "Stop"
@@ -155,6 +166,7 @@ $manifest = @{
     published_at = (Get-Date).ToString("o")
     backend = @{ file = $backendZipName; sha256 = $backendSha }
     frontend = @{ file = $frontendZipName; sha256 = $frontendSha }
+    estavel = [bool]$Estavel.IsPresent
 } | ConvertTo-Json -Depth 5
 
 $manifestPath = Join-Path $StagingDir "manifest.json"
@@ -166,5 +178,9 @@ Set-AzStorageBlobContent -Container $ContainerName -File $manifestPath -Blob "ma
 Remove-Item $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
-Write-Host "Release $Commit publicada com sucesso." -ForegroundColor Green
-Write-Host "As instalações de cliente vão pegar essa versão no próximo ciclo da Tarefa 'BackOn-Updater' (até 30 min)." -ForegroundColor Green
+Write-Host "Release $Commit publicada com sucesso (estavel=$([bool]$Estavel.IsPresent))." -ForegroundColor Green
+if ($Estavel) {
+    Write-Host "Disponível pros dois canais — Homologação e Produção vão pegar no próximo ciclo de verificação de cada instalação." -ForegroundColor Green
+} else {
+    Write-Host "Disponível só pro canal Homologação — instalações em Produção vão ignorar até esta release ser republicada com -Estavel." -ForegroundColor Yellow
+}

@@ -407,6 +407,15 @@ def _get_venda_sync(servidor: str, banco: str, comanda: int) -> dict:
         cur.execute(
             "SELECT m.id_mov, m.codigo_int, m.qtd, m.p_unit, m.vendedor, m.tipo_dav, m.COD_AUTO_DAV, "
             "ISNULL(NULLIF(p.descricao_pdv,''), p.descricao) AS descricao_p, s.descricao AS descricao_s, "
+            # `cod_fab`/`uni` — achados no rastreio do recibo não fiscal do
+            # legado (`FrmPafOFF.frm`, "Cupom" impresso pela impressora
+            # fiscal/ECF: colunas Código/Un usam `codigo_fab`/`uni`, não
+            # `codigo_int`/vazio como este endpoint já devolvia) — usados
+            # pelo recibo tabular novo do KPDV WPF (ver
+            # `KPDV/src/KPDV/Utils/ReciboTexto.cs`). Serviço não tem
+            # nenhum dos dois (`cod_fab`/`uni` ficam `NULL`, tratados como
+            # vazio no service).
+            "p.codigo_fab AS cod_fab, p.uni AS uni, "
             "d.desconto, d.PRECO_BRUTO AS preco_bruto_desc, a.acrescimo, a.PRECO_BRUTO AS preco_bruto_acr "
             "FROM movimentacao m "
             "LEFT JOIN pecas p ON p.codigo_int = m.codigo_int "
@@ -424,6 +433,8 @@ def _get_venda_sync(servidor: str, banco: str, comanda: int) -> dict:
             itens.append({
                 "id_mov": int(r["id_mov"]),
                 "codigo": (r.get("codigo_int") or "").strip(),
+                "cod_fab": (r.get("cod_fab") or "").strip(),
+                "unidade": (r.get("uni") or "").strip(),
                 "descricao": (r.get("descricao_p") or r.get("descricao_s") or "").strip(),
                 "qtd": float(r.get("qtd") or 0),
                 "p_unit": float(r.get("p_unit") or 0),
@@ -533,10 +544,24 @@ def _buscar_produto_sync(servidor: str, banco: str, codigo: str, qtd: float = 1)
                 if tier is not None:
                     preco = tier
         estoque = None
+        imagem_codigo = None
         if produto["tipo"] == "P":
             cur.execute("SELECT qtd FROM pecas WHERE codigo_int=%s", (produto["codigo"],))
             r = cur.fetchone()
             estoque = float(r["qtd"]) if r else 0
+            # Foto de produto (KPDV — exibida no rodapé do menu lateral ao
+            # adicionar um item, 2026-08-27) — mesma consulta já usada em
+            # produtos_service.py/itens_service.py, nunca duplicado como
+            # LEFT JOIN aqui porque este SELECT já resolve por 4 colunas
+            # diferentes (codigo_fab/codigo_int/codigo_bar/CODBARRA_AUXILIAR)
+            # em _resolve_produto_completo — mais simples resolver a imagem
+            # à parte, já com o codigo_int definitivo em mãos.
+            cur.execute(
+                "SELECT codigo FROM produto_imagem WHERE codigo_int=%s AND principal=1 AND situacao='A'",
+                (produto["codigo"],),
+            )
+            r_img = cur.fetchone()
+            imagem_codigo = int(r_img["codigo"]) if r_img else None
         limites = _limites_desconto(cur, produto)
         cur.close()
         conn.close()
@@ -545,6 +570,7 @@ def _buscar_produto_sync(servidor: str, banco: str, codigo: str, qtd: float = 1)
             "codigo": produto["codigo"],
             "cod_fab": produto["cod_fab"],
             "descricao": produto["descricao"],
+            "imagem_codigo": imagem_codigo,
             "tipo": produto["tipo"],
             "unidade": produto["unidade"],
             "preco": preco,

@@ -110,13 +110,25 @@ def _list_forma_pagamento_completo_sync(servidor: str, banco: str) -> dict:
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            "SELECT codigo, descricao, tipo FROM forma_pagamento WHERE situacao='A' ORDER BY descricao"
+            "SELECT codigo, descricao, tipo, prazo, parcela_max, vale_devolucao "
+            "FROM forma_pagamento WHERE situacao='A' ORDER BY descricao"
         )
         items = [
             {
                 "codigo": (r.get("codigo") or "").strip(),
                 "descricao": (r.get("descricao") or "").strip(),
                 "tipo": (r.get("tipo") or "").strip().upper(),
+                # Dias de prazo pra vencimento (Cheque/Cartão/Vale/Duplicata) e
+                # nº máximo de parcelas (Cartão) — colunas reais de
+                # `forma_pagamento`, já usadas em checkout_service.py (venda
+                # web/KPDV) e no legado (`FrmPafOFF.frm::Form_Load`, réplica
+                # de `Type_FormaPagamento`). Adicionadas nesta rodada
+                # (2026-08-27) pro KPDV replicar Vencimento/Parcelas por
+                # linha de pagamento, igual ao VB6 — antes só código/
+                # descrição/tipo eram expostos aqui.
+                "prazo": int(r.get("prazo") or 0),
+                "parcela_max": int(r.get("parcela_max") or 1) or 1,
+                "vale_devolucao": bool(r.get("vale_devolucao")),
             }
             for r in cur.fetchall()
         ]

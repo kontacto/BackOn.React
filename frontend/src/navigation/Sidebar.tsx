@@ -10,12 +10,16 @@
 // relatorios) — só a barra visual dele é escondida no web (`tabBarStyle:
 // display:none`) pra não duplicar este componente.
 import { useState } from "react";
-import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter, usePathname } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import { usePermissions } from "@/src/permissions";
 import { useAtualizacaoPendente } from "@/src/hooks/useAtualizacaoPendente";
+import { useAplicarAtualizacao } from "@/src/hooks/useAplicarAtualizacao";
+import { useTransferenciaPendenteCount } from "@/src/hooks/useTransferenciaPendenteCount";
+import { useSessionWelcome } from "@/src/hooks/useSessionWelcome";
+import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
 
 // Preferência de menu recolhido (só ícones) — lembrada no navegador entre
@@ -35,6 +39,28 @@ type NavItem = {
   href: string;
   visible: boolean;
   badge?: boolean;
+};
+
+// "Pendências do Sistema" — grupo separado do menu de navegação normal
+// (`items` acima), visualmente destacado no final da sidebar (borda
+// superior + rótulo). Regra `[GLOBAL]` nova, 2026-08-28, user-directed:
+// só entram aqui botões de ação DIRETA (disparam algo, não navegam pra
+// uma tela) que só aparecem quando existe algo pendente precisando de
+// INTERVENÇÃO do usuário — nunca um atalho permanente. "Atualizar
+// Sistema" é o primeiro; mais itens previstos (ex.: Transferência
+// disponível do Contas a Pagar/Receber, Transferência pro Fluxo de
+// Caixa) — esses futuros, gateados por permissão normal (`can(...)`),
+// não pelo critério especial do primeiro. O grupo inteiro some quando
+// nenhum item está `visible` (nunca mostra o rótulo "vazio"). Ao
+// adicionar um item novo, seguir este mesmo formato (`ShortcutItem`) em
+// vez de inventar outro padrão.
+type ShortcutItem = {
+  key: string;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  visible: boolean;
+  loading?: boolean;
+  onPress: () => void;
 };
 
 // Telas fora do grupo (tabs) mapeadas pra aba "lógica" a que pertencem, só
@@ -112,8 +138,12 @@ const HIDDEN_ON: string[] = ["/", "/login", "/connections", "/perfil-usuario"];
 export default function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
-  const { moduleOn } = usePermissions();
-  const atualizacaoPendente = useAtualizacaoPendente();
+  const { can, moduleOn, isManagerFuncao } = usePermissions();
+  const feedback = useFeedback();
+  const atualizacao = useAtualizacaoPendente();
+  const { aplicando, aplicar } = useAplicarAtualizacao();
+  const transferenciaPendenteCount = useTransferenciaPendenteCount();
+  const welcome = useSessionWelcome();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
       return window.localStorage.getItem(COLLAPSE_KEY) === "1";
@@ -151,8 +181,66 @@ export default function Sidebar() {
     { key: "financeiro", label: "Financeiro", icon: "cash-outline", href: "/financeiro", visible: true },
     { key: "posto-combustivel", label: "Posto", icon: "water-outline", href: "/posto-combustivel", visible: moduleOn("Posto") },
     { key: "cilindros", label: "Cilindros", icon: "flame-outline", href: "/cilindros", visible: moduleOn("Cilindro") },
-    { key: "configuracoes", label: "Configurações", icon: "settings-outline", href: "/configuracoes", visible: true, badge: atualizacaoPendente },
+    { key: "configuracoes", label: "Configurações", icon: "settings-outline", href: "/configuracoes", visible: true, badge: atualizacao.pendente },
     { key: "relatorios", label: "Relatórios", icon: "bar-chart-outline", href: "/relatorios", visible: true },
+  ];
+
+  // "Atualizar Sistema" — aplica a atualização pendente direto daqui, sem
+  // entrar em Configurações > Serviço do Sistema (essa tela continua
+  // existindo, restrita ao Master, só pra CONFIGURAR chave do
+  // blob/pastas/intervalo).
+  //
+  // Regra de acesso do grupo inteiro `[GLOBAL]`, formalizada pelo
+  // usuário 2026-08-28: TODO item de "Pendências do Sistema" (presente
+  // ou futuro) é visível só quando `can("<TELA>.<ACAO>") ||
+  // isManagerFuncao` — a pendência de uma tela nunca aparece pra quem
+  // não teria acesso à própria tela (ex. do usuário: sem acesso a
+  // Transferência Contas a Pagar/Receber, não recebe o aviso dela).
+  // "Atualizar Sistema" não tem tela/permissão própria no catálogo
+  // (`SERVICO_SISTEMA` não existe lá — visibilidade da tela completa já
+  // é só-Master por decisão própria) — a fórmula degenera pra só
+  // `isManagerFuncao` aqui, não porque a regra deste item é diferente.
+  // "Os três magníficos" (apelido do usuário) = Supervisor, Gerente e
+  // Kontacto (Master) = `isManagerFuncao` já existente
+  // (`isMaster || cod_funcao 1 || cod_funcao 2`) — nenhum mecanismo novo
+  // de permissão foi necessário. Ver CLAUDE.md > "Padrões de UI" > seção
+  // 10 pro desenho completo do grupo.
+  const handleAtualizarSistema = () => {
+    if (aplicando) return;
+    feedback.showConfirm(
+      "Aplicar a atualização pendente agora? O backend vai reiniciar em instantes — qualquer pessoa usando o sistema perde a conexão por alguns segundos.",
+      async () => {
+        const r = await aplicar();
+        if (r.success) {
+          feedback.showSuccess(r.message || "Atualização aplicada — o sistema está reiniciando.", undefined, 5000);
+        } else {
+          feedback.showError(r.message || "Falha ao aplicar a atualização.");
+        }
+      },
+      { title: "Atualizar Sistema", confirmText: "Aplicar agora" },
+    );
+  };
+
+  const shortcuts: ShortcutItem[] = [
+    {
+      key: "atualizar-sistema", label: "Atualizar Sistema", icon: "cloud-download-outline",
+      // Só canal Produção — Homologação aplica exclusivamente pela tela
+      // completa (Serviço do Sistema > Atualização), nunca por aqui. Ver
+      // CLAUDE.md > "Padrões de UI" > seção 13.
+      visible: atualizacao.pendente && atualizacao.canal === "P" && isManagerFuncao,
+      loading: aplicando, onPress: handleAtualizarSistema,
+    },
+    // 2º item do grupo — navega pra tela de revisão (não é ação de 1
+    // clique como "Atualizar Sistema": transferir exige o usuário
+    // marcar quais Notas Fiscais/Comandas entram, então o atalho leva
+    // até `/transferencia-contas` em vez de disparar algo direto daqui.
+    // Mesma fórmula de acesso `[GLOBAL]` da seção 10 do CLAUDE.md:
+    // `can("TRANSF_CONTAS.ABRIR") || isManagerFuncao`.
+    {
+      key: "transferencia-pendente", label: `Transferência Pendente (${transferenciaPendenteCount})`, icon: "swap-horizontal-outline",
+      visible: transferenciaPendenteCount > 0 && (can("TRANSF_CONTAS.ABRIR") || isManagerFuncao),
+      onPress: () => router.push("/transferencia-contas" as never),
+    },
   ];
 
   const activeHref = DETAIL_TO_TAB[pathname] ?? pathname;
@@ -216,6 +304,51 @@ export default function Sidebar() {
       >
         <Ionicons name={collapsed ? "chevron-forward" : "chevron-back"} size={16} color={colors.muted} />
       </Pressable>
+      {/* Card "Bem-vindo" (empresa/usuário/grupo/conexão) — pedido
+          explícito do usuário, 2026-08-28: "não ficou bom na parte
+          inferior. colocar na parte superior, logo acima do menu
+          lateral" (1ª versão ficava no rodapé — revertido pra cá, logo
+          abaixo do botão de recolher, acima de Cadastros/Transações/
+          etc). */}
+      {welcome ? (
+        <Pressable
+          onHoverIn={() => setHoveredKey("welcome")}
+          onHoverOut={() => setHoveredKey(null)}
+          style={[styles.welcomeCard, collapsed && styles.welcomeCardCollapsed]}
+          testID="sidebar-welcome"
+        >
+          {welcome.logo ? (
+            <Image source={{ uri: welcome.logo }} style={styles.welcomeAvatar} resizeMode="cover" testID="sidebar-welcome-logo" />
+          ) : (
+            <View style={[styles.welcomeAvatar, styles.welcomeAvatarFallback]}>
+              <Ionicons name="person" size={16} color={colors.onBrandPrimary} />
+            </View>
+          )}
+          {!collapsed ? (
+            <View style={{ flex: 1, minWidth: 0 }}>
+              {/* Codnome (nome_guerra) no lugar do nome completo, mesma
+                  formatação — pedido explícito do usuário, 2026-08-28
+                  ("exibir o codnome do usuário... no lugar do nome com a
+                  mesma formatação"). Cai pro nome completo só quando não
+                  há nome_guerra cadastrado. */}
+              <Text style={styles.welcomeName} numberOfLines={1}>{welcome.nomeGuerra || welcome.displayName}</Text>
+              {welcome.classe ? <Text style={styles.welcomeSub} numberOfLines={1}>Grupo: {welcome.classe}</Text> : null}
+              {welcome.empresa ? <Text style={styles.welcomeSub} numberOfLines={1}>{welcome.empresa}</Text> : null}
+            </View>
+          ) : null}
+          {collapsed && hoveredKey === "welcome" ? (
+            <View style={styles.tooltip} pointerEvents="none">
+              <View style={styles.tooltipInner}>
+                <Text style={styles.tooltipText}>
+                  {welcome.nomeGuerra || welcome.displayName}
+                  {welcome.classe ? ` — Grupo: ${welcome.classe}` : ""}
+                  {welcome.empresa ? ` — ${welcome.empresa}` : ""}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+        </Pressable>
+      ) : null}
       {items
         .filter((i) => i.visible)
         .map((item) => {
@@ -250,6 +383,45 @@ export default function Sidebar() {
             </Pressable>
           );
         })}
+      {shortcuts.some((s) => s.visible) ? (
+        <View style={styles.shortcutsGroup}>
+          {!collapsed ? <Text style={styles.shortcutsLabel} numberOfLines={1}>Pendências do Sistema</Text> : null}
+          {shortcuts
+            .filter((s) => s.visible)
+            .map((s) => (
+              <Pressable
+                key={s.key}
+                onPress={s.onPress}
+                disabled={s.loading}
+                onHoverIn={() => setHoveredKey(s.key)}
+                onHoverOut={() => setHoveredKey(null)}
+                style={[styles.item, styles.shortcutItem]}
+                testID={`sidebar-shortcut-${s.key}`}
+              >
+                <View style={styles.iconWrap}>
+                  {s.loading ? (
+                    <ActivityIndicator size="small" color={colors.brandPrimary} />
+                  ) : (
+                    <Ionicons name={s.icon} size={20} color={colors.brandPrimary} />
+                  )}
+                </View>
+                {/* Sempre só ícone, independente de recolhido/expandido —
+                    pedido explícito do usuário, 2026-08-28 ("colocar
+                    somente icones nas pendências, pois o espaço é
+                    curto"). Tooltip SEMPRE disponível no hover (não só
+                    quando recolhido, diferente do menu normal acima) —
+                    é a única forma de saber o que o ícone faz. */}
+                {hoveredKey === s.key ? (
+                  <View style={styles.tooltip} pointerEvents="none">
+                    <View style={styles.tooltipInner}>
+                      <Text style={styles.tooltipText}>{s.loading ? "Atualizando…" : s.label}</Text>
+                    </View>
+                  </View>
+                ) : null}
+              </Pressable>
+            ))}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -317,6 +489,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 0,
   },
+  // Itens de "Pendências do Sistema" — sempre ícone-só, mesmo estilo de
+  // `itemCollapsed` mas aplicado incondicionalmente (não só quando o
+  // menu está recolhido).
+  shortcutItem: {
+    justifyContent: "center",
+    paddingHorizontal: 0,
+  },
   itemActive: {
     backgroundColor: colors.surfaceSecondary,
   },
@@ -349,4 +528,52 @@ const styles = StyleSheet.create({
   labelActive: {
     color: colors.brandPrimary,
   },
+  // Grupo "Pendências do Sistema" — visualmente separado da navegação
+  // normal (borda superior, mesmo padrão já usado em `logoWrap`), fica no
+  // final da sidebar. O `View` inteiro só é montado quando existe pelo
+  // menos 1 item pendente visível (ver JSX) — nunca aparece "vazio".
+  shortcutsGroup: {
+    marginTop: spacing.xs,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    gap: 2,
+  },
+  shortcutsLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    paddingHorizontal: 12,
+    marginBottom: 4,
+  },
+  // Card "Bem-vindo" (empresa/avatar/nome/grupo) — pedido explícito do
+  // usuário, 2026-08-28, pra ficar sempre visível na base da sidebar
+  // (mesmo card já usado na Tela Principal, `WelcomeHero.tsx`, versão
+  // compacta pro espaço estreito do menu).
+  welcomeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    position: "relative",
+  },
+  // Menu recolhido — só o avatar é exibido (sem nome/grupo/conexão ao
+  // lado), então centraliza e zera o padding horizontal — mesmo padrão
+  // já usado por `itemCollapsed`/`shortcutItem`. Pedido explícito do
+  // usuário, 2026-08-28 ("quando o menu recuar, centralizar o avatar...
+  // somente nesse caso. Expandido manter como está").
+  welcomeCardCollapsed: {
+    justifyContent: "center",
+    paddingHorizontal: 0,
+  },
+  welcomeAvatar: { width: 28, height: 28, borderRadius: 14 },
+  welcomeAvatarFallback: { backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center" },
+  welcomeName: { fontSize: 12, fontWeight: "600", color: colors.onSurface },
+  welcomeSub: { fontSize: 10, color: colors.muted, marginTop: 1 },
 });

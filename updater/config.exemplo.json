@@ -6,5 +6,6 @@
   "backendPort": 8081,
   "healthCheckTimeoutSeconds": 30,
   "healthCheckRetries": 10,
-  "keepReleases": 2
+  "keepReleases": 2,
+  "canal": "Homologacao"
 }

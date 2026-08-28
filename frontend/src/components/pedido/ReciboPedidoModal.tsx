@@ -167,7 +167,13 @@ export default function ReciboPedidoModal({ visible, onClose, conn, pedido, clie
 
   if (!pedido) return null;
 
-  const situacaoLabel = pedido.situacao === "A" ? "Orçamento" : "Pedido";
+  // Título do recibo sempre "Pedido", mesmo quando `situacao === "A"`
+  // (que internamente ainda é tratado como "Orçamento" — ver CLAUDE.md >
+  // "Regras Globais de Pré-venda", "todo pedido aberto é um orçamento").
+  // Pedido explícito do usuário, 2026-08-27: "o título 'Orçamento' na
+  // conta, trocar para 'Pedido'" — simplificação só do texto impresso,
+  // não reverte a regra de negócio interna.
+  const situacaoLabel = "Pedido";
   const enderecoEmpresa = empresa
     ? [empresa.endereco, empresa.numero ? String(empresa.numero) : null, empresa.complemento].filter(Boolean).join(" ")
     : "";

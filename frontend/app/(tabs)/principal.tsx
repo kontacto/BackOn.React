@@ -113,14 +113,15 @@ export default function PrincipalScreen() {
         <View style={Platform.OS === "web" ? styles.webFrame : undefined}>
           {Platform.OS === "web" ? (
             <>
-              <WelcomeHero
-                empresa={d.session.empresa}
-                logo={d.session.logo}
-                displayName={d.displayName}
-                nomeGuerra={d.nomeGuerra}
-                classe={d.classe}
-              />
-
+              {/* WelcomeHero removido daqui (web) — pedido explícito do
+                  usuário, 2026-08-28: "retirar o card de boas vindas da
+                  tela principal". O mesmo card (empresa/avatar/codnome/
+                  grupo/conexão) já aparece de forma persistente no topo
+                  do Sidebar (ver CLAUDE.md > "Padrões de UI" > seção 12)
+                  — ficava duplicado aqui. Mobile NÃO tem Sidebar (ver
+                  "Platform Scope" em CLAUDE.md), então o branch mobile
+                  logo abaixo continua com o WelcomeHero próprio, sem
+                  mudança. */}
               {/* Alertas de Estoque ao lado dos tiles de módulo (pedido
                   explícito do usuário, 2026-07-20: "colocar o card ao lado
                   do card de Pedidos") — os tiles ficam compactos (160px

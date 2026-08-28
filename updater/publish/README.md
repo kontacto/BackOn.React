@@ -43,9 +43,35 @@ O script:
 3. Calcula sha256 dos 2 zips.
 4. Sobe os 2 zips + `manifest.json` pro container `releases`.
 
-As instalações de cliente pegam a versão nova automaticamente no próximo
-ciclo da Tarefa Agendada `BackOn-Updater` (até ~30 min, ver
-`updater/README.md`).
+As instalações pegam a versão nova sozinhas no próximo ciclo de
+verificação da tarefa de fundo do próprio backend (intervalo configurável
+por instalação em Configurações > Serviço do Sistema > Atualização — ver
+`updater/README.md`; a antiga Tarefa Agendada Windows `BackOn-Updater`
+está pausada, não é mais o mecanismo de disparo).
+
+### Homologação vs. Produção — como VOCÊ decide, ao publicar
+
+**É aqui, neste comando, que se define se uma release chega em cliente ou
+só na equipe** — não tem nenhuma outra etapa/aprovação depois. Toda
+instalação (máquina da equipe ou de cliente) está configurada num canal
+(Serviço do Sistema > Atualização > "Canal"):
+
+- **Homologação** (equipe): baixa **qualquer** release publicada, estável
+  ou não — é o padrão do comando acima, sem flag nenhuma.
+- **Produção** (clientes): só baixa releases marcadas como estáveis. Pra
+  isso, publique com `-Estavel`:
+  ```powershell
+  .\publish_release.ps1 -Estavel
+  ```
+  Sem `-Estavel`, a release fica visível só pro canal Homologação — quem
+  está em Produção continua na versão anterior até você republicar o
+  mesmo (ou outro) commit com `-Estavel`.
+
+Fluxo recomendado: publicar SEM `-Estavel` primeiro, deixar a equipe
+validar em Homologação, e só então republicar (mesmo commit) COM
+`-Estavel` pra liberar em Produção — nunca pular a etapa de homologação
+publicando direto com `-Estavel` num commit que ainda não foi testado por
+ninguém.
 
 ## Gerar a SAS de leitura pro cliente
 
@@ -69,9 +95,9 @@ cada cliente (ver `updater/config.exemplo.json`).
 
 ## Antes de publicar — checklist
 
-- [ ] O commit foi testado (não existe ambiente de homologação
-      automatizado — publicar é um ato manual e deliberado, é isso que
-      controla o que vira release).
-- [ ] `pytest tests/unit -q` passa sem regressão nova.
+- [ ] O commit foi testado (`pytest tests/unit -q` sem regressão nova).
+- [ ] Se o destino final é Produção: já foi publicado ANTES sem
+      `-Estavel` e validado em pelo menos uma instalação no canal
+      Homologação? Só então republicar com `-Estavel`.
 - [ ] Não há mudanças não commitadas sendo publicadas por engano (o script
       avisa, mas não bloqueia).

@@ -274,6 +274,20 @@ function Invoke-Download {
         Write-Log "Já está na versão mais recente (commit $($manifest.commit)). Nada a fazer."
         return $null
     }
+
+    # Canal Homologação/Produção — adicionado 2026-08-28. `config.json`
+    # opcional (`canal`, ausente = "Homologacao" pra compatibilidade com
+    # instalação já configurada antes desta mudança). Homologação sempre
+    # baixa o que estiver publicado; Produção só baixa quando o manifest
+    # marca `estavel: true` (campo gravado por `updater/publish/
+    # publish_release.ps1 -Estavel`) — o commit mais novo pode ficar
+    # "preso" aqui até alguém promovê-lo, de propósito.
+    $Canal = if ($cfg.canal) { $cfg.canal } else { "Homologacao" }
+    if ($Canal -eq "Producao" -and -not $manifest.estavel) {
+        Write-Log "Canal Produção — commit $($manifest.commit) publicado, mas ainda não marcado como estável (-Estavel). Aguardando promoção."
+        return $null
+    }
+
     Write-Log "Nova versão disponível: $($manifest.commit) (atual: $($State.commit))"
 
     $TempDir = Join-Path $env:TEMP ("backon-update-" + [guid]::NewGuid().ToString("N"))

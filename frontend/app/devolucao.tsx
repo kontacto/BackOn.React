@@ -37,6 +37,17 @@ import { formatBRL, formatDateBR } from "@/src/utils/format";
 
 const isWeb = Platform.OS === "web";
 
+// Todo campo de período nasce com a data de hoje (De e Até), não vazio —
+// mesma convenção já usada em ~15 outras telas (gestor-nfce.tsx,
+// contrato-faturar.tsx, inventario.tsx, etc.), reforçada pelo usuário,
+// 2026-08-27: "como combinamos em todas as telas que possuir período,
+// colocar data atual no período". `WebDateField`'s "data inicial repete
+// na final" continua funcionando normal por cima disso — só o valor
+// INICIAL (antes de qualquer toque do usuário) que passa a ser hoje.
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 type ItemVenda = {
   id_mov: number; comanda: number; data: string; cliente: number | null; cliente_nome: string;
   codigo: string; descricao: string; qtd: number; qtd_disponivel: number; p_unit: number;
@@ -48,13 +59,20 @@ type DevolucaoRow = {
   vale_devolucao: number | null; vale_situacao: string | null;
 };
 
+// Textos revisados com o João (equipe Kontacto) — pedido explícito do
+// usuário, 2026-08-27: "revise o gestor de devolução quanto ao design...
+// incluir o João da equipe nessa revisão para tornar a devolução mais
+// didática possível". Reorganizado como um passo-a-passo (1-2-3) e o
+// item que mais confundia — "Registrar" vs "Emitir NF-e", antes 2
+// entradas soltas sem comparação direta — virou uma única entrada que já
+// responde "qual eu escolho".
 const AJUDA_ITENS: HelpItem[] = [
-  { titulo: "Buscar", texto: "Procura itens de vendas já PAGAS que ainda podem ser devolvidos (com saldo disponível). Filtre por data, cupom, NFC-e, NF, comanda, cliente ou produto.", icon: { lib: "ion", name: "search" } },
-  { titulo: "Selecionar item", texto: "Marque o item, informe a quantidade a devolver (não pode passar do saldo disponível) e o motivo (Normal ou Defeito).", icon: { lib: "ion", name: "checkbox-outline" } },
-  { titulo: "Emitir Vale de Devolução", texto: "Gera um crédito no valor total devolvido, em nome do cliente escolhido — pode ser usado como forma de pagamento numa venda futura.", icon: { lib: "ion", name: "cash-outline" } },
-  { titulo: "Registrar Devolução", texto: "Grava a devolução dos itens marcados, sem emitir Nota Fiscal — use quando for juntar várias devoluções numa única NF-e mais tarde.", icon: { lib: "ion", name: "checkmark-done-outline" } },
-  { titulo: "Emitir NF-e de Devolução", texto: "Registra a devolução e já abre a tela de Gerar NF-e com os dados carregados, pronta pra revisar e emitir — sem digitar nada lá. Só funciona quando todos os itens marcados são da mesma venda/cliente (a Nota Fiscal só tem 1 destinatário). O estoque é reposto automaticamente quando a NF-e é emitida.", icon: { lib: "ion", name: "receipt-outline" } },
-  { titulo: "Consulta", texto: "Lista devoluções já registradas. Cancelar uma devolução também cancela o Vale vinculado, se houver — só é possível enquanto não tiver NF de devolução vinculada.", icon: { lib: "ion", name: "list-outline" } },
+  { titulo: "Como funciona esta tela", texto: "Você devolve produtos de uma venda já paga em 3 passos: busca a venda, marca os itens devolvidos, e decide se só registra ou já emite a Nota Fiscal de devolução.", icon: { lib: "ion", name: "information-circle-outline" } },
+  { titulo: "1. Buscar a venda", texto: "Digite qualquer dado que você tiver — data, cupom, NFC-e, NF, comanda, cliente ou produto. Só aparecem itens que ainda têm saldo pra devolver.", icon: { lib: "ion", name: "search" } },
+  { titulo: "2. Marcar os itens", texto: "Clique no item pra selecionar, ajuste a quantidade devolvida (nunca mais do que foi vendido) e escolha o motivo — Normal ou Defeito.", icon: { lib: "ion", name: "checkbox-outline" } },
+  { titulo: "3. Registrar ou Emitir NF-e — qual escolher?", texto: "\"Registrar Devolução\" só guarda no sistema, sem Nota Fiscal — use se for juntar com outras devoluções do mesmo cliente numa Nota só, mais tarde. \"Emitir NF-e de Devolução\" já leva direto pra gerar a Nota, com tudo preenchido — use quando essa é a única devolução dessa venda. Nos dois casos, o estoque só volta quando a Nota Fiscal é realmente emitida.", icon: { lib: "ion", name: "git-compare-outline" } },
+  { titulo: "Vale de Devolução", texto: "É um crédito no valor devolvido, em nome do cliente — ele usa esse crédito como forma de pagamento numa compra futura, em vez de receber o dinheiro de volta na hora.", icon: { lib: "ion", name: "cash-outline" } },
+  { titulo: "Consulta", texto: "Veja as devoluções já feitas. Cancelar uma devolução cancela também o Vale vinculado, se houver — só dá pra cancelar antes de emitir a Nota Fiscal.", icon: { lib: "ion", name: "list-outline" } },
 ];
 
 export default function DevolucaoScreen() {
@@ -70,8 +88,8 @@ export default function DevolucaoScreen() {
 
   const [motivos, setMotivos] = useState<Motivo[]>([]);
 
-  const [dataIni, setDataIni] = useState<string | null>(null);
-  const [dataFim, setDataFim] = useState<string | null>(null);
+  const [dataIni, setDataIni] = useState<string | null>(todayIso());
+  const [dataFim, setDataFim] = useState<string | null>(todayIso());
   const [comanda, setComanda] = useState("");
   const [cupom, setCupom] = useState("");
   const [nfce, setNfce] = useState("");
@@ -92,8 +110,8 @@ export default function DevolucaoScreen() {
   const [registrando, setRegistrando] = useState(false);
   const [emitindoNfe, setEmitindoNfe] = useState(false);
 
-  const [consultaDataIni, setConsultaDataIni] = useState<string | null>(null);
-  const [consultaDataFim, setConsultaDataFim] = useState<string | null>(null);
+  const [consultaDataIni, setConsultaDataIni] = useState<string | null>(todayIso());
+  const [consultaDataFim, setConsultaDataFim] = useState<string | null>(todayIso());
   const [consultaCliente, setConsultaCliente] = useState("");
   const clienteConsultaSearch = useClienteSearchModal(conn);
   const [consultaComanda, setConsultaComanda] = useState("");
@@ -357,12 +375,12 @@ export default function DevolucaoScreen() {
               <View style={WEB_FILTER_CARD}>
                 <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="devolucao-filtros">
                 <View style={{ flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" }}>
-                  <View style={{ width: 160 }}>
-                    <Text style={fieldLabel()}>Data De</Text>
+                  <View style={{ width: 140 }}>
+                    <Text style={fieldLabel()}>De</Text>
                     <WebDateField value={dataIni} onChange={(v) => { setDataIni(v || null); if (v) setDataFim(v); }} testID="devolucao-data-ini" />
                   </View>
-                  <View style={{ width: 160 }}>
-                    <Text style={fieldLabel()}>Data Até</Text>
+                  <View style={{ width: 140 }}>
+                    <Text style={fieldLabel()}>Até</Text>
                     <WebDateField value={dataFim} onChange={(v) => setDataFim(v || null)} testID="devolucao-data-fim" />
                   </View>
                   <View style={{ width: 110 }}>
@@ -476,6 +494,22 @@ export default function DevolucaoScreen() {
                     </Text>
                   </View>
 
+                  {/*
+                    Ajuda em linha, além do modal — pedido do usuário
+                    (revisão com o João, 2026-08-27): a escolha entre
+                    "Registrar" e "Emitir NF-e" é a decisão mais importante
+                    da tela, mas antes só estava explicada dentro do modal
+                    de Ajuda (ícone "i"). Repetir aqui, perto dos botões,
+                    ajuda quem nunca abriu o modal a decidir na hora — só
+                    aparece quando as duas opções estão disponíveis (se só
+                    uma permissão existir, não há escolha pra explicar).
+                  */}
+                  {can("DEVOLUCAO.REGISTRAR") && can("DEVOLUCAO.EMITIR_NFE") ? (
+                    <Text style={{ fontSize: 11, color: colors.muted, fontStyle: "italic", marginTop: spacing.sm }}>
+                      Vai juntar com outra devolução do mesmo cliente depois? Toque em "Registrar Devolução". Essa é a única devolução dessa venda? Toque em "Emitir NF-e de Devolução" — já abre a Nota pronta pra revisar.
+                    </Text>
+                  ) : null}
+
                   <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm, flexWrap: "wrap" }}>
                     {can("DEVOLUCAO.REGISTRAR") ? (
                       <Pressable
@@ -516,12 +550,12 @@ export default function DevolucaoScreen() {
               <View style={WEB_FILTER_CARD}>
                 <AccordionSection title="Buscar e Filtrar" defaultExpanded testID="devolucao-consulta-filtros">
                 <View style={{ flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" }}>
-                  <View style={{ width: 160 }}>
-                    <Text style={fieldLabel()}>Data De</Text>
+                  <View style={{ width: 140 }}>
+                    <Text style={fieldLabel()}>De</Text>
                     <WebDateField value={consultaDataIni} onChange={(v) => { setConsultaDataIni(v || null); if (v) setConsultaDataFim(v); }} testID="devolucao-consulta-data-ini" />
                   </View>
-                  <View style={{ width: 160 }}>
-                    <Text style={fieldLabel()}>Data Até</Text>
+                  <View style={{ width: 140 }}>
+                    <Text style={fieldLabel()}>Até</Text>
                     <WebDateField value={consultaDataFim} onChange={(v) => setConsultaDataFim(v || null)} testID="devolucao-consulta-data-fim" />
                   </View>
                   <View style={{ width: 110 }}>

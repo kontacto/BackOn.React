@@ -98,9 +98,23 @@ Get-ScheduledTask -TaskName "BackOn-Backend" | Get-ScheduledTaskInfo
 ```
 e os logs dentro de `C:\BackOn\current-backend\logs\`. Depois de identificar/corrigir o problema, pode rodar `bootstrap-install.ps1` de novo — ele não duplica nada, é seguro repetir.
 
-### Passo 4 — Configurar pela tela (e não mexer mais em arquivo nenhum)
+### Passo 4 — Cadastrar a conexão (1ª vez que o site abre)
 
-Com o Backend no ar, abra `http://localhost:8081` num navegador nessa mesma máquina. Faça login com o usuário **master**.
+Com o Backend no ar, abra `http://localhost:8081` num navegador nessa mesma máquina — é o próprio Backend quem serve essa tela também, não precisa de nada além do que o `bootstrap-install.ps1` já fez.
+
+Numa máquina **nova**, a tela abre em "Conexões" mostrando **"Nenhuma conexão configurada"** — isso é normal, não é erro. Clique em **"+ Nova Conexão"** e preencha:
+
+| Campo | O que colocar |
+|---|---|
+| **Empresa** | Um nome/apelido pra identificar esse cliente (ex.: o nome da loja) — é só um rótulo, não afeta a conexão em si. |
+| **Servidor** | O endereço do SQL Server **do cliente**, o mesmo já usado pelo VB6 nessa máquina (ex.: `192.168.0.10` ou `NOMEDAMAQUINA\SQLEXPRESS`) — pressuposto do Passo 1: o banco do cliente já está restaurado lá. |
+| **Banco** | O nome do banco de dados do cliente (ex.: `KontactoDB`). |
+| **API** | `http://localhost:8081` — sempre local nesse formato, já que o Backend está rodando na mesma máquina. |
+| Logo / URL de imagens | Opcionais, pode deixar em branco por enquanto. |
+
+Clique em **Gravar**, escolha a conexão recém-criada, e faça login com o usuário **master**.
+
+### Passo 5 — Configurar a Atualização pela tela (e não mexer mais em arquivo nenhum)
 
 Vá em **Configurações → Serviço do Sistema → Atualização** e preencha os **mesmos dados** que você já colocou no `config.json` (URL do manifest, pastas, e agora também o **intervalo de verificação em minutos** — ex.: 30). Clique em **Gravar**.
 

@@ -16,11 +16,19 @@ import { apiGet, apiSend, friendlyApiError, friendlyCatchError } from "@/src/uti
 
 export type Conn = { servidor: string; banco: string; api: string };
 
+// "H" (Homologação, equipe) | "P" (Produção, clientes) — ver
+// CLAUDE.md > "Padrões de UI" > seção 13 pro desenho completo. Aplicar a
+// atualização pendente em Homologação só é possível por esta tela
+// (botão "Aplicar agora" abaixo); em Produção só pelo botão "Atualizar
+// Sistema" do Sidebar — cada canal tem exatamente 1 caminho de aplicar.
+export type Canal = "H" | "P";
+
 export type ServicoSistemaAtualizacaoForm = {
   manifest_url: string;
   pasta_backend: string;
   pasta_frontend: string;
   intervalo_minutos: string;
+  canal: Canal;
   commit_atual: string | null;
   commit_anterior: string | null;
   commit_pendente: string | null;
@@ -34,6 +42,7 @@ const FORM_VAZIO: ServicoSistemaAtualizacaoForm = {
   pasta_backend: "",
   pasta_frontend: "",
   intervalo_minutos: "30",
+  canal: "H",
   commit_atual: null,
   commit_anterior: null,
   commit_pendente: null,
@@ -68,6 +77,7 @@ export function useServicoSistemaForm() {
         pasta_backend: d.pasta_backend || "",
         pasta_frontend: d.pasta_frontend || "",
         intervalo_minutos: String(d.intervalo_minutos ?? 30),
+        canal: d.canal === "P" ? "P" : "H",
         commit_atual: d.commit_atual ?? null,
         commit_anterior: d.commit_anterior ?? null,
         commit_pendente: d.commit_pendente ?? null,
@@ -103,6 +113,7 @@ export function useServicoSistemaForm() {
           pasta_backend: form.pasta_backend.trim(),
           pasta_frontend: form.pasta_frontend.trim(),
           intervalo_minutos: parseInt(form.intervalo_minutos, 10) || 30,
+          canal: form.canal,
         },
       });
       if (!j?.success) { fb.showError(friendlyApiError(j, "Falha ao gravar a configuração.")); return false; }

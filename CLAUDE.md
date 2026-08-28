@@ -2227,6 +2227,46 @@ esse valor pro campo da data final. Não sobrescreve se o valor ficar vazio.
   Entrada/Revisão de um número de série de cilindro) — esses são datas de
   eventos distintos, não um intervalo De/Até de filtro.
 
+### Todo campo de período nasce com a data de hoje, nunca vazio `[GLOBAL]`
+
+**Formalizada 2026-08-27, user-directed** ("como combinamos em todas as
+telas que possuir período, colocar data atual no período") — motivada
+pela revisão de design do Gestor de Devolução, mas o "como combinamos"
+já valia informalmente: ~15 telas (`gestor-nfce.tsx`,
+`contrato-faturar.tsx`, `contrato-envio-cobranca.tsx`,
+`geracao-boletos.tsx`, `gestor-comandas.tsx`, `curva-abc.tsx`,
+`posto-ilhas.tsx`, `posto-afericoes.tsx`, `contrato-completo.tsx`,
+`projetos.tsx`, `posto-tanque-estoque.tsx`, `posto-estoque.tsx`,
+`pedido-compra.tsx`, `inventario.tsx`, `agenda.tsx`) já seguiam esse
+padrão antes desta seção existir — só nunca tinha sido escrito aqui
+como regra própria, gerando o risco real de uma tela nova (ou uma tela
+antiga revisitada, como o Gestor de Devolução) nascer com o par De/Até
+em `null`.
+
+- **Todo par De/Até de filtro de período** (mesmo escopo da seção acima —
+  "período de uma busca", não datas de eventos distintos) inicializa o
+  `useState` de AMBOS os campos com a data de HOJE, nunca `null`/vazio:
+  ```tsx
+  function todayIso(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+  const [dataIni, setDataIni] = useState<string | null>(todayIso());
+  const [dataFim, setDataFim] = useState<string | null>(todayIso());
+  ```
+  Convenção do próprio helper: cada tela declara seu `todayIso()` local
+  (não há um utilitário compartilhado hoje — replicar a mesma função de
+  1 linha por tela, mesmo padrão já usado nas ~15 telas listadas acima,
+  não introduzir um import novo só pra isso).
+- **Não conflita com a regra acima** ("data inicial repete na final") —
+  as duas continuam funcionando juntas: a tela já abre com um período
+  (hoje–hoje) pronto pra busca imediata, e se o usuário trocar a data
+  inicial depois, a final continua copiando o novo valor normalmente.
+- **Aplica-se tanto a telas novas quanto a telas antigas tocadas por
+  outro motivo** (mesmo princípio de retroatividade oportunista das
+  demais regras `[GLOBAL]` — corrigido no Gestor de Devolução ao ser
+  revisado por outro pedido, não uma varredura dedicada). Uma tela com
+  período em `null` encontrada por acaso deve ser corrigida de passagem.
+
 ## Padrões de UI — Modais, Mensagens e Formulários (Web) `[GLOBAL]`
 
 **Added 2026-07-15, user-directed** (pasted as a standalone checklist to stop
@@ -2648,6 +2688,221 @@ cadastro de foto (ex.: miniatura vazia no cabeçalho do Produto Completo).
   Fica registrado como pendência separada — ver PENDENCIAS.md > "Fotos
   de Produto" — não implementar sem confirmar escopo/prioridade com o
   usuário antes, dado o tamanho real do trabalho.
+
+### 10. "Pendências do Sistema" — grupo de ações diretas no final do Sidebar `[GLOBAL]`
+
+**Adicionado 2026-08-28, user-directed** ("colocar um botão 'Atualizar
+Sistema' no final do menu lateral... pode ser um grupo de botões
+separados do menu. futuramente entrará mais recursos como esse... podemos
+colocar o nome de 'Pendências do Sistema'... só aparecerão botões que
+precisam de intervenção do usuário... ao longo de desenvolvimento vamos
+adicionando pendências a esse grupo, sugerido por mim e por você").
+
+Grupo visualmente separado da navegação normal do `Sidebar.tsx`
+(`shortcuts`, tipo `ShortcutItem`), sempre no **final** da sidebar (borda
+superior + rótulo "PENDÊNCIAS DO SISTEMA"), abaixo dos itens de menu
+normais (Cadastros/Transações/Financeiro/.../Relatórios). Diferença
+central pro menu normal: itens aqui são **ações diretas** (disparam algo
+na hora, ex.: chamar uma API), nunca navegação pra uma tela — e só
+aparecem quando existe uma pendência real precisando de intervenção do
+usuário, nunca como atalho permanente. **O grupo inteiro (rótulo
+incluso) some quando nenhum item está visível** — nunca renderiza uma
+seção vazia.
+
+- **Primeiro item, referência de implementação**: "Atualizar Sistema"
+  (`frontend/src/hooks/useAplicarAtualizacao.ts` +
+  `Sidebar.tsx::handleAtualizarSistema`) — visível só quando
+  `useAtualizacaoPendente()` (já existente, badge do item Configurações)
+  é `true`. Ao clicar, confirma (`showConfirm`) e chama
+  `POST /servico-sistema/atualizacao/aplicar` **direto dali**, sem
+  navegar pra Configurações > Serviço do Sistema > Atualização (essa
+  tela continua existindo, mas passa a ser só pra CONFIGURAR chave do
+  blob/pastas/intervalo — regra do usuário: "para acessar a tela de
+  atualização... somente o master").
+- **Regra de acesso, formalizada 2026-08-28 (reforço do usuário, mesma
+  sessão) `[GLOBAL]`**: todo item deste grupo — sem exceção, presente ou
+  futuro — visível quando
+  **`can("<TELA_RELACIONADA>.<ACAO>") || isManagerFuncao`**. Nunca um
+  item aparece sem passar por essa checagem dupla. Exemplo do próprio
+  usuário: "se o usuário não tiver acesso à tela de Transferência para
+  Contas a Receber e Pagar, não receberá esse aviso" — ou seja, a
+  pendência de uma tela nunca vaza pra quem não teria acesso à tela em
+  si, mesmo que a pendência seja só um aviso/atalho.
+  - "Os três magníficos" (apelido do usuário) = Supervisor, Gerente e
+    Kontacto (Master) = `isManagerFuncao` já existente em
+    `frontend/src/permissions/index.tsx` (`isMaster || cod_funcao === 1
+    || cod_funcao === 2`) — nenhum mecanismo de permissão novo foi
+    criado. Ao ouvir esse termo em sessão futura, mapear direto pra
+    `isManagerFuncao`.
+  - **"Atualizar Sistema" é o caso especial sem tela/permissão própria**
+    (`SERVICO_SISTEMA` não está no catálogo de permissões — decisão já
+    registrada, visibilidade da tela completa é só por ser Master) — a
+    fórmula geral degenera pra só `isManagerFuncao` nesse item
+    específico, não porque a regra é diferente, mas porque não existe
+    `can(...)` correspondente pra somar com `||`.
+- **2º item, implementado 2026-08-28**: "Transferência Pendente (N)"
+  (`frontend/src/hooks/useTransferenciaPendenteCount.ts` — mesmo padrão
+  de polling de `useAtualizacaoPendente.ts`, reaproveita o endpoint que a
+  tela `/transferencia-contas` já usa, `GET /transferencia-contas/
+  pendentes`, nenhuma rota nova). **Diferente de "Atualizar Sistema" —
+  não é ação de 1 clique**: transferir exige o usuário revisar e marcar
+  quais Notas Fiscais/Comandas entram, então este item **navega** pra
+  `/transferencia-contas` em vez de disparar algo direto do Sidebar.
+  Visível quando `can("TRANSF_CONTAS.ABRIR") || isManagerFuncao` (fórmula
+  padrão acima) — testado ao vivo contra ARGEN TESTE, 8 pendentes reais
+  no momento do teste.
+- **3º item, ainda NÃO implementado — bloqueado por escopo maior que só
+  Sidebar**: "Transferência para o Fluxo de Caixa" (`FrmTransfCaixa.frm`,
+  tela irmã de `FrmTransfContas.frm` — move saldo entre Contas de caixa/
+  banco). Essa tela **nunca foi migrada** (só identificada/disambiguada
+  quando `FrmTransfContas.frm` foi rastreado, ver "Transferência Contas a
+  Pagar/Receber" em PENDENCIAS.md) — não tem service, não tem rota, não
+  tem tela, não tem permissão no catálogo. Adicionar o item aqui exigiria
+  primeiro rastrear a fonte VB6 e construir a feature inteira (mesmo
+  processo das outras telas de Financeiro), não é um acréscimo pontual
+  de Sidebar — não implementar sem antes confirmar prioridade/escopo com
+  o usuário.
+- **Convenção de adição**: "ao longo de desenvolvimento vamos adicionando
+  pendências a esse grupo, sugerido por mim e por você" — ou seja, tanto
+  o usuário quanto Claude podem propor um item novo pra este grupo
+  quando fizer sentido (ex.: ao migrar uma tela cujo fluxo natural
+  termina numa pendência de ação, como uma transferência não efetivada).
+  Ao propor/implementar um item novo, seguir o mesmo formato
+  (`ShortcutItem`: key/label/icon/visible/loading?/onPress) em vez de
+  inventar um padrão visual diferente.
+- **Itens ícone-só, sempre com tooltip** — reforçado 2026-08-28, user-
+  directed ("colocar somente icones nas pendências, pois o espaço é
+  curto... colocar Tooltip nos itens das Pendências"): diferente do menu
+  de navegação normal acima (que mostra texto quando expandido, ícone-só
+  só quando recolhido), os itens de "Pendências do Sistema" são
+  **sempre** ícone-só, independente do estado recolhido/expandido do
+  Sidebar — o tooltip no hover é a única forma de saber o que cada ícone
+  faz, então fica **sempre** disponível aqui (não só no modo recolhido).
+  Motivo prático: rótulos deste grupo tendem a ser mais longos/variáveis
+  (ex.: "Transferência Pendente (8)") e não cabem no menu expandido sem
+  cortar.
+
+### 11. Totais e botões de ação de lista sempre no TOPO, não embaixo `[GLOBAL]`
+
+**Adicionado 2026-08-28, user-directed** ("colocar o botão transferir e
+total, passar para cima ao lado de marcar e desmarcar" + "Regra global de
+design: O totais e botões de listas sempre na parte de cima"). Em toda
+tela com uma lista selecionável (checkbox por linha) que soma um total e
+tem uma ação final sobre os itens marcados (ex.: "Transferir",
+"Faturar", "Excluir selecionados") — o bloco de **contagem selecionada +
+total + botão de ação principal** fica **sempre no topo da lista**, ao
+lado de "Marcar todos"/"Desmarcar todos", nunca embaixo depois de rolar
+a lista inteira.
+
+- **Referência de implementação**: `frontend/app/transferencia-contas.tsx`
+  — o bloco `Marcar todos | Desmarcar todos | (spacer) | N selecionado(s)
+  | Total: R$X | [Transferir]` fica numa única linha (com `flexWrap` pra
+  quebrar se não couber) logo abaixo do rótulo "Pendentes de
+  Transferência (N)", com borda inferior separando da lista — a lista em
+  si vem depois, sem nenhum bloco de total/ação repetido no final.
+- **Motivo**: numa lista longa, o usuário teria que rolar até o fim pra
+  achar o botão de ação e conferir o total — colocando no topo, a ação
+  fica visível o tempo todo, mesmo com a lista scrollada.
+- Vale pra toda tela NOVA com esse formato (lista selecionável + total +
+  ação) — mesmo princípio de não-retroatividade automática das demais
+  regras `[GLOBAL]` deste arquivo, mas ao tocar numa tela antiga com
+  botão/total no rodapé por outro motivo, mover pro topo de passagem.
+
+### 12. Card "Bem-vindo" (empresa/usuário/grupo/conexão) no TOPO do Sidebar `[GLOBAL]`
+
+**Adicionado 2026-08-28, user-directed** — pedido original: "exibir esse
+card na parte inferior da tela na barra de menu lateral" (screenshot do
+card já existente na Tela Principal, `WelcomeHero.tsx`: avatar, "Bem-
+vindo à {empresa}", nome, "Grupo: {classe}"). **Corrigido no mesmo dia**,
+ainda user-directed: "não ficou bom na parte inferior. colocar na parte
+superior, logo acima do menu lateral" + "incluir o nome da conexão logo
+abaixo do grupo" — posição final é **no topo**, logo abaixo do botão de
+recolher/expandir e ACIMA de Cadastros/Transações/Financeiro/etc, não no
+rodapé.
+
+`frontend/src/hooks/useSessionWelcome.ts` (novo) replica a MESMA
+derivação que `useDashboard.ts` já usa (`displayName`/`nomeGuerra`/
+`classe`/`empresa` a partir de `getSession()`) de forma enxuta, porque o
+Sidebar não deve importar o hook de dashboard inteiro só por essas ~5
+linhas.
+
+- Avatar (logo da empresa se houver, senão ícone de pessoa) + **codnome**
+  (`nome_guerra`, no lugar do nome completo, mesma formatação — corrigido
+  ainda no mesmo dia: "exibir o codnome do usuário... no lugar do nome
+  com a mesma formatação"; cai pro nome completo só quando não há
+  `nome_guerra` cadastrado) + "Grupo: {classe}" + **nome da conexão**
+  (`session.empresa`, ex.: "ARGEN TESTE") numa linha própria, quando o
+  menu está expandido; só o avatar (com tooltip no hover mostrando
+  codnome+grupo+conexão, mesmo padrão dos itens de menu recolhidos)
+  quando está recolhido.
+- **Achado ao investigar o pedido**: o "Grupo" mostrado aqui é
+  `usuario.classe_descricao` (nome da CLASSE de permissão configurada em
+  Grupo de Usuário) — **não** é o mesmo campo que `isManagerFuncao`
+  verifica (`funcionario.cod_funcao`, código de FUNÇÃO/cargo). Os dois
+  podem coincidir textualmente por acaso (ex.: uma classe chamada
+  "GERENTE" E uma função "01 - GERENTE" pro mesmo usuário), mas são
+  campos e tabelas diferentes — nunca assumir que "o card mostra Grupo:
+  X" implica `isManagerFuncao` verdadeiro, ou vice-versa. Confirmado
+  contra dado real (ARGEN TESTE, funcionário ADELINO CARLOS MESQUITA
+  MARQUES, `cod_funcao='01'` = "GERENTE" na tabela `funcoes`) que os dois
+  batiam nesse caso específico, mas é coincidência de nomenclatura, não
+  garantia estrutural.
+
+### 13. Canal de Atualização — Homologação (equipe) x Produção (clientes) `[GLOBAL]`
+
+**Adicionado 2026-08-28, user-directed** ("precisamos criar as variantes
+de Homologação (Atualização para equipe) Produção (Atualização para
+Clientes). A atualização de Homologação só será feito pela tela de
+atualização e a Produção pelo botão no menu lateral"). Decisões de
+desenho confirmadas via `AskUserQuestion`: **um manifest só**, com uma
+flag de estabilidade por release (não dois manifests/branches
+separados); canal **configurável a qualquer momento** por instalação
+(não fixo); e o botão "Atualizar Sistema" do Sidebar **nunca** aparece
+em Homologação, só em Produção.
+
+- **Onde mora a configuração**: `servico_sistema_atualizacao.canal`
+  (`'H'`/`'P'`, default `'H'` — seguro por padrão), editável em
+  Configurações > Serviço do Sistema > Atualização > "Canal"
+  (`SelectField compactWeb`, Modo Didático explicando a diferença).
+- **Como o publicador (você, rodando `updater/publish/
+  publish_release.ps1`) decide o destino de uma release**: o script
+  ganhou o switch `-Estavel`. Sem ele (padrão), a release grava
+  `manifest.json`'s `estavel: false` — só o canal Homologação baixa.
+  Com `-Estavel`, grava `estavel: true` — os dois canais baixam.
+  **Não existem dois manifests** — é o MESMO `manifest.json` de sempre,
+  só ganhou esse campo booleano a mais. Fluxo recomendado (documentado
+  em `updater/publish/README.md`): publicar sem `-Estavel` primeiro,
+  validar em Homologação, só depois republicar o mesmo commit com
+  `-Estavel` pra liberar em Produção.
+- **Onde a checagem realmente acontece**: `updater/apply_update.ps1`'s
+  `Invoke-Download` (não no lado Python — o Python só dispara o script
+  e lê o resultado depois via `state.json`, nunca vê o conteúdo do
+  manifest diretamente). Lê `$cfg.canal` (`"Homologacao"`/`"Producao"`,
+  escrito por `servico_sistema_service.py::_escrever_config_ps1`); em
+  canal Produção, se `manifest.estavel` for `false`, a etapa de download
+  simplesmente retorna sem baixar nada (mesmo efeito de "nenhuma
+  atualização nova encontrada") — o commit mais novo fica "preso" até
+  ser republicado como estável.
+- **Aplicar tem exatamente 1 caminho por canal** — nunca os dois ao
+  mesmo tempo: em Homologação, só o botão "Aplicar agora" da tela
+  completa (Serviço do Sistema); em Produção, só o botão "Atualizar
+  Sistema" do Sidebar (grupo "Pendências do Sistema", seção 10 acima —
+  visível quando `atualizacao.pendente && atualizacao.canal === "P" &&
+  isManagerFuncao`). A tela completa, quando o canal é Produção, mostra
+  o commit pendente mas SUBSTITUI o botão "Aplicar agora" por um aviso
+  explicando que a aplicação acontece pelo Sidebar.
+- **Auto-atualização de schema em instalação já existente**: a coluna
+  `canal` foi adicionada estendendo a MESMA função `_ensure_servico_
+  sistema_atualizacao_table` já registrada em `schema_ensure.py`'s
+  `_MIGRACOES` (não uma função nova) — nenhum registro adicional foi
+  necessário; qualquer instalação já rodando pega a coluna nova sozinha
+  no primeiro request após o deploy, mesmo mecanismo "auto-atualização
+  INTEGRAL" já documentado em "Persistência de schema" mais abaixo neste
+  arquivo.
+- **Backend reforça, não só o frontend**: `_save_config_sync` valida
+  `canal` (só aceita `'H'`/`'P'`, case-insensitive) antes de gravar —
+  mesmo princípio de "backend reinforces, doesn't just trust the
+  frontend" já usado no resto do projeto.
 
 ## Padrão de Impressão de Relatórios `[GLOBAL]`
 
