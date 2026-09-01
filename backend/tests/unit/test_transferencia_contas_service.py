@@ -61,6 +61,24 @@ NF_ROW = {
 }
 
 
+class TestListarPendentesSync:
+    # Achado real 2026-08-28 (Adriana/suporte, "KONTACTO REAL"): a listagem
+    # mostrava Notas de Saída cuja comanda vinculada já estava baixada no
+    # Contas a Receber — sempre falhavam ao transferir (mesmo bloqueio de
+    # `_bloqueio_comanda_ja_transferida`). Réplica fiel do legado, mas o
+    # usuário pediu explicitamente pra excluir da listagem em vez de deixar
+    # o usuário descobrir só depois de tentar transferir.
+    def test_exclui_nota_com_comanda_ja_baixada_da_query(self, monkeypatch):
+        cur = FakeCursor(many=[[]])
+        _patch(monkeypatch, cur)
+        r = svc._listar_pendentes_sync("srv", "bd")
+        assert r["success"] is True
+        query = cur.queries[0][0]
+        assert "NOT EXISTS" in query
+        assert "comanda_nf" in query
+        assert "transf_caixa" in query
+
+
 class TestNfRecebe:
     def test_sucesso_sem_agrupar_sem_gerar_numero(self, monkeypatch):
         cur = FakeCursor(

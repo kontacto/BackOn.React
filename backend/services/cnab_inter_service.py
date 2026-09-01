@@ -50,27 +50,45 @@ por busca de conteúdo (`InStr` do prefixo `"1" & "02" & CNPJ`), não por
 posição fixa de linha — replicado aqui do mesmo jeito (remove toda quebra
 de linha do conteúdo colado antes de buscar).
 
-**Posições do retorno — VALIDADAS contra arquivo real do Inter (2026-07-24,
-mesmo dia)**: o usuário colou um retorno real (8 títulos, ocorrências 02,
-06 e 07 misturadas) logo após a implementação inicial. A leitura inicial
-seguia o struct `Retorno_400` do legado pra posição do Nosso Número
-(`Mid(Registro,108,11)`), mas o arquivo real revelou que essa posição na
-verdade contém um ID interno do PRÓPRIO BANCO (não o nosso número que nós
-atribuímos) — o Nosso Número que nós geramos e enviamos na remessa (ver
-`_montar_detalhe_400`, mesmo formato `_n(nosso_numero,10)`) volta
-**ECOADO na posição 98-107 (1-indexed)**, não 108+. Corrigido com base no
-arquivo real, não mais numa leitura ambígua do código-fonte. As demais
-posições usadas (`Ocorrencia` em 90-91, `Valor_Titulo` em 125-137,
-`Valor_Pago` em 160-172, `Data_Pagamento` em 173-178) bateram
-byte-a-byte com o arquivo real sem precisar de ajuste — inclusive
-confirmando que a leitura por posição hardcoded nos ramos de negócio
-(não o struct genérico) era de fato o caminho certo a seguir, exatamente
-como a análise do código-fonte já indicava antes de ver o arquivo real.
-Cabeçalho (`"02RETORNO01COBRANCA"`) e a busca por `"1"+"02"+CNPJ` também
-bateram exatamente. **Ocorrência "07" apareceu no arquivo real** (não
-documentada em nenhum ramo do `Processa_Retorno_inter` legado) — tratada
-como ignorada (mesmo comportamento do legado: nenhum `ElseIf` cobre esse
-código, então nada acontece).
+**Posição do Nosso Número — CORRIGIDA 2026-08-28, achado real contra
+produção**: a versão original (2026-07-24, ver histórico abaixo) usava a
+posição 98-107 (0-indexed `[97:107]`), concluída por dedução de formato
+(mesma largura que `_n(nosso_numero, 10)` grava na remessa), mas **nunca
+validada contra um `duplicata_rec_venc.numero_boleto` real** — os testes
+"golden file" da época usavam cursor falso com respostas em fila fixa
+(`FakeCursor`), que retornam "encontrado" na ordem chamada, não por
+conteúdo da query; ou seja, o teste passava mesmo se o número extraído
+fosse incorreto, porque nunca checava QUAL número foi de fato usado no
+`WHERE`. Isso só foi descoberto ao processar um retorno real do Inter
+contra o banco de produção do cliente real "KONTACTO REAL"
+(`minimachine`/`BD_KONTACTO`) — 2 de 78 títulos vieram "não encontrado".
+Investigação (consulta direta, só leitura, contra `duplicata_rec_venc`)
+confirmou: a posição 98-107 nunca bateu com NENHUM dos 78 títulos reais
+(nem os 2 "baixa" nem, testado à parte, os 76 "confirmação"); a posição
+**70-81 (0-indexed `[70:81]`, 11 dígitos)** bateu com **os 78/78** —
+inclusive reconferida contra o arquivo real de 2026-07-24 já citado
+abaixo (MESQUITA/MAX PNEUS/AT2B: `90748479261`/`90748479873`/
+`90748479188`, não `3016`/`3012`/`2975` como a posição antiga extraía).
+Ou seja, a posição que a versão original descartou como "ID interno do
+banco" é, na verdade, o Nosso Número real usado pelo Inter pra
+identificar boletos registrados via API (`duplicata_rec_venc.registrado
+= 1`, o caso de praticamente todo boleto real desta instalação) — a
+posição 98-107 não corresponde a nada útil na prática. **Efeito real
+antes desta correção**: toda baixa via Retorno do Inter contra título
+genuinamente registrado provavelmente falhava silenciosamente
+("não encontrado"), nunca dando baixa de verdade em nenhum título real
+processado até hoje.
+
+**Posições do retorno — demais campos validados contra arquivo real do
+Inter (2026-07-24)**: `Ocorrencia` em 90-91, `Valor_Titulo` em 125-137,
+`Valor_Pago` em 160-172, `Data_Pagamento` em 173-178 — bateram
+byte-a-byte com o arquivo real sem precisar de ajuste (só o Nosso Número
+precisou da correção acima). Cabeçalho (`"02RETORNO01COBRANCA"`) e a
+busca por `"1"+"02"+CNPJ` também bateram exatamente. **Ocorrência "07"
+apareceu no arquivo real** (não documentada em nenhum ramo do
+`Processa_Retorno_inter` legado) — tratada como ignorada (mesmo
+comportamento do legado: nenhum `ElseIf` cobre esse código, então nada
+acontece).
 
 **Simplificação deliberada, para ficar simétrico ao Bradesco já
 implementado** (registrar, não é regra de negócio perdida): o legado NÃO
@@ -419,7 +437,26 @@ def _parse_linhas(conteudo: str, cnpj_empresa: str) -> dict:
     `Importação do Arquivo de Retorno`). `cnpj_empresa` já formatado 14
     dígitos (mesma função `_n` deste módulo). Retorna `{"error": msg}` ou
     `{"registros": [...]}`, cada item com `{ignorado}` ou `{numero_boleto,
-    ocorrencia, data_pag, valor_pago, juros, desconto, documento}`."""
+    ocorrencia, data_pag, valor_pago, juros, desconto, documento}` — para
+    ocorrência "02" também `{codigo_interno}` (ver abaixo).
+
+    **Ocorrência "02" (Confirmação de Título) — achado real 2026-08-28,
+    completa o ciclo remessa→retorno**: é aqui que o Nosso Número
+    DEFINITIVO do Inter é atribuído a um título nosso pela primeira vez —
+    até este ponto, `duplicata_rec_venc.numero_boleto` só tem o valor
+    provisório que nós mesmos geramos (`_gerar_nosso_numero_sync`).
+    Réplica de `Processa_Retorno_inter`/`Command5_Click`
+    (`FrmImpRetBan.frm`, confirmado contra o código real, não só
+    dedução): `Uso da Empresa` (posição 38,25 1-indexed = `[37:62]`
+    0-indexed) é o NOSSO controle — `_montar_detalhe_400` já grava
+    `duplicata_rec_venc.codigo` exatamente aí (`auto_num_drv`, ver
+    função acima) — e o Nosso Número real do banco vem ecoado na posição
+    108,11 (1-indexed) = `[107:118]` 0-indexed (mesmo valor, confirmado
+    ao vivo, também aparece em `[70:81]` nas linhas de ocorrência "02" —
+    o legado lê de `[107:118]` especificamente pra esse tipo, replicado
+    aqui). **Ocorrência "03" (Entrada Rejeitada)** nunca chega a ganhar
+    Nosso Número real (o legado grava `0` no lugar) — tratada só como
+    contagem informativa, igual já era antes desta correção."""
     conteudo_flat = "".join(
         l for l in conteudo.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     )
@@ -437,12 +474,23 @@ def _parse_linhas(conteudo: str, cnpj_empresa: str) -> dict:
             registros.append({"ignorado": True})
             continue
         ocorrencia = registro[89:91].strip()
-        if ocorrencia in ("02", "03"):
+        if ocorrencia == "02":
+            codigo_interno = registro[37:62].strip().lstrip("0") or "0"
+            numero_real = registro[107:118].strip().lstrip("0") or "0"
+            registros.append({
+                "ignorado": False, "numero_boleto": numero_real, "ocorrencia": ocorrencia,
+                "codigo_interno": codigo_interno,
+                "data_pag": None, "valor_pago": 0.0, "juros": 0.0, "desconto": 0.0, "documento": None,
+            })
+            continue
+        if ocorrencia == "03":
             registros.append({"ignorado": False, "numero_boleto": None, "ocorrencia": ocorrencia,
                                "data_pag": None, "valor_pago": 0.0, "juros": 0.0, "desconto": 0.0, "documento": None})
             continue
         if ocorrencia == "06":
-            nosso_numero = registro[97:107].strip().lstrip("0") or "0"
+            # Posição corrigida 2026-08-28 — ver docstring do módulo pro
+            # achado real (0/78 x 78/78 contra duplicata_rec_venc real).
+            nosso_numero = registro[70:81].strip().lstrip("0") or "0"
             valor_titulo = _parse_valor_cnab(registro[124:137])
             valor_pago = _parse_valor_cnab(registro[159:172])
             data_pg = _parse_data_ddmmyy(registro[172:178]) or date.today()
@@ -480,6 +528,7 @@ def _processar_retorno_sync(servidor: str, banco: str, cod_banco: int, conteudo:
             return {"success": False, "message": parsed["error"]}
 
         confirmados = 0
+        registrados = 0
         baixados = 0
         nao_encontrados = []
         ignorados = 0
@@ -490,7 +539,19 @@ def _processar_retorno_sync(servidor: str, banco: str, cod_banco: int, conteudo:
                 continue
             ocorrencia = reg["ocorrencia"]
 
-            if ocorrencia in ("02", "03"):
+            if ocorrencia == "02":
+                confirmados += 1
+                codigo_interno = int(reg.get("codigo_interno") or 0)
+                numero_real = int(reg.get("numero_boleto") or 0)
+                if codigo_interno and numero_real:
+                    cur.execute(
+                        "UPDATE duplicata_rec_venc SET registrado=1, numero_boleto=%s WHERE codigo=%s",
+                        (numero_real, codigo_interno),
+                    )
+                    registrados += 1
+                continue
+
+            if ocorrencia == "03":
                 confirmados += 1
                 continue
 
@@ -521,6 +582,7 @@ def _processar_retorno_sync(servidor: str, banco: str, cod_banco: int, conteudo:
         return {
             "success": True,
             "confirmados": confirmados,
+            "registrados": registrados,
             "baixados": baixados,
             "nao_encontrados": nao_encontrados,
             "ignorados": ignorados,

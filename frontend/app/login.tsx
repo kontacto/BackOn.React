@@ -38,21 +38,28 @@ function normalizeApiUrl(url: string): string {
 // `WebkitTextSecurity` é a peça que mascara o texto sem usar
 // type="password" (ver comentário no JSX) — não é uma propriedade CSS
 // padrão reconhecida pelos tipos do React, por isso o cast.
-const maskedSenhaInputStyle = {
-  backgroundColor: colors.surfaceSecondary,
-  border: `1px solid ${colors.border}`,
-  borderRadius: radius.md,
-  paddingLeft: spacing.lg,
-  paddingRight: spacing.lg,
-  paddingTop: 14,
-  paddingBottom: 14,
-  fontSize: 15,
-  color: colors.onSurface,
-  minHeight: 48,
-  boxSizing: "border-box",
-  width: "100%",
-  WebkitTextSecurity: "disc",
-} as CSSProperties;
+// Vira função (não mais const fixa) pra suportar o toggle "mostrar
+// senha" (pedido da Adriana/suporte, 2026-08-28) — só alterna
+// `WebkitTextSecurity` entre "disc"/"none", nunca reintroduz
+// type="password" nativo (continua sendo a mesma defesa contra o
+// gerenciador de senha do navegador oferecer salvar a conta master).
+function maskedSenhaInputStyle(mostrar: boolean): CSSProperties {
+  return {
+    backgroundColor: colors.surfaceSecondary,
+    border: `1px solid ${colors.border}`,
+    borderRadius: radius.md,
+    paddingLeft: spacing.lg,
+    paddingRight: spacing.xl + spacing.lg,
+    paddingTop: 14,
+    paddingBottom: 14,
+    fontSize: 15,
+    color: colors.onSurface,
+    minHeight: 48,
+    boxSizing: "border-box",
+    width: "100%",
+    WebkitTextSecurity: mostrar ? "none" : "disc",
+  } as CSSProperties;
+}
 
 const LOGIN_CARD_SHADOW_STYLE =
   Platform.OS === "web"
@@ -101,6 +108,9 @@ export default function LoginScreen() {
   const [selected, setSelected] = useState<Connection | null>(null);
   const [usuario, setUsuario] = useState("");
   const [senha, setSenha] = useState("");
+  // "Mostrar senha" — pedido da Adriana/suporte (2026-08-28), padrão
+  // DESLIGADO (senha sempre mascarada até o usuário clicar no olho).
+  const [mostrarSenha, setMostrarSenha] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -398,51 +408,67 @@ export default function LoginScreen() {
 
             <View style={styles.field}>
               <Text style={styles.label}>Senha</Text>
-              {isWeb && isMasterUsernameTyped ? (
-                // Regra de segurança [GLOBAL-ish, só nesta tela]: o navegador
-                // NUNCA pode oferecer "Salvar senha?" pra conta master
-                // (KONTACTO) — ver print do usuário, Chrome oferecendo salvar
-                // mesmo com `disableBiometrics()`/`setSenha("")` já rodando
-                // pós-login (isso só protege a biometria DO APP, não o
-                // gerenciador de senha do NAVEGADOR, que decide salvar com
-                // base em existir um <input type="password"> de verdade
-                // sendo enviado — não tem API pra desligar isso condicional-
-                // mente depois do fato). Único jeito confiável: nunca deixar
-                // este campo virar um <input type="password"> nativo quando
-                // o usuário digitado é KONTACTO — mascarado por CSS
-                // (`-webkit-text-security`) em vez disso. Suportado em
-                // Chrome/Edge/Safari (WebKit/Blink); Firefox não implementa
-                // essa propriedade e cai pra texto visível — limitação
-                // conhecida do navegador, não deste código.
-                // eslint-disable-next-line jsx-a11y/no-redundant-roles
-                <input
-                  value={senha}
-                  onChange={(e) => setSenha((e.target as HTMLInputElement).value)}
-                  placeholder="Digite sua senha"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  autoComplete="off"
-                  data-lpignore="true"
-                  data-1p-ignore="true"
-                  onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
-                  style={maskedSenhaInputStyle}
-                  data-testid="login-senha-input"
-                />
-              ) : (
-                <TextInput
-                  value={senha}
-                  onChangeText={setSenha}
-                  placeholder="Digite sua senha"
-                  placeholderTextColor={colors.muted}
-                  secureTextEntry
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  style={styles.input}
-                  testID="login-senha-input"
-                  returnKeyType="go"
-                  onSubmitEditing={handleSubmit}
-                />
-              )}
+              <View style={{ position: "relative", justifyContent: "center" }}>
+                {isWeb && isMasterUsernameTyped ? (
+                  // Regra de segurança [GLOBAL-ish, só nesta tela]: o navegador
+                  // NUNCA pode oferecer "Salvar senha?" pra conta master
+                  // (KONTACTO) — ver print do usuário, Chrome oferecendo salvar
+                  // mesmo com `disableBiometrics()`/`setSenha("")` já rodando
+                  // pós-login (isso só protege a biometria DO APP, não o
+                  // gerenciador de senha do NAVEGADOR, que decide salvar com
+                  // base em existir um <input type="password"> de verdade
+                  // sendo enviado — não tem API pra desligar isso condicional-
+                  // mente depois do fato). Único jeito confiável: nunca deixar
+                  // este campo virar um <input type="password"> nativo quando
+                  // o usuário digitado é KONTACTO — mascarado por CSS
+                  // (`-webkit-text-security`) em vez disso. Suportado em
+                  // Chrome/Edge/Safari (WebKit/Blink); Firefox não implementa
+                  // essa propriedade e cai pra texto visível — limitação
+                  // conhecida do navegador, não deste código. O toggle
+                  // "mostrar senha" (Adriana/suporte, 2026-08-28) alterna só
+                  // o CSS de mascaramento, nunca reintroduz type="password".
+                  // eslint-disable-next-line jsx-a11y/no-redundant-roles
+                  <input
+                    value={senha}
+                    onChange={(e) => setSenha((e.target as HTMLInputElement).value)}
+                    placeholder="Digite sua senha"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    autoComplete="off"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
+                    style={maskedSenhaInputStyle(mostrarSenha)}
+                    data-testid="login-senha-input"
+                  />
+                ) : (
+                  <TextInput
+                    value={senha}
+                    onChangeText={setSenha}
+                    placeholder="Digite sua senha"
+                    placeholderTextColor={colors.muted}
+                    secureTextEntry={!mostrarSenha}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    style={[styles.input, { paddingRight: spacing.xl + spacing.lg }]}
+                    testID="login-senha-input"
+                    returnKeyType="go"
+                    onSubmitEditing={handleSubmit}
+                  />
+                )}
+                <Pressable
+                  onPress={() => setMostrarSenha((v) => !v)}
+                  hitSlop={8}
+                  style={{ position: "absolute", right: spacing.md }}
+                  testID="login-senha-mostrar"
+                >
+                  <Ionicons
+                    name={mostrarSenha ? "eye-off-outline" : "eye-outline"}
+                    size={20}
+                    color={colors.onSurfaceTertiary}
+                  />
+                </Pressable>
+              </View>
             </View>
 
             {error ? (

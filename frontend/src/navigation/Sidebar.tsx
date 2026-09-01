@@ -18,6 +18,8 @@ import { usePermissions } from "@/src/permissions";
 import { useAtualizacaoPendente } from "@/src/hooks/useAtualizacaoPendente";
 import { useAplicarAtualizacao } from "@/src/hooks/useAplicarAtualizacao";
 import { useTransferenciaPendenteCount } from "@/src/hooks/useTransferenciaPendenteCount";
+import { useTransferenciaCaixaPendenteCount } from "@/src/hooks/useTransferenciaCaixaPendenteCount";
+import { useEspacoBancoAlerta } from "@/src/hooks/useEspacoBancoAlerta";
 import { useSessionWelcome } from "@/src/hooks/useSessionWelcome";
 import { useFeedback } from "@/src/components/feedback/FeedbackProvider";
 import { colors, radius, spacing } from "@/src/theme/colors";
@@ -138,11 +140,13 @@ const HIDDEN_ON: string[] = ["/", "/login", "/connections", "/perfil-usuario"];
 export default function Sidebar() {
   const router = useRouter();
   const pathname = usePathname();
-  const { can, moduleOn, isManagerFuncao } = usePermissions();
+  const { can, moduleOn, isManagerFuncao, isMaster } = usePermissions();
   const feedback = useFeedback();
   const atualizacao = useAtualizacaoPendente();
   const { aplicando, aplicar } = useAplicarAtualizacao();
   const transferenciaPendenteCount = useTransferenciaPendenteCount();
+  const transferenciaCaixaPendenteCount = useTransferenciaCaixaPendenteCount();
+  const espacoBanco = useEspacoBancoAlerta();
   const welcome = useSessionWelcome();
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
@@ -241,6 +245,30 @@ export default function Sidebar() {
       visible: transferenciaPendenteCount > 0 && (can("TRANSF_CONTAS.ABRIR") || isManagerFuncao),
       onPress: () => router.push("/transferencia-contas" as never),
     },
+    // 3º item do grupo — tela irmã da anterior (Transferência p/Fluxo de
+    // Caixa, não Contas Pagar/Receber), pedido explícito do usuário
+    // (2026-08-28: "ela é alertada também em Pendência do Sistema na
+    // barra lateral"). Mesmo motivo de navegar (não ação de 1 clique):
+    // transferir exige marcar quais Previsões/Movimentações entram.
+    {
+      key: "transferencia-caixa-pendente", label: `Transf. Fluxo de Caixa (${transferenciaCaixaPendenteCount})`, icon: "cash-outline",
+      visible: transferenciaCaixaPendenteCount > 0 && (can("TRANSF_CAIXA.ABRIR") || isManagerFuncao),
+      onPress: () => router.push("/transferencia-caixa" as never),
+    },
+    // 4º item — "Espaço do Banco" (SQL Server Express, teto de 10GB por
+    // banco). Achado real, análise DBA de Áureo, 2026-08-31. Diferente
+    // dos itens acima (gateados por `can(...)||isManagerFuncao`), este
+    // navega pra uma tela que já é hard-restrita a Master
+    // (`servico-sistema.tsx`) — mostrar o ícone pra Supervisor/Gerente
+    // levaria a um LockedView sem saída, então o gate aqui é `isMaster`
+    // puro, espelhando o destino real, não o fallback `isManagerFuncao`
+    // usado em "Atualizar Sistema" (cujo destino é uma AÇÃO, não uma
+    // tela restrita).
+    {
+      key: "espaco-banco", label: `Espaço do Banco (${espacoBanco.pct.toFixed(0)}%)`, icon: "server-outline",
+      visible: espacoBanco.visivel && isMaster,
+      onPress: () => router.push("/servico-sistema" as never),
+    },
   ];
 
   const activeHref = DETAIL_TO_TAB[pathname] ?? pathname;
@@ -288,7 +316,7 @@ export default function Sidebar() {
             testID="sidebar-logo-icon"
           />
         )}
-        {collapsed && hoveredKey === "logo" ? (
+        {hoveredKey === "logo" ? (
           <View style={styles.tooltip} pointerEvents="none">
             <View style={styles.tooltipInner}>
               <Text style={styles.tooltipText}>Início</Text>
@@ -312,6 +340,11 @@ export default function Sidebar() {
           etc). */}
       {welcome ? (
         <Pressable
+          // Pedido explícito do usuário, 2026-08-28: clicar no bloco do
+          // usuário abre o Perfil já carregado — `perfil-usuario.tsx` lê a
+          // sessão sozinho (`getSession()`), então navegar sem parâmetro
+          // nenhum já mostra os dados de quem está logado agora.
+          onPress={() => router.push("/perfil-usuario" as never)}
           onHoverIn={() => setHoveredKey("welcome")}
           onHoverOut={() => setHoveredKey(null)}
           style={[styles.welcomeCard, collapsed && styles.welcomeCardCollapsed]}

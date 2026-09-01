@@ -5,6 +5,8 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
+from models.log_auditoria import AuditFields
+
 
 class StatusCheck(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -1171,6 +1173,161 @@ class TransfContasTransferirRequest(BaseModel):
     plataforma: Optional[str] = None
 
 
+class TransfCaixaItem(BaseModel):
+    """1 linha marcada pra transferir — `codigo` é o código do vencimento
+    (`duplicata_rec_venc`/`duplicata_pag_venc`) ou da Entrada/Saída de
+    Caixa, `flag` decide qual (PrevisaoReceber/PrevisaoPagar/
+    MovimentacaoReceber/MovimentacaoPagar/EntradaCaixa/SaidaCaixa) —
+    réplica de `FrmTransfCaixa.frm`."""
+    codigo: int
+    flag: str
+
+
+class TransfCaixaTransferirRequest(BaseModel):
+    """Transfere Previsões/Movimentações/Entrada-Saída de Caixa pro Fluxo
+    de Caixa de verdade (`movimentacoes`/`contas.saldo_atual`) — ver
+    services/transferencia_caixa_service.py."""
+    servidor: str
+    banco: str
+    itens: List[TransfCaixaItem]
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class TransfCaixaAgrupadasRequest(BaseModel):
+    """Fase 2 — Transferir Comandas Agrupadas (`Command6_Click`). `itens`
+    é só a lista de códigos de `duplicata_rec_venc` marcados (sempre
+    flag=MovimentacaoReceberAgrupada, não precisa repetir por item) — ver
+    services/transferencia_caixa_service.py::transferir_agrupadas."""
+    servidor: str
+    banco: str
+    itens: List[int]
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class TransfCaixaConfigAgrupamentoRequest(BaseModel):
+    """Fase 2 — Configuração de Agrupamento de Comandas (`FrmAgrCom.frm`)
+    — quais tipos de cliente e formas de pagamento entram no agrupamento."""
+    servidor: str
+    banco: str
+    clientes_diversos: bool = False
+    sem_documento: bool = False
+    cpf: bool = False
+    cnpj: bool = False
+    formas: List[str] = []
+
+
+class PrevisaoRateioItem(BaseModel):
+    """1 linha de rateio manual de centro de custo, réplica de
+    `previsoes_centro_custo` — ver services/previsoes_service.py."""
+    centro_custo: int
+    classe: Optional[int] = None
+    sub_classe: Optional[int] = None
+    valor: float
+    memorando: str = ""
+    credito_debito: str = "C"
+    repete_lancamento: bool = False
+
+
+class PrevisaoSaveRequest(AuditFields):
+    """Grava (cria/edita) uma Previsão manual — Pagar(0)/Receber(1)/
+    Transferência(2). Ver services/previsoes_service.py.
+
+    `classe_previsao`/`sub_classe_previsao` são códigos reais de
+    `classes`/`sub_classes` (Plano de Contas) — cadastro existente, nunca
+    texto livre (achado do usuário 2026-08-31: "Classe e Subclasse é um
+    cadastro. As opções tem que vir do banco e não digitação livre").
+    **Nome deliberadamente diferente de `classe`** — esse nome já é usado
+    por `AuditFields.classe` (grupo de permissão do usuário, pra
+    auditoria); reusar o mesmo nome aqui sobrescreveria o campo herdado
+    (achado durante a implementação, corrigido antes de qualquer teste)."""
+    servidor: str
+    banco: str
+    codigo: Optional[int] = None
+    conta: int
+    conta_destino: Optional[int] = None  # só tipo=2
+    tipo: int = 0
+    documento: Optional[str] = None
+    data_documento: Optional[str] = None
+    data_vencimento: str
+    favorecido_nome: str = ""
+    classe_previsao: Optional[int] = None
+    sub_classe_previsao: Optional[int] = None
+    valor: float
+    memorando: str = ""
+    frequencia: int = 10
+    parcelas: int = 1
+    rateio: List[PrevisaoRateioItem] = []
+
+
+class PrevisaoDeleteRequest(AuditFields):
+    servidor: str
+    banco: str
+    codigo: int
+    autorizado: bool = False
+
+
+class PrevisaoEfetivarRequest(AuditFields):
+    servidor: str
+    banco: str
+    codigos: List[int]
+    data_liquidacao: Optional[str] = None
+    # Override de conta ("Transferência Para Movimentação" do legado,
+    # campo `Contas2` — `FrmManPrev.frm:2095-2105`) — quando informado, a
+    # movimentação é lançada nessa conta em vez da conta própria gravada
+    # na previsão. Achado do usuário 2026-08-31 ("a tela de transferência
+    # que nos permite informar a data de liquidação e conta").
+    conta: Optional[int] = None
+
+
+class PainelLancamentoRateioItem(BaseModel):
+    """1 linha de rateio manual de centro de custo pro lançamento direto
+    do Painel de Movimentações — réplica de `movimentacoes_centro_custo`,
+    mesmo shape de PrevisaoRateioItem, ver services/painel_financeiro_service.py."""
+    centro_custo: int
+    classe: Optional[int] = None
+    sub_classe: Optional[int] = None
+    valor: float
+    memorando: str = ""
+    credito_debito: str = "C"
+
+
+class PainelLancamentoSaveRequest(AuditFields):
+    """Lançamento direto (Pagar/Cheque, Receber/Depósito, Transferência,
+    Saque) — grava direto em `movimentacoes`, sem passar por Previsões.
+    Ver services/painel_financeiro_service.py.
+
+    `classe_lancamento`/`sub_classe_lancamento`: código real de
+    `classes`/`sub_classes` (Plano de Contas), nunca texto livre (mesmo
+    achado/correção de `PrevisaoSaveRequest`, 2026-08-31). Nome
+    deliberadamente diferente de `classe` — esse já é usado por
+    `AuditFields.classe` (grupo de permissão, pra auditoria)."""
+    servidor: str
+    banco: str
+    conta: int
+    conta_destino: Optional[int] = None  # só tipo=2
+    tipo: int = 0
+    documento: Optional[str] = None
+    data_documento: Optional[str] = None
+    data_vencimento: Optional[str] = None
+    data_liquidacao: str
+    favorecido_nome: str = ""
+    classe_lancamento: Optional[int] = None
+    sub_classe_lancamento: Optional[int] = None
+    valor: float
+    memorando: str = ""
+    rateio: List[PainelLancamentoRateioItem] = []
+
+
+class PainelLancamentoDeleteRequest(AuditFields):
+    servidor: str
+    banco: str
+    codigo: int
+
+
 class DevolucaoConsultaRequest(BaseModel):
     """Consulta de devoluções já registradas — réplica simplificada de
     `FrmConDev.frm`."""
@@ -1224,6 +1381,21 @@ class ContasReceberAvulsaRequest(BaseModel):
     plataforma: Optional[str] = None
 
 
+class ChequePreDatadoItem(BaseModel):
+    """1 linha de `GridCheques` (`FrmManPar.frm::Command2_Click`) —
+    cheque(s) pré-datado(s) recebido(s) como parte da própria baixa.
+    Achado do usuário 2026-08-31, réplica de `Geral/mdl_proc.bas::
+    GravaChequePre`."""
+    banco: Optional[int] = None
+    agencia: Optional[str] = None
+    conta: Optional[str] = None
+    numero_ch: Optional[int] = None
+    valor: float
+    bom_para: Optional[str] = None
+    nome_cheque: Optional[str] = None
+    telefone: Optional[str] = None
+
+
 class ContasReceberBaixaRequest(BaseModel):
     """Baixa manual de 1 parcela (`Duplicata_Rec_Venc`) — réplica de
     `Revenda/FrmManPar.frm`'s `Command2_Click` (modo Pagamento). Ver
@@ -1244,6 +1416,9 @@ class ContasReceberBaixaRequest(BaseModel):
     conta: Optional[int] = None
     forma_pag: Optional[str] = None
     observacao: Optional[str] = None
+    # Cheque(s) pré-datado(s) recebido(s) junto com esta baixa — achado do
+    # usuário 2026-08-31, réplica de `GridCheques`/`GravaChequePre`.
+    cheques: List[ChequePreDatadoItem] = []
     usuario_alteracao: Optional[int] = None
     classe: Optional[int] = None
     plataforma: Optional[str] = None
@@ -1251,10 +1426,14 @@ class ContasReceberBaixaRequest(BaseModel):
 
 class ContasReceberCancelarBaixaRequest(BaseModel):
     """Cancelamento de baixa (`Duplicata_Rec_Venc`) — réplica de
-    `Revenda/FrmManPar.frm`'s `Command2_Click` (modo `"C"`/Cancelamento)."""
+    `Revenda/FrmManPar.frm`'s `Command2_Click` (modo `"C"`/Cancelamento).
+    `excluir_cheques`: None na 1ª chamada (deixa o backend checar se há
+    cheque pré-datado vinculado); True/False na 2ª chamada, depois do
+    usuário responder ao aviso `exige_confirmacao_cheque`."""
     servidor: str
     banco: str
     codigo_venc: int
+    excluir_cheques: Optional[bool] = None
     usuario_alteracao: Optional[int] = None
     classe: Optional[int] = None
     plataforma: Optional[str] = None
@@ -1306,6 +1485,79 @@ class ContasReceberEditarParcelaRequest(BaseModel):
     plataforma: Optional[str] = None
 
 
+class ContasReceberSituacaoVencimentoLoteRequest(BaseModel):
+    servidor: str
+    banco: str
+    codigos_venc: List[int]
+    situacao_duplicata: int
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasReceberSituacaoVencimentoRequest(BaseModel):
+    """"Cadastro de Vencimentos" (`FrmManDur.frm`, combo `Situacao`) — troca
+    só `duplicata_rec_venc.situacao_duplicata`, endpoint dedicado (não
+    reaproveita `editar-parcela`, que sobrescreve incondicionalmente
+    dt_vencimento/valor — chamar aquele daqui zeraria os dois por engano).
+    Achado do usuário 2026-08-31: valores são 0-based (`Situacao.ListIndex`
+    gravado direto, NÃO o `codigo` 1-based da tabela `situacao_duplicata`
+    usada só pra popular o combo) — 0=Normal, 1=Jurídico, 2=Protestado."""
+    servidor: str
+    banco: str
+    codigo_venc: int
+    situacao_duplicata: int
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasReceberVincularNfRequest(BaseModel):
+    """"Notas Fiscais" (`FrmManDur.frm::NF2_DblClick`/`NF_DblClick`) —
+    vincula/desvincula uma NF adicional (Receber) numa duplicata já
+    existente. Achado do usuário 2026-08-31."""
+    servidor: str
+    banco: str
+    codigo_duplicata: int
+    nf_fiscal: int
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasReceberAlterarNumeroRequest(BaseModel):
+    """"Alterar Número da Duplicata" (`FrmManDur.frm::Command15_Click`) —
+    apaga as previsões vinculadas (Transferência p/Fluxo de Caixa) e
+    reseta `transf_previsao`, porque o vínculo referenciava o número
+    antigo. Achado do usuário 2026-08-31."""
+    servidor: str
+    banco: str
+    codigo_duplicata: int
+    novo_numero: int
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasReceberEmitirReciboRequest(BaseModel):
+    """"Emitir Recibo" (`FrmManPar.frm::Command13` — botão real na tela de
+    Baixa, mas com o Click comentado/morto na fonte atual; completa a
+    intenção documentada no comentário morto). Recebemos/Valor/Referente
+    pré-preenchidos pelo frontend a partir da parcela paga, editáveis
+    pelo usuário antes de confirmar — nunca grava sem esses 3 campos.
+    Achado do usuário 2026-08-31."""
+    servidor: str
+    banco: str
+    recebemos: str
+    valor: float
+    referente: str
+    data_recibo: Optional[str] = None
+    assinatura: Optional[str] = None
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
 class ContasReceberExcluirRequest(BaseModel):
     servidor: str
     banco: str
@@ -1323,6 +1575,17 @@ class ContasPagarListRequest(BaseModel):
     busca: Optional[str] = None
     data_ini: Optional[str] = None
     data_fim: Optional[str] = None
+    # Filtros extras, rastreados de `Revenda/frmcondup.frm` ("Consulta de
+    # Duplicatas a Pagar..."), mirror do que já existe em
+    # `ContasReceberListRequest` a partir de `FRMCONDur.frm` — ver
+    # AJUSTES.md #039.
+    duplicata_num: Optional[int] = None
+    desmembramento: Optional[str] = None
+    valor: Optional[float] = None
+    numero_boleto: Optional[float] = None
+    num_doc_pag: Optional[str] = None
+    emissao_ini: Optional[str] = None
+    emissao_fim: Optional[str] = None
 
 
 class ContasPagarAvulsaRequest(BaseModel):
@@ -1409,6 +1672,42 @@ class ContasPagarExcluirRequest(BaseModel):
     servidor: str
     banco: str
     codigo_duplicata: int
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasPagarAlterarNumeroRequest(BaseModel):
+    """"Alterar Nº Duplicata" — réplica de `frmmandup.frm::Command15_Click`,
+    mirror de `ContasReceberAlterarNumeroRequest`. Ver AJUSTES.md #039."""
+    servidor: str
+    banco: str
+    codigo_duplicata: int
+    novo_numero: int
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasPagarVincularNfRequest(BaseModel):
+    """"Incluir Nota Fiscal" (`frmmandup.frm::Command5_Click`/
+    `NF2_DblClick`) — vincula/desvincula uma NF adicional (Pagar) numa
+    duplicata já existente. Mirror de `ContasReceberVincularNfRequest`."""
+    servidor: str
+    banco: str
+    codigo_duplicata: int
+    nf_fiscal: int
+    usuario_alteracao: Optional[int] = None
+    classe: Optional[int] = None
+    plataforma: Optional[str] = None
+
+
+class ContasPagarDesvincularNfRequest(BaseModel):
+    """Réplica de `frmmandup.frm::NF_DblClick`."""
+    servidor: str
+    banco: str
+    codigo_duplicata: int
+    nf_fiscal: int
     usuario_alteracao: Optional[int] = None
     classe: Optional[int] = None
     plataforma: Optional[str] = None

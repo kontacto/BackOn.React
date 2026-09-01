@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import { usePermissions } from "@/src/permissions";
@@ -58,6 +58,8 @@ const AJUDA_ITENS: HelpItem[] = [
   { titulo: "Editar parcela", texto: "Corrige data de vencimento, valor ou observação de uma parcela ainda em aberto. Uma parcela já paga não pode mais ser editada.", icon: { lib: "ion", name: "create-outline" } },
   { titulo: "Vencido", texto: "Parcela em aberto cuja data de vencimento já passou — aparece em destaque vermelho.", icon: { lib: "ion", name: "alert-circle-outline" } },
   { titulo: "Excluir", texto: "Só é possível excluir uma duplicata se NENHUMA parcela dela já tiver sido paga.", icon: { lib: "ion", name: "trash-outline" } },
+  { titulo: "Alterar Número", texto: "Troca o número da duplicata (bloqueia se já existir outra com esse número). Se ela já tiver sido transferida pro Fluxo de Caixa, as previsões vinculadas são removidas — gere uma nova transferência depois com o número novo.", icon: { lib: "ion", name: "create-outline" } },
+  { titulo: "Notas Fiscais", texto: "Vincule mais de uma Nota Fiscal na mesma duplicata (útil quando o fornecedor tem filiais faturando junto). Só mostra NFs em aberto do mesmo documento. Desvincular só é permitido se nenhuma parcela já tiver sido paga.", icon: { lib: "ion", name: "document-text-outline" } },
 ];
 
 const SITUACOES: { key: string; label: string }[] = [
@@ -66,6 +68,10 @@ const SITUACOES: { key: string; label: string }[] = [
 
 export default function ContasPagarScreen() {
   const router = useRouter();
+  // `?situacao=` — deep-link a partir do Painel Financeiro (cards
+  // "Pagamentos em Atraso"/"À Pagar Hoje"), pra abrir esta tela já
+  // filtrada em vez do padrão "Aberto" — ver painel-financeiro.tsx.
+  const params = useLocalSearchParams<{ situacao?: string }>();
   const { can, isMaster: masterPerm, classe: classePerm } = usePermissions();
   const feedback = useFeedback();
 
@@ -75,11 +81,23 @@ export default function ContasPagarScreen() {
   const [buscando, setBuscando] = useState(false);
   const [ajudaOpen, setAjudaOpen] = useState(false);
   const [busca, setBusca] = useState("");
-  const [situacao, setSituacao] = useState("A");
+  const [situacao, setSituacao] = useState(() => (typeof params.situacao === "string" ? params.situacao : "A"));
   const [dataIni, setDataIni] = useState<string | null>(todayISO());
   const [dataFim, setDataFim] = useState<string | null>(todayISO());
   const [usarPeriodo, setUsarPeriodo] = useState(false);
   const [items, setItems] = useState<Duplicata[]>([]);
+
+  // Filtros extras, rastreados de `Revenda/frmcondup.frm` ("Consulta de
+  // Duplicatas a Pagar..."), mirror dos que já existem em
+  // contas-receber.tsx a partir de `FRMCONDur.frm`. Achado do usuário
+  // 2026-08-31 — ver AJUSTES.md #039. Sem "Situação do Vencimento"
+  // (Protestado/etc.) — confirmado ausente na fonte real do lado Pagar.
+  const [duplicataNum, setDuplicataNum] = useState("");
+  const [valorFiltro, setValorFiltro] = useState("");
+  const [numeroBoleto, setNumeroBoleto] = useState("");
+  const [numDocPag, setNumDocPag] = useState("");
+  const [emissaoIni, setEmissaoIni] = useState<string | null>(null);
+  const [emissaoFim, setEmissaoFim] = useState<string | null>(null);
 
   const [tiposMov, setTiposMov] = useState<SelectOption[]>([]);
   const [contasOpts, setContasOpts] = useState<SelectOption[]>([]);
@@ -109,6 +127,21 @@ export default function ContasPagarScreen() {
   const [detalheLoading, setDetalheLoading] = useState(false);
   const [detalhe, setDetalhe] = useState<Detalhe | null>(null);
   const [excluindo, setExcluindo] = useState(false);
+  // "Alterar Nº Duplicata" (`frmmandup.frm::Command15_Click`) — mirror do
+  // já existente em Contas a Receber. Modal próprio (nunca prompt()/
+  // alert() do navegador, padrão do projeto).
+  const [alterarNumeroOpen, setAlterarNumeroOpen] = useState(false);
+  const [novoNumero, setNovoNumero] = useState("");
+  const [alterandoNumero, setAlterandoNumero] = useState(false);
+
+  // "Notas Fiscais" — vincular/desvincular NF adicional numa duplicata já
+  // existente (`frmmandup.frm::Command5_Click`/`NF2_DblClick`/
+  // `NF_DblClick`). Mirror do já existente em Contas a Receber.
+  const [notasVincularOpen, setNotasVincularOpen] = useState(false);
+  const [notasDisponiveis, setNotasDisponiveis] = useState<{ codigo: number; codigo_fornecedor: number; fornecedor_nome: string; nota_fiscal: number; serie: string | null; valor: number }[]>([]);
+  const [notasCarregando, setNotasCarregando] = useState(false);
+  const [vinculandoNf, setVinculandoNf] = useState<number | null>(null);
+  const [desvinculandoNf, setDesvinculandoNf] = useState<number | null>(null);
 
   // ---- Baixa manual de 1 parcela ----
   const [baixaVenc, setBaixaVenc] = useState<Parcela | null>(null);
@@ -178,6 +211,14 @@ export default function ContasPagarScreen() {
         params.data_ini = dataIni;
         params.data_fim = dataFim;
       }
+      if (duplicataNum.trim()) params.duplicata_num = duplicataNum.trim();
+      if (valorFiltro.trim()) params.valor = String(parseNum(valorFiltro));
+      if (numeroBoleto.trim()) params.numero_boleto = numeroBoleto.trim();
+      if (numDocPag.trim()) params.num_doc_pag = numDocPag.trim();
+      if (emissaoIni && emissaoFim) {
+        params.emissao_ini = emissaoIni;
+        params.emissao_fim = emissaoFim;
+      }
       const j = await apiGet(conn, "/api/contas-pagar", params);
       if (j?.success) {
         setItems(j.items || []);
@@ -189,7 +230,7 @@ export default function ContasPagarScreen() {
     } finally {
       setBuscando(false);
     }
-  }, [conn, situacao, busca, usarPeriodo, dataIni, dataFim, feedback]);
+  }, [conn, situacao, busca, usarPeriodo, dataIni, dataFim, duplicataNum, valorFiltro, numeroBoleto, numDocPag, emissaoIni, emissaoFim, feedback]);
 
   // Situação re-busca sozinha ao trocar o chip; busca por texto/período continuam manuais (Enter/Buscar).
   useEffect(() => { if (conn) carregar(); }, [conn, situacao]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -271,6 +312,105 @@ export default function ContasPagarScreen() {
       setDetalheLoading(false);
     }
   }, [conn, feedback]);
+
+  const abrirAlterarNumero = () => {
+    if (!detalhe) return;
+    setNovoNumero(String(detalhe.header.duplicata));
+    setAlterarNumeroOpen(true);
+  };
+
+  const confirmarAlterarNumero = useCallback(async () => {
+    if (!conn || !detalhe) return;
+    const novo = parseInt(novoNumero, 10);
+    if (!novo || novo <= 0) { feedback.showError("Informe um número válido."); return; }
+    setAlterandoNumero(true);
+    try {
+      const j = await apiSend(conn, "/api/contas-pagar/alterar-numero", "POST", {
+        codigo_duplicata: detalhe.header.codigo, novo_numero: novo,
+        usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
+      });
+      if (j?.success) {
+        feedback.showSuccess("Número da duplicata alterado. Previsões de Transferência vinculadas a ela foram removidas — gere uma nova transferência se precisar.", undefined, 5000);
+        setAlterarNumeroOpen(false);
+        abrirDetalhe(detalhe.header.codigo);
+        carregar();
+      } else {
+        feedback.showError(friendlyApiError(j, "Não foi possível alterar o número."));
+      }
+    } catch (e) {
+      feedback.showError(friendlyCatchError(e));
+    } finally {
+      setAlterandoNumero(false);
+    }
+  }, [conn, detalhe, novoNumero, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
+
+  const abrirVincularNf = useCallback(async () => {
+    if (!conn || !detalhe) return;
+    setNotasVincularOpen(true);
+    setNotasCarregando(true);
+    try {
+      const j = await apiGet(conn, `/api/contas-pagar/${detalhe.header.codigo}/notas-disponiveis`);
+      if (j?.success) {
+        setNotasDisponiveis(j.items || []);
+      } else {
+        feedback.showError(friendlyApiError(j, "Não foi possível buscar notas disponíveis."));
+      }
+    } catch (e) {
+      feedback.showError(friendlyCatchError(e));
+    } finally {
+      setNotasCarregando(false);
+    }
+  }, [conn, detalhe, feedback]);
+
+  const vincularNf = useCallback(async (nfFiscal: number) => {
+    if (!conn || !detalhe) return;
+    setVinculandoNf(nfFiscal);
+    try {
+      const j = await apiSend(conn, "/api/contas-pagar/vincular-nf", "POST", {
+        codigo_duplicata: detalhe.header.codigo, nf_fiscal: nfFiscal,
+        usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
+      });
+      if (j?.success) {
+        feedback.showSuccess("Nota Fiscal vinculada.");
+        setNotasVincularOpen(false);
+        abrirDetalhe(detalhe.header.codigo);
+        carregar();
+      } else {
+        feedback.showError(friendlyApiError(j, "Não foi possível vincular."));
+      }
+    } catch (e) {
+      feedback.showError(friendlyCatchError(e));
+    } finally {
+      setVinculandoNf(null);
+    }
+  }, [conn, detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
+
+  const desvincularNf = useCallback((nfFiscal: number, notaFiscalNum: number) => {
+    if (!conn || !detalhe) return;
+    feedback.showConfirm(
+      `Desvincular a Nota Fiscal ${notaFiscalNum} desta duplicata?`,
+      async () => {
+        setDesvinculandoNf(nfFiscal);
+        try {
+          const j = await apiSend(conn, "/api/contas-pagar/desvincular-nf", "POST", {
+            codigo_duplicata: detalhe.header.codigo, nf_fiscal: nfFiscal,
+            usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
+          });
+          if (j?.success) {
+            feedback.showSuccess("Nota Fiscal desvinculada.");
+            abrirDetalhe(detalhe.header.codigo);
+            carregar();
+          } else {
+            feedback.showError(friendlyApiError(j, "Não foi possível desvincular."));
+          }
+        } catch (e) {
+          feedback.showError(friendlyCatchError(e));
+        } finally {
+          setDesvinculandoNf(null);
+        }
+      },
+    );
+  }, [conn, detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
 
   const excluirDuplicata = useCallback(async () => {
     if (!conn || !detalhe) return;
@@ -470,6 +610,36 @@ export default function ContasPagarScreen() {
                       )}
                     </Pressable>
                   </View>
+                  {/* Filtros avançados (`frmcondup.frm`, "Consulta de
+                      Duplicatas a Pagar...") — mirror dos já existentes em
+                      Contas a Receber. Achado do usuário 2026-08-31 — ver
+                      AJUSTES.md #039. */}
+                  <View style={{ flexDirection: "row", gap: spacing.sm, alignItems: "flex-end", flexWrap: "wrap", marginTop: spacing.xs, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border }}>
+                    <View style={{ width: 110 }}>
+                      <Text style={fieldLabel()}>Duplicata</Text>
+                      <TextInput value={duplicataNum} onChangeText={setDuplicataNum} keyboardType="numeric" style={inputStyle()} testID="contas-pagar-filtro-duplicata" />
+                    </View>
+                    <View style={{ width: 110 }}>
+                      <Text style={fieldLabel()}>Valor</Text>
+                      <TextInput value={valorFiltro} onChangeText={setValorFiltro} keyboardType="numeric" style={inputStyle()} testID="contas-pagar-filtro-valor" />
+                    </View>
+                    <View style={{ width: 130 }}>
+                      <Text style={fieldLabel()}>Nº do Boleto</Text>
+                      <TextInput value={numeroBoleto} onChangeText={setNumeroBoleto} keyboardType="numeric" style={inputStyle()} testID="contas-pagar-filtro-boleto" />
+                    </View>
+                    <View style={{ width: 150 }}>
+                      <Text style={fieldLabel()}>Nº Doc. Pagamento</Text>
+                      <TextInput value={numDocPag} onChangeText={setNumDocPag} style={inputStyle()} testID="contas-pagar-filtro-numdocpag" />
+                    </View>
+                    <View style={{ width: 150 }}>
+                      <Text style={fieldLabel()}>Emissão de</Text>
+                      <WebDateField value={emissaoIni} onChange={(v) => { setEmissaoIni(v || null); if (v) setEmissaoFim(v); }} testID="contas-pagar-emissao-ini" />
+                    </View>
+                    <View style={{ width: 150 }}>
+                      <Text style={fieldLabel()}>até</Text>
+                      <WebDateField value={emissaoFim} onChange={(v) => setEmissaoFim(v || null)} testID="contas-pagar-emissao-fim" />
+                    </View>
+                  </View>
                 </View>
               </AccordionSection>
 
@@ -637,15 +807,110 @@ export default function ContasPagarScreen() {
                   </View>
                 ))}
 
-                {(can("CONTAS_PAGAR.EXCLUIR") || masterPerm) ? (
-                  <Pressable onPress={excluirDuplicata} disabled={excluindo} style={[ps.secondaryBtn, { marginTop: spacing.lg, borderColor: colors.error }]} testID="contas-pagar-excluir-btn">
-                    {excluindo ? <ActivityIndicator color={colors.error} size="small" /> : (
-                      <><Ionicons name="trash-outline" size={16} color={colors.error} /><Text style={{ color: colors.error, fontWeight: "600" }}>Excluir Duplicata</Text></>
-                    )}
-                  </Pressable>
-                ) : null}
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.lg, marginBottom: spacing.xs }}>
+                  <Text style={labelStyle()}>Notas Fiscais</Text>
+                  {(can("CONTAS_PAGAR.GRAVAR") || masterPerm) ? (
+                    <Pressable onPress={abrirVincularNf} style={smallBtnStyle()} testID="contas-pagar-vincular-nf-btn">
+                      <Ionicons name="add" size={14} color={colors.brandPrimary} />
+                      <Text style={smallBtnLabelStyle()}>Vincular NF</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                {detalhe.notas.length === 0 ? (
+                  <Text style={{ fontSize: 12, color: colors.muted }}>Nenhuma nota fiscal vinculada.</Text>
+                ) : detalhe.notas.map((n) => (
+                  <View key={n.codigo} style={parcelaRowStyle()}>
+                    <Text style={{ flex: 1, fontSize: 13, color: colors.onSurface }}>
+                      NF {n.nota_fiscal}{n.serie ? `/${n.serie}` : ""}
+                    </Text>
+                    {(can("CONTAS_PAGAR.GRAVAR") || masterPerm) ? (
+                      <Pressable onPress={() => desvincularNf(n.codigo, n.nota_fiscal)} disabled={desvinculandoNf === n.codigo} style={smallBtnStyle()} testID={`contas-pagar-desvincular-nf-${n.codigo}`}>
+                        {desvinculandoNf === n.codigo ? <ActivityIndicator color={colors.error} size="small" /> : (
+                          <><Ionicons name="close-circle-outline" size={14} color={colors.error} /><Text style={[smallBtnLabelStyle(), { color: colors.error }]}>Desvincular</Text></>
+                        )}
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ))}
+
+                <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.lg }}>
+                  {(can("CONTAS_PAGAR.GRAVAR") || masterPerm) ? (
+                    <Pressable onPress={abrirAlterarNumero} style={ps.secondaryBtn} testID="contas-pagar-alterar-numero-btn">
+                      <Ionicons name="create-outline" size={16} color={colors.brandPrimary} /><Text style={{ color: colors.brandPrimary, fontWeight: "600" }}>Alterar Número</Text>
+                    </Pressable>
+                  ) : null}
+                  {(can("CONTAS_PAGAR.EXCLUIR") || masterPerm) ? (
+                    <Pressable onPress={excluirDuplicata} disabled={excluindo} style={[ps.secondaryBtn, { borderColor: colors.error }]} testID="contas-pagar-excluir-btn">
+                      {excluindo ? <ActivityIndicator color={colors.error} size="small" /> : (
+                        <><Ionicons name="trash-outline" size={16} color={colors.error} /><Text style={{ color: colors.error, fontWeight: "600" }}>Excluir Duplicata</Text></>
+                      )}
+                    </Pressable>
+                  ) : null}
+                </View>
               </ScrollView>
             )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* "Vincular Nota Fiscal" — lista NFs em aberto do mesmo grupo de
+          documento (matriz/filiais), toque vincula direto (mesmo padrão
+          de "duplo-clique inclui" do legado, `NF2_DblClick`). */}
+      <Modal visible={notasVincularOpen} transparent animationType="slide" onRequestClose={() => setNotasVincularOpen(false)}>
+        <Pressable style={[ps.modalBg, isWeb && ps.modalBgWebCompact]} onPress={() => setNotasVincularOpen(false)}>
+          <Pressable style={[ps.modalCard, isWeb && ps.modalCardWebCompact]} onPress={(e) => e.stopPropagation()}>
+            <View style={ps.modalHeader}>
+              <Text style={ps.modalTitle}>Vincular Nota Fiscal</Text>
+              <Pressable onPress={() => setNotasVincularOpen(false)} hitSlop={8}><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
+            </View>
+            <Text style={{ fontSize: 12, color: colors.muted, marginBottom: spacing.sm }}>
+              Notas fiscais em aberto do mesmo fornecedor (matriz e filiais). Toque pra vincular a esta duplicata.
+            </Text>
+            {notasCarregando ? (
+              <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 24 }} />
+            ) : notasDisponiveis.length === 0 ? (
+              <Text style={{ fontSize: 13, color: colors.muted, textAlign: "center", marginVertical: 24 }}>Nenhuma nota fiscal disponível.</Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 360 }}>
+                {notasDisponiveis.map((n) => (
+                  <Pressable key={n.codigo} onPress={() => vincularNf(n.codigo)} disabled={vinculandoNf === n.codigo} style={parcelaRowStyle()} testID={`contas-pagar-nf-disponivel-${n.codigo}`}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 13, fontWeight: "600", color: colors.onSurface }}>NF {n.nota_fiscal}{n.serie ? `/${n.serie}` : ""} · {formatBRL(n.valor)}</Text>
+                      <Text style={{ fontSize: 12, color: colors.muted }}>{n.fornecedor_nome}</Text>
+                    </View>
+                    {vinculandoNf === n.codigo ? <ActivityIndicator color={colors.brandPrimary} size="small" /> : <Ionicons name="add-circle-outline" size={20} color={colors.brandPrimary} />}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* "Alterar Nº Duplicata" — modal próprio (o legado usa um InputBox
+          nativo, nunca replicado neste projeto). */}
+      <Modal visible={alterarNumeroOpen} transparent animationType="slide" onRequestClose={() => setAlterarNumeroOpen(false)}>
+        <Pressable style={[ps.modalBg, isWeb && ps.modalBgWebCompact]} onPress={() => setAlterarNumeroOpen(false)}>
+          <Pressable style={[ps.modalCard, isWeb && ps.modalCardWebCompactNarrow]} onPress={(e) => e.stopPropagation()}>
+            <View style={ps.modalHeader}>
+              <Text style={ps.modalTitle}>Alterar Número da Duplicata</Text>
+              <Pressable onPress={() => setAlterarNumeroOpen(false)} hitSlop={8}><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
+            </View>
+            <View style={{ gap: spacing.sm }}>
+              <Text style={{ fontSize: 12, color: colors.muted }}>
+                Se esta duplicata já tiver sido transferida pro Fluxo de Caixa, as previsões vinculadas a ela serão removidas (referenciam o número antigo) — será preciso gerar uma nova transferência depois.
+              </Text>
+              <View>
+                <Text style={fieldLabel()}>Novo Número</Text>
+                <TextInput value={novoNumero} onChangeText={setNovoNumero} keyboardType="numeric" style={inputStyle()} testID="contas-pagar-novo-numero" />
+              </View>
+              <View style={ps.modalBtns}>
+                <Pressable onPress={() => setAlterarNumeroOpen(false)} style={ps.secondaryBtn}><Text>Cancelar</Text></Pressable>
+                <Pressable onPress={confirmarAlterarNumero} disabled={alterandoNumero} style={[ps.primaryBtn, { flex: 1 }]} testID="contas-pagar-alterar-numero-confirmar">
+                  {alterandoNumero ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={{ color: colors.onBrandPrimary, fontWeight: "600" }}>Confirmar</Text>}
+                </Pressable>
+              </View>
+            </View>
           </Pressable>
         </Pressable>
       </Modal>
@@ -666,13 +931,13 @@ export default function ContasPagarScreen() {
                     <WebDateField value={baixaData} onChange={(v) => setBaixaData(v || null)} testID="contas-pagar-baixa-data" />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={fieldLabel()}>Forma de Pagamento</Text>
+                    <Text style={fieldLabel()}>Forma de Pagamento *</Text>
                     <SelectField value={baixaFormaPag} onChange={(v) => setBaixaFormaPag(v as string)} options={formaPagOpts} compactWeb allowClear testID="contas-pagar-baixa-formapag" />
                   </View>
                 </View>
                 <View style={{ flexDirection: "row", gap: spacing.sm }}>
                   <View style={{ flex: 1 }}>
-                    <Text style={fieldLabel()}>Conta</Text>
+                    <Text style={fieldLabel()}>Conta *</Text>
                     <SelectField value={baixaConta} onChange={(v) => setBaixaConta(v == null ? null : Number(v))} options={contasOpts} compactWeb allowClear testID="contas-pagar-baixa-conta" />
                   </View>
                   <View style={{ width: 150 }}>

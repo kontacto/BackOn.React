@@ -244,15 +244,15 @@ export default function LoteBaixaModal({
             {modo === "baixar" ? (
               <View style={{ flexDirection: "row", gap: spacing.sm, flexWrap: "wrap", marginBottom: spacing.sm }}>
                 <View style={{ width: 150 }}>
-                  <Text style={localStyles.fieldLabel}>Data Pag.</Text>
+                  <Text style={localStyles.fieldLabel}>Data Pag. *</Text>
                   <WebDateField value={loteDataPag} onChange={(v) => setLoteDataPag(v || null)} testID="lote-data-pag" />
                 </View>
                 <View style={{ width: 200 }}>
-                  <Text style={localStyles.fieldLabel}>Forma de Pagamento</Text>
+                  <Text style={localStyles.fieldLabel}>Forma de Pagamento *</Text>
                   <SelectField value={loteFormaPag} onChange={(v) => setLoteFormaPag(v as string)} options={formaPagOpts} compactWeb allowClear testID="lote-forma-pag" />
                 </View>
                 <View style={{ width: 200 }}>
-                  <Text style={localStyles.fieldLabel}>Conta</Text>
+                  <Text style={localStyles.fieldLabel}>Conta *</Text>
                   <SelectField value={loteConta} onChange={(v) => setLoteConta(v == null ? null : Number(v))} options={contasOpts} compactWeb allowClear testID="lote-conta" />
                 </View>
                 {tipoLote === "montante" ? (

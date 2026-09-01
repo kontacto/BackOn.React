@@ -10,12 +10,25 @@ tipos pra confirmar/baixar. Aqui, só o fluxo de **baixa** (ocorrência
 06/09/17 — a ação com impacto financeiro real, quita o título) vira uma
 grade selecionável linha a linha, com cliente/vencimento/valor resolvidos.
 **Confirmação (ocorrência 02/03) vira só uma contagem-resumo**, não uma
-lista selecionável — nos bancos CNAB400 (Inter/Itaú), o registro de
-confirmação não carrega o mesmo identificador (`Nosso Número`) usado pra
-achar o título no banco, só um identificador interno (`AutoNumDRV`) que o
-parsing atual não extrai pra esse caso (só usa pra CONTAR, replicando o
-`_processar_retorno_sync` de cada motor) — extrair isso pros 5 bancos é
-trabalho adicional não incluído nesta rodada. Registrado em PENDENCIAS.md.
+lista selecionável — mas, pro Inter (achado real 2026-08-28, ver docstring
+de `cnab_inter_service._parse_linhas`), a ocorrência "02" É aplicada
+automaticamente aqui no `_preview_retorno_sync` (não fica só na contagem):
+grava `duplicata_rec_venc.registrado=1`+`numero_boleto=<Nosso Número real
+do banco>`, casando pelo `codigo_interno` (`AutoNumDRV`) que o Inter ecoa
+de volta no campo "Uso da Empresa" — sem isso, nenhuma baixa futura de um
+boleto GERADO por este app (não pelo legado) jamais encontraria o título
+depois, porque `numero_boleto` ficaria travado no valor provisório pra
+sempre. Aplicado dentro do "preview" (não um botão à parte) porque: (1) é
+o único ponto que já toca esses registros; (2) é idempotente e de baixo
+risco (só grava um identificador, não mexe em situação/saldo — diferente
+da baixa, que quita o título); (3) sem aplicar, a baixa nunca funciona.
+Retornado como `registrados` na resposta, pro frontend exibir com
+transparência. **Os outros 4 bancos (Bradesco/Santander/BB/Itaú) ainda não
+têm essa extração** — cada um tem seu próprio layout de retorno,
+confirmado só pro Inter até aqui; não presumir que a mesma posição de
+campo vale pros outros sem rastrear cada um (mesmo princípio já usado
+neste projeto pra CNAB — "todo banco tem seu layout próprio"). Registrado
+em PENDENCIAS.md.
 
 Dispatch por banco (`MOTORES`, mesmo padrão de `routes/bancos.py`
 `_MOTORES_CNAB`). Cada motor expõe `_parse_linhas` com uma destas formas:
@@ -85,6 +98,7 @@ def _preview_retorno_sync(servidor: str, banco: str, cod_banco: int, conteudo: s
         itens_baixa = []
         itens_nao_encontrados = []
         confirmados = 0
+        registrados = 0
         ignorados = 0
         nao_encontrados = []
 
@@ -95,6 +109,15 @@ def _preview_retorno_sync(servidor: str, banco: str, cod_banco: int, conteudo: s
             ocorrencia = reg["ocorrencia"]
             if ocorrencia in OCORRENCIAS_CONFIRMACAO:
                 confirmados += 1
+                if motor is cnab_inter_service and ocorrencia == "02":
+                    codigo_interno = int(reg.get("codigo_interno") or 0)
+                    numero_real = int(reg.get("numero_boleto") or 0)
+                    if codigo_interno and numero_real:
+                        cur.execute(
+                            "UPDATE duplicata_rec_venc SET registrado=1, numero_boleto=%s WHERE codigo=%s",
+                            (numero_real, codigo_interno),
+                        )
+                        registrados += 1
                 continue
             if ocorrencia not in OCORRENCIAS_BAIXA:
                 ignorados += 1
@@ -152,12 +175,14 @@ def _preview_retorno_sync(servidor: str, banco: str, cod_banco: int, conteudo: s
                 "encontrado": True,
             })
 
+        conn.commit()  # necessário desde 2026-08-28: ocorrência "02" do Inter agora grava (ver acima)
         cur.close()
         return {
             "success": True,
             "itens_baixa": itens_baixa,
             "itens_nao_encontrados": itens_nao_encontrados,
             "confirmados": confirmados,
+            "registrados": registrados,
             "ignorados": ignorados,
             "nao_encontrados": nao_encontrados,
         }

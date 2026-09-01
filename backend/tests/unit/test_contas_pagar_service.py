@@ -143,7 +143,7 @@ class TestBaixarParcela:
         return base
 
     def test_sucesso_parcial_mantem_situacao_aberta(self, monkeypatch):
-        cur = FakeCursor(one=[self._parcela(), {"total": 3, "pagas": 1}])
+        cur = FakeCursor(one=[self._parcela(), {"data_fecha_cx": None}, {"total": 3, "pagas": 1}])
         conn = _patch(monkeypatch, cur)
         r = svc._baixar_parcela_sync("srv", "bd", self._req())
         assert r["success"] is True
@@ -152,7 +152,7 @@ class TestBaixarParcela:
         assert update_dp == (1, "A", 900)
 
     def test_sucesso_todas_pagas_marca_duplicata_pg(self, monkeypatch):
-        cur = FakeCursor(one=[self._parcela(), {"total": 1, "pagas": 1}])
+        cur = FakeCursor(one=[self._parcela(), {"data_fecha_cx": None}, {"total": 1, "pagas": 1}])
         _patch(monkeypatch, cur)
         r = svc._baixar_parcela_sync("srv", "bd", self._req())
         assert r["success"] is True
@@ -163,7 +163,7 @@ class TestBaixarParcela:
         """`num_doc_pag` é exclusivo do lado Pagar (não existe em
         `Duplicata_Rec_Venc`) — confirmado via INFORMATION_SCHEMA ao vivo,
         e é o único campo extra em relação ao lado Receber."""
-        cur = FakeCursor(one=[self._parcela(), {"total": 1, "pagas": 1}])
+        cur = FakeCursor(one=[self._parcela(), {"data_fecha_cx": None}, {"total": 1, "pagas": 1}])
         _patch(monkeypatch, cur)
         req = self._req(num_doc_pag="NF-12345", banco_cedente=341, agencia_cedente=1234)
         r = svc._baixar_parcela_sync("srv", "bd", req)
@@ -176,11 +176,38 @@ class TestBaixarParcela:
     def test_nao_bloqueia_valor_pago_maior_que_parcela(self, monkeypatch):
         """Diferente do lado Receber — o legado (`FrmManPap.frm`) NÃO tem
         essa trava (comentário de validação desativado no fonte real)."""
-        cur = FakeCursor(one=[self._parcela(valor=50.0), {"total": 1, "pagas": 1}])
+        cur = FakeCursor(one=[self._parcela(valor=50.0), {"data_fecha_cx": None}, {"total": 1, "pagas": 1}])
         conn = _patch(monkeypatch, cur)
         r = svc._baixar_parcela_sync("srv", "bd", self._req(valor_pag=999.0))
         assert r["success"] is True
         assert conn.committed is True
+
+    def test_bloqueia_caixa_ja_fechado(self, monkeypatch):
+        """Mesma guarda do lado Receber, confirmada com Leandro 2026-08-28
+        ("deve usar os mesmos critérios de bloqueio que existem hoje,
+        incluíndo bloqueio por caixa já fechado") — réplica de
+        `FrmManPap.frm`'s `Command2_Click`, sem bypass de usuário master
+        (esse bypass só existe no botão de LOTE do legado, `Command7_Click`
+        — inconsistência do legado, não replicada de propósito)."""
+        cur = FakeCursor(one=[self._parcela(), {"data_fecha_cx": date(2026, 8, 28)}])
+        _patch(monkeypatch, cur)
+        r = svc._baixar_parcela_sync("srv", "bd", self._req(data_pag="2026-08-28"))
+        assert r["success"] is False
+        assert "Caixa já fechado" in r["message"]
+
+    def test_bloqueia_sem_forma_pagamento(self, monkeypatch):
+        cur = FakeCursor(one=[self._parcela(), {"data_fecha_cx": None}])
+        _patch(monkeypatch, cur)
+        r = svc._baixar_parcela_sync("srv", "bd", self._req(forma_pag=None))
+        assert r["success"] is False
+        assert "Forma de Pagamento" in r["message"]
+
+    def test_bloqueia_sem_conta(self, monkeypatch):
+        cur = FakeCursor(one=[self._parcela(), {"data_fecha_cx": None}])
+        _patch(monkeypatch, cur)
+        r = svc._baixar_parcela_sync("srv", "bd", self._req(conta=None))
+        assert r["success"] is False
+        assert "Conta" in r["message"]
 
     def test_bloqueia_parcela_ja_paga(self, monkeypatch):
         cur = FakeCursor(one=[self._parcela(situacao="PG")])
@@ -223,6 +250,7 @@ class TestProcessarLote:
         cur = FakeCursor(one=[
             {"valor": 50.0},
             {"codigo": 1, "duplicata": 900, "situacao": "A", "valor": 50.0, "dt_vencimento": date(2026, 8, 28)},
+            {"data_fecha_cx": None},
             {"total": 1, "pagas": 1},
             None,
         ])
@@ -300,3 +328,165 @@ class TestExcluir:
         r = svc._excluir_sync("srv", "bd", 999)
         assert r["success"] is False
         assert "não encontrada" in r["message"]
+
+
+class TestFiltrosExtrasListar:
+    # Filtros extras rastreados de `frmcondup.frm` ("Consulta de
+    # Duplicatas a Pagar..."), mirror dos que já existem em
+    # test_contas_receber_service.py. Ver AJUSTES.md #039.
+    def test_filtro_duplicata_num(self, monkeypatch):
+        cur = FakeCursor(many=[[]])
+        _patch(monkeypatch, cur)
+        svc._listar_sync("srv", "bd", {"duplicata_num": 1994})
+        sql, params = cur.queries[0]
+        assert "dp.duplicata = %s" in sql
+        assert 1994 in params
+
+    def test_filtro_valor_e_boleto_e_num_doc_pag(self, monkeypatch):
+        cur = FakeCursor(many=[[]])
+        _patch(monkeypatch, cur)
+        svc._listar_sync("srv", "bd", {"valor": 150.5, "numero_boleto": 998877, "num_doc_pag": "ABC"})
+        sql, params = cur.queries[0]
+        assert "CAST(v.valor AS NUMERIC(15,2)) = %s" in sql
+        assert "v.numero_boleto = %s" in sql
+        assert "v.num_doc_pag LIKE %s" in sql
+        assert 150.5 in params and 998877 in params and "%ABC%" in params
+
+    def test_filtro_emissao(self, monkeypatch):
+        cur = FakeCursor(many=[[]])
+        _patch(monkeypatch, cur)
+        svc._listar_sync("srv", "bd", {"emissao_ini": "2026-01-01", "emissao_fim": "2026-01-31"})
+        sql, params = cur.queries[0]
+        assert "dp.dt_emissao BETWEEN %s AND %s" in sql
+        assert ("2026-01-01", "2026-01-31") == tuple(p for p in params if isinstance(p, str))
+
+
+class TestNotasDisponiveisPagar:
+    # "Incluir Nota Fiscal" (`frmmandup.frm::Command5_Click`) — mirror de
+    # TestNotasDisponiveis (Receber). Ver AJUSTES.md #039.
+    def test_duplicata_nao_encontrada(self, monkeypatch):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        r = svc._notas_disponiveis_sync("srv", "bd", 999)
+        assert r["success"] is False
+        assert "não encontrada" in r["message"]
+
+    def test_busca_por_raiz_documento_fornecedor(self, monkeypatch):
+        cur = FakeCursor(
+            one=[{"fornecedor": 10}, {"codigo": "12345678000199"}],
+            many=[[{"codigo": 700, "codigo_fornecedor": 11, "nome": "FILIAL LTDA", "nota_fiscal": 55, "serie": "1", "valor": 200.0}]],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._notas_disponiveis_sync("srv", "bd", 900)
+        assert r["success"] is True
+        assert r["items"][0]["fornecedor_nome"] == "FILIAL LTDA"
+        sql, params = cur.queries[-1]
+        assert "LEFT(f.codigo,8) = %s" in sql
+        assert params == ("12345678",)
+
+
+class TestVincularNfPagar:
+    def test_duplicata_nao_encontrada(self, monkeypatch):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        r = svc._vincular_nf_sync("srv", "bd", 999, 700)
+        assert r["success"] is False
+        assert "não encontrada" in r["message"]
+
+    def test_bloqueia_ja_vinculada(self, monkeypatch):
+        cur = FakeCursor(one=[{"codigo": 900}, {"codigo": 1}])
+        _patch(monkeypatch, cur)
+        r = svc._vincular_nf_sync("srv", "bd", 900, 700)
+        assert r["success"] is False
+        assert "já vinculada" in r["message"].lower()
+
+    def test_checagem_de_vinculo_usa_coluna_real(self, monkeypatch):
+        # Regressão achada ao vivo (ARGEN TESTE, 2026-08-31):
+        # `Duplicata_Pag_Nf` só tem as colunas `(duplicata, nf_fiscal)` —
+        # `SELECT codigo FROM Duplicata_Pag_Nf` quebra em produção
+        # ("Invalid column name 'codigo'"), invisível no FakeCursor. Nunca
+        # reintroduzir `codigo` nessa checagem.
+        cur = FakeCursor(one=[{"codigo": 900}, None, {"situacao": "A"}])
+        _patch(monkeypatch, cur)
+        svc._vincular_nf_sync("srv", "bd", 900, 700)
+        check_query = [q for q, p in cur.queries if "Duplicata_Pag_Nf WHERE duplicata" in q][0]
+        assert "SELECT codigo FROM Duplicata_Pag_Nf" not in check_query
+        assert "SELECT duplicata FROM Duplicata_Pag_Nf" in check_query
+
+    def test_bloqueia_nf_nao_aberta(self, monkeypatch):
+        cur = FakeCursor(one=[{"codigo": 900}, None, {"situacao": "DU"}])
+        _patch(monkeypatch, cur)
+        r = svc._vincular_nf_sync("srv", "bd", 900, 700)
+        assert r["success"] is False
+        assert "não está mais em aberto" in r["message"]
+
+    def test_vincula_com_sucesso(self, monkeypatch):
+        cur = FakeCursor(one=[{"codigo": 900}, None, {"situacao": "A"}])
+        conn = _patch(monkeypatch, cur)
+        r = svc._vincular_nf_sync("srv", "bd", 900, 700)
+        assert r["success"] is True
+        assert conn.committed is True
+        insert = [p for q, p in cur.queries if q.startswith("INSERT INTO Duplicata_Pag_Nf")][0]
+        assert insert == (900, 700)
+        update = [p for q, p in cur.queries if q.startswith("UPDATE Pagar SET situacao = 'DU'")][0]
+        assert update == (700,)
+
+
+class TestDesvincularNfPagar:
+    def test_bloqueia_se_ja_pago(self, monkeypatch):
+        cur = FakeCursor(one=[{"qtd": 1}])
+        _patch(monkeypatch, cur)
+        r = svc._desvincular_nf_sync("srv", "bd", 900, 700)
+        assert r["success"] is False
+        assert "pagos" in r["message"]
+
+    def test_bloqueia_nao_vinculada(self, monkeypatch):
+        cur = FakeCursor(one=[{"qtd": 0}, None])
+        _patch(monkeypatch, cur)
+        r = svc._desvincular_nf_sync("srv", "bd", 900, 700)
+        assert r["success"] is False
+        assert "não está vinculada" in r["message"]
+
+    def test_desvincula_com_sucesso(self, monkeypatch):
+        cur = FakeCursor(one=[{"qtd": 0}, {"codigo": 1}])
+        conn = _patch(monkeypatch, cur)
+        r = svc._desvincular_nf_sync("srv", "bd", 900, 700)
+        assert r["success"] is True
+        assert conn.committed is True
+        delete = [p for q, p in cur.queries if q.startswith("DELETE FROM Duplicata_Pag_Nf")][0]
+        assert delete == (900, 700)
+        update = [p for q, p in cur.queries if q.startswith("UPDATE Pagar SET situacao = 'A'")][0]
+        assert update == (700,)
+
+
+class TestAlterarNumeroPagar:
+    # "Alterar Nº Duplicata" (`frmmandup.frm::Command15_Click`) — mirror de
+    # TestAlterarNumero (Receber), com `flag_transf_caixa = 'P'`.
+    def test_duplicata_nao_encontrada(self, monkeypatch):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        r = svc._alterar_numero_sync("srv", "bd", 999, 1994)
+        assert r["success"] is False
+        assert "não encontrada" in r["message"]
+
+    def test_bloqueia_numero_ja_usado(self, monkeypatch):
+        cur = FakeCursor(one=[{"codigo": 900}, {"codigo": 901}])
+        _patch(monkeypatch, cur)
+        r = svc._alterar_numero_sync("srv", "bd", 900, 1994)
+        assert r["success"] is False
+        assert "já existe" in r["message"].lower()
+
+    def test_altera_numero_apaga_previsoes_e_reseta_transf(self, monkeypatch):
+        cur = FakeCursor(one=[{"codigo": 900}, None])
+        conn = _patch(monkeypatch, cur)
+        r = svc._alterar_numero_sync("srv", "bd", 900, 1994)
+        assert r["success"] is True
+        assert r["duplicata"] == 1994
+        assert conn.committed is True
+        update = [p for q, p in cur.queries if q.startswith("UPDATE Duplicata_Pagar SET duplicata")][0]
+        assert update == (1994, 900)
+        delete_prev = [q for q, p in cur.queries if q.startswith("DELETE p FROM Previsoes")]
+        assert len(delete_prev) == 1
+        assert "flag_transf_caixa = 'P'" in delete_prev[0]
+        reset_transf = [p for q, p in cur.queries if q.startswith("UPDATE Duplicata_Pag_Venc SET transf_previsao")][0]
+        assert reset_transf == (900,)

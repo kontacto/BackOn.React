@@ -24,6 +24,11 @@ type ConfirmOptions = {
   confirmText?: string;
   cancelText?: string;
   destructive?: boolean;
+  // Opcional — só quando o botão "Cancelar" precisa disparar uma ação
+  // própria (não só fechar o diálogo), ex.: um Sim/Não real onde as DUAS
+  // respostas seguem em frente com efeito diferente (não um "desistir").
+  // Sem isso, o botão Cancelar só fecha o diálogo, como sempre foi.
+  onCancel?: () => void;
 };
 
 type ConfirmState = {
@@ -33,6 +38,7 @@ type ConfirmState = {
   cancelText: string;
   destructive: boolean;
   onConfirm: () => void;
+  onCancel?: () => void;
 };
 
 export type FeedbackApi = {
@@ -110,6 +116,7 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
       cancelText: options?.cancelText || "Cancelar",
       destructive: options?.destructive || false,
       onConfirm,
+      onCancel: options?.onCancel,
     });
   }, []);
 
@@ -174,7 +181,7 @@ export function FeedbackProvider({ children }: { children: React.ReactNode }) {
               <Text style={styles.message}>{confirm.message}</Text>
               <View style={styles.confirmBtnRow}>
                 <Pressable
-                  onPress={hideConfirm}
+                  onPress={() => { const onCancel = confirm.onCancel; hideConfirm(); onCancel?.(); }}
                   style={({ pressed }) => [styles.confirmBtn, styles.confirmBtnCancel, pressed && { opacity: 0.85 }]}
                   testID="feedback-confirm-cancel"
                 >

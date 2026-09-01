@@ -38,8 +38,26 @@ const AJUDA_ITENS: HelpItem[] = [
   { titulo: "Contas a Receber", texto: "Notas Fiscais de Saída (vendas) — viram um título a receber do cliente.", icon: { lib: "ion", name: "arrow-down-circle-outline" } },
   { titulo: "Contas a Pagar", texto: "Notas Fiscais de Entrada (compras) — viram um título a pagar ao fornecedor.", icon: { lib: "ion", name: "arrow-up-circle-outline" } },
   { titulo: "Comanda", texto: "Uma comanda do Bar já fechada e paga, ainda não lançada no Contas a Receber.", icon: { lib: "ion", name: "receipt-outline" } },
+  { titulo: "\"Esta comanda já está baixada...\"", texto: "Pode aparecer numa Nota que ainda está pendente aqui, mas cuja comanda vinculada já foi baixada no Contas a Receber por outro caminho. Siga a própria mensagem: cancele o recebimento dessa comanda e transfira de novo.", icon: { lib: "ion", name: "warning-outline" } },
   { titulo: "Depois de transferir", texto: "O item sai desta lista — não tem \"desfazer\" por aqui. Se algo foi transferido por engano, é preciso ajustar direto no Contas a Pagar/Receber já lançado.", icon: { lib: "ion", name: "alert-circle-outline" } },
 ];
+
+// Agrupa falhas por texto de mensagem ÚNICO — achado real 2026-08-28: um
+// lote com N itens que caem no MESMO bloqueio (ex.: "Esta comanda já está
+// baixada...", réplica fiel de FrmTransfContas.frm, não bug de listagem)
+// gerava um toast repetindo a frase inteira N vezes. Nunca repete o mesmo
+// texto — mostra quantidade + a lista de notas afetadas por grupo.
+function resumirFalhas(falhas: { codnota: number; message: string }[]): string {
+  const grupos = new Map<string, number[]>();
+  for (const f of falhas) {
+    const lista = grupos.get(f.message) || [];
+    lista.push(f.codnota);
+    grupos.set(f.message, lista);
+  }
+  return Array.from(grupos.entries())
+    .map(([mensagem, codnotas]) => `${codnotas.length}x (notas ${codnotas.join(", ")}): ${mensagem}`)
+    .join("\n\n");
+}
 
 export default function TransferenciaContasScreen() {
   const router = useRouter();
@@ -144,10 +162,18 @@ export default function TransferenciaContasScreen() {
           undefined, 5000,
         );
       }
-      if (falhas.length > 0 && transferidos.length === 0) {
-        feedback.showError(falhas.map((f) => f.message).join("\n"));
-      } else if (falhas.length > 0) {
-        feedback.showWarning(`Falhas: ${falhas.map((f) => f.message).join("; ")}`, undefined, 5000);
+      if (falhas.length > 0) {
+        // Achado real 2026-08-28 (várias comandas caindo no mesmo bloqueio
+        // "já baixada no Contas a Receber" — réplica fiel de FrmTransfContas.
+        // frm, não é bug de listagem): sem agrupar, o toast repetia a MESMA
+        // mensagem uma vez por item (11x o texto inteiro, ilegível). Agrupa
+        // por texto único, mostra quantidade — nunca repete a frase.
+        const resumo = resumirFalhas(falhas);
+        if (transferidos.length === 0) {
+          feedback.showError(resumo, undefined, 5000);
+        } else {
+          feedback.showWarning(`Falhas: ${resumo}`, undefined, 5000);
+        }
       }
       buscar();
     } catch (e) {

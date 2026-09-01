@@ -37,18 +37,34 @@ export async function apiGet(conn: ConnLike, path: string, params?: Record<strin
 }
 
 // POST/PUT/DELETE com corpo JSON → json. servidor/banco devem ir no body pelo chamador.
+// `timeoutMs` é opcional — sem ele, comportamento idêntico a sempre (sem
+// timeout, mesmo padrão de todo o resto do app). Passar um valor só nas
+// telas onde travar pra sempre já foi um problema real (ex.: Efetivar
+// Previsão travando "processando" indefinidamente contra um banco real
+// com lock — achado do usuário 2026-08-31, PENDENCIAS.md > "Painel
+// Financeiro"). Não virou padrão global de propósito — uma chamada
+// legitimamente demorada (emissão de NFe, relatório grande) não deve
+// ganhar um timeout que não pediu.
 export async function apiSend(
   conn: ConnLike,
   path: string,
   method: "POST" | "PUT" | "DELETE",
   body: Record<string, unknown>,
+  timeoutMs?: number,
 ): Promise<any> {
-  const r = await fetch(`${apiBase(conn)}${path}`, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...body }),
-  });
-  return r.json();
+  const controller = timeoutMs ? new AbortController() : undefined;
+  const timer = timeoutMs ? setTimeout(() => controller!.abort(), timeoutMs) : undefined;
+  try {
+    const r = await fetch(`${apiBase(conn)}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ servidor: conn.servidor, banco: conn.banco, ...body }),
+      signal: controller?.signal,
+    });
+    return await r.json();
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 // DELETE via querystring (servidor/banco). Sem corpo.
@@ -129,6 +145,11 @@ export function friendlyCatchError(e: unknown, fallback = "Não foi possível co
   // aqui, eles retornam uma resposta normal pro `.json()` ler.
   if (e instanceof TypeError) {
     return "Falha de conexão com o servidor. Verifique sua internet/rede e tente novamente.";
+  }
+  // `AbortController` (só quando `apiSend` recebeu `timeoutMs`) — distinto
+  // de falha de rede: o pedido chegou a sair, só não voltou a tempo.
+  if (e instanceof Error && e.name === "AbortError") {
+    return "O servidor demorou demais para responder. Pode haver um bloqueio no banco de dados — tente novamente em instantes; se persistir, avise o suporte.";
   }
   if (e instanceof Error && e.message) return e.message;
   return fallback;

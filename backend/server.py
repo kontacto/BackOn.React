@@ -33,27 +33,32 @@ from starlette.middleware.cors import CORSMiddleware  # noqa: E402
 
 from db import mongo  # noqa: E402
 from routes import (  # noqa: E402
-    abertura_dia, afericao_abastecimento, agenda, apuracao_fiscal, auth, balanca, bancos, bomba, bordero, checkout, cilindro, clientes, combustivel, combustivel_meta, comanda, conta_func, contas, contas_pagar, contas_receber, contatos,
+    abertura_dia, afericao_abastecimento, agenda, apuracao_fiscal, auth, backup_sistema, balanca, bancos, bomba, bordero, checkout, cilindro, clientes, combustivel, combustivel_meta, comanda, conta_func, contas, contas_pagar, contas_receber, contatos,
     contingencia_nfe, contratos, controle, controle_config, controle_sistema, cotacao_compra, curva_abc, custo_combustivel, descontos, devolucao,
     entrada_saida_caixa, envio_massa, equipamentos, estoque_combustivel, etiqueta_produto, fechamento_turno, financeiro, fornecedores, funcionarios,
     geracao_boletos, gestao_compras, gestor_documentos, gestor_nfce, gestor_nfse, ia_config, ilha, impressao, inutilizacao_nfe, inventario, layout, log_auditoria, lookups, margem_lucro, mdfe, misc, modificadores, movimentacao_produtos,
-    mov_encerrante, ncm_cest, nfe_agrupada, nfe_avulsa, notas_fiscais, os, os_completo, pedido_completo, pedido_compra, pedidos, permissoes, produto_completo, produto_imagem, produtos,
+    manutencao_indices, mov_encerrante, ncm_cest, nfe_agrupada, nfe_avulsa, notas_fiscais, os, os_completo, painel_financeiro, pedido_completo, pedido_compra, pedidos, permissoes, previsoes, produto_completo, produto_imagem, produtos,
     produtos_compostos, produtos_niveis, projetos, reabertura_turno, recebimento, relatorio_clientes, relatorios, requisicao, retifica, servico_sistema, servicos, tabelas_aux, tanque,
-    tanque_estoque, tanque_nf, taxas_ia, telemarketing, transferencia_contas, usuarios, veiculos, viagem, whatsapp,
+    tanque_estoque, tanque_nf, taxas_ia, telemarketing, transferencia_caixa, transferencia_contas, usuarios, veiculos, viagem, whatsapp,
 )
-from services import servico_sistema_service  # noqa: E402
+from services import backup_sistema_service, manutencao_indices_service, servico_sistema_service  # noqa: E402
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Primeira tarefa de fundo deste backend (ver services/servico_sistema_
-    # service.py) — verifica/baixa atualização em background, dentro do
-    # próprio processo, substituindo a Tarefa Agendada Windows independente
-    # que ficou pausada. Cancelada no shutdown junto com o fechamento do
-    # Mongo — precisa ser um `lifespan` só (não dá pra misturar com o
-    # `@app.on_event` antigo no mesmo app).
-    task = asyncio.create_task(servico_sistema_service.loop_verificacao_atualizacao())
+    # Tarefas de fundo deste backend (ver services/servico_sistema_service.py,
+    # services/manutencao_indices_service.py e services/backup_sistema_
+    # service.py) — rodam dentro do próprio processo, sem depender de SQL
+    # Server Agent (Express não suporta) nem de Tarefa Agendada do Windows
+    # configurada manualmente por instalação. Todas canceladas no shutdown
+    # junto com o fechamento do Mongo — precisa ser um `lifespan` só (não dá
+    # pra misturar com o `@app.on_event` antigo no mesmo app).
+    task_atualizacao = asyncio.create_task(servico_sistema_service.loop_verificacao_atualizacao())
+    task_manutencao_indices = asyncio.create_task(manutencao_indices_service.loop_manutencao_indices())
+    task_backup = asyncio.create_task(backup_sistema_service.loop_backup_sistema())
     yield
-    task.cancel()
+    task_atualizacao.cancel()
+    task_manutencao_indices.cancel()
+    task_backup.cancel()
     if mongo.client is not None:
         mongo.client.close()
 
@@ -94,6 +99,8 @@ api_router.include_router(permissoes.router)
 api_router.include_router(controle_config.router)
 api_router.include_router(controle_sistema.router)
 api_router.include_router(servico_sistema.router)
+api_router.include_router(manutencao_indices.router)
+api_router.include_router(backup_sistema.router)
 api_router.include_router(impressao.router)
 api_router.include_router(gestor_documentos.router)
 api_router.include_router(tabelas_aux.router)
@@ -118,6 +125,7 @@ api_router.include_router(recebimento.router)
 api_router.include_router(checkout.router)
 api_router.include_router(devolucao.router)
 api_router.include_router(transferencia_contas.router)
+api_router.include_router(transferencia_caixa.router)
 api_router.include_router(contas_receber.router)
 api_router.include_router(contas_pagar.router)
 api_router.include_router(movimentacao_produtos.router)
@@ -133,6 +141,8 @@ api_router.include_router(viagem.router)
 api_router.include_router(bordero.router)
 api_router.include_router(bancos.router)
 api_router.include_router(contas.router)
+api_router.include_router(previsoes.router)
+api_router.include_router(painel_financeiro.router)
 api_router.include_router(conta_func.router)
 api_router.include_router(geracao_boletos.router)
 api_router.include_router(telemarketing.router)

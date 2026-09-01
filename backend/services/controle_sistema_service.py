@@ -21,7 +21,48 @@ from typing import Optional
 
 from db.connection import _open_conn, _to_json_safe
 
-EMPRESA = 0  # mono-empresa; controle.empresa / controle_aux.empresa_aux fixos em 0
+EMPRESA = 0  # valor padrão só pra fallback (ver `_resolver_empresa_sync` abaixo)
+
+
+def _resolver_empresa_sync(cur) -> int:
+    """`controle`/`controle_aux` são tabelas mono-linha, atualizadas às
+    cegas sem WHERE (ver docstring do módulo) — não precisam desta
+    função. Mas `controle_nota_fiscal` é multi-linha, tem uma coluna
+    `empresa` (FK real de verdade). **Achado real, 2026-08-28**
+    (Adriana/suporte, instalação "KONTACTO APP"): o código assumia
+    `controle.empresa` sempre `0` — nesta instalação real vale `1`. Um
+    `WHERE empresa=0` hardcoded nunca bate com nenhuma linha real,
+    fazendo leitura devolver vazio e gravação "ter sucesso" sem alterar
+    nada (UPDATE de 0 linhas não é erro). Resolve o valor genuíno a
+    partir de `controle.empresa` (a fonte de verdade) em vez de assumir
+    0 — cai pro fallback só se a tabela `controle` estiver genuinamente
+    vazia (instalação nova, nunca deveria acontecer em produção)."""
+    cur.execute("SELECT TOP 1 empresa FROM controle")
+    row = cur.fetchone()
+    valor = (row or {}).get("empresa")
+    return valor if valor is not None else EMPRESA
+
+
+def _get_row_sem_filtro_sync(servidor: str, banco: str, tabela: str) -> Optional[dict]:
+    """`controle`/`controle_aux` são mono-linha — busca a única linha sem
+    WHERE. Usada só pra montar o "antes" do log de auditoria em
+    `routes/controle_sistema.py` (o genérico `log_auditoria_service.
+    get_row_by_pk` exige um `pk_val` real, e `controle.empresa` não é
+    confiavelmente `0` — mesmo achado de `_resolver_empresa_sync`
+    acima)."""
+    conn = _open_conn(servidor, banco)
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(f"SELECT TOP 1 * FROM {tabela}")
+        row = cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+async def get_row_sem_filtro(servidor: str, banco: str, tabela: str) -> Optional[dict]:
+    return await asyncio.to_thread(_get_row_sem_filtro_sync, servidor, banco, tabela)
+
 
 # =====================================================================
 # CAMPOS — tabela `controle`
@@ -309,8 +350,8 @@ def _upload_logo_empresa_sync(servidor: str, banco: str, conteudo: bytes, mime: 
     try:
         cur = conn.cursor(as_dict=True)
         cur.execute(
-            "UPDATE controle SET logo_empresa=%s, logo_empresa_mime=%s WHERE empresa=%s",
-            (conteudo, (mime or "")[:50] or None, EMPRESA),
+            "UPDATE controle SET logo_empresa=%s, logo_empresa_mime=%s",
+            (conteudo, (mime or "")[:50] or None),
         )
         conn.commit()
         cur.close()
@@ -329,10 +370,7 @@ def _remover_logo_empresa_sync(servidor: str, banco: str) -> dict:
     conn = _open_conn(servidor, banco)
     try:
         cur = conn.cursor(as_dict=True)
-        cur.execute(
-            "UPDATE controle SET logo_empresa=NULL, logo_empresa_mime=NULL WHERE empresa=%s",
-            (EMPRESA,),
-        )
+        cur.execute("UPDATE controle SET logo_empresa=NULL, logo_empresa_mime=NULL")
         conn.commit()
         cur.close()
         return {"success": True, "message": "Logo da empresa removida."}
@@ -380,10 +418,10 @@ def _get_controle_sistema_sync(servidor: str, banco: str) -> dict:
         # ficando fora do Gravar genérico — o formulário precisa mostrar o
         # valor atual antes do usuário usar o botão dedicado de cada um.
         cols_c = ", ".join(CAMPOS_CONTROLE + CAMPOS_NF_PRINCIPAL + [CAMPO_CONTROLE_LICENCA])
-        cur.execute(f"SELECT TOP 1 {cols_c} FROM controle WHERE empresa=%s", (EMPRESA,))
+        cur.execute(f"SELECT TOP 1 {cols_c} FROM controle")
         row_c = cur.fetchone() or {}
         cols_a = ", ".join(CAMPOS_CONTROLE_AUX + CAMPOS_NFCE_NUMERACAO + CAMPOS_MDFE_NUMERACAO)
-        cur.execute(f"SELECT TOP 1 {cols_a} FROM controle_aux WHERE empresa_aux=%s", (EMPRESA,))
+        cur.execute(f"SELECT TOP 1 {cols_a} FROM controle_aux")
         row_a = cur.fetchone() or {}
         cur.close()
         dados = _to_json_safe(row_c) or {}
@@ -413,13 +451,13 @@ def _save_controle_sistema_sync(servidor: str, banco: str, dados: dict) -> dict:
         cur = conn.cursor(as_dict=True)
         set_c = ", ".join(f"[{c}]=%s" for c in CAMPOS_CONTROLE)
         cur.execute(
-            f"UPDATE controle SET {set_c} WHERE empresa=%s",
-            tuple(vals_c[c] for c in CAMPOS_CONTROLE) + (EMPRESA,),
+            f"UPDATE controle SET {set_c}",
+            tuple(vals_c[c] for c in CAMPOS_CONTROLE),
         )
         set_a = ", ".join(f"[{c}]=%s" for c in CAMPOS_CONTROLE_AUX)
         cur.execute(
-            f"UPDATE controle_aux SET {set_a} WHERE empresa_aux=%s",
-            tuple(vals_a[c] for c in CAMPOS_CONTROLE_AUX) + (EMPRESA,),
+            f"UPDATE controle_aux SET {set_a}",
+            tuple(vals_a[c] for c in CAMPOS_CONTROLE_AUX),
         )
         conn.commit()
         cur.close()
@@ -442,9 +480,10 @@ async def save_controle_sistema(servidor, banco, dados):
     return await asyncio.to_thread(_save_controle_sistema_sync, servidor, banco, dados)
 
 
-def _save_grupo_sync(servidor: str, banco: str, tabela: str, empresa_col: str, campos: list, text_fields: set, dados: dict) -> dict:
+def _save_grupo_sync(servidor: str, banco: str, tabela: str, campos: list, text_fields: set, dados: dict) -> dict:
     # Mesma guarda defensiva de `_save_controle_sistema_sync` acima — este
-    # UPDATE também é às cegas (todo campo do grupo, sem WHERE por campo).
+    # UPDATE também é às cegas (todo campo do grupo, sem WHERE nenhum —
+    # `controle`/`controle_aux` são mono-linha, ver docstring do módulo).
     if not dados:
         return {"success": False, "message": "Nenhum dado informado para gravar."}
     vals = _coerce_vals(dados, campos, set(), text_fields)
@@ -453,8 +492,8 @@ def _save_grupo_sync(servidor: str, banco: str, tabela: str, empresa_col: str, c
         cur = conn.cursor(as_dict=True)
         set_sql = ", ".join(f"[{c}]=%s" for c in campos)
         cur.execute(
-            f"UPDATE {tabela} SET {set_sql} WHERE {empresa_col}=%s",
-            tuple(vals[c] for c in campos) + (EMPRESA,),
+            f"UPDATE {tabela} SET {set_sql}",
+            tuple(vals[c] for c in campos),
         )
         conn.commit()
         cur.close()
@@ -470,15 +509,15 @@ def _save_grupo_sync(servidor: str, banco: str, tabela: str, empresa_col: str, c
 
 
 def _save_nf_principal_sync(servidor: str, banco: str, dados: dict) -> dict:
-    return _save_grupo_sync(servidor, banco, "controle", "empresa", CAMPOS_NF_PRINCIPAL, _NF_PRINCIPAL_TEXT_FIELDS, dados)
+    return _save_grupo_sync(servidor, banco, "controle", CAMPOS_NF_PRINCIPAL, _NF_PRINCIPAL_TEXT_FIELDS, dados)
 
 
 def _save_nfce_numeracao_sync(servidor: str, banco: str, dados: dict) -> dict:
-    return _save_grupo_sync(servidor, banco, "controle_aux", "empresa_aux", CAMPOS_NFCE_NUMERACAO, _NFCE_NUMERACAO_TEXT_FIELDS, dados)
+    return _save_grupo_sync(servidor, banco, "controle_aux", CAMPOS_NFCE_NUMERACAO, _NFCE_NUMERACAO_TEXT_FIELDS, dados)
 
 
 def _save_mdfe_numeracao_sync(servidor: str, banco: str, dados: dict) -> dict:
-    return _save_grupo_sync(servidor, banco, "controle_aux", "empresa_aux", CAMPOS_MDFE_NUMERACAO, _MDFE_NUMERACAO_TEXT_FIELDS, dados)
+    return _save_grupo_sync(servidor, banco, "controle_aux", CAMPOS_MDFE_NUMERACAO, _MDFE_NUMERACAO_TEXT_FIELDS, dados)
 
 
 async def save_nf_principal(servidor, banco, dados):
@@ -505,7 +544,7 @@ def _list_series_nf_sync(servidor: str, banco: str) -> dict:
         cur.execute(
             "SELECT numero_nf, serie_nf, modelo_nf FROM controle_nota_fiscal "
             "WHERE empresa=%s ORDER BY serie_nf",
-            (EMPRESA,),
+            (_resolver_empresa_sync(cur),),
         )
         items = [{
             "serie_nf": (r.get("serie_nf") or "").strip(),
@@ -525,21 +564,22 @@ def _save_serie_nf_sync(servidor: str, banco: str, serie_nf: str, numero_nf: int
     conn = _open_conn(servidor, banco)
     try:
         cur = conn.cursor(as_dict=True)
+        empresa = _resolver_empresa_sync(cur)
         cur.execute(
             "SELECT TOP 1 1 AS ok FROM controle_nota_fiscal WHERE empresa=%s AND serie_nf=%s",
-            (EMPRESA, serie),
+            (empresa, serie),
         )
         if cur.fetchone():
             cur.execute(
                 "UPDATE controle_nota_fiscal SET numero_nf=%s, modelo_nf='18' "
                 "WHERE empresa=%s AND serie_nf=%s",
-                (numero_nf, EMPRESA, serie),
+                (numero_nf, empresa, serie),
             )
         else:
             cur.execute(
                 "INSERT INTO controle_nota_fiscal (numero_nf, serie_nf, modelo_nf, empresa) "
                 "VALUES (%s,%s,'18',%s)",
-                (numero_nf, serie, EMPRESA),
+                (numero_nf, serie, empresa),
             )
         conn.commit()
         cur.close()
@@ -560,7 +600,7 @@ def _delete_serie_nf_sync(servidor: str, banco: str, serie_nf: str) -> dict:
         cur = conn.cursor(as_dict=True)
         cur.execute(
             "DELETE FROM controle_nota_fiscal WHERE empresa=%s AND serie_nf=%s",
-            (EMPRESA, serie_nf),
+            (_resolver_empresa_sync(cur), serie_nf),
         )
         if cur.rowcount == 0:
             conn.rollback()
@@ -699,7 +739,7 @@ def _list_simples_remessa_sync(servidor: str, banco: str) -> dict:
     conn = _open_conn(servidor, banco)
     try:
         cur = conn.cursor(as_dict=True)
-        cur.execute("SELECT TOP 1 uf FROM controle WHERE empresa=%s", (EMPRESA,))
+        cur.execute("SELECT TOP 1 uf FROM controle")
         uf = ((cur.fetchone() or {}).get("uf") or "").strip()
         cur.execute(
             "SELECT tipo_mov, destino, cfop, cod_icms FROM simples_remessa_config "
@@ -722,7 +762,7 @@ def _save_simples_remessa_sync(servidor: str, banco: str, tipo_mov: str, dentro:
     conn = _open_conn(servidor, banco)
     try:
         cur = conn.cursor(as_dict=True)
-        cur.execute("SELECT TOP 1 uf FROM controle WHERE empresa=%s", (EMPRESA,))
+        cur.execute("SELECT TOP 1 uf FROM controle")
         uf = ((cur.fetchone() or {}).get("uf") or "").strip()
         cur.execute("DELETE FROM simples_remessa_config")
         for item in (dentro or [])[:4]:

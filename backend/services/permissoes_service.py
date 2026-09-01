@@ -423,6 +423,43 @@ ACOES_TRANSF_CONTAS = [
     ("TRANSFERIR", "Transferir para Contas a Pagar/Receber"),
 ]
 
+# Tela irmã de TRANSF_CONTAS (`Geral\FrmTransfCaixa.frm`) — promove
+# Previsões/Movimentações já baixadas/Entrada-Saída de Caixa pro Fluxo de
+# Caixa de verdade (mexe em `contas.saldo_atual`). Ver
+# services/transferencia_caixa_service.py e PENDENCIAS.md > "Transferência
+# para o Fluxo de Caixa".
+ACOES_TRANSF_CAIXA = [
+    ("ABRIR", "Abrir tela"),
+    ("TRANSFERIR", "Transferir para o Fluxo de Caixa"),
+    # Fase 2 — Agrupamento de Comandas (FrmAgrCom.frm). Ação própria
+    # porque é uma configuração de instalação (quem pode mudar quais
+    # tipos de cliente/forma de pagamento entram no agrupamento), separada
+    # de quem só pode executar a transferência do dia a dia.
+    ("CONFIG_AGRUP", "Configurar Agrupamento de Comandas"),
+]
+
+# Previsões (Tesouraria\FrmManPrev.frm) — CRUD de lançamentos futuros/
+# recorrentes manuais + motor de Efetivação (previsão -> movimentação
+# real). Ver services/previsoes_service.py e PENDENCIAS.md > "Painel
+# Financeiro (Fluxo de Caixa)".
+ACOES_PREVISOES = [
+    ("ABRIR", "Abrir tela"),
+    ("GRAVAR", "Gravar previsão"),
+    ("EXCLUIR", "Excluir previsão"),
+    ("EFETIVAR", "Efetivar previsão no Fluxo de Caixa"),
+]
+
+# Painel de Movimentações (Kontacto\FrmPnlCon.frm) — dashboard de saldo/
+# alertas + grade de movimentações + lançamento direto (Pagar/Cheque,
+# Receber/Depósito, Transferência, Saque). Ver
+# services/painel_financeiro_service.py e PENDENCIAS.md > "Painel
+# Financeiro (Fluxo de Caixa)".
+ACOES_PAINEL_FINANCEIRO = [
+    ("ABRIR", "Abrir tela"),
+    ("LANCAR", "Lançamento direto (Pagar/Receber/Transferência/Saque)"),
+    ("EXCLUIR", "Excluir lançamento"),
+]
+
 # Ações de Contas a Receber (`Geral\frmTraNFRec.frm` + `Revenda\FrmManDur.frm`
 # — rastreio completo em PENDENCIAS.md > "Contas a Receber"). "BAIXAR" é
 # funcionalidade NOVA (baixa manual sem boleto/CNAB) — sem precedente no
@@ -1113,6 +1150,11 @@ CATALOGO = [
         # listagem/gestão das duplicatas já lançadas, ainda não
         # implementadas — não confundir as duas).
         _tela("TRANSF_CONTAS", "Transferir Contas", ACOES_TRANSF_CONTAS),
+        # Ver PENDENCIAS.md > "Transferência para o Fluxo de Caixa" —
+        # tela irmã de TRANSF_CONTAS acima, mesmo nível de menu (confirmado
+        # pelo screenshot do usuário: as duas ficam soltas em Financeiro,
+        # não dentro do submenu "Fluxo de Caixa").
+        _tela("TRANSF_CAIXA", "Transf. Fluxo Caixa", ACOES_TRANSF_CAIXA),
         _menu("FLUXO_CAIXA", "Fluxo de Caixa", [
             _tela("PLANO_CONTAS", "Plano de Contas"),
             _tela("CENTRO_CUSTO", "Centro de Custo"),
@@ -1123,6 +1165,8 @@ CATALOGO = [
             # (FrmConFunc.frm), ver services/conta_func_service.py e
             # PENDENCIAS.md > "Contas x Funcionário".
             _tela("CONTA_FUNC", "Contas x Funcionário"),
+            _tela("PREVISOES", "Previsões", ACOES_PREVISOES),
+            _tela("PAINEL_MOV", "Painel Financeiro", ACOES_PAINEL_FINANCEIRO),
         ]),
         # Cadastro de Bancos para cobrança (CNAB/boleto/API) — card
         # "Cobranças" em Financeiro. Fase 1 (cadastro) + Fase 2a (motor CNAB

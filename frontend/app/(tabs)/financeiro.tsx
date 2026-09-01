@@ -63,6 +63,14 @@ export default function FinanceiroScreen() {
         visible: can("TRANSF_CONTAS.ABRIR"),
       },
       {
+        key: "transferencia-caixa",
+        label: "Transferência p/Fluxo de Caixa",
+        hint: "Lança Previsões/Movimentações já baixadas e Entrada/Saída de Caixa no Fluxo de Caixa de verdade",
+        icon: "cash-outline",
+        route: "/transferencia-caixa",
+        visible: can("TRANSF_CAIXA.ABRIR"),
+      },
+      {
         key: "fluxo-caixa",
         label: "Fluxo de Caixa",
         hint: "Movimentação e previsão de caixa",

@@ -3,6 +3,7 @@
 `_parse_linhas` já testados em cada test_cnab_*_service.py."""
 from datetime import date
 
+import services.cnab_inter_service as cnab_inter
 import services.cobranca_retorno_service as svc
 
 
@@ -124,6 +125,74 @@ class TestPreviewRetorno:
         _patch(monkeypatch, cur)
         r = svc._preview_retorno_sync("srv", "bd", 1, _linha_bradesco_06())
         assert r["itens_baixa"][0]["ja_baixado"] is True
+
+
+CNPJ_TESTE = "12345678000199"
+
+
+def _linha_inter_02(codigo_interno="20621", numero_real="90820068271"):
+    """Réplica da posição real do Inter pra ocorrência "02" (Confirmação
+    de Título) — achado 2026-08-28 contra arquivo real da instalação
+    "KONTACTO REAL": `codigo_interno` (Uso da Empresa, nosso controle) em
+    [37:62], `numero_real` (Nosso Número do banco, ecoado) em [107:118]."""
+    linha = list(" " * 400)
+    linha[0] = "1"
+    linha[1:3] = list("02")
+    linha[3:17] = list(CNPJ_TESTE)
+    linha[37:62] = list(codigo_interno.ljust(25))
+    linha[89:91] = list("02")
+    linha[107:118] = list(numero_real.rjust(11, "0"))
+    return "".join(linha)
+
+
+class TestPreviewRetornoInterConfirmacao:
+    """Achado real 2026-08-28 — sem isso, nenhuma baixa futura de um
+    boleto GERADO por este app (não pelo legado) jamais encontraria o
+    título depois, porque `numero_boleto` ficaria travado no valor
+    provisório pra sempre. Ver docstring do módulo/`cnab_inter_service.
+    _parse_linhas`."""
+    def _conteudo(self, linha: str) -> str:
+        return "02RETORNO01COBRANCA" + " " * 380 + "\n" + linha
+
+    def test_ocorrencia_02_grava_registrado_e_numero_real(self, monkeypatch):
+        banco_row = {"codigo": cnab_inter.BANCO_INTER_CODIGO, "contacorrente": 318631490}
+        cur = FakeCursor(one=[banco_row, {"cgc": CNPJ_TESTE}])
+        conn = _patch(monkeypatch, cur)
+        r = svc._preview_retorno_sync("srv", "bd", 1, self._conteudo(_linha_inter_02()))
+        assert r["success"] is True
+        assert r["confirmados"] == 1
+        assert r["registrados"] == 1
+        assert conn.committed is True
+        update = [p for q, p in cur.queries if q.startswith("UPDATE duplicata_rec_venc SET registrado=1")][0]
+        assert update == (90820068271, 20621)
+
+    def test_ocorrencia_03_nao_grava_nada(self, monkeypatch):
+        """Entrada Rejeitada — o legado nunca chega a atribuir Nosso
+        Número real pra esse caso (grava 0 no lugar); só contagem."""
+        linha = _linha_inter_02(numero_real="0")
+        linha = linha[:89] + "03" + linha[91:]
+        banco_row = {"codigo": cnab_inter.BANCO_INTER_CODIGO, "contacorrente": 318631490}
+        cur = FakeCursor(one=[banco_row, {"cgc": CNPJ_TESTE}])
+        _patch(monkeypatch, cur)
+        r = svc._preview_retorno_sync("srv", "bd", 1, self._conteudo(linha))
+        assert r["success"] is True
+        assert r["confirmados"] == 1
+        assert r["registrados"] == 0
+        assert not any(q.startswith("UPDATE duplicata_rec_venc SET registrado=1") for q, p in cur.queries)
+
+    def test_outro_banco_nao_tenta_gravar_confirmacao(self, monkeypatch):
+        """Bradesco/Santander/BB/Itaú ainda não têm essa extração — a
+        confirmação continua só contagem pra eles, sem KeyError."""
+        linha = list(" " * 400)
+        linha[0] = "1"
+        linha[108:110] = list("02")
+        banco_row = {"codigo": 237, "contacorrente": 98765}
+        cur = FakeCursor(one=[banco_row])
+        _patch(monkeypatch, cur)
+        r = svc._preview_retorno_sync("srv", "bd", 1, "".join(linha))
+        assert r["success"] is True
+        assert r["confirmados"] == 1
+        assert r["registrados"] == 0
 
 
 class TestAplicarBaixas:

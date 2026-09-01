@@ -47,7 +47,7 @@ from typing import Optional
 
 from db.connection import _open_conn, _get_col_sizes, _trunc
 from services.pedido_common import _modulo_contratos_ativo
-from services import nfe_agrupada_service, email_cobranca_service, boleto_pdf_service, recibo_pdf_service
+from services import nfe_agrupada_service, email_cobranca_service, boleto_pdf_service, recibo_pdf_service, recibo_service
 
 _MODULO_OFF_MSG = "Módulo Contratos está desativado — fale com o administrador em Configurações > Módulos e Recursos."
 
@@ -1984,9 +1984,9 @@ async def emitir_documento_contrato(servidor, banco, tipo, comanda, usuario_codi
 def _gerar_recibo_sync(servidor: str, banco: str, contrato_codigo: int, comanda: int, ano_ref: int, mes_ref: int, descreve_os: str) -> dict:
     """Réplica de `Recibo()` sem a impressão física (VB6 `Printer`) — devolve
     o conteúdo estruturado pro frontend renderizar/imprimir (mesmo padrão
-    de `ReciboPedidoModal`), e grava o registro em `Recibos` + incrementa
-    `Controle.Seq_Recibo`/reaproveita `Controle.Ano_Recibo`, igual ao
-    legado (numeração sequencial por empresa)."""
+    de `ReciboPedidoModal`). Numeração/gravação em `Recibos` delegada ao
+    núcleo compartilhado `recibo_service._gravar_recibo_numerado_sync`
+    (extraído 2026-08-31 pra também ser usado por Contas a Receber)."""
     conn = _open_conn(servidor, banco)
     try:
         cur = conn.cursor(as_dict=True)
@@ -2004,33 +2004,18 @@ def _gerar_recibo_sync(servidor: str, banco: str, contrato_codigo: int, comanda:
         if not contrato or not com:
             cur.close()
             return {"success": False, "message": "Contrato ou comanda não encontrados."}
-        cur.execute("SELECT rz_social, seq_recibo, ano_recibo FROM controle")
-        ctl = cur.fetchone() or {}
-        seq = int(ctl.get("seq_recibo") or 0) + 1
-        ano_recibo = int(ctl.get("ano_recibo") or date.today().year)
         valor = float(com["valor_venda"] or 0)
         meses_pt = ["", "JANEIRO", "FEVEREIRO", "MARÇO", "ABRIL", "MAIO", "JUNHO", "JULHO", "AGOSTO", "SETEMBRO", "OUTUBRO", "NOVEMBRO", "DEZEMBRO"]
         referente = f"{(contrato.get('descr_nf') or '').strip()} Ref: {meses_pt[mes_ref]}/{ano_ref}" + (descreve_os if descreve_os else ".")
         nome_cliente = (contrato.get("fantasia") or contrato.get("nome") or "").strip()
-        rz_social = (ctl.get("rz_social") or "").strip()
-        hoje = date.today()
-        cur.execute(
-            "INSERT INTO Recibos (seq, ano, recebemos, valor, referente, data, assinatura) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-            (seq, ano_recibo, nome_cliente, valor, referente, hoje, rz_social),
+        resultado = recibo_service._gravar_recibo_numerado_sync(
+            cur, recebemos=nome_cliente, valor=valor, referente=referente,
         )
-        cur.execute("UPDATE controle SET seq_recibo=%s", (seq,))
         conn.commit()
         cur.close()
-        return {
-            "success": True,
-            "numero": f"{seq:03d}/{ano_recibo}",
-            "recebemos": nome_cliente,
-            "valor": round(valor, 2),
-            "valor_extenso": _valor_por_extenso(valor),
-            "referente": referente,
-            "data": _iso(hoje),
-            "assinatura": rz_social,
-        }
+        resultado["success"] = True
+        resultado["valor_extenso"] = _valor_por_extenso(valor)
+        return resultado
     except Exception as e:
         conn.rollback()
         return {"success": False, "message": f"Erro ao gerar recibo: {e}"}

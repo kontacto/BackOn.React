@@ -226,7 +226,7 @@ class TestProcessarRetornoValidacoes:
     def test_ocorrencia_06_titulo_nao_encontrado(self, monkeypatch):
         linha = self._linha_base()
         linha[89:91] = list("06")
-        linha[97:107] = list("0000000001")
+        linha[70:81] = list("00000000001")
         cur = FakeCursor(one=[dict(BANCO_ROW), {"cgc": self.CNPJ}, None])
         _patch(monkeypatch, cur)
         r = svc._processar_retorno_sync("srv", "bd", 1, self._conteudo_com_header("".join(linha)))
@@ -237,7 +237,7 @@ class TestProcessarRetornoValidacoes:
     def test_ocorrencia_06_baixa_titulo(self, monkeypatch):
         linha = self._linha_base()
         linha[89:91] = list("06")
-        linha[97:107] = list("0000000001")
+        linha[70:81] = list("00000000001")
         linha[172:178] = list("240726")
         cur = FakeCursor(one=[dict(BANCO_ROW), {"cgc": self.CNPJ}, {"codigo": 10, "situacao": "A"}])
         conn = _patch(monkeypatch, cur)
@@ -246,6 +246,12 @@ class TestProcessarRetornoValidacoes:
         assert r["baixados"] == 1
         assert conn.committed is True
         assert "UPDATE duplicata_rec_venc SET situacao='PG'" in cur.queries[-1][0]
+        # Achado real 2026-08-28: confere que o WHERE realmente usou o
+        # número extraído da posição corrigida (70:81), não a antiga
+        # (97:107) — é exatamente esse tipo de checagem que faltava nos
+        # testes originais e deixou o bug de posição passar despercebido.
+        select_params = [p for q, p in cur.queries if q.startswith("SELECT codigo, situacao FROM duplicata_rec_venc")][0]
+        assert select_params[0] == 1
 
     def test_ocorrencia_06_ignora_ocorrencia_nao_mapeada(self, monkeypatch):
         """Ocorrência "07" apareceu num arquivo real do Inter e não tem
@@ -294,6 +300,51 @@ class TestProcessarRetornoValidacoes:
         assert r["ignorados"] == 1  # a 2ª MAX CAR (ocorrência 07, não mapeada)
         assert r["baixados"] == 3  # MESQUITA, MAX PNEUS, AT2B (ocorrência 06)
         assert r["nao_encontrados"] == []
+        # Achado real 2026-08-28: o teste original nunca conferia QUAL
+        # número foi de fato buscado (o FakeCursor "encontra" na ordem
+        # chamada, não por conteúdo da query) — por isso o bug de posição
+        # do Nosso Número (97:107 em vez de 70:81) passou despercebido por
+        # um mês. Reconferido aqui contra os valores reais deste mesmo
+        # arquivo: MESQUITA=90748479261, MAX PNEUS=90748479873, AT2B=90748479188.
+        selects = [p for q, p in cur.queries if q.startswith("SELECT codigo, situacao FROM duplicata_rec_venc")]
+        assert [p[0] for p in selects] == [90748479261, 90748479873, 90748479188]
+
+    def test_arquivo_real_kontacto_real_2026_08_28_confirma_posicao_correta(self, monkeypatch):
+        """2º arquivo real, independente do de 2026-07-24 acima — retorno
+        genuíno processado contra a instalação real de produção "KONTACTO
+        REAL" (`minimachine`/`BD_KONTACTO`), 78 títulos (76 ocorrência 02 +
+        2 ocorrência 06). Subconjunto real (header + as 2 linhas de baixa,
+        únicas que exercitam a posição do Nosso Número + trailer) — não o
+        arquivo completo, mas nenhuma linha foi alterada/inventada. Foi
+        exatamente rodando este arquivo contra o banco real que a posição
+        antiga (97:107) revelou "não encontrado" pros 2 títulos — motivou
+        a correção pra 70:81 documentada no módulo. GUEREN=90820068271,
+        MONDRIAN=90825112892 — conferidos ao vivo contra `duplicata_rec_
+        venc` real (78/78 títulos do arquivo completo bateram na posição
+        nova; 0/78 batiam na antiga)."""
+        conteudo = (
+            "02RETORNO01COBRANCA                 0318631490SOFTHWORD INFORMATICA LTDA    077INTER          280826                                                                                                                                                                                                                                                                                                      000001\n"
+            "102521796410001590001120001031863149020621                    000000009082006827100   112062708260000003139908200682712708260000000012000077000101             0000000012000270826   GUEREN COMERCIO DE GASES LTDA                11769085000193                                                                                                                                            0903450       000002\n"
+            "102521796410001590001120001031863149020675                    000000009082511270200   112022408260000003171908251127021009260000000025000077000101             0000000000000000000   GR CENTRO AUTOMOTIVO LTDA                    67192298000150                                                                                                                                            0903450       000003\n"
+            "102521796410001590001120001031863149020688                    000000009082511289200   112062808260000003184908251128920509260000000072000077000101             0000000072000280826   MONDRIAN ILUMINACAO LTDA                     45930063000185                                                                                                                                            0903450       000004\n"
+            "9201077          00000078                                00076000003490801            00000                        00002000000084000                                                                                                                                                                                                                                                                      000080\n"
+        )
+        cur = FakeCursor(
+            one=[
+                {**BANCO_ROW, "contacorrente": 318631490},
+                {"cgc": "52179641000159"},
+                {"codigo": 200, "situacao": "A"},  # GUEREN
+                {"codigo": 201, "situacao": "A"},  # MONDRIAN
+            ],
+        )
+        _patch(monkeypatch, cur)
+        r = svc._processar_retorno_sync("srv", "bd", 1, conteudo)
+        assert r["success"] is True
+        assert r["confirmados"] == 1  # GR CENTRO AUTOMOTIVO (ocorrência 02)
+        assert r["baixados"] == 2  # GUEREN, MONDRIAN (ocorrência 06)
+        assert r["nao_encontrados"] == []
+        selects = [p for q, p in cur.queries if q.startswith("SELECT codigo, situacao FROM duplicata_rec_venc")]
+        assert [p[0] for p in selects] == [90820068271, 90825112892]
 
     def test_ocorrencia_06_ja_baixado_e_idempotente(self, monkeypatch):
         linha = self._linha_base()

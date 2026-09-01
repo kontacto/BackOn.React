@@ -52,6 +52,7 @@ vez de pontual de novo.
 import logging
 from typing import Callable
 
+from services.backup_sistema_service import _ensure_backup_sistema_table
 from services.balanca_service import _ensure_balancas_table
 from services.checkout_service import _ensure_cartao_presente_resgate_table
 from services.comanda_service import _ensure_cancelamento_fiscal_cols
@@ -101,6 +102,7 @@ from services.tabelas_aux_service import _ensure_nfse_indop_sync
 # coluna independente das outras) — mas se uma nova migração depender de
 # outra já ter rodado antes, colocar na ordem certa aqui.
 _MIGRACOES: list[Callable[[object], None]] = [
+    _ensure_backup_sistema_table,
     _ensure_balancas_table,
     _ensure_cartao_presente_resgate_table,
     _ensure_contingencia_nfce_table,
@@ -157,6 +159,12 @@ _MIGRACOES: list[Callable[[object], None]] = [
 # muito tempo caso um schema mude enquanto o processo está de pé).
 _SCHEMA_JA_GARANTIDO: set[tuple[str, str]] = set()
 
+# Cache próprio (não reaproveita `_SCHEMA_JA_GARANTIDO`) porque
+# `ensure_auto_close_off` roda fora do lote de `_MIGRACOES` — ver
+# docstring dela pro motivo (ALTER DATABASE não pode rodar dentro da
+# transação única que o lote inteiro compartilha).
+_AUTO_CLOSE_JA_GARANTIDO: set[tuple[str, str]] = set()
+
 
 def ensure_all_schema(cur, servidor: str, banco: str) -> None:
     """Aplica TODAS as migrações de schema pendentes pra este
@@ -180,3 +188,60 @@ def ensure_all_schema(cur, servidor: str, banco: str) -> None:
                 getattr(migracao, "__name__", migracao), servidor, banco, exc_info=True,
             )
     _SCHEMA_JA_GARANTIDO.add(chave)
+
+
+def ensure_auto_close_off(conn, servidor: str, banco: str) -> None:
+    """Garante `AUTO_CLOSE` desligado no banco do cliente — SQL Server
+    Express liga essa opção por padrão, e ela faz o SQL Server fechar o
+    banco INTEIRO assim que a última conexão encerra; a próxima conexão
+    tem que reabrir tudo do zero, do disco, antes de responder qualquer
+    query. Em banco grande (GBs) isso é lento o bastante pra parecer
+    "travou até estourar timeout" de forma intermitente — só acontece
+    quando a operação chega bem depois de um período ocioso.
+
+    Achado real 2026-08-28 investigando timeout intermitente no sistema
+    legado (BackOn VB6) de um cliente real (réplica de teste
+    `RJPNEUS-TESTE`/`minimachine`) — ver PENDENCIAS.md/memória de projeto
+    pro diagnóstico completo (não foi a única causa achada — o banco
+    também tinha estatística nunca atualizada e dezenas de índices
+    redundantes/fragmentados — mas `AUTO_CLOSE` é a única que faz sentido
+    corrigir automaticamente aqui; o resto exige decisão caso a caso, não
+    é uma correção segura de aplicar às cegas em produção). Corrigir isso
+    no app novo protege tanto ele quanto o BackOn VB6 legado quando os
+    dois compartilham o mesmo banco durante a migração — é configuração
+    de BANCO, não de conexão/aplicação, então o benefício vale pra
+    qualquer sistema que converse com esse banco, não só pra quem aplicou
+    o fix.
+
+    **Assinatura própria (recebe `conn`, não `cur`, diferente de toda
+    entrada de `_MIGRACOES` acima)**: `ALTER DATABASE` não pode rodar
+    dentro de uma transação de usuário (erro 226 do SQL Server), e
+    `ensure_all_schema` roda o lote inteiro dentro de UMA transação só,
+    commitada de uma vez no fim por `db.connection._ensure_schema_integral`
+    — por isso este passo roda separado, liga `autocommit` só pra esta 1
+    instrução e devolve pro estado anterior (`autocommit(False)`) logo
+    em seguida, pra nunca deixar o resto do fluxo da conexão (que espera
+    poder fazer seu próprio commit/rollback manual) rodando em autocommit
+    por engano."""
+    chave = ((servidor or "").strip().upper(), (banco or "").strip().upper())
+    if chave in _AUTO_CLOSE_JA_GARANTIDO:
+        return
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT is_auto_close_on FROM sys.databases WHERE database_id = DB_ID()")
+        row = cur.fetchone()
+        if row and row.get("is_auto_close_on"):
+            cur.execute("SELECT DB_NAME() AS db")
+            nome_banco = cur.fetchone()["db"]
+            nome_escapado = nome_banco.replace("]", "]]")
+            conn.autocommit(True)
+            try:
+                cur.execute(f"ALTER DATABASE [{nome_escapado}] SET AUTO_CLOSE OFF")
+            finally:
+                conn.autocommit(False)
+        cur.close()
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Falha ao garantir AUTO_CLOSE OFF em %s/%s", servidor, banco, exc_info=True,
+        )
+    _AUTO_CLOSE_JA_GARANTIDO.add(chave)

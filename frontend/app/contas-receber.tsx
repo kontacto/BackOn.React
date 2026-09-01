@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@/src/components/Ionicons";
 
 import { usePermissions } from "@/src/permissions";
@@ -35,6 +35,7 @@ import { apiGet, apiSend, friendlyApiError, friendlyCatchError } from "@/src/uti
 import { colors, radius, spacing } from "@/src/theme/colors";
 import { WEB_CONTENT_SHELL, WEB_FILTER_CARD, WEB_SCROLL_CENTER } from "@/src/theme/webLayout";
 import { formatBRL, formatDateBR, parseNum, todayISO } from "@/src/utils/format";
+import { printHtml, escHtml } from "@/src/utils/printHtml";
 
 const isWeb = Platform.OS === "web";
 
@@ -48,9 +49,26 @@ type Parcela = {
   codigo: number; desmembramento: number; dt_vencimento: string | null; valor: number; situacao: string;
   data_pag: string | null; valor_pag: number | null; desconto_pag: number | null; juros_pag: number | null;
   conta: number | null; forma_pag: string | null; observacao: string | null;
+  // "Cadastro de Vencimentos" (FrmManDur.frm, combo Situação) — 0-based:
+  // 0=Normal, 1=Jurídico, 2=Protestado. Achado do usuário 2026-08-31.
+  situacao_duplicata: number;
 };
 
+const SITUACAO_VENCIMENTO_OPTIONS = [
+  { value: 0, label: "Normal" },
+  { value: 1, label: "Jurídico" },
+  { value: 2, label: "Protestado" },
+];
+
 type Detalhe = { header: Duplicata; parcelas: Parcela[]; notas: { codigo: number; nota_fiscal: number; serie: string }[] };
+
+// 1 linha de `GridCheques` (`FrmManPar.frm::Command2_Click`) — cheque(s)
+// pré-datado(s) recebido(s) como parte da própria baixa. Achado do
+// usuário 2026-08-31.
+type ChequeItem = {
+  banco?: number | null; agencia?: string; conta?: string; numero_ch?: number | null;
+  valor: number; bom_para?: string | null; nome_cheque?: string; telefone?: string;
+};
 
 const AJUDA_ITENS: HelpItem[] = [
   { titulo: "O que esta tela faz", texto: "Lista as duplicatas a receber já lançadas (vindas de Nota Fiscal, Comanda, Contrato faturado, ou digitadas aqui mesmo) e deixa acompanhar/baixar as parcelas.", icon: { lib: "ion", name: "cash-outline" } },
@@ -62,6 +80,10 @@ const AJUDA_ITENS: HelpItem[] = [
   { titulo: "Editar parcela", texto: "Corrige data de vencimento, valor ou observação de uma parcela ainda em aberto. Uma parcela já paga não pode mais ser editada.", icon: { lib: "ion", name: "create-outline" } },
   { titulo: "Vencido", texto: "Parcela em aberto cuja data de vencimento já passou — aparece em destaque vermelho.", icon: { lib: "ion", name: "alert-circle-outline" } },
   { titulo: "Excluir", texto: "Só é possível excluir uma duplicata se NENHUMA parcela dela já tiver sido paga.", icon: { lib: "ion", name: "trash-outline" } },
+  { titulo: "Alterar Número", texto: "Troca o número da duplicata (bloqueia se já existir outra com esse número). Se ela já tiver sido transferida pro Fluxo de Caixa, as previsões vinculadas são removidas — gere uma nova transferência depois com o número novo.", icon: { lib: "ion", name: "create-outline" } },
+  { titulo: "Recibo", texto: "Emite um recibo numerado (sequencial, controlado pelo sistema) pra uma parcela já paga — os campos vêm preenchidos automaticamente a partir do pagamento, mas você pode ajustar antes de gravar. Depois de gravado, o número não muda mais.", icon: { lib: "ion", name: "receipt-outline" } },
+  { titulo: "Notas Fiscais", texto: "Vincule mais de uma Nota Fiscal na mesma duplicata (útil quando o cliente tem filiais faturando junto). Só mostra NFs em aberto do mesmo CNPJ/CPF. Desvincular só é permitido se nenhuma parcela já tiver sido paga.", icon: { lib: "ion", name: "document-text-outline" } },
+  { titulo: "Cheques Pré-Datados na Baixa", texto: "Ao dar baixa numa parcela recebida (total ou parcialmente) em cheque pré-datado, cadastre cada cheque ali mesmo — eles entram no controle de cheques da empresa, prontos pra compensar na data de bom para.", icon: { lib: "ion", name: "wallet-outline" } },
 ];
 
 const SITUACOES: { key: string; label: string }[] = [
@@ -70,6 +92,10 @@ const SITUACOES: { key: string; label: string }[] = [
 
 export default function ContasReceberScreen() {
   const router = useRouter();
+  // `?situacao=` — deep-link a partir do Painel Financeiro (cards
+  // "Contas a Receber em Atraso"/"Contas a Receber Hoje"), pra abrir esta
+  // tela já filtrada em vez do padrão "Aberto" — ver painel-financeiro.tsx.
+  const params = useLocalSearchParams<{ situacao?: string }>();
   const { can, isMaster: masterPerm, classe: classePerm } = usePermissions();
   const feedback = useFeedback();
 
@@ -80,11 +106,21 @@ export default function ContasReceberScreen() {
   const [ajudaOpen, setAjudaOpen] = useState(false);
   const [filtrosExpandido, setFiltrosExpandido] = useState(true);
   const [busca, setBusca] = useState("");
-  const [situacao, setSituacao] = useState("A");
+  const [situacao, setSituacao] = useState(() => (typeof params.situacao === "string" ? params.situacao : "A"));
   const [dataIni, setDataIni] = useState<string | null>(todayISO());
   const [dataFim, setDataFim] = useState<string | null>(todayISO());
   const [usarPeriodo, setUsarPeriodo] = useState(false);
   const [items, setItems] = useState<Duplicata[]>([]);
+
+  // Filtros extras — rastreados de `FRMCONDUr.frm` ("Consulta de
+  // Duplicatas à Receber..."), achado do usuário 2026-08-31, integrados
+  // na própria listagem em vez de uma tela separada.
+  const [duplicataNum, setDuplicataNum] = useState("");
+  const [valorFiltro, setValorFiltro] = useState("");
+  const [numeroBoleto, setNumeroBoleto] = useState("");
+  const [situacaoDuplicataFiltro, setSituacaoDuplicataFiltro] = useState<number | null>(null);
+  const [recebidoIni, setRecebidoIni] = useState<string | null>(null);
+  const [recebidoFim, setRecebidoFim] = useState<string | null>(null);
 
   const [tiposMov, setTiposMov] = useState<SelectOption[]>([]);
   const [contasOpts, setContasOpts] = useState<SelectOption[]>([]);
@@ -114,6 +150,34 @@ export default function ContasReceberScreen() {
   const [detalheLoading, setDetalheLoading] = useState(false);
   const [detalhe, setDetalhe] = useState<Detalhe | null>(null);
   const [excluindo, setExcluindo] = useState(false);
+  // "Alterar Número da Duplicata" (`FrmManDur.frm::Command15_Click`) —
+  // achado do usuário 2026-08-31. Modal próprio em vez do InputBox nativo
+  // do legado (padrão do projeto: nunca usar prompt()/alert() do browser).
+  const [alterarNumeroOpen, setAlterarNumeroOpen] = useState(false);
+  const [novoNumero, setNovoNumero] = useState("");
+  const [alterandoNumero, setAlterandoNumero] = useState(false);
+
+  // "Emitir Recibo" (`FrmManPar.frm::Command13` — botão real na tela de
+  // Baixa, mas com o Click comentado/morto na fonte real; completa a
+  // intenção documentada no comentário morto: pré-preenche Recebemos/
+  // Valor a partir da parcela paga, editável antes de gravar). Achado do
+  // usuário 2026-08-31.
+  const [reciboParcela, setReciboParcela] = useState<Parcela | null>(null);
+  const [reciboRecebemos, setReciboRecebemos] = useState("");
+  const [reciboValor, setReciboValor] = useState("");
+  const [reciboReferente, setReciboReferente] = useState("");
+  const [reciboData, setReciboData] = useState<string | null>(null);
+  const [reciboAssinatura, setReciboAssinatura] = useState("");
+  const [emitindoRecibo, setEmitindoRecibo] = useState(false);
+
+  // "Notas Fiscais" — vincular/desvincular NF adicional numa duplicata já
+  // existente (`FrmManDur.frm::Command5_Click`/`NF2_DblClick`/
+  // `NF_DblClick`). Achado do usuário 2026-08-31.
+  const [notasVincularOpen, setNotasVincularOpen] = useState(false);
+  const [notasDisponiveis, setNotasDisponiveis] = useState<{ codigo: number; codigo_cliente: number; cliente_nome: string; nota_fiscal: number; serie: string | null; valor: number }[]>([]);
+  const [notasCarregando, setNotasCarregando] = useState(false);
+  const [vinculandoNf, setVinculandoNf] = useState<number | null>(null);
+  const [desvinculandoNf, setDesvinculandoNf] = useState<number | null>(null);
 
   // ---- Baixa manual de 1 parcela ----
   const [baixaVenc, setBaixaVenc] = useState<Parcela | null>(null);
@@ -130,6 +194,17 @@ export default function ContasReceberScreen() {
   const [baixaConta, setBaixaConta] = useState<number | null>(null);
   const [baixaFormaPag, setBaixaFormaPag] = useState<string | null>(null);
   const [baixaObs, setBaixaObs] = useState("");
+  // Cheque(s) pré-datado(s) recebido(s) junto com esta baixa
+  // (`GridCheques`/`GravaChequePre`) — achado do usuário 2026-08-31.
+  const [baixaCheques, setBaixaCheques] = useState<ChequeItem[]>([]);
+  const [novoChequeBanco, setNovoChequeBanco] = useState("");
+  const [novoChequeAgencia, setNovoChequeAgencia] = useState("");
+  const [novoChequeConta, setNovoChequeConta] = useState("");
+  const [novoChequeNumero, setNovoChequeNumero] = useState("");
+  const [novoChequeValor, setNovoChequeValor] = useState("");
+  const [novoChequeBomPara, setNovoChequeBomPara] = useState<string | null>(null);
+  const [novoChequeNome, setNovoChequeNome] = useState("");
+  const [novoChequeTelefone, setNovoChequeTelefone] = useState("");
   const [baixando, setBaixando] = useState(false);
 
   // ---- Cancelar baixa ----
@@ -140,6 +215,7 @@ export default function ContasReceberScreen() {
   const [editDtVenc, setEditDtVenc] = useState<string | null>(null);
   const [editValor, setEditValor] = useState("");
   const [editObs, setEditObs] = useState("");
+  const [editSituacao, setEditSituacao] = useState(0);
   const [editando, setEditando] = useState(false);
 
   useEffect(() => {
@@ -182,6 +258,14 @@ export default function ContasReceberScreen() {
         params.data_ini = dataIni;
         params.data_fim = dataFim;
       }
+      if (duplicataNum.trim()) params.duplicata_num = duplicataNum.trim();
+      if (valorFiltro.trim()) params.valor = String(parseNum(valorFiltro));
+      if (numeroBoleto.trim()) params.numero_boleto = numeroBoleto.trim();
+      if (situacaoDuplicataFiltro !== null) params.situacao_duplicata = String(situacaoDuplicataFiltro);
+      if (recebidoIni && recebidoFim) {
+        params.recebido_ini = recebidoIni;
+        params.recebido_fim = recebidoFim;
+      }
       const j = await apiGet(conn, "/api/contas-receber", params);
       if (j?.success) {
         setItems(j.items || []);
@@ -193,7 +277,7 @@ export default function ContasReceberScreen() {
     } finally {
       setBuscando(false);
     }
-  }, [conn, situacao, busca, usarPeriodo, dataIni, dataFim, feedback]);
+  }, [conn, situacao, busca, usarPeriodo, dataIni, dataFim, duplicataNum, valorFiltro, numeroBoleto, situacaoDuplicataFiltro, recebidoIni, recebidoFim, feedback]);
 
   // Situação re-busca sozinha ao trocar o chip; busca por texto/período continuam manuais (Enter/Buscar).
   useEffect(() => { if (conn) carregar(); }, [conn, situacao]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -300,6 +384,147 @@ export default function ContasReceberScreen() {
     );
   }, [conn, detalhe, usuarioCod, classePerm, feedback, carregar]);
 
+  const abrirAlterarNumero = () => {
+    if (!detalhe) return;
+    setNovoNumero(String(detalhe.header.duplicata));
+    setAlterarNumeroOpen(true);
+  };
+
+  const confirmarAlterarNumero = useCallback(async () => {
+    if (!conn || !detalhe) return;
+    const novo = parseInt(novoNumero, 10);
+    if (!novo || novo <= 0) { feedback.showError("Informe um número válido."); return; }
+    setAlterandoNumero(true);
+    try {
+      const j = await apiSend(conn, "/api/contas-receber/alterar-numero", "POST", {
+        codigo_duplicata: detalhe.header.codigo, novo_numero: novo,
+        usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
+      });
+      if (j?.success) {
+        feedback.showSuccess("Número da duplicata alterado. Previsões de Transferência vinculadas a ela foram removidas — gere uma nova transferência se precisar.", undefined, 5000);
+        setAlterarNumeroOpen(false);
+        abrirDetalhe(detalhe.header.codigo);
+        carregar();
+      } else {
+        feedback.showError(friendlyApiError(j, "Não foi possível alterar o número."));
+      }
+    } catch (e) {
+      feedback.showError(friendlyCatchError(e));
+    } finally {
+      setAlterandoNumero(false);
+    }
+  }, [conn, detalhe, novoNumero, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
+
+  const abrirRecibo = useCallback((p: Parcela) => {
+    if (!detalhe) return;
+    setReciboParcela(p);
+    setReciboRecebemos(detalhe.header.cliente_nome || "");
+    setReciboValor(String(p.valor_pag ?? p.valor));
+    setReciboReferente(`Duplicata Nº ${detalhe.header.duplicata}/${p.desmembramento}`);
+    setReciboData(p.data_pag || todayISO());
+    setReciboAssinatura("");
+  }, [detalhe]);
+
+  const confirmarEmitirRecibo = useCallback(async () => {
+    if (!conn) return;
+    const valorNum = parseNum(reciboValor);
+    if (!reciboRecebemos.trim()) { feedback.showError("Informe quem está pagando (Recebemos de)."); return; }
+    if (!valorNum || valorNum <= 0) { feedback.showError("Informe um valor válido."); return; }
+    if (!reciboReferente.trim()) { feedback.showError("Informe a que o recibo se refere."); return; }
+    setEmitindoRecibo(true);
+    try {
+      const j = await apiSend(conn, "/api/contas-receber/emitir-recibo", "POST", {
+        recebemos: reciboRecebemos.trim(), valor: valorNum, referente: reciboReferente.trim(),
+        data_recibo: reciboData, assinatura: reciboAssinatura.trim() || undefined,
+        usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
+      });
+      if (!j?.success) { feedback.showError(friendlyApiError(j, "Falha ao emitir o recibo.")); return; }
+      const html = `
+        <div class="center bold" style="font-size:20px;margin-bottom:12px;">Recibo Nº ${escHtml(j.numero)}</div>
+        <p>Recebemos de <b>${escHtml(j.recebemos)}</b>.</p>
+        <p>A importância de <b>R$ ${escHtml(formatBRL(j.valor))}</b> (${escHtml(j.valor_extenso)}).</p>
+        <p>Referente à ${escHtml(j.referente)}</p>
+        <p style="margin-top:24px;">${escHtml(formatDateBR(j.data))}</p>
+        <p style="margin-top:48px;text-align:center;">____________________________________<br/>${escHtml(j.assinatura)}</p>
+      `;
+      printHtml(html, `Recibo ${j.numero}`);
+      feedback.showSuccess(`Recibo ${j.numero} emitido.`, undefined, 5000);
+      setReciboParcela(null);
+    } catch (e) {
+      feedback.showError(friendlyCatchError(e, "Falha ao emitir o recibo."));
+    } finally {
+      setEmitindoRecibo(false);
+    }
+  }, [conn, reciboRecebemos, reciboValor, reciboReferente, reciboData, reciboAssinatura, usuarioCod, classePerm, feedback]);
+
+  const abrirVincularNf = useCallback(async () => {
+    if (!conn || !detalhe) return;
+    setNotasVincularOpen(true);
+    setNotasCarregando(true);
+    try {
+      const j = await apiGet(conn, `/api/contas-receber/${detalhe.header.codigo}/notas-disponiveis`);
+      if (j?.success) {
+        setNotasDisponiveis(j.items || []);
+      } else {
+        feedback.showError(friendlyApiError(j, "Não foi possível buscar notas disponíveis."));
+      }
+    } catch (e) {
+      feedback.showError(friendlyCatchError(e));
+    } finally {
+      setNotasCarregando(false);
+    }
+  }, [conn, detalhe, feedback]);
+
+  const vincularNf = useCallback(async (nfFiscal: number) => {
+    if (!conn || !detalhe) return;
+    setVinculandoNf(nfFiscal);
+    try {
+      const j = await apiSend(conn, "/api/contas-receber/vincular-nf", "POST", {
+        codigo_duplicata: detalhe.header.codigo, nf_fiscal: nfFiscal,
+        usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
+      });
+      if (j?.success) {
+        feedback.showSuccess("Nota Fiscal vinculada.");
+        setNotasVincularOpen(false);
+        abrirDetalhe(detalhe.header.codigo);
+        carregar();
+      } else {
+        feedback.showError(friendlyApiError(j, "Não foi possível vincular."));
+      }
+    } catch (e) {
+      feedback.showError(friendlyCatchError(e));
+    } finally {
+      setVinculandoNf(null);
+    }
+  }, [conn, detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
+
+  const desvincularNf = useCallback((nfFiscal: number, notaFiscalNum: number) => {
+    if (!conn || !detalhe) return;
+    feedback.showConfirm(
+      `Desvincular a Nota Fiscal ${notaFiscalNum} desta duplicata?`,
+      async () => {
+        setDesvinculandoNf(nfFiscal);
+        try {
+          const j = await apiSend(conn, "/api/contas-receber/desvincular-nf", "POST", {
+            codigo_duplicata: detalhe.header.codigo, nf_fiscal: nfFiscal,
+            usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
+          });
+          if (j?.success) {
+            feedback.showSuccess("Nota Fiscal desvinculada.");
+            abrirDetalhe(detalhe.header.codigo);
+            carregar();
+          } else {
+            feedback.showError(friendlyApiError(j, "Não foi possível desvincular."));
+          }
+        } catch (e) {
+          feedback.showError(friendlyCatchError(e));
+        } finally {
+          setDesvinculandoNf(null);
+        }
+      },
+    );
+  }, [conn, detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
+
   const abrirBaixa = (p: Parcela) => {
     setBaixaVenc(p);
     setBaixaData(todayISO());
@@ -307,6 +532,27 @@ export default function ContasReceberScreen() {
     setBaixaDesconto(""); setBaixaOutrosDesc(""); setBaixaJuros(""); setBaixaOutrosAcresc(""); setBaixaTarifa("");
     setBaixaBanco(""); setBaixaAgencia(""); setBaixaBoleto(""); setBaixaObs("");
     setBaixaConta(p.conta ?? null); setBaixaFormaPag(p.forma_pag ?? null);
+    setBaixaCheques([]);
+    setNovoChequeBanco(""); setNovoChequeAgencia(""); setNovoChequeConta(""); setNovoChequeNumero("");
+    setNovoChequeValor(""); setNovoChequeBomPara(null); setNovoChequeNome(""); setNovoChequeTelefone("");
+  };
+
+  const adicionarChequePre = () => {
+    const valorNum = parseNum(novoChequeValor);
+    if (!valorNum || valorNum <= 0) { feedback.showError("Informe o valor do cheque."); return; }
+    setBaixaCheques((atual) => [...atual, {
+      banco: novoChequeBanco ? parseInt(novoChequeBanco, 10) : null,
+      agencia: novoChequeAgencia.trim(), conta: novoChequeConta.trim(),
+      numero_ch: novoChequeNumero ? parseInt(novoChequeNumero, 10) : null,
+      valor: valorNum, bom_para: novoChequeBomPara, nome_cheque: novoChequeNome.trim(),
+      telefone: novoChequeTelefone.trim(),
+    }]);
+    setNovoChequeBanco(""); setNovoChequeAgencia(""); setNovoChequeConta(""); setNovoChequeNumero("");
+    setNovoChequeValor(""); setNovoChequeBomPara(null); setNovoChequeNome(""); setNovoChequeTelefone("");
+  };
+
+  const removerChequePre = (i: number) => {
+    setBaixaCheques((atual) => atual.filter((_, idx) => idx !== i));
   };
 
   const confirmarBaixa = useCallback(async () => {
@@ -328,7 +574,7 @@ export default function ContasReceberScreen() {
         banco_cedente: baixaBanco ? parseInt(baixaBanco, 10) : null,
         agencia_cedente: baixaAgencia ? parseInt(baixaAgencia, 10) : null,
         numero_boleto: baixaBoleto ? parseNum(baixaBoleto) : null,
-        conta: baixaConta, forma_pag: baixaFormaPag, observacao: baixaObs,
+        conta: baixaConta, forma_pag: baixaFormaPag, observacao: baixaObs, cheques: baixaCheques,
         usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
       });
       if (j?.success) {
@@ -345,40 +591,53 @@ export default function ContasReceberScreen() {
       setBaixando(false);
     }
   }, [conn, baixaVenc, baixaValor, baixaData, baixaDesconto, baixaOutrosDesc, baixaJuros, baixaOutrosAcresc,
-      baixaTarifa, baixaBanco, baixaAgencia, baixaBoleto, baixaConta, baixaFormaPag, baixaObs,
+      baixaTarifa, baixaBanco, baixaAgencia, baixaBoleto, baixaConta, baixaFormaPag, baixaObs, baixaCheques,
       detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
+
+  const executarCancelamento = useCallback(async (p: Parcela, excluirCheques?: boolean) => {
+    if (!conn || !detalhe) return;
+    setCancelandoBaixa(p.codigo);
+    try {
+      const j = await apiSend(conn, "/api/contas-receber/cancelar-baixa", "POST", {
+        codigo_venc: p.codigo, excluir_cheques: excluirCheques,
+        usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
+      });
+      if (j?.success) {
+        feedback.showSuccess("Baixa cancelada.");
+        abrirDetalhe(detalhe.header.codigo);
+        carregar();
+      } else if (j?.exige_confirmacao_cheque) {
+        setCancelandoBaixa(null);
+        feedback.showConfirm(
+          j.message || `Existe(m) ${j.qtd_cheques} cheque(s) associado(s) a esta duplicata. Deseja excluir também?`,
+          () => executarCancelamento(p, true),
+          { confirmText: "Excluir cheque(s)", cancelText: "Manter cheque(s)", onCancel: () => executarCancelamento(p, false) },
+        );
+        return;
+      } else {
+        feedback.showError(friendlyApiError(j, "Não foi possível cancelar a baixa."));
+      }
+    } catch (e) {
+      feedback.showError(friendlyCatchError(e));
+    } finally {
+      setCancelandoBaixa(null);
+    }
+  }, [conn, detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
 
   const cancelarBaixa = useCallback((p: Parcela) => {
     if (!conn || !detalhe) return;
     feedback.showConfirm(
       `Cancelar a baixa da parcela ${p.desmembramento}? Ela volta pra Aberto.`,
-      async () => {
-        setCancelandoBaixa(p.codigo);
-        try {
-          const j = await apiSend(conn, "/api/contas-receber/cancelar-baixa", "POST", {
-            codigo_venc: p.codigo, usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
-          });
-          if (j?.success) {
-            feedback.showSuccess("Baixa cancelada.");
-            abrirDetalhe(detalhe.header.codigo);
-            carregar();
-          } else {
-            feedback.showError(friendlyApiError(j, "Não foi possível cancelar a baixa."));
-          }
-        } catch (e) {
-          feedback.showError(friendlyCatchError(e));
-        } finally {
-          setCancelandoBaixa(null);
-        }
-      },
+      () => executarCancelamento(p),
     );
-  }, [conn, detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
+  }, [conn, detalhe, feedback, executarCancelamento]);
 
   const abrirEditar = (p: Parcela) => {
     setEditParcela(p);
     setEditDtVenc(p.dt_vencimento);
     setEditValor(String(p.valor).replace(".", ","));
     setEditObs(p.observacao || "");
+    setEditSituacao(p.situacao_duplicata || 0);
   };
 
   const confirmarEditar = useCallback(async () => {
@@ -392,6 +651,16 @@ export default function ContasReceberScreen() {
         codigo_venc: editParcela.codigo, dt_vencimento: editDtVenc, valor: valorNum, observacao: editObs,
         usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
       });
+      // Situação do Vencimento (Normal/Jurídico/Protestado) — endpoint
+      // dedicado, separado de propósito de editar-parcela (ver docstring
+      // de _alterar_situacao_vencimento_sync no backend); só chama se
+      // realmente mudou, pra não gerar log de auditoria à toa.
+      if (j?.success && editSituacao !== (editParcela.situacao_duplicata || 0)) {
+        await apiSend(conn, "/api/contas-receber/vencimento/situacao", "POST", {
+          codigo_venc: editParcela.codigo, situacao_duplicata: editSituacao,
+          usuario_alteracao: usuarioCod, classe: classePerm, plataforma: "web",
+        });
+      }
       if (j?.success) {
         feedback.showSuccess("Parcela atualizada.");
         setEditParcela(null);
@@ -405,7 +674,7 @@ export default function ContasReceberScreen() {
     } finally {
       setEditando(false);
     }
-  }, [conn, editParcela, editDtVenc, editValor, editObs, detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
+  }, [conn, editParcela, editDtVenc, editValor, editObs, editSituacao, detalhe, usuarioCod, classePerm, feedback, abrirDetalhe, carregar]);
 
   if (!isWeb) {
     return <LockedView title="Disponível somente na versão web" message="Contas a Receber está disponível apenas no web." testID="contas-receber-web-only" />;
@@ -474,6 +743,35 @@ export default function ContasReceberScreen() {
                         <><Ionicons name="search" size={16} color={colors.brandPrimary} /><Text style={secondaryBtnLabelStyle()}>Buscar</Text></>
                       )}
                     </Pressable>
+                  </View>
+                  {/* Filtros avançados (`FRMCONDUr.frm`, "Consulta de
+                      Duplicatas à Receber...") — achado do usuário
+                      2026-08-31, integrados aqui em vez de tela separada. */}
+                  <View style={{ flexDirection: "row", gap: spacing.sm, alignItems: "flex-end", flexWrap: "wrap", marginTop: spacing.xs, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border }}>
+                    <View style={{ width: 110 }}>
+                      <Text style={fieldLabel()}>Duplicata</Text>
+                      <TextInput value={duplicataNum} onChangeText={setDuplicataNum} keyboardType="numeric" style={inputStyle()} testID="contas-receber-filtro-duplicata" />
+                    </View>
+                    <View style={{ width: 110 }}>
+                      <Text style={fieldLabel()}>Valor</Text>
+                      <TextInput value={valorFiltro} onChangeText={setValorFiltro} keyboardType="numeric" style={inputStyle()} testID="contas-receber-filtro-valor" />
+                    </View>
+                    <View style={{ width: 130 }}>
+                      <Text style={fieldLabel()}>Nº do Boleto</Text>
+                      <TextInput value={numeroBoleto} onChangeText={setNumeroBoleto} keyboardType="numeric" style={inputStyle()} testID="contas-receber-filtro-boleto" />
+                    </View>
+                    <View style={{ width: 160 }}>
+                      <Text style={fieldLabel()}>Situação do Vencimento</Text>
+                      <SelectField value={situacaoDuplicataFiltro} onChange={(v) => setSituacaoDuplicataFiltro(v as number | null)} options={SITUACAO_VENCIMENTO_OPTIONS} placeholder="Todas" compactWeb allowClear testID="contas-receber-filtro-situacao-venc" />
+                    </View>
+                    <View style={{ width: 150 }}>
+                      <Text style={fieldLabel()}>Recebido de</Text>
+                      <WebDateField value={recebidoIni} onChange={(v) => { setRecebidoIni(v || null); if (v) setRecebidoFim(v); }} testID="contas-receber-recebido-ini" />
+                    </View>
+                    <View style={{ width: 150 }}>
+                      <Text style={fieldLabel()}>até</Text>
+                      <WebDateField value={recebidoFim} onChange={(v) => setRecebidoFim(v || null)} testID="contas-receber-recebido-fim" />
+                    </View>
                   </View>
                 </View>
               </AccordionSection>
@@ -632,6 +930,12 @@ export default function ContasReceberScreen() {
                           <Text style={[situacaoBadgeTextStyle(), { color: colors.success }]}>Pago</Text>
                         </View>
                         {(can("CONTAS_RECEBER.BAIXAR") || masterPerm) ? (
+                          <Pressable onPress={() => abrirRecibo(p)} style={smallBtnStyle()} testID={`contas-receber-recibo-${p.codigo}`}>
+                            <Ionicons name="receipt-outline" size={14} color={colors.brandPrimary} />
+                            <Text style={smallBtnLabelStyle()}>Recibo</Text>
+                          </Pressable>
+                        ) : null}
+                        {(can("CONTAS_RECEBER.BAIXAR") || masterPerm) ? (
                           <Pressable onPress={() => cancelarBaixa(p)} disabled={cancelandoBaixa === p.codigo} style={smallBtnStyle()} testID={`contas-receber-cancelar-baixa-${p.codigo}`}>
                             {cancelandoBaixa === p.codigo ? <ActivityIndicator color={colors.brandPrimary} size="small" /> : (
                               <><Ionicons name="arrow-undo-outline" size={14} color={colors.brandPrimary} /><Text style={smallBtnLabelStyle()}>Cancelar</Text></>
@@ -643,15 +947,165 @@ export default function ContasReceberScreen() {
                   </View>
                 ))}
 
-                {(can("CONTAS_RECEBER.EXCLUIR") || masterPerm) ? (
-                  <Pressable onPress={excluirDuplicata} disabled={excluindo} style={[ps.secondaryBtn, { marginTop: spacing.lg, borderColor: colors.error }]} testID="contas-receber-excluir-btn">
-                    {excluindo ? <ActivityIndicator color={colors.error} size="small" /> : (
-                      <><Ionicons name="trash-outline" size={16} color={colors.error} /><Text style={{ color: colors.error, fontWeight: "600" }}>Excluir Duplicata</Text></>
-                    )}
-                  </Pressable>
-                ) : null}
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: spacing.lg, marginBottom: spacing.xs }}>
+                  <Text style={labelStyle()}>Notas Fiscais</Text>
+                  {(can("CONTAS_RECEBER.GRAVAR") || masterPerm) ? (
+                    <Pressable onPress={abrirVincularNf} style={smallBtnStyle()} testID="contas-receber-vincular-nf-btn">
+                      <Ionicons name="add" size={14} color={colors.brandPrimary} />
+                      <Text style={smallBtnLabelStyle()}>Vincular NF</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                {detalhe.notas.length === 0 ? (
+                  <Text style={{ fontSize: 12, color: colors.muted }}>Nenhuma nota fiscal vinculada.</Text>
+                ) : detalhe.notas.map((n) => (
+                  <View key={n.codigo} style={parcelaRowStyle()}>
+                    <Text style={{ flex: 1, fontSize: 13, color: colors.onSurface }}>
+                      NF {n.nota_fiscal}{n.serie ? `/${n.serie}` : ""}
+                    </Text>
+                    {(can("CONTAS_RECEBER.GRAVAR") || masterPerm) ? (
+                      <Pressable onPress={() => desvincularNf(n.codigo, n.nota_fiscal)} disabled={desvinculandoNf === n.codigo} style={smallBtnStyle()} testID={`contas-receber-desvincular-nf-${n.codigo}`}>
+                        {desvinculandoNf === n.codigo ? <ActivityIndicator color={colors.error} size="small" /> : (
+                          <><Ionicons name="close-circle-outline" size={14} color={colors.error} /><Text style={[smallBtnLabelStyle(), { color: colors.error }]}>Desvincular</Text></>
+                        )}
+                      </Pressable>
+                    ) : null}
+                  </View>
+                ))}
+
+                <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: spacing.lg }}>
+                  {(can("CONTAS_RECEBER.GRAVAR") || masterPerm) ? (
+                    <Pressable onPress={abrirAlterarNumero} style={ps.secondaryBtn} testID="contas-receber-alterar-numero-btn">
+                      <Ionicons name="create-outline" size={16} color={colors.brandPrimary} /><Text style={{ color: colors.brandPrimary, fontWeight: "600" }}>Alterar Número</Text>
+                    </Pressable>
+                  ) : null}
+                  {(can("CONTAS_RECEBER.EXCLUIR") || masterPerm) ? (
+                    <Pressable onPress={excluirDuplicata} disabled={excluindo} style={[ps.secondaryBtn, { borderColor: colors.error }]} testID="contas-receber-excluir-btn">
+                      {excluindo ? <ActivityIndicator color={colors.error} size="small" /> : (
+                        <><Ionicons name="trash-outline" size={16} color={colors.error} /><Text style={{ color: colors.error, fontWeight: "600" }}>Excluir Duplicata</Text></>
+                      )}
+                    </Pressable>
+                  ) : null}
+                </View>
               </ScrollView>
             )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* "Vincular Nota Fiscal" — lista NFs em aberto do mesmo grupo
+          CGC/CPF (matriz/filiais), toque vincula direto (mesmo padrão de
+          "duplo-clique inclui" do legado, `NF2_DblClick`). */}
+      <Modal visible={notasVincularOpen} transparent animationType="slide" onRequestClose={() => setNotasVincularOpen(false)}>
+        <Pressable style={[ps.modalBg, isWeb && ps.modalBgWebCompact]} onPress={() => setNotasVincularOpen(false)}>
+          <Pressable style={[ps.modalCard, isWeb && ps.modalCardWebCompact]} onPress={(e) => e.stopPropagation()}>
+            <View style={ps.modalHeader}>
+              <Text style={ps.modalTitle}>Vincular Nota Fiscal</Text>
+              <Pressable onPress={() => setNotasVincularOpen(false)} hitSlop={8}><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
+            </View>
+            <Text style={{ fontSize: 12, color: colors.muted, marginBottom: spacing.sm }}>
+              Notas fiscais em aberto do mesmo CNPJ/CPF (matriz e filiais). Toque pra vincular a esta duplicata.
+            </Text>
+            {notasCarregando ? (
+              <ActivityIndicator color={colors.brandPrimary} style={{ marginVertical: 24 }} />
+            ) : notasDisponiveis.length === 0 ? (
+              <Text style={{ fontSize: 13, color: colors.muted, textAlign: "center", marginVertical: 24 }}>Nenhuma nota fiscal disponível.</Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 360 }}>
+                {notasDisponiveis.map((n) => (
+                  <Pressable key={n.codigo} onPress={() => vincularNf(n.codigo)} disabled={vinculandoNf === n.codigo} style={parcelaRowStyle()} testID={`contas-receber-nf-disponivel-${n.codigo}`}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 13, fontWeight: "600", color: colors.onSurface }}>NF {n.nota_fiscal}{n.serie ? `/${n.serie}` : ""} · {formatBRL(n.valor)}</Text>
+                      <Text style={{ fontSize: 12, color: colors.muted }}>{n.cliente_nome}</Text>
+                    </View>
+                    {vinculandoNf === n.codigo ? <ActivityIndicator color={colors.brandPrimary} size="small" /> : <Ionicons name="add-circle-outline" size={20} color={colors.brandPrimary} />}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* "Alterar Número da Duplicata" — modal próprio (o legado usa um
+          InputBox nativo, nunca replicado neste projeto). Efeito colateral
+          real explicado no texto: renumerar apaga previsões de
+          Transferência p/Fluxo de Caixa vinculadas, já que elas
+          referenciam o número antigo. */}
+      <Modal visible={alterarNumeroOpen} transparent animationType="slide" onRequestClose={() => setAlterarNumeroOpen(false)}>
+        <Pressable style={[ps.modalBg, isWeb && ps.modalBgWebCompact]} onPress={() => setAlterarNumeroOpen(false)}>
+          <Pressable style={[ps.modalCard, isWeb && ps.modalCardWebCompactNarrow]} onPress={(e) => e.stopPropagation()}>
+            <View style={ps.modalHeader}>
+              <Text style={ps.modalTitle}>Alterar Número da Duplicata</Text>
+              <Pressable onPress={() => setAlterarNumeroOpen(false)} hitSlop={8}><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
+            </View>
+            <View style={{ gap: spacing.sm }}>
+              <Text style={{ fontSize: 12, color: colors.muted }}>
+                Se esta duplicata já tiver sido transferida pro Fluxo de Caixa, as previsões vinculadas a ela serão removidas (referenciam o número antigo) — será preciso gerar uma nova transferência depois.
+              </Text>
+              <View>
+                <Text style={fieldLabel()}>Novo Número</Text>
+                <TextInput value={novoNumero} onChangeText={setNovoNumero} keyboardType="numeric" style={inputStyle()} testID="contas-receber-novo-numero" />
+              </View>
+              <View style={ps.modalBtns}>
+                <Pressable onPress={() => setAlterarNumeroOpen(false)} style={ps.secondaryBtn}><Text>Cancelar</Text></Pressable>
+                <Pressable onPress={confirmarAlterarNumero} disabled={alterandoNumero} style={[ps.primaryBtn, { flex: 1 }]} testID="contas-receber-alterar-numero-confirmar">
+                  {alterandoNumero ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={{ color: colors.onBrandPrimary, fontWeight: "600" }}>Confirmar</Text>}
+                </Pressable>
+              </View>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* "Emitir Recibo" — tier "confirmação pontual" (~420px). Recebemos/
+          Valor/Referente pré-preenchidos a partir da parcela paga,
+          editáveis (mesmo princípio do formulário legado standalone
+          `frmmanrecibo.frm`, que também sempre exige preenchimento
+          manual antes de gravar). */}
+      <Modal visible={!!reciboParcela} transparent animationType="slide" onRequestClose={() => setReciboParcela(null)}>
+        <Pressable style={[ps.modalBg, isWeb && ps.modalBgWebCompact]} onPress={() => setReciboParcela(null)}>
+          <Pressable style={[ps.modalCard, isWeb && ps.modalCardWebCompactNarrow]} onPress={(e) => e.stopPropagation()}>
+            <ScrollView>
+              <View style={ps.modalHeader}>
+                <Text style={ps.modalTitle}>Emitir Recibo</Text>
+                <Pressable onPress={() => setReciboParcela(null)} hitSlop={8}><Ionicons name="close" size={22} color={colors.muted} /></Pressable>
+              </View>
+              <View style={{ gap: spacing.sm }}>
+                <View>
+                  <Text style={fieldLabel()}>Recebemos de *</Text>
+                  <TextInput value={reciboRecebemos} onChangeText={setReciboRecebemos} style={inputStyle()} testID="contas-receber-recibo-recebemos" />
+                </View>
+                <View style={{ flexDirection: "row", gap: spacing.sm }}>
+                  <View style={{ width: 150 }}>
+                    <Text style={fieldLabel()}>Valor *</Text>
+                    <TextInput value={reciboValor} onChangeText={setReciboValor} keyboardType="numeric" style={inputStyle()} testID="contas-receber-recibo-valor" />
+                  </View>
+                  <View style={{ width: 150 }}>
+                    <Text style={fieldLabel()}>Data</Text>
+                    <WebDateField value={reciboData} onChange={(v) => setReciboData(v || null)} testID="contas-receber-recibo-data" />
+                  </View>
+                </View>
+                <View>
+                  <Text style={fieldLabel()}>Referente à *</Text>
+                  <TextInput value={reciboReferente} onChangeText={setReciboReferente} style={inputStyle()} testID="contas-receber-recibo-referente" />
+                </View>
+                <View>
+                  <Text style={fieldLabel()}>Assinatura</Text>
+                  <TextInput
+                    value={reciboAssinatura} onChangeText={setReciboAssinatura}
+                    placeholder="Padrão: razão social da empresa" placeholderTextColor={colors.muted}
+                    style={inputStyle()} testID="contas-receber-recibo-assinatura"
+                  />
+                </View>
+                <View style={ps.modalBtns}>
+                  <Pressable onPress={() => setReciboParcela(null)} style={ps.secondaryBtn}><Text>Cancelar</Text></Pressable>
+                  <Pressable onPress={confirmarEmitirRecibo} disabled={emitindoRecibo} style={[ps.primaryBtn, { flex: 1 }]} testID="contas-receber-recibo-confirmar">
+                    {emitindoRecibo ? <ActivityIndicator color={colors.onBrandPrimary} size="small" /> : <Text style={{ color: colors.onBrandPrimary, fontWeight: "600" }}>Gravar e Imprimir</Text>}
+                  </Pressable>
+                </View>
+              </View>
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -672,13 +1126,13 @@ export default function ContasReceberScreen() {
                     <WebDateField value={baixaData} onChange={(v) => setBaixaData(v || null)} testID="contas-receber-baixa-data" />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={fieldLabel()}>Forma de Pagamento</Text>
+                    <Text style={fieldLabel()}>Forma de Pagamento *</Text>
                     <SelectField value={baixaFormaPag} onChange={(v) => setBaixaFormaPag(v as string)} options={formaPagOpts} compactWeb allowClear testID="contas-receber-baixa-formapag" />
                   </View>
                 </View>
                 <View style={{ flexDirection: "row", gap: spacing.sm }}>
                   <View style={{ flex: 1 }}>
-                    <Text style={fieldLabel()}>Conta</Text>
+                    <Text style={fieldLabel()}>Conta *</Text>
                     <SelectField value={baixaConta} onChange={(v) => setBaixaConta(v == null ? null : Number(v))} options={contasOpts} compactWeb allowClear testID="contas-receber-baixa-conta" />
                   </View>
                   <View style={{ width: 150 }}>
@@ -726,6 +1180,70 @@ export default function ContasReceberScreen() {
                     <TextInput value={baixaAgencia} onChangeText={setBaixaAgencia} keyboardType="numeric" style={inputStyle()} testID="contas-receber-baixa-agencia" />
                   </View>
                 </View>
+                <View style={{ borderTopWidth: 1, borderTopColor: colors.border, paddingTop: spacing.sm, gap: spacing.xs }}>
+                  <Text style={{ fontSize: 13, fontWeight: "600", color: colors.onSurface }}>Cheques Pré-Datados (opcional)</Text>
+                  <Text style={{ fontSize: 11, color: colors.muted }}>
+                    Se o cliente deixou cheque(s) pré-datado(s) como parte deste pagamento, cadastre aqui — eles ficam registrados como "a receber" na data de bom para, sem precisar de outra tela.
+                  </Text>
+                  <View style={{ flexDirection: "row", gap: spacing.xs, flexWrap: "wrap" }}>
+                    <View style={{ width: 90 }}>
+                      <Text style={fieldLabel()}>Banco</Text>
+                      <TextInput value={novoChequeBanco} onChangeText={setNovoChequeBanco} keyboardType="numeric" style={inputStyle()} testID="contas-receber-cheque-banco" />
+                    </View>
+                    <View style={{ width: 90 }}>
+                      <Text style={fieldLabel()}>Agência</Text>
+                      <TextInput value={novoChequeAgencia} onChangeText={setNovoChequeAgencia} style={inputStyle()} testID="contas-receber-cheque-agencia" />
+                    </View>
+                    <View style={{ width: 110 }}>
+                      <Text style={fieldLabel()}>Conta</Text>
+                      <TextInput value={novoChequeConta} onChangeText={setNovoChequeConta} style={inputStyle()} testID="contas-receber-cheque-conta" />
+                    </View>
+                    <View style={{ width: 100 }}>
+                      <Text style={fieldLabel()}>Nº Cheque</Text>
+                      <TextInput value={novoChequeNumero} onChangeText={setNovoChequeNumero} keyboardType="numeric" style={inputStyle()} testID="contas-receber-cheque-numero" />
+                    </View>
+                  </View>
+                  <View style={{ flexDirection: "row", gap: spacing.xs, flexWrap: "wrap" }}>
+                    <View style={{ width: 110 }}>
+                      <Text style={fieldLabel()}>Valor *</Text>
+                      <TextInput value={novoChequeValor} onChangeText={setNovoChequeValor} keyboardType="numeric" style={inputStyle()} placeholder="0,00" testID="contas-receber-cheque-valor" />
+                    </View>
+                    <View style={{ width: 150 }}>
+                      <Text style={fieldLabel()}>Bom Para</Text>
+                      <WebDateField value={novoChequeBomPara} onChange={(v) => setNovoChequeBomPara(v || null)} testID="contas-receber-cheque-bompara" />
+                    </View>
+                    <View style={{ flex: 1, minWidth: 140 }}>
+                      <Text style={fieldLabel()}>Nome no Cheque</Text>
+                      <TextInput value={novoChequeNome} onChangeText={setNovoChequeNome} style={inputStyle()} testID="contas-receber-cheque-nome" />
+                    </View>
+                    <View style={{ width: 130 }}>
+                      <Text style={fieldLabel()}>Telefone</Text>
+                      <TextInput value={novoChequeTelefone} onChangeText={setNovoChequeTelefone} keyboardType="numeric" style={inputStyle()} testID="contas-receber-cheque-telefone" />
+                    </View>
+                  </View>
+                  <Pressable
+                    onPress={adicionarChequePre}
+                    style={[ps.secondaryBtn, { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 8 }]}
+                    testID="contas-receber-cheque-adicionar"
+                  >
+                    <Ionicons name="add-circle-outline" size={16} color={colors.brandPrimary} />
+                    <Text style={{ color: colors.brandPrimary, fontWeight: "600" }}>Adicionar Cheque</Text>
+                  </Pressable>
+                  {baixaCheques.length > 0 && (
+                    <View style={{ gap: spacing.xs }}>
+                      {baixaCheques.map((c, i) => (
+                        <View key={i} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: colors.surfaceTertiary, borderRadius: 6, paddingVertical: 6, paddingHorizontal: spacing.sm }}>
+                          <Text style={{ fontSize: 12, color: colors.onSurface, flex: 1 }}>
+                            {formatBRL(c.valor)}{c.banco ? ` · Banco ${c.banco}` : ""}{c.numero_ch ? ` · Cheque nº ${c.numero_ch}` : ""}{c.bom_para ? ` · Bom p/ ${c.bom_para}` : ""}
+                          </Text>
+                          <Pressable onPress={() => removerChequePre(i)} hitSlop={8} testID={`contas-receber-cheque-remover-${i}`}>
+                            <Ionicons name="trash-outline" size={16} color={colors.error} />
+                          </Pressable>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
                 <View>
                   <Text style={fieldLabel()}>Observação</Text>
                   <TextInput value={baixaObs} onChangeText={setBaixaObs} style={[inputStyle(), { minHeight: 50 }]} multiline testID="contas-receber-baixa-obs" />
@@ -764,6 +1282,10 @@ export default function ContasReceberScreen() {
               <View>
                 <Text style={fieldLabel()}>Observação</Text>
                 <TextInput value={editObs} onChangeText={setEditObs} style={[inputStyle(), { minHeight: 60 }]} multiline testID="contas-receber-editar-obs" />
+              </View>
+              <View>
+                <Text style={fieldLabel()}>Situação do Vencimento</Text>
+                <SelectField value={editSituacao} onChange={(v) => setEditSituacao((v as number) ?? 0)} options={SITUACAO_VENCIMENTO_OPTIONS} compactWeb testID="contas-receber-editar-situacao" />
               </View>
               <View style={ps.modalBtns}>
                 <Pressable onPress={() => setEditParcela(null)} style={ps.secondaryBtn}><Text>Cancelar</Text></Pressable>

@@ -74,9 +74,12 @@ comum (Comanda paga → ainda não lançada) está implementado por completo.
 Bloqueia com a mesma mensagem, não deixa duplicar.
 """
 import asyncio
+import logging
 from typing import Optional
 
 from db.connection import _open_conn
+
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -111,6 +114,18 @@ def _listar_pendentes_sync(servidor: str, banco: str) -> dict:
         # decide se o nome exibido vem de `cliente` ou `fornecedor` — mesma
         # coluna `N_fiscal.fornecedor` é reaproveitada pros dois papéis
         # (FK dupla de propósito no legado, não erro de digitação aqui).
+        #
+        # **Divergência deliberada do legado, pedido explícito do usuário
+        # (2026-08-28)**: o `.frm` original NUNCA excluía da listagem uma
+        # Nota de Saída cuja comanda vinculada já tinha sido baixada no
+        # Contas a Receber por outro caminho (`comanda.transf_caixa`) — a
+        # nota aparecia como "pendente" e SEMPRE falhava ao transferir
+        # (`_bloqueio_comanda_ja_transferida` abaixo, mesmo bloqueio já
+        # existente no legado). Confirmado como réplica fiel, mas o usuário
+        # decidiu conscientemente MELHORAR isso aqui: "se está baixada não
+        # pode listar" — o `NOT EXISTS` abaixo tira essas notas da
+        # listagem desde o início, em vez de deixar o usuário descobrir o
+        # bloqueio só depois de marcar e clicar Transferir.
         cur.execute(
             """
             SELECT (SELECT TOP 1 nfv.data_venc FROM nf_vencimento nfv WHERE nfv.codigo = nf.codigo) AS vencimento,
@@ -121,6 +136,10 @@ def _listar_pendentes_sync(servidor: str, banco: str) -> dict:
                         ELSE (SELECT nome FROM fornecedor WHERE codigo_int = nf.fornecedor) END AS cliforn
             FROM N_fiscal nf JOIN tipo_mov tm ON nf.mov = tm.codigo
             WHERE nf.pagar = 'S' AND LEFT(nf.mov, 1) = 'S' AND nf.situacao = 'A'
+              AND NOT EXISTS (
+                  SELECT 1 FROM comanda_nf cn JOIN comanda c ON c.comanda = cn.comanda
+                  WHERE cn.nota_fisc = nf.codigo AND ISNULL(c.transf_caixa, '') <> ''
+              )
 
             UNION ALL
 
@@ -448,7 +467,15 @@ def _transferir_sync(servidor: str, banco: str, itens: list) -> dict:
                 else:
                     resultado = {"success": False, "message": f"Tipo desconhecido: {flag}"}
             except Exception as e:
-                resultado = {"success": False, "message": f"Erro ao transferir {codnota}: {e}"}
+                # [GLOBAL] Mensagens de Erro — Linguagem Não-Técnica: nunca
+                # despejar o texto cru da exceção (pode ser erro de driver/
+                # SQL Server) pro usuário final — loga o real pro suporte
+                # investigar, devolve uma frase genérica e acionável.
+                logger.warning("transferencia_contas: falha ao transferir item %s (%s)", codnota, flag, exc_info=True)
+                resultado = {
+                    "success": False,
+                    "message": f"Não foi possível transferir o item {codnota} — tente novamente ou avise o suporte se persistir.",
+                }
             if resultado.get("success"):
                 sucesso.append(codnota)
             else:

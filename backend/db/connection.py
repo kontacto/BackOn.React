@@ -171,7 +171,7 @@ def _ensure_schema_integral(conn, servidor: str, banco: str) -> None:
     próprio ponto de uso original, então uma falha pontual aqui não
     significa que a feature específica vai quebrar)."""
     try:
-        from services.schema_ensure import ensure_all_schema
+        from services.schema_ensure import ensure_all_schema, ensure_auto_close_off
         # as_dict=True — todo `_ensure_*` original foi escrito assumindo
         # esse formato de cursor (mesmo padrão usado em todo o resto do
         # backend), não o tuple padrão do pymssql.
@@ -179,6 +179,10 @@ def _ensure_schema_integral(conn, servidor: str, banco: str) -> None:
         ensure_all_schema(cur, servidor, banco)
         conn.commit()
         cur.close()
+        # Roda DEPOIS do commit acima, nunca dentro do mesmo lote — ver
+        # docstring de `ensure_auto_close_off` (ALTER DATABASE não pode
+        # rodar dentro de transação de usuário).
+        ensure_auto_close_off(conn, servidor, banco)
     except Exception:
         logging.getLogger(__name__).warning(
             "Falha ao garantir schema integral em %s/%s", servidor, banco, exc_info=True

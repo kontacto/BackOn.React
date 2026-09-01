@@ -147,7 +147,7 @@ export default function GeracaoBoletosScreen() {
   const [baixandoRetorno, setBaixandoRetorno] = useState(false);
   const [itensRetorno, setItensRetorno] = useState<ItemBaixa[]>([]);
   const [selecionadosRetorno, setSelecionadosRetorno] = useState<Set<string>>(new Set());
-  const [resumoRetorno, setResumoRetorno] = useState<{ confirmados: number; ignorados: number; naoEncontrados: string[] } | null>(null);
+  const [resumoRetorno, setResumoRetorno] = useState<{ confirmados: number; registrados: number; ignorados: number; naoEncontrados: string[] } | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -433,7 +433,7 @@ export default function GeracaoBoletosScreen() {
         const lista = [...encontrados, ...naoEncontrados];
         setItensRetorno(lista);
         setSelecionadosRetorno(new Set(encontrados.filter((i) => !i.ja_baixado).map((i) => i.numero_boleto)));
-        setResumoRetorno({ confirmados: j.confirmados || 0, ignorados: j.ignorados || 0, naoEncontrados: j.nao_encontrados || [] });
+        setResumoRetorno({ confirmados: j.confirmados || 0, registrados: j.registrados || 0, ignorados: j.ignorados || 0, naoEncontrados: j.nao_encontrados || [] });
         if (lista.length === 0 && (j.confirmados || 0) === 0) {
           fb.showWarning("Nenhum título reconhecido nesse arquivo para este banco.");
         }
@@ -614,6 +614,14 @@ export default function GeracaoBoletosScreen() {
                   </Pressable>
                 </View>
                 <View style={styles.rowFields}>
+                  <Pressable onPress={marcarTodosGeracao} disabled={itens.length === 0} style={[styles.secondaryBtn, itens.length === 0 && { opacity: 0.5 }]} testID="geracao-boletos-marcar-todos">
+                    <Text style={styles.secondaryBtnText}>Marcar Todos</Text>
+                  </Pressable>
+                  <Pressable onPress={desmarcarTodosGeracao} disabled={itens.length === 0} style={[styles.secondaryBtn, itens.length === 0 && { opacity: 0.5 }]} testID="geracao-boletos-desmarcar-todos">
+                    <Text style={styles.secondaryBtnText}>Desmarcar Todos</Text>
+                  </Pressable>
+                </View>
+                <View style={styles.rowFields}>
                   <Pressable onPress={selecionar} disabled={carregando} style={({ pressed }) => [styles.primaryBtn, (pressed || carregando) && { opacity: 0.8 }]} testID="geracao-boletos-selecionar">
                     {carregando ? (
                       <><ActivityIndicator size="small" color={colors.onBrandPrimary} /><Text style={styles.primaryBtnText}>Buscando…</Text></>
@@ -670,14 +678,6 @@ export default function GeracaoBoletosScreen() {
               {itens.length > 0 ? (
                 <View style={styles.gridCard}>
                   <Text style={styles.gridTitle}>Boletos que Serão Impressos… ({itens.length}) — {selecionadosGeracao.size} selecionado(s)</Text>
-                  <View style={styles.rowFields}>
-                    <Pressable onPress={marcarTodosGeracao} style={styles.secondaryBtn} testID="geracao-boletos-marcar-todos">
-                      <Text style={styles.secondaryBtnText}>Marcar Todos</Text>
-                    </Pressable>
-                    <Pressable onPress={desmarcarTodosGeracao} style={styles.secondaryBtn} testID="geracao-boletos-desmarcar-todos">
-                      <Text style={styles.secondaryBtnText}>Desmarcar Todos</Text>
-                    </Pressable>
-                  </View>
                   <View style={styles.gridHeaderRow}>
                     <Text style={[styles.gridHeaderCell, { width: 32 }]} />
                     <Text style={[styles.gridHeaderCell, { flex: 1.4 }]}>Cliente</Text>
@@ -760,9 +760,29 @@ export default function GeracaoBoletosScreen() {
               {resumoRetorno ? (
                 <View style={styles.resumoCard}>
                   <Text style={styles.resumoTexto}>
-                    {resumoRetorno.confirmados} confirmação(ões) · {itensRetorno.filter((i) => i.encontrado).length} título(s) p/ baixa · {resumoRetorno.ignorados} linha(s) ignorada(s)
+                    {resumoRetorno.confirmados} confirmação(ões){resumoRetorno.registrados ? ` (${resumoRetorno.registrados} com número do banco registrado)` : ""} · {itensRetorno.filter((i) => i.encontrado).length} título(s) p/ baixa · {resumoRetorno.ignorados} linha(s) ignorada(s)
                     {resumoRetorno.naoEncontrados.length ? ` · ${resumoRetorno.naoEncontrados.length} não encontrado(s) — listado(s) abaixo` : ""}
                   </Text>
+                  {ultimoConteudoRetorno ? (
+                    <Pressable
+                      onPress={() => { void processarConteudoRetorno(ultimoConteudoRetorno); }}
+                      disabled={carregandoRetorno}
+                      style={[styles.secondaryBtn, { marginTop: spacing.sm }, carregandoRetorno && { opacity: 0.7 }]}
+                      testID="geracao-boletos-reaplicar-confirmacao"
+                    >
+                      {carregandoRetorno ? (
+                        <>
+                          <ActivityIndicator color={colors.brandPrimary} size="small" />
+                          <Text style={styles.secondaryBtnText}>Reaplicando…</Text>
+                        </>
+                      ) : (
+                        <>
+                          <Ionicons name="refresh-outline" size={16} color={colors.brandPrimary} />
+                          <Text style={styles.secondaryBtnText}>Reaplicar Confirmação</Text>
+                        </>
+                      )}
+                    </Pressable>
+                  ) : null}
                 </View>
               ) : null}
 

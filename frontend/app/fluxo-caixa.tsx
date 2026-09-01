@@ -31,6 +31,7 @@ export default function FluxoCaixaScreen() {
     { key: "centro-custo", label: "Centro de Custo", hint: "Centros de custo e vínculo com o plano de contas", icon: "layers-outline" as const, route: "/centro-custo", visible: can("CENTRO_CUSTO.ABRIR") },
     { key: "contas", label: "Contas", hint: "Contas de caixa/banco (saldo, situação, conta padrão)", icon: "wallet-outline" as const, route: "/contas", visible: can("CONTAS.ABRIR") },
     { key: "conta-funcionario", label: "Contas x Funcionário", hint: "Configura quais contas cada funcionário pode visualizar", icon: "people-outline" as const, route: "/conta-funcionario", visible: can("CONTA_FUNC.ABRIR") },
+    { key: "painel-financeiro", label: "Painel Financeiro", hint: "Movimentações, Previsões e Relatórios de Fluxo de Caixa — tudo em um só lugar", icon: "speedometer-outline" as const, route: "/painel-financeiro", visible: can("PAINEL_MOV.ABRIR") || can("PREVISOES.ABRIR") },
   ].filter((t) => t.visible).sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
 
   return (

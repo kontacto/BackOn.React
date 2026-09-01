@@ -83,6 +83,48 @@ def _listar_sync(servidor: str, banco: str, filtros: dict) -> dict:
             )
             params.extend([filtros["data_ini"], filtros["data_fim"]])
 
+        # Filtros extras, rastreados de `Revenda/frmcondup.frm` ("Consulta
+        # de Duplicatas a Pagar..."), mirror dos que já existem em
+        # `contas_receber_service._listar_sync` a partir de
+        # `FRMCONDur.frm` — ver AJUSTES.md #039. `emissao_ini`/`emissao_fim`
+        # é filtro NOVO em relação ao lado Receber (esse campo existe na
+        # fonte real de Pagar, `Campo(0)`/`Campo(1)`).
+        if filtros.get("duplicata_num"):
+            where.append("dp.duplicata = %s")
+            params.append(filtros["duplicata_num"])
+
+        if filtros.get("desmembramento"):
+            where.append(
+                "EXISTS (SELECT 1 FROM Duplicata_Pag_Venc v WHERE v.duplicata = dp.codigo "
+                "AND v.desmembramento = %s)"
+            )
+            params.append(filtros["desmembramento"])
+
+        if filtros.get("valor"):
+            where.append(
+                "EXISTS (SELECT 1 FROM Duplicata_Pag_Venc v WHERE v.duplicata = dp.codigo "
+                "AND CAST(v.valor AS NUMERIC(15,2)) = %s)"
+            )
+            params.append(filtros["valor"])
+
+        if filtros.get("numero_boleto"):
+            where.append(
+                "EXISTS (SELECT 1 FROM Duplicata_Pag_Venc v WHERE v.duplicata = dp.codigo "
+                "AND v.numero_boleto = %s)"
+            )
+            params.append(filtros["numero_boleto"])
+
+        if filtros.get("num_doc_pag"):
+            where.append(
+                "EXISTS (SELECT 1 FROM Duplicata_Pag_Venc v WHERE v.duplicata = dp.codigo "
+                "AND v.num_doc_pag LIKE %s)"
+            )
+            params.append(f"%{filtros['num_doc_pag']}%")
+
+        if filtros.get("emissao_ini") and filtros.get("emissao_fim"):
+            where.append("dp.dt_emissao BETWEEN %s AND %s")
+            params.extend([filtros["emissao_ini"], filtros["emissao_fim"]])
+
         sql = (
             "SELECT dp.codigo, dp.fornecedor, f.nome AS fornecedor_nome, f.fantasia AS fornecedor_fantasia, "
             "dp.duplicata, dp.desmembramento, dp.dt_emissao, dp.valor, dp.situacao, "
@@ -124,6 +166,180 @@ def _listar_sync(servidor: str, banco: str, filtros: dict) -> dict:
         except Exception:
             pass
         return {"success": False, "message": f"Erro: {e}", "items": []}
+
+
+def _notas_disponiveis_sync(servidor: str, banco: str, codigo_duplicata: int) -> dict:
+    """"Incluir Nota Fiscal" — réplica de `frmmandup.frm::Command5_Click`.
+    Mirror de `contas_receber_service._notas_disponiveis_sync`: outras
+    Notas em aberto de QUALQUER fornecedor com a mesma raiz de documento
+    (matriz/filiais) — no lado Fornecedor, o documento mora direto na
+    coluna `Fornecedor.codigo` (nvarchar), não numa `cgc_cpf` separada
+    como em `Cliente` (confirmado ao vivo contra GERDELL/BARESTELA,
+    2026-08-31). Achado do usuário — ver AJUSTES.md #039."""
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": []}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT dp.fornecedor FROM Duplicata_Pagar dp WHERE dp.codigo = %s", (codigo_duplicata,))
+        dup = cur.fetchone()
+        if not dup:
+            cur.close(); conn.close()
+            return {"success": False, "message": "Duplicata não encontrada.", "items": []}
+
+        cur.execute("SELECT codigo FROM Fornecedor WHERE codigo_int = %s", (dup["fornecedor"],))
+        row = cur.fetchone()
+        doc_raiz = (row.get("codigo") or "")[:8] if row else ""
+
+        cur.execute(
+            "SELECT p.codigo, f.codigo_int AS codigo_fornecedor, f.nome, p.nota_fiscal, p.serie, p.valor "
+            "FROM Pagar p JOIN Fornecedor f ON f.codigo_int = p.fornecedor "
+            "WHERE p.situacao = 'A' AND LEFT(f.codigo,8) = %s",
+            (doc_raiz,),
+        )
+        items = [
+            {
+                "codigo": r["codigo"], "codigo_fornecedor": r["codigo_fornecedor"], "fornecedor_nome": r["nome"],
+                "nota_fiscal": r["nota_fiscal"], "serie": r.get("serie"), "valor": float(r.get("valor") or 0),
+            }
+            for r in (cur.fetchall() or [])
+        ]
+        cur.close(); conn.close()
+        return {"success": True, "items": items}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": []}
+
+
+def _vincular_nf_sync(servidor: str, banco: str, codigo_duplicata: int, nf_fiscal: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT codigo FROM Duplicata_Pagar WHERE codigo = %s", (codigo_duplicata,))
+        if not cur.fetchone():
+            cur.close(); conn.close()
+            return {"success": False, "message": "Duplicata não encontrada."}
+
+        cur.execute(
+            "SELECT duplicata FROM Duplicata_Pag_Nf WHERE duplicata = %s AND nf_fiscal = %s",
+            (codigo_duplicata, nf_fiscal),
+        )
+        if cur.fetchone():
+            cur.close(); conn.close()
+            return {"success": False, "message": "Nota Fiscal já vinculada a esta duplicata."}
+
+        cur.execute("SELECT situacao FROM Pagar WHERE codigo = %s", (nf_fiscal,))
+        nf = cur.fetchone()
+        if not nf:
+            cur.close(); conn.close()
+            return {"success": False, "message": "Nota Fiscal não encontrada."}
+        if nf.get("situacao") != "A":
+            cur.close(); conn.close()
+            return {"success": False, "message": "Esta Nota Fiscal não está mais em aberto."}
+
+        cur.execute("INSERT INTO Duplicata_Pag_Nf (duplicata, nf_fiscal) VALUES (%s,%s)", (codigo_duplicata, nf_fiscal))
+        cur.execute("UPDATE Pagar SET situacao = 'DU' WHERE codigo = %s", (nf_fiscal,))
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+def _desvincular_nf_sync(servidor: str, banco: str, codigo_duplicata: int, nf_fiscal: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT COUNT(*) AS qtd FROM Duplicata_Pag_Venc WHERE duplicata = %s AND situacao = 'PG'",
+            (codigo_duplicata,),
+        )
+        if cur.fetchone()["qtd"] > 0:
+            cur.close(); conn.close()
+            return {"success": False, "message": (
+                "Esta duplicata já possui vencimentos pagos — só é possível alterar dados sobre os vencimentos."
+            )}
+
+        cur.execute(
+            "SELECT duplicata FROM Duplicata_Pag_Nf WHERE duplicata = %s AND nf_fiscal = %s",
+            (codigo_duplicata, nf_fiscal),
+        )
+        if not cur.fetchone():
+            cur.close(); conn.close()
+            return {"success": False, "message": "Esta Nota Fiscal não está vinculada a esta duplicata."}
+
+        cur.execute("DELETE FROM Duplicata_Pag_Nf WHERE duplicata = %s AND nf_fiscal = %s", (codigo_duplicata, nf_fiscal))
+        cur.execute("UPDATE Pagar SET situacao = 'A' WHERE codigo = %s", (nf_fiscal,))
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+# =============================================================================
+# "Alterar Nº Duplicata" — réplica de `frmmandup.frm::Command15_Click`.
+# Mirror de `contas_receber_service._alterar_numero_sync` — mesma limpeza
+# de previsões de Transferência p/Fluxo de Caixa vinculadas ao número
+# antigo, com `flag_transf_caixa = 'P'` (Pagar, confirmado em
+# `previsoes_service.py`) em vez de `'R'`.
+# =============================================================================
+
+def _alterar_numero_sync(servidor: str, banco: str, codigo_duplicata: int, novo_numero: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT codigo FROM Duplicata_Pagar WHERE codigo = %s", (codigo_duplicata,))
+        if not cur.fetchone():
+            cur.close(); conn.close()
+            return {"success": False, "message": "Duplicata não encontrada."}
+
+        cur.execute(
+            "SELECT codigo FROM Duplicata_Pagar WHERE codigo <> %s AND duplicata = %s",
+            (codigo_duplicata, novo_numero),
+        )
+        if cur.fetchone():
+            cur.close(); conn.close()
+            return {"success": False, "message": "Já existe uma duplicata cadastrada com esse número."}
+
+        cur.execute("UPDATE Duplicata_Pagar SET duplicata = %s WHERE codigo = %s", (novo_numero, codigo_duplicata))
+        cur.execute(
+            "DELETE p FROM Previsoes p INNER JOIN Duplicata_Pag_Venc v ON v.codigo = p.cod_transf_caixa "
+            "WHERE p.flag_transf_caixa = 'P' AND v.duplicata = %s",
+            (codigo_duplicata,),
+        )
+        cur.execute("UPDATE Duplicata_Pag_Venc SET transf_previsao = '' WHERE duplicata = %s", (codigo_duplicata,))
+
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": True, "duplicata": novo_numero}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
 
 
 def _detalhe_sync(servidor: str, banco: str, codigo: int) -> dict:
@@ -566,3 +782,19 @@ async def excluir(servidor: str, banco: str, codigo_duplicata: int) -> dict:
 
 async def list_tipos_mov(servidor: str, banco: str) -> dict:
     return await asyncio.to_thread(_list_tipos_mov_sync, servidor, banco)
+
+
+async def notas_disponiveis(servidor: str, banco: str, codigo_duplicata: int) -> dict:
+    return await asyncio.to_thread(_notas_disponiveis_sync, servidor, banco, codigo_duplicata)
+
+
+async def vincular_nf(servidor: str, banco: str, codigo_duplicata: int, nf_fiscal: int) -> dict:
+    return await asyncio.to_thread(_vincular_nf_sync, servidor, banco, codigo_duplicata, nf_fiscal)
+
+
+async def desvincular_nf(servidor: str, banco: str, codigo_duplicata: int, nf_fiscal: int) -> dict:
+    return await asyncio.to_thread(_desvincular_nf_sync, servidor, banco, codigo_duplicata, nf_fiscal)
+
+
+async def alterar_numero(servidor: str, banco: str, codigo_duplicata: int, novo_numero: int) -> dict:
+    return await asyncio.to_thread(_alterar_numero_sync, servidor, banco, codigo_duplicata, novo_numero)

@@ -28,6 +28,19 @@ class AtualizacaoDados(BaseModel):
     # default "H". Bug real, corrigido de passagem (ver PENDENCIAS.md).
     canal: str = "H"
     cel_suporte: str = ""
+    # Manutenção automática de índices (2026-08-28) — ver
+    # services/manutencao_indices_service.py. Mesmo cuidado do achado
+    # acima: todo campo novo tem que ser declarado aqui, senão o
+    # Pydantic descarta e o service nunca recebe o valor da tela.
+    manutencao_indices_ativo: bool = True
+    manutencao_indices_dias_semana: str = "0,1,2,3,4,5,6"
+    manutencao_indices_hora: str = "03:00"
+    # Extensão 2026-08-31 (Áureo, análise DBA de RJPNEUS-TESTE) — mesmo
+    # cuidado dos campos acima: declarar aqui, senão o Pydantic descarta.
+    manutencao_indices_orcamento_minutos: int = 120
+    checkdb_ativo: bool = True
+    checkdb_dias_semana: str = "0"
+    checkdb_hora: str = "04:00"
 
 
 class AtualizacaoSaveRequest(AuditFields):

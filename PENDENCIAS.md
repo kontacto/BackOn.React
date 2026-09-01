@@ -6,21 +6,275 @@ inteira antes de continuar — não reanalisar do zero.
 
 ## Estado Atual do Projeto
 
-**Última atualização: 2026-08-28 — DIFAL/ICMSUFDest corrigido no motor
-de emissão de NF-e + Apoio Fiscal BackOn (tradução de rejeição fiscal +
-notificação automática de suporte).** Duas frentes do mesmo dia, a
-segunda generalizando a primeira. Motivo real, não hipotético: rejeição
-695 do SEFAZ ("Informado indevidamente o grupo de ICMS para a UF de
-destino") mostrada via screenshot real do VB6 — o motor de emissão desta
-migração nunca montava o grupo `<ICMSUFDest>` (DIFAL) em nenhuma
-circunstância. Pesquisado contra fonte oficial primária (texto completo
-da NT 2015.003 + XSD oficial da NFe 4.00, não resumo de terceiros — 2
-suposições iniciais erradas foram pegas e corrigidas ANTES de virar
-código: o grupo é por ITEM dentro de `<det><imposto>`, não um bloco único
-por nota; os totais somados entram em `<ICMSTot>` logo após `vICMSDeson`,
-não perto de `vNF`). Implementado em `backend/services/nfe_regras_
-fiscais.py` (módulo novo, registro extensível — dataclass `RegraFiscal` +
-lista `REGRAS_CONSISTENCIA`, cabeçalho documenta como adicionar uma regra
+**Última atualização: 2026-08-31 — "Ecossistema Pagar" recebeu a mesma
+varredura de aprofundamento do lado Receber: 4 itens implementados
+(Notas Fiscais vincular/desvincular, Alterar Número, filtros extras de
+Consulta, relatório "Duplicatas Pagas"), TESTADOS AO VIVO contra
+`minimachine/ARGEN-TESTE`** (AJUSTES.md #039). Mirror direto do que
+Contas a Receber já tinha ganho — rastreado de `frmmandup.frm`/
+`frmcondup.frm`/`frmreldup.frm`, confirmando de novo que
+`AtualizadrvCartao`/cheque pré-datado/Baixa por Montante/Situação do
+Vencimento continuam genuinamente RECEBER-only (sem equivalente na fonte
+Pagar, não são gaps). **2 bugs reais achados no teste ao vivo, corrigidos
+nos 2 lados** (Pagar E Receber): `_vincular_nf_sync`/`_desvincular_nf_sync`
+liam uma coluna `codigo` que nunca existiu em `Duplicata_Pag_Nf`/
+`Duplicata_Rec_Nf` (só `duplicata`+`nf_fiscal`) — invisível nos testes
+unitários (`FakeCursor` não valida nome de coluna real), só apareceu
+contra o banco de verdade. 22 testes novos, suíte completa 3125 passing
+(mesmas 4 falhas pré-existentes não-relacionadas). Ver AJUSTES.md #039.
+
+<details>
+<summary>Resumo anterior (2026-08-31, "Ecossistema Receber" — cronograma de repasse de cartão + cheque pré-datado), preservado por contexto</summary>
+
+"Ecossistema Receber" fechado: cronograma de repasse de cartão
+(`AtualizadrvCartao`) + cheque pré-datado na própria Baixa, TESTADOS AO
+VIVO contra `GERDELL/BARESTELA` (AJUSTES.md #038).
+Terceiro dos 3 itens pedidos ("Transferência pro Fluxo de Caixa refletindo
+baixa/cancelamento") **não era gap real** — já estava implementado
+(Fase 1+2, `transferencia_caixa_service.py`, 40 testes); a nota antiga do
+CLAUDE.md que dizia o contrário foi corrigida. Os outros 2:
+(1) **Cronograma de repasse de cartão de crédito/débito** (réplica de
+`Gestor_Cartoes.bas::AtualizadrvCartao`, RECEBER-ONLY) — recalculado depois
+de toda baixa/cancelamento (individual, lote, montante), grava em
+`duplicata_rec_venc_cartao`/`duplicata_rec_venc_debito`, com a mesma
+rolagem de fim de semana/feriado do legado. **Bug real achado no teste ao
+vivo**: `SELECT 1 FROM feriados` sem alias quebrava contra o driver real
+(`pymssql.ColumnsWithoutNamesError`, cursor `as_dict=True`) — invisível nos
+testes unitários (`FakeCursor` não reproduz essa restrição), corrigido +
+teste de regressão que inspeciona o SQL literal. (2) **Cheque(s)
+pré-datado(s) na própria Baixa** (réplica de `GridCheques`/
+`GravaChequePre`) — seção nova no modal de Baixa, grava em `cheque`.
+Testado ao vivo: duplicata de teste baixada com cartão 12x + 1 cheque —
+12 parcelas de repasse geradas corretamente + cheque gravado com todos os
+campos; dados de teste limpos ao final. `tsc --noEmit` (baseline de 12
+erros pré-existentes inalterado) + `pytest` (3101 passing, mesmas 4
+falhas pré-existentes não-relacionadas). Ver AJUSTES.md #038.
+
+</details>
+
+<details>
+<summary>Resumo anterior (2026-08-31, Contas a Receber — Emitir Recibo + Duplicatas Recebidas), preservado por contexto</summary>
+
+Contas a Receber ganhou "Emitir Recibo" + relatório "Duplicatas
+Recebidas", TESTADOS AO VIVO contra `GERDELL/BARESTELA` (AJUSTES.md
+#034/#035/#036/#037). Análise profunda (persona Carlos) cruzou
+`backon.vbp` (412 telas) por formulários ligados a Contas a Receber ainda
+não rastreados — achou 2 gaps reais: (1) a tela de Baixa já existente
+(`FrmManPar.frm`) tem um botão real "&Emitir Recibo", mas seu `Click`
+está inteiramente comentado/morto na fonte atual (nunca chega a abrir
+`FrmManRecibo`) — implementado completando a intenção já documentada no
+comentário morto (pré-preenche Recebemos/Valor/Data a partir do
+pagamento), reaproveitando o núcleo de numeração já existente de
+`contratos_service._gerar_recibo_sync` (extraído pra
+`services/recibo_service.py`, compartilhado); (2) `Revenda/frmreldur.frm`
+("Duplicatas Recebidas") — relatório inteiro faltando, agora na aba
+Relatórios do Painel Financeiro, período por Vencimento/Data de
+Pagamento, cliente, forma de pagamento, banco cedente, vendedor,
+sub-filtro Comandas/NF's, agrupado por dia + resumo por forma de
+pagamento. Testado ao vivo contra dado de produção real (10.337
+duplicatas pagas, R$505.178,86) — filtro por forma de pagamento bateu
+exato com o resumo agregado. "Cancelamento Por Data" (`Command6`)
+investigado e confirmado já coberto pelo "Lote" existente — não era gap
+real. Ver AJUSTES.md #034-#037 pro rastreio completo.
+
+</details>
+
+<details>
+<summary>Resumo anterior (2026-08-31, Manutenção Automática do Banco — 5 recursos novos), preservado por contexto</summary>
+
+Manutenção Automática do Banco ganhou 5 recursos novos, TESTADOS AO VIVO
+contra `BD_PAJE` (AJUSTES.md #033). Motivado por uma análise de DBA
+real (persona Áureo, nova no Protocolo Gauntlet — ver CLAUDE.md) contra
+o banco de um cliente real (`RJPNEUS-TESTE`, Minimachine): SQL Server
+2014 Express, fragmentação severa em praticamente todo índice grande
+(achado que já tinha motivado a Manutenção de Índices original,
+2026-08-28), superindexação (dezenas de índices `tabela_N` genéricos sem
+uso), e — achado novo desta rodada — o arquivo de dados já em ~50% do
+teto rígido de 10GB da Express Edition. 5 recursos implementados: `DBCC
+CHECKDB WITH PHYSICAL_ONLY` agendado (padrão semanal, domingo 04h);
+alerta de espaço vs. teto Express (novo item "Espaço do Banco" no
+Sidebar, gate `isMaster`); orçamento de tempo/circuit breaker pro
+REBUILD (evita invadir o horário comercial); relatório — nunca ação
+automática — de índices nunca usados; botão "Rodar agora" manual. 32
+testes novos, suíte completa 3067 passando (mesmas 4 falhas
+pré-existentes não-relacionadas). **Achado real ao vivo, corrigido de
+passagem**: contra um banco genuinamente fragmentado, a conexão do loop
+de REBUILD morreu no meio 2 de 3 vezes ("Adaptive Server connection
+timed out") — e a conexão nova pra gravar o resultado também falhava
+logo em seguida, deixando o status vazio mesmo com trabalho real feito.
+Corrigido com 1 retry curto, confirmado funcionando no 3º teste ao vivo.
+Causa-raiz da conexão do REBUILD em si morrer no meio do lote não foi
+investigada a fundo (sem padrão claro entre as 3 rodadas) — fica
+registrado como possível follow-up. Ver
+[[project_servico_sistema_atualizacao]] pro detalhe completo.
+
+</details>
+
+<details>
+<summary>Resumo anterior (2026-08-31, "Saldo Previsto" real do Painel Financeiro), preservado por contexto</summary>
+
+"Saldo Previsto" real do Painel Financeiro implementado e VALIDADO AO
+VIVO, incluindo os 2 checkboxes do cabeçalho do legado ("Previsões a
+partir de hoje"/"Desconsiderar Pendências", `FrmPnlCon.frm:922-930/
+160-166`, mutuamente exclusivos). Fecha a pendência #1 registrada na
+atualização anterior (mesmo dia, rodada seguinte). Fórmula real
+(`Saldo_Previsto = saldo_atual + saldo_pendencia - Previsoes_Despesas +
+Previsoes_Receitas`, `FrmPnlCon.frm:3299`) exige EXPANDIR virtualmente
+cada previsão recorrente dentro do período (Mensal entra 1x no mês,
+Semanal entraria várias vezes) — implementado em
+`painel_financeiro_service.py` (`_pendencia_conta_sync`/
+`_previsoes_expandidas_conta_sync`/`_avancar_mes_painel`/
+`_saldo_previsto_real_sync`). Achado real: o fallback de "dia inválido
+no mês" desta expansão (vira dia 01 do mês SEGUINTE) é DIFERENTE do já
+usado na Efetivação real de Previsões (decrementa pro último dia válido
+do MESMO mês) — confirmado que o legado usa 2 algoritmos diferentes em 2
+lugares, não by-engano. 11 testes novos, todos passando de primeira;
+validado ao vivo contra KONTACTO-TESTE recomputando os 3 cenários
+(padrão/`partir_de_hoje`/`desconsiderar_pendencias`) manualmente via
+script direto no banco — bateram exato com a API nos 3 casos.
+**Pendência #2 da rodada anterior segue em aberto, não tocada nesta**:
+"Efetivar" uma Previsão trava "processando" contra KONTACTO REAL — ainda
+não reproduzido/resolvido. ~3020 testes passando (backend, +11 desta
+frente), mesmos 4 pré-existentes não-relacionados. TypeScript sem novo
+erro (mesmos 12 pré-existentes).
+
+</details>
+
+<details>
+<summary>Resumo anterior (2026-08-31, consolidação em Painel Financeiro único), preservado por contexto</summary>
+
+Painel Financeiro virou tela única com 3 abas (Painel de Movimentações +
+Previsões + Relatórios), pedido explícito do usuário ("quero tudo
+concentrado nele... não pode está nada de fora"). `previsoes.tsx` foi
+removido, consolidado dentro de `painel-financeiro.tsx` (nenhuma rota
+separada mais). Nova aba Relatórios: Fase 1 com 5 dos ~20 relatórios
+reais do menu do legado (Saldos Atuais das Contas, Movimentação de
+Contas, Receitas x Despesas por Mês, Duplicatas à Pagar/Receber em
+Aberto), demais ~15 registrados como pendência explícita via
+`AskUserQuestion` (usuário escolheu "Fase 1 focada"). Cards de alerta
+agora são clicáveis, levando pra `/contas-pagar`/`/contas-receber` já
+filtrados (`?situacao=V/A`). Achado corrigido no meio da consolidação:
+gráfico Receita x Despesa zerava um lado quando a lista tinha filtro de
+Tipo ativo — corrigido pra sempre somar os 2 lados. ~3009 testes
+passando (+2 desta frente).
+
+</details>
+
+<details>
+<summary>Resumo anterior (2026-08-29, guardas de Cancelamento do Contas a Receber), preservado por contexto</summary>
+
+2 guardas de Cancelamento do Contas a Receber implementadas e VALIDADAS
+AO VIVO (bloqueio se o vencimento está agrupado numa comanda no caixa;
+pergunta se remove cheque(s) pré-datado(s) vinculado(s) antes de
+cancelar uma baixa). Rastreadas até a raiz em
+`Revenda\FrmManPar.frm::Command2_Click` (linhas 2427-2456) — um `.frm`
+diferente do que uma nota antiga fazia supor. Guarda 1 bloqueia
+incondicional; Guarda 2 nunca bloqueia sozinha, vira um fluxo de 2
+chamadas na API (1ª sem `excluir_cheques` devolve
+`exige_confirmacao_cheque`; 2ª já manda a decisão) — mesmo padrão já
+usado em Previsões pra autorização de gerente. `FeedbackProvider.
+showConfirm` ganhou `onCancel` opcional (mudança aditiva). 8 testes
+novos; testado ao vivo contra KONTACTO-TESTE com dado de teste
+descartável, removido por completo ao final. Achado registrado, fora do
+pedido original: cancelamento não checa caixa fechado
+(`controle.data_fecha_cx`) — não implementado, fica pra decisão futura.
+~3007 testes passando (+6 desta frente).
+
+</details>
+
+<details>
+<summary>Resumo anterior (2026-08-29, Painel Financeiro — Previsões + Painel de Movimentações + gráficos), preservado por contexto</summary>
+
+Painel Financeiro (Fluxo de Caixa) concluído: Fase 1 (Previsões) + Fase 2
+(Painel de Movimentações) + Fase 3 (gráficos), as três VALIDADAS AO VIVO
+contra KONTACTO-TESTE. Motivado pelo pedido do usuário de trazer um
+"Painel Financeiro" moderno (a partir de uma TAREFA colada com
+referências a Nubank PJ/ContaAzul/Stripe) — resolvido via decisão
+explícita do usuário ("Híbrido — rastreio real + inspiração pontual"):
+fidelidade obrigatória à fonte VB6 real (`Tesouraria\FrmManPrev.frm` +
+`Kontacto\FrmPnlCon.frm` + `Dao_Kash_Painel.vb`), sem as features
+especulativas do texto colado (simulador "E se", cenários otimista/
+pessimista). Fase 1: CRUD de Previsões (Pagar/Receber/Transferência) +
+motor de Efetivação (recorrência por avanço de data, nunca cria linha
+nova; nunca toca previsões com `cod_transf_caixa>0`). Fase 2: dashboard
+de saldo/totais do período + 4 alertas + lançamento direto rápido
+(Pagar/Receber/Transferência/Saque, com rateio de centro de custo) —
+grava direto em `movimentacoes`, sem passar por Previsões. Fase 3
+(mesmo dia, pedido do usuário "vamos fazer os gráficos"): gráfico de
+saldo REALIZADO no Painel (`<svg>` intrínseco, sem lib nova, agrupado
+por dia/mês, endpoint novo `GET /painel-financeiro/serie-saldo`) +
+gráfico Receita x Despesa nas Previsões (100% frontend, soma
+`data_vencimento` já declarada pelo usuário, sem endpoint novo). Os dois
+gráficos são só dado real/declarado, nunca projeção. Um bug real achado
+e corrigido ANTES de reportar Fase 2 pronta: `_alertas_sync` lia
+`situacao_duplicata` da tabela errada (`duplicata_receber` em vez de
+`duplicata_rec_venc`). Correção adicional, mesmo dia: um "gap" registrado
+inicialmente (movimentação de Previsão efetivada não seta
+`flag_transf_caixa`) foi RECLASSIFICADO como não-gap depois de rastrear
+as 3 rotinas reais de Efetivar em `FrmManPrev.frm` — o próprio legado
+também nunca seta esse campo aqui. Também corrigida uma nota antiga
+(26/08) que dizia "Transferência p/Fluxo de Caixa nunca migrada" — já
+tinha sido implementada e validada nos dias seguintes, só a nota não
+tinha sido atualizada. ~3001 testes passando (+28 desta frente).
+
+</details>
+
+<details>
+<summary>Resumo anterior (2026-08-28, Contas a Pagar/Receber + manutenção de banco), preservado por contexto</summary>
+
+**2026-08-28 — Leandro respondeu as 3 pendências de Contas a Pagar/
+Receber, guardas implementadas no mesmo dia.** Respostas: (1) baixa/
+cancelamento de duplicata **não** deve mexer no saldo de Fluxo de Caixa
+— quem faz essa ponte é uma tela separada, ainda não migrada
+("Transferência para o Fluxo de Caixa", `FrmTransfCaixa.frm`) — o achado
+técnico anterior não era um gap, é a arquitetura correta; (2) guarda de
+caixa fechado (`controle.data_fecha_cx`) + Forma de Pagamento/Conta
+obrigatórios **implementados** — cobrem baixa individual, lote e Montante
+de uma vez (núcleo compartilhado `_baixar_parcela_core`, sem bypass de
+usuário master), 7 testes novos; (3) Centro de Resultados (rateio) e
+Emitir Fatura do Contas a Receber ficam fora de escopo, mesmo destino já
+confirmado do Boleto avulso. Ver "Baixa de Duplicatas — Achado Completo
+(2026-08-28)" mais abaixo pro detalhe técnico completo.
+
+**Mesma sessão, frente técnica separada (infraestrutura/manutenção de
+banco)**: diagnóstico ao vivo de timeout intermitente no BackOn VB6 de um
+cliente real (réplica `RJPNEUS-TESTE`) — causa raiz: SQL Server Express
+com `AUTO_CLOSE` ligado (reabre o banco inteiro do zero a cada conexão
+nova), 36 índices redundantes/fragmentados até 98% em `pedido_venda`,
+estatística do otimizador nunca atualizada. Corrigido/protegido no app
+novo: `schema_ensure.py` agora desliga `AUTO_CLOSE` sozinho na 1ª conexão
+de cada banco (`ensure_auto_close_off`); duas features novas de
+manutenção automática em background rodando dentro do próprio processo
+do backend (sem depender de SQL Agent, que o Express não tem) —
+**Manutenção de Índices** (`manutencao_indices_service.py`, rebuild/
+reorganize por limiar de fragmentação + update statistics, dias da
+semana/hora configuráveis) e **Backup Programado** (`backup_sistema_
+service.py`, dias/hora/intervalo, destino Local ou Blob nativo via
+`BACKUP ... TO URL`, retenção automática, log consultável via botão na
+tela). Tela "Serviço do Sistema" ganhou aba Backup e foi reorganizada em
+`AccordionSection` (cada bloco de config agora é recolhível). ~2879
+testes passando (backend), mesmos 4 pré-existentes não-relacionados.
+
+</details>
+
+<details>
+<summary>Resumo anterior (2026-08-28, DIFAL/ICMSUFDest + Apoio Fiscal BackOn), preservado por contexto</summary>
+
+DIFAL/ICMSUFDest corrigido no motor de emissão de NF-e + Apoio Fiscal
+BackOn (tradução de rejeição fiscal + notificação automática de
+suporte). Duas frentes do mesmo dia, a segunda generalizando a primeira.
+Motivo real, não hipotético: rejeição 695 do SEFAZ ("Informado
+indevidamente o grupo de ICMS para a UF de destino") mostrada via
+screenshot real do VB6 — o motor de emissão desta migração nunca montava
+o grupo `<ICMSUFDest>` (DIFAL) em nenhuma circunstância. Pesquisado
+contra fonte oficial primária (texto completo da NT 2015.003 + XSD
+oficial da NFe 4.00, não resumo de terceiros — 2 suposições iniciais
+erradas foram pegas e corrigidas ANTES de virar código: o grupo é por
+ITEM dentro de `<det><imposto>`, não um bloco único por nota; os totais
+somados entram em `<ICMSTot>` logo após `vICMSDeson`, não perto de
+`vNF`). Implementado em `backend/services/nfe_regras_fiscais.py` (módulo
+novo, registro extensível — dataclass `RegraFiscal` + lista
+`REGRAS_CONSISTENCIA`, cabeçalho documenta como adicionar uma regra
 nova) e ligado em `nfe_emissao_service.py::emitir_nfe_sync`. 17 testes
 novos + 5 em `test_nfe_emissao_service.py`.
 
@@ -118,13 +372,13 @@ funções — 4 na rodada 1, 5 na rodada 2, 5 na rodada 3 — + 2 na rodada 4,
 persistência DIFAL), mesmas 4 falhas pré-existentes não relacionadas,
 zero regressão. `tsc --noEmit` → mesmos 12 erros pré-existentes, nenhum
 nos arquivos novos/tocados.
-**Ainda não commitado nem publicado** (instrução permanente do projeto é
-só commitar quando pedido explicitamente). **Apoio Fiscal BackOn ainda
-NÃO testado ao vivo** — nenhuma rejeição fiscal real disparada pra
-confirmar e-mail/WhatsApp chegando de verdade; validação real só vai
-acontecer na próxima
-rejeição genuína em produção (não dá pra forçar uma rejeição real do
-SEFAZ só pra testar isso).
+**Commitado 2026-08-28** (`789bbfd`, pedido explícito do usuário). **Apoio
+Fiscal BackOn ainda NÃO testado ao vivo** — nenhuma rejeição fiscal real
+disparada pra confirmar e-mail/WhatsApp chegando de verdade; validação
+real só vai acontecer na próxima rejeição genuína em produção (não dá pra
+forçar uma rejeição real do SEFAZ só pra testar isso).
+
+</details>
 
 <details>
 <summary>Resumo anterior (2026-08-28, Contas a Receber/Pagar), preservado por contexto</summary>
@@ -726,13 +980,24 @@ formalizado em CLAUDE.md > "Padrões de UI" > seção 10 como fórmula única
   quem tem a permissão. `tsc --noEmit`: mesmos 12 erros de sempre,
   nenhum novo.
 - **"Transferência para o Fluxo de Caixa" — NÃO implementado, bloqueado
-  por escopo maior que só Sidebar.** É `FrmTransfCaixa.frm` (tela irmã
-  de `FrmTransfContas.frm`, move saldo entre Contas de caixa/banco) —
-  nunca migrada: sem service, sem rota, sem tela, sem permissão no
+  por escopo maior que só Sidebar** (nota de 2026-08-26, **superada —
+  ver correção 2026-08-29 logo abaixo**). É `FrmTransfCaixa.frm` (tela
+  irmã de `FrmTransfContas.frm`, move saldo entre Contas de caixa/banco)
+  — nunca migrada: sem service, sem rota, sem tela, sem permissão no
   catálogo. Adicionar ao Sidebar exigiria construir a feature inteira
   primeiro (rastreio VB6 + backend + frontend), não é um acréscimo
   pontual — não implementado sem confirmar prioridade/escopo com o
   usuário antes.
+
+  **Correção 2026-08-29**: esta nota ficou desatualizada — "Transferência
+  p/Fluxo de Caixa" foi implementada e VALIDADA AO VIVO nos dias
+  seguintes (Fase 1 unitária + Fase 2 Agrupamento de Comandas), ver
+  seção própria "## Transferência para o Fluxo de Caixa (Financeiro)"
+  mais abaixo neste arquivo. Ela não entrou no grupo "Pendências do
+  Sistema" do Sidebar (o gatilho original desta nota) — vive como item
+  próprio em Financeiro (permissão `TRANSF_CAIXA`), ao lado de
+  "Transferência p/Contas Pagar/Receber" — decisão consciente, não uma
+  lacuna nova.
 
 **Atualização 2026-08-28, ainda mesmo dia — 1º teste ao vivo no
 navegador (screenshot do usuário), 3 ajustes + 1 investigação.**
@@ -13990,6 +14255,107 @@ itens abaixo mantidos só como histórico do que ainda faltava até então:
 
 ## Bancos (Cadastro de Cobrança / Boleto / CNAB)
 
+### 🔴→✅ Bug real de produção corrigido 2026-08-28 — posição do Nosso Número (Inter) + ciclo de Confirmação nunca gravava
+
+**Achado ao vivo, contra a instalação real "KONTACTO REAL"** (não
+teste): usuário processou um retorno real do Inter (78 títulos) pela
+tela `geracao-boletos.tsx` (aba Importação Retorno) — 2 títulos reais
+(GUEREN, MONDRIAN) vieram "não encontrado". Investigação (leitura direta,
+só `SELECT`, contra `duplicata_rec_venc` real) confirmou:
+
+1. **Posição do Nosso Número pra BAIXA (ocorrência 06/09/17) estava
+   errada** — `cnab_inter_service.py` lia `[97:107]`, decidido em
+   2026-07-24 por dedução de formato, nunca validado contra dado real (o
+   `FakeCursor` dos testes "golden file" da época retorna "encontrado" na
+   ordem chamada, não por conteúdo da query — o teste passava mesmo com o
+   número errado). Testado ao vivo: **0 de 78 títulos reais bateram** na
+   posição antiga; **78 de 78 bateram** na posição `[70:81]`. Corrigido —
+   ver docstring de `cnab_inter_service.py` pro histórico completo.
+   **Confirmado de forma independente**: o usuário rodou a tela
+   equivalente do BackOn VB6 (`FrmImpRetBan.frm`) com o MESMO arquivo —
+   achou e processou os mesmos 2 títulos com sucesso, e a leitura da
+   fonte real (`Processa_Retorno_inter`, `Mid(Registro,71,11)` pra
+   ocorrência "06") bate exatamente com a posição corrigida.
+
+2. **Achado mais grave, só apareceu ao rastrear `FrmImpRetBan.frm`
+   inteiro**: o botão "Confirmar Títulos Selecionados" do legado
+   (`Command5_Click`, ocorrência 02/03) é o que GRAVA
+   `duplicata_rec_venc.registrado=1`+`numero_boleto=<Nosso Número real do
+   banco>` — casando pelo `AutoNumDRV` (`duplicata_rec_venc.codigo`,
+   ecoado pelo Inter no campo "Uso da Empresa", posição `[37:62]`) e o
+   Nosso Número real (posição `[107:118]`, mesmo valor que também
+   aparece em `[70:81]` nesse tipo de registro). **Esse passo nunca
+   existiu na nossa implementação** (`_processar_retorno_sync`/
+   `_preview_retorno_sync` só CONTAVAM ocorrência 02/03, nunca
+   gravavam). Sem ele, `duplicata_rec_venc.numero_boleto` fica travado
+   no valor provisório que a REMESSA gerou pra sempre — nenhuma baixa
+   futura de um boleto GERADO por este app (não pelo legado) jamais
+   encontraria o título depois. Os 78 títulos de hoje só bateram porque
+   foi o **VB6 legado** quem os gerou/confirmou originalmente — nosso
+   app ainda não tinha completado esse ciclo pra nenhum boleto real de
+   produção até agora.
+
+**Corrigido nos 2 lugares**: `cnab_inter_service._processar_retorno_sync`
+(endpoint `/retorno`, direto) E `cobranca_retorno_service._preview_
+retorno_sync` (endpoint `/retorno/preview`, o que a tela `geracao-
+boletos.tsx` REALMENTE usa — `/retorno` sozinho não é chamado pelo
+frontend). Aplicado automaticamente na própria pré-visualização (não um
+botão à parte — decisão registrada no docstring do módulo: é
+idempotente, baixo risco, e sem aplicar a baixa nunca funciona depois).
+Novo campo `registrados` na resposta, exibido no resumo da tela ("X
+confirmação(ões) (Y com número do banco registrado)").
+
+**Escopo**: só Banco Inter (077) — os outros 4 bancos (Bradesco/
+Santander/BB/Itaú) cada um tem seu próprio layout de retorno, ainda não
+rastreado pra esse mecanismo especificamente (mesmo princípio "todo
+banco tem seu layout próprio" já confirmado pelo usuário nesta mesma
+área). Se algum desses bancos também tiver um passo de "confirmação
+registra Nosso Número real", precisa ser rastreado à parte, não
+presumir que a mesma posição vale.
+
+**Testes**: 3 novos em `test_cnab_inter_service.py` (posição corrigida +
+2 golden files reais, um deles o arquivo de hoje) + 3 novos em
+`test_cobranca_retorno_service.py` (grava pra Inter ocorrência 02, não
+grava pra 03/outros bancos). Suíte completa: 2890 passed, mesmas 4
+falhas pré-existentes não relacionadas.
+
+**Validado ao vivo contra produção, mesmo dia (2026-08-28)**: chamada
+real (não mock) a `POST /retorno/preview` contra `KONTACTO REAL`
+(servidor `minimachine`, banco `BD_KONTACTO`, `cod_banco=4` — achado por
+`bancos.codigo=77`, não confundir com o PK interno `cod`, que varia por
+instalação) com o mesmo arquivo de 78 títulos: `confirmados=76`,
+`registrados=76`, `itens_baixa=2` (GUEREN e MONDRIAN, nome/valor
+corretos), `nao_encontrados=[]` — resultado 100% correto, prova mais
+forte que os testes unitários sozinhos.
+
+**Incidente à parte, resolvido no caminho**: entre o fix do código e essa
+validação, o usuário reportou "CONTINUA NÃO EXIBINDO O CLIENTE" com uma
+tela ainda mostrando o estado antigo (3139/3184 não encontrado) — não era
+regressão do fix, era o backend rodando SEM `--reload`
+(`start-backend.ps1`, ver memória `feedback_backend_supervisor_
+duplicado`): o processo supervisor + 2 workers `uvicorn` duplicados
+continuavam ativos com o código de ANTES do fix. Diagnosticado via
+`Get-CimInstance Win32_Process` (3 PIDs, todos iniciados antes do commit
+do fix), corrigido matando os 3 e resubindo pelo supervisor documentado.
+
+**UI — paridade com o legado, resolvida via pergunta direta ao
+usuário**: depois da correção, o usuário comparou contra a tela VB6 viva
+(`FrmImpRetBan.frm`) e apontou "FALTA O BOTÃO CONFIRMAR TÍTULO E OS
+CHECKBOX" — na prática, os checkboxes da grade de baixa (`itensRetorno`/
+`selecionadosRetorno`) já existiam desde antes, só ficaram invisíveis no
+screenshot porque `itens_baixa` estava vazio (efeito do bug de posição,
+já corrigido). Perguntado via `AskUserQuestion` se valia replicar a grade
+de Confirmação selecionável do legado (`Command5_Click`) ou manter o
+comportamento automático já implementado — resposta do usuário:
+**"Continua automático, só adicionar um botão 'Reaplicar'"**. Implementado
+em `geracao-boletos.tsx`: botão dentro do card de resumo (`resumoRetorno`),
+reaproveita `ultimoConteudoRetorno`/`processarConteudoRetorno` já
+existentes (nenhuma chamada nova), com spinner+"Reaplicando…" durante a
+chamada (regra global de feedback >3s), `testID=
+"geracao-boletos-reaplicar-confirmacao"`. A grade selecionável de
+Confirmação (paridade 1:1 com `Command5_Click`) foi explicitamente
+descartada pelo usuário — não implementar sem novo pedido.
+
 **Status: 🟢 Fase 1 (cadastro) implementada e testada ao vivo (2026-07-23)**
 — CRUD completo contra a tabela `bancos` já existente em GERDELL/BARESTELA
 (53 colunas confirmadas ao vivo via `INFORMATION_SCHEMA`, PK `cod`
@@ -14494,6 +14860,137 @@ navegador.
 **Status: 🟡 Implementada 2026-07-24** — não testada ao vivo num
 navegador. Tela única em Financeiro > Cobranças
 (`frontend/app/geracao-boletos.tsx`, card único no hub `cobrancas.tsx`).
+
+### Auditoria completa 2026-08-28 — 7 gaps reais encontrados, decisão de escopo pendente
+
+**Pedido do usuário**: confirmar a localização real desta tela no legado
+("Relatórios/Impressão de Boletos") e reler `Kontacto\frmrelbol4.frm`
+inteiro (2466 linhas, 15 rotinas) pra checar cobertura completa. Achados
+confirmados contra o código atual (`geracao_boletos_service.py`/
+`geracao-boletos.tsx`/`email_cobranca_service.py`), não suposição — cada
+um com o local exato onde falta:
+
+1. **"Marcar Todos" sem a validação de NF ainda não transferida** —
+   legado (`Command6_Click`) desmarca automaticamente linha de comanda
+   cuja NF emitida ainda não foi transferida pro Contas a Receber, com
+   aviso. `marcarTodosGeracao` (`geracao-boletos.tsx:289`) é select-all
+   puro, sem essa checagem.
+2. **E-mails não consolidam múltiplos boletos da mesma duplicata+cliente**
+   num envio só (legado agrupa, `Command8_Click`) — `_enviar_email_sync`
+   manda sempre 1 e-mail por título.
+3. **Recibo e NFS-e não são anexados junto com o Boleto nesta tela** —
+   essa consolidação (até 3 anexos, texto adaptado) já existe em
+   Contratos (`_enviar_cobrancas_sync`), mas não foi trazida pra cá.
+4. **Assunto/corpo do e-mail sempre genérico** — legado varia por origem
+   real da cobrança (NF/O.S./Pedido/mensalidade de contrato); aqui é
+   sempre "Boleto para pagamento — vencimento DD/MM/AAAA".
+5. **Template de e-mail (logo + texto customizado) nunca é lido** —
+   `controle_aux.PATH_LOGO_EMAIL_COBRANCA`/`TEXTO_CORPO_EMAIL_COBRANCA`
+   já existem no schema e já são editáveis em Controle do Sistema
+   (`controle_sistema_service.py`), mas **nenhum lugar do backend os lê**
+   (confirmado via grep) — os campos existem, não fazem nada.
+6. **Sem histórico de envio consultável** — legado grava status_envio/
+   data/hora em `cobrancas_enviadas` (Não Enviado/Sem Email/Falha/
+   Enviado com Sucesso), com filtro por status. `_enviar_email_sync`
+   nunca toca essa tabela — nada fica gravado pra reconsultar "quem
+   falhou" depois que a chamada termina.
+7. **Link público de verificação da NFS-e por município** — legado monta
+   a URL de consulta pública (Rio, Itaguaí, Duque de Caxias, Niterói, São
+   Gonçalo, Ginfes genérico) a partir do RPS/código de verificação — sem
+   equivalente implementado em nenhuma tela ainda.
+
+**Não são gaps** — checados e descartados conscientemente: impressão
+física direta via `Printer` do VB6 (substituída corretamente pelo PDF
+real via reportlab); atalho de UI do botão pro Banco Inter pulando
+direto pra remessa (redundante com "Gerar Remessa" que já existe);
+cálculo de tarifa com override manual e lógica condicional específica do
+banco 341 (já simplificação deliberada, documentada no docstring do
+service).
+
+**Sobreposição real com Contratos**: os gaps 2/3/4 têm bastante lógica em
+comum com o que `contratos_service._enviar_cobrancas_sync` já resolve
+pro caso de mensalidade — se algum entrar em escopo, avaliar extrair um
+helper compartilhado em vez de duplicar a lógica de novo nesta tela.
+**Nenhum dos 7 foi implementado ainda** — registrado como achado aberto,
+aguardando decisão de prioridade do usuário antes de codar qualquer um.
+
+### Rastreio das 6 checkbox do cabeçalho (2026-08-28) — usuário apontou 2 screenshots reais da tela VB6 (Painel de Relatórios → Impressão de Boletos)
+
+**Pedido do usuário**: "a tela impressão de boletos está faltando as
+checkbox e o botão gerar pdf". Comparado campo-a-campo contra
+`frmrelbol4.frm` (controles `Check1`/`Check5`/`Check2`/`Check7`/`Check8`/
+`Check100`, `Command9_Click`/`Sub Boleto`/`Sub DadosEnvio` lidos linha a
+linha) contra o estado atual de `geracao-boletos.tsx`:
+
+1. **"Só Duplicatas sem boleto." (Check1)** — já portado (`soSemBoleto`).
+2. **"Somente registrados" (Check8)** — já portado
+   (`somenteRegistrados`). No legado esse controle nasce `Visible=False`
+   e só aparece condicionalmente (achado, não confirmado no código colado
+   até onde foi lido — mas o conceito "registrado" só existe pro Inter,
+   ver Thread C desta mesma sessão) — não é uma regressão nossa mostrá-lo
+   sempre, é só menos condicional que o legado; não vale a pena replicar
+   a ocultação condicional sem mais sinal de que isso importa de verdade.
+3. **"Gera Arquivo Remessa Bancária" (Check5)** — **não é gap**: no
+   legado é um TOGGLE que relabela o mesmo botão "Imprimir"/Command2 pra
+   também emitir a remessa CNAB junto. Nossa tela já expõe isso como um
+   BOTÃO PRÓPRIO ("Gerar Remessa", separado de "Baixar PDF") — mesma
+   função, UX mais clara (ação explícita em vez de checkbox + relabel de
+   botão). Não implementar o checkbox.
+4. **"Um arquivo de impressão por boleto" (Check2)** — **não é gap**:
+   rastreado até `Sub Boleto`, é passado pra cada `BoletoXXX(...)` como
+   `IIf(PDF, True, IIf(Check2.Value, True, False))` — ou seja, só tem
+   efeito quando `PDF=False` (fluxo de impressão física direta via
+   `Printer`, já descartado conscientemente nesta migração, substituído
+   por PDF real). Como nossa tela SEMPRE gera PDF, o valor de Check2
+   nunca mudaria nada no nosso fluxo — confirmado via leitura da fonte,
+   não suposição.
+5. **"Enviar cópias individuais para o remetente" (Check7)** — rastreado
+   até `Command8_Click` (Enviar por Email): controla se uma cópia extra é
+   mandada pro remetente/emissor só no PRIMEIRO e-mail de um lote
+   (`copianoprimeiro`). É uma faceta do **gap 2 já registrado**
+   ("e-mails não consolidam múltiplos boletos da mesma duplicata+cliente
+   num envio só") — decisão de escopo continua pendente, não é um item
+   novo isolado.
+6. **"Gerar PDF dos DANFe's" (Check100)** — rastreado até `Sub
+   DadosEnvio`: quando ligado, gera o DANFE (PDF da NF-e) na hora se
+   ainda não existir em disco, ANTES de anexar no e-mail de cobrança —
+   não afeta o botão "Gerar PDF" do boleto em si (`Command9_Click` não
+   usa `Check100`). É uma faceta do **gap 3/7 já registrados** ("Recibo e
+   NFS-e não são anexados junto com o Boleto" / "link público de
+   verificação da NFS-e por município") — mesma decisão de escopo
+   pendente, não item novo isolado.
+
+**Ramificações condicionais por CNPJ hardcoded no `Form_Load`** (ex.:
+`tb("cgc") = "20853558000127"` → `Boxtruck=True`, trava `Check5`/
+`Check100`) — confirmado tratar-se de customização por CLIENTE
+específico do legado (não regra de negócio geral), mesmo princípio "Não
+replicar truques VB6" — não portado, não é gap.
+
+**Corrigido nesta rodada (achado real, não um dos 6 acima)**: "Marcar
+Todos"/"Desmarcar Todos" no legado ficam SEMPRE visíveis (canto inferior
+esquerdo, junto de Selecionar/Gerar Remessa/Gerar PDF/Enviar por
+Email/Gerar Planilha/Sair), independente da grade já ter sido buscada —
+na nossa tela, esses 2 botões estavam dentro do bloco condicional
+`itens.length > 0` (só apareciam DEPOIS de "Selecionar" popular a
+grade), inconsistente com o legado. Movidos pra fora, pro topo (mesma
+linha de ação sempre visível), desabilitados quando `itens.length===0`
+(nada pra marcar/desmarcar ainda) em vez de escondidos.
+
+**Confirmado que "Baixar PDF" (equivalente a "Gerar PDF" do legado) JÁ
+EXISTE e já está sempre visível** (`canPdf`, não gated por
+`itens.length`) — se ainda não aparecer pro usuário na prática, as
+causas mais prováveis (não confirmadas ainda) são: bundle desatualizado
+do Metro (cache) ou a permissão `GERACAO_BOLETOS.PDF` não concedida ao
+grupo do usuário de teste (usuário master bypassa via `isMaster`,
+usuário comum grupo precisa da ação marcada em Permissões).
+
+**Decisão de escopo AINDA pendente** (não mudou nesta rodada): os gaps
+2/3/6/7 do bloco acima — se o usuário quiser avançar neles agora,
+precisa dizer qual prioridade primeiro (email consolidado + cópia pro
+remetente [Check7] vs. DANFE anexado automaticamente [Check100] vs.
+histórico de envio consultável [check11/22/33/44, achados agora — são
+FILTROS de status pra uma tela/visualização de histórico ainda não
+localizada no `.frm`] vs. link público NFS-e por município).
 
 **Unificação 2026-07-24, user-directed** ("todo o processamento de
 remessa e retorno é através da tela Geração de Boletos... pode colocar as
@@ -15772,6 +16269,1102 @@ completa continua em zero regressão.
   ARGEN TESTE (8 pendentes reais visíveis no print, valores/badges por
   tipo corretos).
 
+### Achado real 2026-08-28 (Adriana/suporte, "KONTACTO REAL") — nota já pendente sempre falhava, e divergência deliberada do legado
+
+Print real mostrando 11 itens marcados como "Contas a Receber" — clicar
+em Transferir devolvia o MESMO erro repetido 11 vezes: "Esta comanda já
+está baixada no Contas a Receber! Cancelar o recebimento da comanda e
+executar novamente a transferência!"
+
+**Rastreado até a fonte VB6 real** (`Geral\FrmTransfContas.frm::Preenche`)
+— confirmado que a query de listagem "Contas a Receber" (Notas de Saída)
+**nunca checou**, nem no legado original, se a comanda vinculada àquela
+nota já tinha sido baixada por outro caminho (`comanda.transf_caixa`) —
+só o bloqueio no momento de transferir (`_bloqueio_comanda_ja_
+transferida`, também fiel ao legado) captura isso. Ou seja: mostrar a
+nota como "pendente" e sempre falhar ao transferir é **comportamento
+fielmente replicado**, não bug de migração.
+
+**Usuário decidiu divergir do legado conscientemente**: "se está baixada
+não pode listar." Corrigido em `_listar_pendentes_sync` — o ramo "Contas
+a Receber" da query ganhou `AND NOT EXISTS (SELECT 1 FROM comanda_nf cn
+JOIN comanda c ON c.comanda = cn.comanda WHERE cn.nota_fisc = nf.codigo
+AND ISNULL(c.transf_caixa,'') <> '')`, excluindo da listagem uma nota
+cuja comanda já foi baixada, em vez de deixar aparecer como "pendente"
+pra só falhar depois. **Divergência documentada explicitamente** (não
+uma "correção silenciosa" do que já tinha sido confirmado como réplica
+fiel) — segue o mesmo princípio de nunca mudar comportamento herdado do
+legado sem decisão consciente do usuário, só que aqui a decisão já foi
+tomada e registrada.
+
+**"E o erro tem que ser tratado para cliente final"** — dois ajustes:
+1. O toast que mostrava a mesma frase 11 vezes seguidas (frontend fazia
+   `falhas.map(f => f.message).join("\n")` sem deduplicar) agora agrupa
+   por mensagem única com contagem + lista de notas afetadas
+   (`resumirFalhas`, `transferencia-contas.tsx`).
+2. `_transferir_sync`'s captura de exceção genérica (`except Exception as
+   e: ...{e}...`) vazava texto cru de driver/SQL Server pro usuário final
+   — [GLOBAL] "Mensagens de Erro — Linguagem Não-Técnica". Corrigido:
+   loga a exceção real (`logger.warning(..., exc_info=True)`) e devolve
+   uma frase genérica acionável ("Não foi possível transferir o item X —
+   tente novamente ou avise o suporte se persistir.").
+
+Também adicionado ao Modo Didático da tela um item explicando esse
+cenário específico ("Esta comanda já está baixada..."), pro caso raro de
+ainda aparecer (condição de corrida entre carregar a lista e clicar
+Transferir).
+
+**1 teste novo** (`test_listar_pendentes_sync.py::test_exclui_nota_com_
+comanda_ja_baixada_da_query` — confere `NOT EXISTS`/`comanda_nf`/
+`transf_caixa` na query gerada). Suíte completa: 2845 passed, mesmas 4
+falhas pré-existentes. `tsc --noEmit` limpo. **Nada testado ao vivo
+ainda** — a correção ainda não foi publicada/aplicada na instalação real
+onde o bug apareceu.
+
+---
+
+## Transferência para o Fluxo de Caixa (Financeiro)
+
+**Status: 🟢 Fase 1 + Fase 2 implementadas, testadas (unitário) e
+VALIDADAS AO VIVO contra KONTACTO-TESTE (2026-08-28/29)** — ver "Fase 2 —
+Agrupamento de Comandas" mais abaixo pro rastreio/implementação/teste ao
+vivo completo dessa parte. Pedido do usuário, com screenshots reais da
+tela VB6
+(`Painel de Relatórios` do menu Gerencial, e o menu Financeiro mostrando
+"Transferência p/Contas Pagar/Receber" e "Transferência p/ Fluxo de
+Caixa" como itens irmãos, mesmo nível): "vamos migrar Transferência para
+o Fluxo de Caixa... assim como Transferência para Contas Pagar/Receber,
+ela é alertada também em Pendência do Sistema na barra lateral."
+
+**Fonte VB6 rastreada linha a linha** (não por agente de pesquisa desta
+vez — leitura direta): `Geral\FrmTransfCaixa.frm` (1961 linhas), caption
+real "Transferência para o Fluxo de Caixa..." — **tela irmã de
+`FrmTransfContas.frm`** (ver seção acima), mas papel bem diferente:
+aquela promove Nota Fiscal/Comanda pro Contas a Pagar/Receber; esta pega
+o que JÁ está em Contas a Pagar/Receber (Previsões — ainda aberto — ou
+Movimentações — já baixado) e lança de fato no Fluxo de Caixa
+(`movimentacoes` + `contas.saldo_atual`) ou em `previsoes` (sem mexer no
+saldo).
+
+**Confirma diretamente o e-mail do Leandro já registrado em "Baixa de
+Duplicatas" (Contas a Receber, 2026-08-28)**: "A baixa ou cancelamento de
+duplicatas não tem que mexer no saldo do fluxo de caixa! Quem faz isso é
+a rotina de transferência pra fluxo de caixa" — **esta tela É essa
+rotina**. Baixar uma duplicata só marca `situacao='PG'`; só rodar esta
+transferência muda `contas.saldo_atual` de verdade.
+
+### Achados/decisões de escopo (rastreio completo, não presumido)
+
+1. **Tags realmente geradas pela listagem VIVA** (`Command1_Click`):
+   `PNFR`/`PNFP` (Previsões Receber/Pagar, `situacao='A'`), `NFR `/`NFP `
+   (Movimentações já baixadas, `situacao='PG'`), `ECX `/`SCX ` (Entrada/
+   Saída de Caixa já lançadas). As tags `MOV `/`COM ` existem no `Select
+   Case` de `Command2_Click`, mas o bloco de `Command1_Click` que as
+   geraria está **inteiro comentado** no `.frm` — confirmado código morto,
+   não portado.
+2. **"Todos em Aberto" filtra diferente por categoria** — achado real ao
+   ler a fonte, não intuitivo: Previsões e Entrada/Saída de Caixa não
+   filtram NENHUMA data quando "Todos em Aberto" está marcado; só
+   Movimentações (NFR/NFP) filtram por `data_pag > controle.data_fecha_cx`
+   (só o que foi pago DEPOIS do último fechamento de caixa). Replicado
+   fielmente — os 3 grupos têm regras de filtro de "Todos em Aberto"
+   diferentes entre si.
+3. **Split proporcional de juros/desconto/tarifa bancária por centro de
+   custo** — regra real de contabilidade (não workaround), replicada por
+   completo, **incluindo a assimetria real do legado**: Receber sempre usa
+   os campos `controle.Classe_Sai_*`/`Sub_Classe_Sai_*` pros 3 ajustes;
+   Pagar usa `Classe_Ent_*` pra juros/desconto mas `Classe_Sai_*` pra
+   tarifa bancária (confirmado 2x na leitura da fonte, `VCAMPOS(1)/(2)`
+   na tarifa do `Case "NFP "`) — não é erro de digitação deste projeto,
+   é o que o `.frm` literalmente grava; replicado como está, sem "corrigir"
+   a inconsistência do legado.
+4. **Favorecido (contraparte do lançamento) é achado/criado por NOME**,
+   não por FK de cliente/fornecedor — tabela `favorecidos` é independente,
+   réplica do `pegadenovo:` do legado (`_upsert_favorecido_sync`).
+5. **Cliente/fornecedor com `conta_transf_caixa` própria sobrescreve a
+   conta padrão** (`controle.conta_transf_caixa`) — réplica real.
+6. **`Pos_Sistema`** (bloqueia Transferir com "Banco de Dados Corrompido
+   e/ou Inconsistente"/validade de chave de sistema expirada) — rastreado
+   até `Mdl_Proc.bas`, confirmado ser mecanismo de LICENCIAMENTO do VB6
+   (chave de validade do sistema), não regra de negócio desta tela — não
+   portado (mesmo princípio "Não replicar truques VB6").
+
+### Simplificações registradas (Fase 1, ainda valem)
+
+- Simplificação registrada: quando uma duplicata não tem NENHUM rateio de
+  centro de custo (`receber_custo`/`pagar_custo` vazio — deveria ser raro),
+  o legado chama uma rotina de auto-reparo (`CentroCustoReceber`/
+  equivalente, não rastreada) que cria o rateio faltante e tenta de novo.
+  Aqui, o lançamento financeiro ainda é feito por completo (o dinheiro
+  nunca deixa de mover corretamente), só cai num centro de custo genérico
+  (`1`) em vez do rateio real.
+- Memorando do lançamento é próximo do legado, mas sem a busca extra de
+  `DadosComandaNF` (link de verificação pública de NFS-e por município
+  embutido no texto) — cosmético, não afeta valor/conta/classe.
+
+### Implementação
+
+**Backend**: `backend/services/transferencia_caixa_service.py` (novo,
+~500 linhas) — `listar_pendentes`/`transferir` (dispatch por flag,
+transação única, falha isolada por item, mesmo princípio de
+`transferencia_contas_service.py`) + `tem_pendencia` (COUNT rápido pro
+badge da Sidebar). Rotas `backend/routes/transferencia_caixa.py`
+(`GET /transferencia-caixa/pendentes`, `GET /transferencia-caixa/
+tem-pendencia`, `POST /transferencia-caixa/transferir`), registradas em
+`server.py`. Modelos `TransfCaixaItem`/`TransfCaixaTransferirRequest`
+(`models/schemas.py`). Permissão nova `TRANSF_CAIXA` (menu FINANCEIRO,
+ações ABRIR/TRANSFERIR, `permissoes_service.py`) — tela irmã de
+`TRANSF_CONTAS`, mesmo nível de menu (confirmado pelo screenshot: as duas
+ficam soltas em Financeiro, não dentro do submenu "Fluxo de Caixa").
+Auditoria em Transferir (`tela="TRANSF_CAIXA"`).
+
+**Frontend**: `frontend/app/transferencia-caixa.tsx` — clone estrutural
+de `transferencia-contas.tsx` (mesmo padrão: radio Todos em Aberto/
+Período, checkboxes do que transferir, grade selecionável com Marcar/
+Desmarcar Todos + total sempre no topo, Modo Didático). Card "Transferência
+p/Fluxo de Caixa" em `financeiro.tsx`, entre "Transferência Contas a
+Pagar/Receber" e "Fluxo de Caixa" (mesma ordem do menu legado).
+
+**Achado real corrigido durante os testes**: a query de cabeçalho
+(`_rateio_receber_sync`/`_rateio_pagar_sync`) inicialmente não trazia
+`drv.valor_pag`/`dpv.valor_pag` (o valor REALMENTE pago, distinto do
+valor nominal da duplicata) — Movimentações precisam do valor pago real
+pro lançamento, só Previsões usam o valor nominal. Pego pelo próprio
+teste unitário (`KeyError: 'valor_pag'`) antes de qualquer teste ao vivo.
+
+**"Pendências do Sistema" (Sidebar)**: `useTransferenciaCaixaPendenteCount.ts`
+(novo hook, clone de `useTransferenciaPendenteCount.ts`, usa o endpoint
+dedicado `tem-pendencia` em vez da listagem completa — mais barato pra
+polling). 3º item do grupo em `Sidebar.tsx`, mesma fórmula de acesso
+`[GLOBAL]` (`can("TRANSF_CAIXA.ABRIR") || isManagerFuncao`), mesmo
+padrão de navegar (não ação de 1 clique) — transferir exige o usuário
+marcar quais itens entram.
+
+**Testes**: 25 novos em `test_transferencia_caixa_service.py` (split
+proporcional, upsert de favorecido, listagem com as 3 regras de filtro
+diferentes por categoria, guarda de duplo-transferência, Previsão não mexe
+em saldo/Movimentação mexe, juros/desconto/tarifa geram os inserts certos
+em `movimentacoes_centro_custo`, Entrada/Saída de Caixa inclusive o caso
+`transferencia=2` de transferência entre 2 contas, isolamento de falha por
+item no dispatch). Suíte completa: 2915 passed, mesmas 4 falhas
+pré-existentes não relacionadas. `tsc --noEmit` limpo (mesmos 11 erros
+pré-existentes de baseline, nenhum novo).
+
+**✅ Validado ao vivo contra KONTACTO TESTE (`minimachine`/`KONTACTO-TESTE`),
+2026-08-29** — depois de reiniciar o backend (mesmo incidente já
+documentado no Bug CNAB Inter: `start-backend.ps1` roda sem `--reload`,
+rotas novas só carregam depois de matar supervisor+workers antigos e
+resubir), chamada real (não mock) contra `POST /transferencia-caixa/
+transferir`:
+- **Achado real, não hipotético, ao listar**: "Todos em Aberto" (sem
+  período) devolveu só 1 de 5 Movimentações a Receber pendentes reais —
+  as outras 4 têm `data_pag` de 2018/2020, ANTES do
+  `controle.data_fecha_cx` desta instalação (2020-02-19). Confirmado que é
+  o comportamento CORRETO da regra (não um bug de listagem): reconsultando
+  em modo Período (2018-01-01 a 2020-03-01) as 4 apareceram normalmente —
+  prova que o filtro `data_pag > data_fecha_cx` do "Todos em Aberto"
+  está funcionando exatamente como a fonte VB6 define, não perdendo dado.
+- **1 Previsão a Receber (drv 20615, R$160,00) transferida**: gravou em
+  `previsoes`+`previsoes_centro_custo` (centro de custo/classe/sub-classe
+  reais resolvidos do rateio da NF de origem), marcou
+  `duplicata_rec_venc.transf_previsao='T'` — **`contas.saldo_atual` não
+  mudou nem 1 centavo**, confirmando ao vivo a regra central do Leandro
+  (Previsão não mexe em saldo).
+- **1 Movimentação a Receber (drv 20147, R$191,52) transferida**: gravou
+  em `movimentacoes`+`movimentacoes_centro_custo` (memorando com parcela
+  "(2/2)" correto), marcou `transf_caixa='T'`, e **`contas.saldo_atual` da
+  conta 8 (INTER) mudou de R$21.446,80 pra R$21.638,32 — exatamente
+  +R$191,52, sem diferença de 1 centavo**.
+- **Guarda de duplo-transferência confirmada**: reenviar os MESMOS 2 itens
+  devolveu `success:false` com as mensagens corretas ("já foi
+  transferida"/"já foi transferido"), sem gravar nada de novo nem alterar
+  o saldo outra vez.
+- **Falso alarme descartado, mesmo padrão já visto em `Baixo Brisa Real`**:
+  a mensagem de erro aparecia como "j� foi transferida" quando vista via
+  `curl | python -m json.tool` — checagem dos bytes crus da resposta
+  (`urllib.request`) confirmou UTF-8 correto (`\xc3\xa1` = "á"); era só
+  artefato de exibição do pipe do terminal, não um bug de encoding real do
+  backend.
+
+**Dado de teste que ficou no banco** (decisão deliberada — não desfazer):
+`duplicata_rec_venc.codigo=20615` (previsão) e `codigo=20147` (movimentação,
+conta INTER) — os 2 primeiros registros reais desta instalação a passar
+pelo ciclo completo desta tela. As outras 6 pendências reais desta
+instalação (2 Movimentações antigas de 2018/2020 duplicadas em 2 contas
+diferentes + a 2ª previsão) **não foram tocadas**, ficam disponíveis pra
+um próximo teste ao vivo (ex.: caso de conta múltipla/juros/desconto reais,
+que este primeiro teste não cobriu por nenhum dos itens reais ter esses
+valores diferentes de zero).
+
+---
+
+## Fase 2 — Agrupamento de Comandas
+
+**Status: 🟢 Implementada, testada (unitário) e VALIDADA AO VIVO contra
+KONTACTO-TESTE, 2026-08-29 — no mesmo dia do pedido do usuário** ("vamos
+implementar a fase 2"). Fonte rastreada linha a linha:
+`Geral\FrmAgrCom.frm` (tela de configuração, 155 linhas, lida por
+completo) + o bloco `AgrupaComandas` de `Command1_Click` (listagem, já
+tinha sido lido na Fase 1) + `Command6_Click` (Transferir Comandas
+Agrupadas, ~250 linhas) + `Sub agrupacentrocusto` (consolidação final).
+
+### Achados reais do rastreio
+
+1. **`FrmAgrCom.frm` é bem mais simples do que o nome sugere**: só 2
+   grupos de configuração — 4 checkboxes de tipo de cliente (Clientes
+   Diversos/Sem documento/CPF/CNPJ) + uma lista multi-seleção de
+   `forma_pagamento`. Grava substituindo por completo `agrupa_comandas`
+   (1 linha) + `agrupa_comandas_fp` (N linhas, uma por forma marcada) —
+   mesmo padrão DELETE+INSERT replicado no backend.
+2. **Achado mais importante da rodada — código morto confirmado, não
+   portado**: o `Select Case tb("tipoforma")` de `Command1_Click`
+   (`Case "DI"/"CH"/"CC"/"CD"/"VA"/"TI"`) filtraria adicionalmente por
+   TIPO de forma de pagamento (Dinheiro/Cheque/Cartão Crédito/Débito/
+   Vale/Ticket), mas depende de `ag_dinheiro`/`ag_cheque`/`ag_credito`/
+   `ag_debito`/`ag_vale`/`ag_ticket` — **declaradas no `.frm`, sempre
+   inicializadas `False`, e nunca atribuídas `True` em lugar nenhum do
+   arquivo inteiro** (confirmado via `grep` no arquivo completo).
+   `FrmAgrCom.frm` não tem NENHUM checkbox de tipo de forma — só a lista
+   de formas específicas. **Confirmado contra dado real** (GERDELL/
+   BARESTELA, `forma_pagamento.tipo` tem valores reais "DI"/"CC"/"CD"/
+   "VA"/"TI" em uso — os MESMOS 6 códigos do `Select Case`): replicar
+   isso literalmente faria QUALQUER forma de pagamento comum (dinheiro,
+   cartão) ser SEMPRE excluída do agrupamento, o oposto do propósito da
+   feature. **Decisão**: não portado — a única filtragem por forma de
+   pagamento é a lista explícita de `agrupa_comandas_fp` (o que o usuário
+   marcou na tela de config), sem sub-filtro por tipo.
+3. **Chave de agrupamento = (data de pagamento, forma de pagamento)**,
+   não cliente — várias comandas do MESMO dia + MESMA forma viram 1
+   lançamento só, mesmo que sejam de clientes diferentes. Confirmado via
+   `Agrupadas.TextMatrix(X,4) & Agrupadas.TextMatrix(X,8)` (data+forma)
+   como `ultimolote` em `Command6_Click`.
+4. **Conta de destino continua sendo por-item, mesmo dentro de um grupo
+   compartilhado** — a linha "casca" de `movimentacoes` do grupo nasce
+   numa conta fixa (`controle.conta_transf_caixa`), mas cada comanda do
+   grupo credita/debita `contas.saldo_atual` na conta REAL resolvida por
+   ela (própria do cliente, ou `drv.conta`) — só o valor mostrado na
+   linha `movimentacoes` em si (soma de todos os itens) fica atribuído à
+   conta do cabeçalho. **Confirmado ao vivo** (ver teste abaixo): 2
+   comandas com contas diferentes (1 e 2) transferidas juntas, cada
+   `contas.saldo_atual` mudou na conta certa, mesmo a `movimentacoes`
+   "casca" de cada uma ficando com `conta=8` (a conta padrão).
+5. **Cabeçalho de grupo é reaproveitado entre transferências** —
+   `movimentacoes` com `flag_transf_caixa='X'` e `cod_transf_caixa=0` é a
+   marca de "isto é um cabeçalho de grupo, ainda acumulando" — uma
+   transferência agrupada posterior pro MESMO dia+forma soma no mesmo
+   registro em vez de criar um novo.
+6. **Guarda de duplo-transferência é POR ITEM**, não por grupo —
+   `movimentacoes_agrupadas.cod_transf_comanda` (tabela de ligação
+   comanda↔lançamento do grupo) é checada item a item, então um item já
+   processado bloqueia só ele, os outros do mesmo lote continuam.
+
+### Implementação
+
+**Backend** (`transferencia_caixa_service.py`, seção própria "Fase 2"):
+- `_get_config_agrupamento_sync`/`_obter_config_agrupamento_sync`/
+  `_salvar_config_agrupamento_sync` — CRUD da config (réplica de
+  `FrmAgrCom.frm`).
+- `_diversos_codes_sync` — resolve "Clientes Diversos" via
+  `controle_aux.cod_cliente_orcamento` + cliente literal "CLIENTES
+  DIVERSOS" (réplica de `Diversos_1`/`Diversos_2`, colapsados num `set`).
+- `_listar_agrupadas_candidatas_sync` — candidatas a agrupamento
+  (`dr.desmembramento='CM'`, forma marcada, filtro por tipo de cliente).
+  A `_listar_pendentes_sync` (Fase 1) agora chama isso e **exclui** da
+  listagem normal (`MovimentacaoReceber`) qualquer item que também tenha
+  virado candidata aceita em `agrupadas` — evita o mesmo vencimento
+  aparecer selecionável nos dois caminhos ao mesmo tempo.
+- `_lancar_ajustes_receber_sync` — extraído de `_transferir_mov_receber_
+  sync` (Fase 1) pra ser reaproveitado também no caminho agrupado, sem
+  duplicar a lógica de juros/desconto/tarifa.
+- `_obter_ou_criar_cabecalho_grupo_sync`/`_transferir_item_agrupado_
+  sync`/`_consolidar_centro_custo_sync` (réplica de `agrupacentrocusto`)
+  / `_transferir_agrupadas_sync` — motor completo do agrupamento.
+
+Rotas novas: `GET/POST /transferencia-caixa/agrupamento/config`,
+`POST /transferencia-caixa/transferir-agrupadas`. Modelos
+`TransfCaixaConfigAgrupamentoRequest`/`TransfCaixaAgrupadasRequest`
+(`models/schemas.py`). Ação nova no catálogo de permissões,
+`TRANSF_CAIXA.CONFIG_AGRUP` ("Configurar Agrupamento de Comandas") — a
+transferência em si reaproveita a mesma ação `TRANSFERIR` já existente.
+**Achado de constraint real**: `permissoes.comando`/`.tela` são
+`nvarchar(15)` — "CONFIG_AGRUPAMENTO"/"TRANSFERIR_AGRUPADAS" (as
+primeiras tentativas de nome) estouravam o limite, abreviados pra
+`CONFIG_AGRUP`/`TRANSF_AGRUP`.
+
+**Frontend** (`transferencia-caixa.tsx`): ícone de engrenagem
+("options-outline") no cabeçalho abre `AgrupamentoConfigModal` (tier
+"seleção", 560px — checkboxes de cliente + lista de formas de pagamento
+com scroll). Nova seção "Comandas Agrupadas" (mesmo padrão de Marcar/
+Desmarcar Todos + total no topo das outras seções desta tela) só aparece
+quando `agrupamento_ativo && agrupadas.length>0`, com botão próprio
+"Transferir Comandas Agrupadas" chamando o endpoint dedicado. Modo
+Didático (`AJUDA_ITENS`) ganhou 2 itens novos explicando o agrupamento e
+o botão de configuração.
+
+### Testes
+
+15 novos em `test_transferencia_caixa_service.py` (config ativo/inativo
+nos 3 critérios — sem linha, sem forma, sem checkbox de cliente —,
+resolução de Clientes Diversos, filtro de candidatas por CPF/CNPJ/
+Diversos aceito e rejeitado, consolidação de centro de custo, fluxo
+completo de 2 itens do mesmo grupo consolidando em 1 `movimentacoes` +
+guarda de duplo-transferência isolada por item). Suíte completa do
+backend: **2930 passed**, mesmas 4 falhas pré-existentes não
+relacionadas. `tsc --noEmit`: mesmos 11 erros pré-existentes de baseline,
+nenhum novo.
+
+### ✅ Validado ao vivo contra KONTACTO-TESTE, 2026-08-29
+
+Reaproveitando as mesmas 4 Movimentações a Receber de origem Comanda já
+encontradas no teste da Fase 1 (drv 3524/3973/7458/7620, todos CNPJ,
+forma "CONTRATO"):
+
+1. **Configuração gravada e lida de volta corretamente**
+   (`POST`+`GET /agrupamento/config`): CNPJ marcado, forma "2" (CONTRATO)
+   selecionada — `ativo:true` confirmado.
+2. **Listagem exclui corretamente os 4 itens do grupo normal e os move
+   pra `agrupadas`** — `GET /pendentes` com período 2018-2020 devolveu
+   `items:[]` (a lista `MovimentacaoReceber` normal, agora vazia) e
+   `agrupadas:[4 itens]`, prova ao vivo de que a Fase 1 e a Fase 2
+   convivem sem duplicar o mesmo vencimento nos dois caminhos.
+3. **2 comandas de contas DIFERENTES (drv 3524→conta 2/CAIXA, drv
+   7458→conta 1/ITAÚ), datas diferentes, transferidas juntas numa única
+   chamada** a `POST /transferir-agrupadas`:
+   - conta 2 (CAIXA): R$685,00 → **R$1.485,00** (+R$800,00, exato)
+   - conta 1 (ITAÚ): R$3.755,99 → **R$3.955,99** (+R$200,00, exato)
+   - conta 8 (INTER, conta padrão/cabeçalho do grupo): **inalterada**
+     (R$21.638,32) — confirma ao vivo que o valor só é somado na conta
+     REAL de cada item, nunca na conta do cabeçalho por engano.
+   - 2 grupos criados (datas diferentes → 2 `movimentacoes` "casca"
+     separadas, códigos 27026/27027), cada uma com memorando "Ref
+     MOVIMENTO CONTRATO de <data>" e valor exatamente igual ao item que
+     a compõe (grupo de 1 item cada, já que as 2 comandas testadas não
+     compartilhavam data — a consolidação de VÁRIOS itens no mesmo grupo
+     já foi validada via teste unitário, não ao vivo nesta rodada).
+   - `movimentacoes_centro_custo` consolidada corretamente (centro de
+     custo genérico `1`, já que essas comandas antigas não têm rateio —
+     mesma simplificação registrada da Fase 1).
+   - `duplicata_rec_venc.transf_caixa='T'` e `movimentacoes_agrupadas`
+     linkando corretamente cada drv ao seu `cod_mov`.
+4. **Guarda de duplo-transferência confirmada**: reenviar os mesmos 2
+   itens devolveu `success:false`, "Esta comanda já foi transferida
+   (agrupada)." pros dois, sem gravar nada de novo.
+
+**Dado de teste que ficou no banco** (deliberado): `agrupa_comandas`
+configurada com CNPJ+forma "2" nesta instalação (era o estado anterior,
+vazio/inativo — agora fica ativo, o que é o comportamento real esperado
+se alguém configurar essa tela); drv 3524 e 7458 marcados como
+transferidos. As outras 2 comandas do mesmo achado da Fase 1 (drv 3973,
+7620 — mesmos clientes, datas diferentes) **não foram tocadas**, ficam
+disponíveis pra um próximo teste ao vivo do caso de consolidação real
+(marcar 2 itens do MESMO dia+forma, que nenhum dos dados reais
+encontrados até agora permite testar).
+
+---
+
+## Painel Financeiro (Fluxo de Caixa) — Painel de Movimentações + Previsões
+
+**Status: 🟡 EM ANÁLISE, iniciado 2026-08-29.** Pedido do usuário, com 2
+screenshots reais da tela VB6 + um prompt de tarefa detalhado pedindo um
+"Painel Financeiro" com benchmark de dashboards SaaS modernos (Nubank PJ,
+ContaAzul, Stripe) e recursos especulativos (simulador "E se", cenários
+otimista/pessimista, sparklines de variação MoM, drill-down em donut).
+
+**Decisão de metodologia, confirmada com o usuário via `AskUserQuestion`**
+("Híbrido — rastreio real + inspiração pontual"): a base é o rastreio
+fiel dos 2 formulários VB6 reais — nenhuma feature especulativa do prompt
+colado entra sem antes existir na fonte real ou ser proposta como o
+"recurso extra justificado" que Carlos já é mandatado a contribuir
+(CLAUDE.md > Protocolo Gauntlet > Papel Carlos), decidido caso a caso, não
+em bloco.
+
+**Fonte real localizada e confirmada por Caption** (agente de pesquisa,
+2026-08-29 — só inventário de rotinas, corpo ainda não lido):
+- **"Painel de Movimentações"** → `C:\Desenv\VB6\SQLSERVER\Kontacto\
+  FrmPnlCon.frm` (5.388 linhas, ~68 rotinas). Não existe em `Geral\`
+  (só um stub vazio `FrmPnlFcx.frm` lá, `Caption="Form6"`, ignorar) —
+  fonte canônica é `Kontacto\`, mesma pasta de negócio onde
+  `frmmanconta.frm` (Cadastro de Contas, já migrado) também tem uma cópia.
+- **"Previsões..."** → `C:\Desenv\VB6\SQLSERVER\Tesouraria\
+  FrmManPrev.frm` (5.928 linhas, ~85 rotinas). **Não confundir** com
+  `Tesouraria\FrmManPrev2.frm`/`FrmManPrev5bkp.frm` — mesmo Caption,
+  mas versões antigas/backup não referenciadas em nenhum `.vbp` ativo.
+
+**Juntas, ~11.300 linhas** — de longe as 2 maiores telas únicas
+encontradas neste projeto até agora (a maior anterior, Transferência p/
+Fluxo de Caixa, tinha ~2.000).
+
+### Rastreio completo (2 agentes de pesquisa, 2026-08-29) — resumo curado
+
+**Achado estrutural mais importante**: a regra de negócio real de
+"Painel de Movimentações" (cálculo de saldo/totais/previsões) **não está
+no `.frm`** — está numa DLL VB.NET já usada noutras partes deste projeto
+(`C:\Desenv\VB6\vb.net\APICamadas\BackOn\Backon.Data\Dao_Kash_Painel.vb`,
+857 linhas, chamada via COM `Backon_Controllers.Controller_Kash_Painel`).
+Essa DLL é a fonte primária dos cálculos, não o `.frm`.
+
+**Achado que conecta as 3 telas, CORRIGIDO após rastreio mais fundo**
+(a 1ª leitura estava errada, corrigida antes de implementar qualquer
+coisa): o Efetivar de `FrmManPrev.frm` **não fecha nenhuma lacuna** na
+Transferência p/Fluxo de Caixa. Rastreado até a raiz (`Command13_Click`,
+label `Processa:`, linha 2087): `If RstPrev1("Cod_Transf_Caixa") > 0 Then
+GoTo naoprocessa` — o lote **pula silenciosamente** qualquer previsão que
+já pertence a outra tela; e a edição individual (linha 2507-2520) bloqueia
+explicitamente com "Operação não Permitida - Deve-se Alterar o Lcto no
+Contas A Pagar/no Contas A Receber!". Ou seja: previsões com
+`cod_transf_caixa>0` (as que a Transferência p/Fluxo de Caixa cria a
+partir de duplicata em aberto) **nunca** passam pelo Efetivar desta tela.
+**Conferido no próprio código já implementado**: `transferencia_caixa_
+service.py` já apaga a previsão sozinha (`DELETE FROM previsoes WHERE
+flag_transf_caixa=... AND cod_transf_caixa=...`, linhas 766/846/1090) no
+exato momento em que a duplicata correspondente é baixada e vira
+movimentação real — o ciclo de vida já está fechado, sem gap.
+
+**O que "Previsões" realmente é, então**: uma ferramenta **independente**
+pra lançamentos futuros/recorrentes **manuais** (aluguel mensal,
+assinatura recorrente, qualquer previsão sem nenhum vínculo com
+duplicata) — real e valiosa, só não é "conserto de lacuna", é a próxima
+peça própria do ecossistema Fluxo de Caixa.
+
+#### `FrmManPrev.frm` ("Previsões...") — CRUD de `previsoes` + motor de Efetivação
+
+- **Tabelas**: `previsoes`/`previsoes_centro_custo` (CRUD completo) →
+  ao efetivar → `movimentacoes`/`movimentacoes_centro_custo` (INSERT a
+  partir da previsão) + `contas.saldo_atual` (UPDATE incremental,
+  soma/subtrai conforme `tipo`) + `gestor_documentos` (migra anexos do
+  grupo Previsões pro grupo Movimentações).
+- **3 abas** (Pagar/Receber/Transferência), botão Gravar único por par
+  Pagar+Receber (`Command2_Click` equivalente — na verdade aqui é grava
+  por aba própria, `previsoes.tipo` = 0/1/2/3), com Centro de Custo
+  simples (1 linha) ou detalhado (`Command25_Click`, painel de rateio
+  manual linha-a-linha com conferência de soma no fechamento — **não**
+  é distribuição proporcional automática como em `FrmTransfCaixa.frm`,
+  é mais simples: usuário digita cada linha, um helper `RestoCusto`
+  pré-preenche o "resto a ratear").
+- **Recorrência real**: `previsoes.frequencia` (0=diário...9=anual,
+  10=única vez) — `RetOrnaFrequencia` (nome com erro de digitação
+  confirmado na própria fonte) avança a DATA DE VENCIMENTO NA MESMA
+  LINHA ao efetivar (soma dias/meses fixos, com correção de "dia não
+  existe no mês"). **Não existe geração antecipada de previsões
+  futuras** — tudo é recalculado on-demand, uma ocorrência por vez, só
+  quando efetivada. "Única Vez" é excluída da tabela ao efetivar
+  (não avança, morre).
+- **Efetivação em lote** (`Command13_Click`, rótulo "Iniciar
+  Transferência" — nome herdado/enganoso, não é sobre a tela de
+  Transferência) com 3 modos: itens marcados na grade (seta verde/
+  vermelha, estado em memória, não é coluna de banco), faixa de data, ou
+  por favorecido. Também existe efetivação individual (`Command19_Click`/
+  `Command22_Click`, rotulados "Transferir" — mesma confusão de nomes).
+  Transferência (`tipo=2`) dentro do lote debita uma conta e credita
+  outra NUM SÓ registro de `movimentacoes` (`Classe` guarda a conta
+  destino — reuso de coluna, 2 significados diferentes por `tipo`,
+  documentar mas não separar em 2 colunas na migração a menos que traga
+  valor real).
+- **Botões auxiliares**: "Centro de Resultado" (rateio detalhado, acima),
+  "Gerar Planilha" (Excel via OLE client-side — vira export server-side),
+  "Anexos" (Gestor de Documentos genérico, já usado no resto do app),
+  Busca (sequencial em memória na grade já carregada, não é query nova).
+- **Controle de acesso real, não descartável**: exclusão exige senha de
+  gerente quando `controle.Senha_Gerente_Cx=True` (mesmo padrão de
+  `AuthorizationSlide` já usado no resto do app). `CheckBaixaData`
+  restrito a usuário hardcoded `"KONTACTO"` — gambiarra de acesso
+  ad-hoc, não replicar como regra genérica, mas registrar como pendência
+  de decisão (virar feature configurável ou descartar).
+
+#### `FrmPnlCon.frm` ("Painel de Movimentações") — dashboard + lançamento rápido
+
+- **Fórmulas reais** (via `Dao_Kash_Painel.vb`): `Saldo Anterior ao
+  Período` = `contas.saldo_inicial` (âncora fixa) ± soma histórica de
+  `movimentacoes` antes da data inicial — **diferente** de
+  `contas.saldo_atual` (contador incremental mantido por UPDATE a cada
+  gravação) — são 2 modelos de cálculo coexistindo, risco real de
+  divergência se algum UPDATE de saldo for pulado. `Saldo Previsto =
+  saldo_atual + saldo_pendencia - previsões_despesas + previsões_receitas`.
+- **4 blocos de alerta**: "Contas a Receber em Atraso/Hoje" vêm direto de
+  `duplicata_rec_venc` (query própria na tela); "À Pagar Hoje"/
+  "Pagamentos em Atraso" vêm de uma tabela de staging povoada pela DLL.
+  Ajuste real "próximo dia útil" quando é sexta e o total de hoje é zero
+  (evita mostrar "Hoje" vazio no fim de semana) — regra real, implementação
+  hardcoded só pra sexta (não trata feriado), replicar a intenção de forma
+  mais genérica.
+- **4 abas de lançamento rápido** (Pagar/Cheque, Receber/Depósito,
+  Transferência, Saque) — **caminho de escrita DIRETO em `movimentacoes`,
+  DIFERENTE de `entrada_saida_caixa_service.py` já migrado** (que grava em
+  `entrada_caixa`/`saida_caixa`, precisando depois passar pela
+  Transferência p/Fluxo de Caixa) e diferente do motor de Previsões acima
+  (que passa por `previsoes` primeiro). É um 3º caminho real de criar uma
+  `movimentacoes`, mais direto — Pagar/Receber/Saque usam um Gravar
+  comum, Transferência usa um Gravar próprio (grava 1 registro +
+  atualiza as 2 contas). Mesmo padrão de Centro de Custo (simples ou
+  painel de rateio) do resto do sistema.
+- **Filtros reais**: período (Hoje/Ontem/Esta Semana/Mês navegável/
+  Últimos 30 dias/Mostrar Todos), múltiplas contas somadas (opção
+  "TODAS"), 2 checkboxes mutuamente exclusivos no bloco Previsão
+  ("Previsões à partir de hoje" ignora pendências vencidas; "Desconsiderar
+  Pendências" zera o saldo de pendência do cálculo).
+
+#### Gambiarras confirmadas, não replicar
+
+Tabelas de staging globais SEM escopo de sessão/usuário
+(`temp_kash_mov`/`temp_kash_prev`/`temp_kash_rxd`) — condição de corrida
+real entre usuários simultâneos no legado; a migração calcula tudo em
+memória por requisição, sem staging compartilhado. Duas implementações
+quase idênticas de "achar-ou-criar Favorecido" com obtenção de ID via
+`SELECT MAX(Codigo)` (frágil sob concorrência) — unificar num serviço só,
+usando o ID real retornado pelo INSERT. Vários blocos de código morto/
+vestigial identificados e documentados nos relatórios completos dos
+agentes (branch de Transferência dentro do Gravar comum, referências a
+um controle `Grid` inexistente no form, cálculo de "Recebimentos
+Atrasados" comentado e abandonado).
+
+### Plano de fases proposto (aguardando confirmação do usuário)
+
+1. **Fase 1 — Motor de Efetivação + CRUD de Previsões** (`FrmManPrev.frm`)
+   — confirmado com o usuário (2026-08-29), depois de corrigir a leitura
+   inicial (não fecha lacuna nenhuma — ver achado corrigido acima):
+   ferramenta independente pra lançamentos futuros/recorrentes manuais,
+   sem vínculo com duplicata. Escopo real: CRUD de previsões (Pagar/
+   Receber/Transferência) + motor de Efetivação (individual e em lote,
+   recorrência via avanço de data, rateio de centro de custo simples e
+   detalhado) — **nunca toca previsões com `cod_transf_caixa>0`** (essas
+   continuam exclusivas da Transferência p/Fluxo de Caixa, réplica fiel
+   do bloqueio real do legado).
+2. **Fase 2 — Painel de Movimentações** (`FrmPnlCon.frm`) — dashboard +
+   lançamento rápido direto em `movimentacoes`, reaproveitando o motor de
+   Centro de Custo já existente onde fizer sentido. **✅ Implementada,
+   testada (24 testes unitários) e VALIDADA AO VIVO, 2026-08-29 — ver
+   seção própria logo abaixo.**
+3. **"Recurso extra" do Carlos** (decisão híbrida já confirmada): proposta
+   inicial — um mini-gráfico de saldo ao longo do período no Painel,
+   visualizando dados que a fórmula real já calcula (sem inventar cálculo
+   novo) — a decidir com o usuário no momento da Fase 2.
+
+### ✅ Fase 1 — Previsões — implementada, testada e VALIDADA AO VIVO, 2026-08-29
+
+**Backend**: `backend/services/previsoes_service.py` (novo) —
+`listar`/`obter`/`salvar`/`excluir`/`efetivar`. CRUD completo (Pagar/
+Receber/Transferência), achar-ou-criar Favorecido/Classe/Sub-Classe pelo
+ID real do INSERT (não `SELECT MAX(Codigo)`, gambiarra do legado
+descartada), recorrência real (`avancar_data_frequencia`, réplica de
+`RetOrnaFrequencia` — inclusive a correção "dia não existe no mês
+seguinte"), rateio de centro de custo (soma precisa bater com o valor —
+simplificação deliberada em relação ao diálogo "sobrescrever ou não" do
+legado), motor de Efetivação (`_efetivar_um_sync`/`_efetivar_sync`) que
+grava `movimentacoes`+`movimentacoes_centro_custo`, migra
+`gestor_documentos`, atualiza `contas.saldo_atual` (tipo 0=debita,
+1=credita, 2=transferência debita origem+credita destino), e avança ou
+apaga a previsão conforme a frequência. **Nunca toca previsões com
+`cod_transf_caixa>0`** (bloqueio replicado em `_save_sync`/`_delete_sync`/
+`_efetivar_um_sync`).
+
+**Bug de padrão evitado durante a escrita** (não chegou a subir pra
+produção): a 1ª versão de `_efetivar_sync` resolvia o grupo/sub-grupo do
+Gestor de Documentos em variáveis de módulo (globais) — corrigido antes
+de qualquer teste pra retornar os valores e passá-los como parâmetro,
+seguindo a regra já documentada no CLAUDE.md ("Porting VB6 global state
+— no backend-side globals": este backend é stateless, atende várias
+empresas ao mesmo tempo, um global vazaria o grupo de uma empresa pra
+outra).
+
+Rotas `backend/routes/previsoes.py` (`GET /previsoes`,
+`GET /previsoes/{codigo}`, `POST /previsoes`, `DELETE /previsoes/
+{codigo}`, `POST /previsoes/efetivar`), registradas em `server.py`.
+Modelos `PrevisaoSaveRequest`/`PrevisaoDeleteRequest`/
+`PrevisaoEfetivarRequest`/`PrevisaoRateioItem` (`models/schemas.py`,
+reaproveitando o mixin `AuditFields` já existente em vez de duplicar
+`usuario_alteracao`/`classe`/`plataforma` campo a campo). Permissão nova
+`PREVISOES` (dentro do MENU Fluxo de Caixa, ao lado de Plano de Contas/
+Centro de Custo/Contas/Contas x Funcionário — mesmo lugar onde o
+screenshot do usuário mostrava a tela "Conta"), ações ABRIR/GRAVAR/
+EXCLUIR/EFETIVAR. Auditoria em Gravar/Excluir/Efetivar (`tela=
+"PREVISOES"`).
+
+**Exclusão exige senha de gerente** quando `controle.senha_gerente_cx=1`
+— backend devolve `exige_autorizacao:true` sem gravar nada, frontend abre
+`AuthorizationSlide` (mesmo modal de elevação de privilégio já usado no
+resto do app) e reenvia com `autorizado:true` só depois de confirmado.
+
+**Frontend**: `frontend/app/previsoes.tsx` — lista com filtros (conta,
+tipo Pagar/Receber/Transferência, Todas/Em Atraso/Hoje, busca), Marcar/
+Desmarcar Todos + total + "Efetivar Selecionadas" sempre no topo (regra
+`[GLOBAL]` de design já documentada), modal de cadastro/edição (tier
+"seleção", campos adaptados por tipo — Transferência troca Classe por
+Conta de Destino —, seção de rateio de centro de custo com validação de
+soma em tempo real, frequência via combo, parcelas só ao criar), Excluir
+com o fluxo de autorização acima, Modo Didático (ícone Ajuda). Tile
+"Previsões" adicionado ao hub `fluxo-caixa.tsx` (ordenação alfabética
+automática já existente, nenhuma mudança de ordem manual necessária).
+
+**Fora de escopo desta rodada, registrado**: "Gerar Planilha" (export
+Excel — pode reaproveitar `export-xlsx.ts` depois), "Anexos"
+(reaproveitaria `GestorDocumentosSection`, adiado por tempo — a
+migração/coluna do Gestor de Documentos já é feita pelo motor de
+Efetivação, só a UI de anexar/ver arquivos na tela de Previsões em si
+ficou de fora), `CheckBaixaData` (campo restrito ao usuário hardcoded
+"KONTACTO" no legado — regra de acesso ad-hoc, não uma regra de negócio
+genérica, decisão de não portar).
+
+**Testes**: 43 novos em `test_previsoes_service.py` (recorrência com
+todos os casos de borda de data, upsert de Favorecido/Classe/Sub-Classe,
+listagem com os 3 filtros de data, validações de gravação, bloqueio de
+edição/exclusão/efetivação pra previsões de outra tela, transferência
+entre contas, parcelas mensais, exclusão com/sem senha de gerente,
+Efetivar com débito/crédito/transferência/única-vez/recorrente, cópia de
+rateio pra `movimentacoes_centro_custo`, isolamento de falha por item).
+Suíte completa: **2973 passed**, mesmas 4 falhas pré-existentes não
+relacionadas. `tsc --noEmit`: mesmos 11 erros pré-existentes de baseline,
+nenhum novo.
+
+**✅ Validado ao vivo contra KONTACTO-TESTE, 2026-08-29** — depois de
+reiniciar o backend (mesmo procedimento já repetido várias vezes nesta
+sessão): criei uma Previsão a Pagar real (conta INTER/8, R$50,00,
+frequência Mensal, favorecido/classe novos criados inline) via
+`POST /previsoes`, confirmei que aparece em `GET /previsoes` (com busca
+por favorecido funcionando), efetivei via `POST /previsoes/efetivar`, e
+conferi cada efeito direto no banco:
+- **`contas.saldo_atual`** (conta 8): R$21.638,32 → **R$21.588,32** —
+  exatamente -R$50,00, sem diferença de centavo.
+- **`previsoes.data_vencimento`**: avançou de **29/08/2026 para
+  29/09/2026** — exatamente 1 mês (frequência Mensal), a MESMA linha
+  (`codigo=19574`), confirmando que a recorrência não gera registro novo.
+- **`movimentacoes`**: 1 linha criada (código 27028), `conta=8`,
+  `valor=50`, `tipo=0`, memorando preservado.
+- Depois, exclusão da previsão de teste confirmada (sem exigir
+  autorização, já que `controle.senha_gerente_cx=False` nesta
+  instalação) — a `movimentacoes` real gerada pela efetivação foi
+  **mantida** (é dinheiro que realmente "aconteceu"), só a previsão de
+  teste em si foi removida.
+
+**Dado de teste que ficou no banco** (deliberado, harmless): favorecido
+"TESTE CLAUDE ALUGUEL" (`favorecidos.codigo=4400`) e classe "TESTE CLAUDE
+DESPESA" (`classes.codigo=33`), criados inline pelo teste — mesmo padrão
+de dado de teste reaproveitável/inofensivo já deixado noutras rodadas
+desta sessão. A `movimentacoes.codigo=27028` resultante também
+permanece, é um lançamento financeiro real e válido.
+
+### ✅ Fase 2 — Painel de Movimentações — implementada, testada e VALIDADA AO VIVO, 2026-08-29
+
+**Backend**: `backend/services/painel_financeiro_service.py` (novo) —
+`resumo`/`listar_movimentacoes`/`lancar`/`excluir_lancamento`. Fórmulas
+conferidas DIRETO contra `Dao_Kash_Painel.vb::Movimentacoes_Por_Periodo`
+(linhas 1-170) — não só o relatório do agente de pesquisa, releitura
+própria do `.vb` real:
+- **Saldo Anterior ao Período**: `saldo_inicial - despesas_antes_do_período
+  + receitas_antes_do_período` (tipo 0/3/2=saída da conta,
+  tipo 1 ou (tipo 2 E classe=conta)=entrada). **Diferente de
+  `contas.saldo_atual`** (contador incremental atualizado a cada
+  lançamento) por desenho — os dois convivem, não foram unificados (ver
+  docstring do service).
+- **Saldo ao Fim do Período** = anterior + receitas do período - despesas
+  do período.
+- **Saldo Previsto** = `saldo_atual - pagamentos_atraso - a_pagar_hoje +
+  contas_a_receber_atraso + contas_a_receber_hoje`.
+- **4 alertas** rastreados direto em `FrmPnlCon.frm:3051-3117` (não só o
+  DLL, que não tem função dedicada pra isso): Contas a Receber Atraso/Hoje
+  vêm de `duplicata_rec_venc` (`situacao='A' AND situacao_duplicata=0`,
+  filtrado por `dt_vencimento`); Pagamentos Atraso/Hoje no legado vêm de
+  `previsoes.tipo=0` (SAIDA) — replicado aqui como
+  `SELECT ... FROM previsoes WHERE tipo=0` filtrado por
+  `data_vencimento` — **simplificação documentada**: o legado também
+  conta como "SAIDA" as previsões de Transferência (`tipo=2`) onde
+  `classe=conta` (ou seja, esta conta como DESTINO de uma transferência
+  futura) — não replicado aqui (edge case raro — transferência futura
+  agendada via Previsões — e o cálculo já é só informativo/dashboard, não
+  bloqueia nada); registrado como possível refinamento futuro, não como
+  lacuna silenciosa.
+- **Lançamento direto** (`_lancar_sync`): grava direto em `movimentacoes`
+  (sem Previsões no meio) pros 4 tipos — Pagar(0)/Receber(1)/
+  Transferência(2)/Saque(3) — com rateio de centro de custo opcional
+  (mesma validação de soma exata já usada em Previsões), reaproveitando
+  `_upsert_favorecido_sync`/`_upsert_classe_sync`/`_upsert_sub_classe_sync`
+  de `previsoes_service.py` (não duplicado).
+- **`flag_transf_caixa` guard** (`_excluir_lancamento_sync`): bloqueia
+  exclusão de um lançamento que pertence a outra tela (Transferência p/
+  Fluxo de Caixa, Agrupamento de Comandas) — mensagem explicando pra ir
+  na tela de origem.
+- **Tabelas de staging globais do legado (`temp_kash_prev`/
+  `temp_kash_mov`) NÃO replicadas** — tudo recalculado direto via SQL por
+  requisição, mesmo princípio já usado em Fase 1 e documentado em "Não
+  replicar truques VB6".
+
+**Bug real achado e corrigido antes do teste ao vivo**: `_alertas_sync`
+tinha `ISNULL(dr.situacao_duplicata,0)` — coluna `situacao_duplicata`
+não existe em `duplicata_receber` (`dr`), só em `duplicata_rec_venc`
+(`drv`), confirmado direto contra `FrmPnlCon.frm:3051` (`... and
+situacao_duplicata=0 ...` no mesmo escopo de `duplicata_rec_venc`) e
+contra o próprio `Dao_Kash_Painel.vb:263` (usa `situacao_duplicata`
+puro, sem qualificar tabela, mas só existe em `duplicata_rec_venc`).
+Erro real capturado ao vivo (`Invalid column name 'situacao_duplicata'`)
+no primeiro teste contra KONTACTO-TESTE — corrigido pra
+`drv.situacao_duplicata`, backend reiniciado, reconfirmado.
+
+**Frontend**: `frontend/app/painel-financeiro.tsx` (novo) — filtros
+(Conta/Período com navegação de mês Anterior/Próximo), bloco de
+saldo/totais, 4 cards de alerta, botões de Lançamento Direto (4 tipos,
+mesmo modal com rateio de centro de custo do padrão de Previsões), grade
+de movimentações com indicador de cadeado pra lançamentos de outra tela.
+Tile "Painel Financeiro" adicionado em `fluxo-caixa.tsx`.
+
+**Permissões**: tela `PAINEL_MOV` ("Painel Financeiro" — nome
+encurtado, `permissoes.nome` é `nvarchar(20)`; tela key também encurtada
+pra caber em `permissoes.tela nvarchar(15)`), ações ABRIR/LANCAR/EXCLUIR,
+dentro do menu Fluxo de Caixa (mesmo nível de Previsões/Contas).
+
+**✅ Validado ao vivo contra KONTACTO-TESTE** (`minimachine`/
+`KONTACTO-TESTE`), 2026-08-29, depois de reiniciar o backend com a
+correção do bug acima:
+- `GET /resumo` (conta 8/INTER, período mês): `saldo_atual=21.588,32`
+  (bate com `contas.saldo_atual` real), `saldo_anterior_periodo=22.536,26`
+  — conferido via SQL direto (`saldo_inicial(0) - despesas_antes(1.280.532,17)
+  + receitas_antes(1.303.068,43) = 22.536,26`, exato), `saldo_fim_periodo=
+  22.486,26` (`22.536,26 + 0 - 50,00`, exato). Testado também com
+  `periodo=tudo` (`saldo_anterior=0`, `saldo_fim=1.303.068,43-1.280.582,17=
+  22.486,26`, exato) e `periodo=hoje`, e sem filtro de conta (soma só as
+  contas `situacao='A'` — só a conta 8 nesta instalação — confirmado
+  igual ao filtro por conta 8 sozinha, comportamento correto).
+- **Lançamento Pagar** R$25,00 (conta 8): saldo 21.588,32→**21.563,32**,
+  exato.
+- **Lançamento Transferência** R$100,00 (conta 8→conta 2/CAIXA): conta 8
+  21.563,32→**21.463,32**, conta 2 1.485,00→**1.585,00**, ambos exatos;
+  grade de movimentações confirmada mostrando `credito=false` do lado da
+  conta 8 (saída) e `credito=true` do lado da conta 2 (entrada) pro MESMO
+  código de lançamento — lógica de exibição por perspectiva de conta
+  confirmada correta.
+- **Lançamento Saque com rateio** R$40,00 (conta 8, rateio 30+10 entre 2
+  centros de custo reais): `movimentacoes_centro_custo` confirmado com as
+  2 linhas exatas (30,00/"parte produtos" + 10,00/"parte infra"), saldo
+  21.463,32→**21.423,32**, exato.
+- **Exclusão dos 3 lançamentos de teste**: saldo das 2 contas voltou
+  EXATAMENTE ao valor original (conta 8: 21.588,32; conta 2: 1.485,00) —
+  confirmado também que `movimentacoes`/`movimentacoes_centro_custo` não
+  deixaram nenhuma linha residual (`COUNT(*)=0` pros 3 códigos de teste).
+  **Nenhum dado de teste ficou no banco desta vez** (diferente da Fase 1,
+  onde a movimentação real da previsão efetivada foi deliberadamente
+  mantida) — os 3 lançamentos desta rodada eram só teste técnico, sem
+  significado de negócio, por isso foram completamente revertidos.
+
+**Correção 2026-08-29 — "gap" acima RECLASSIFICADO como não-gap, depois
+de rastrear a fonte VB6 até a raiz (regra `[GLOBAL]` "Toda ramificação
+condicional VB6 tem que ser rastreada até a raiz").** O registro
+original (abaixo, riscado por histórico) presumiu que a movimentação de
+Previsão efetivada DEVERIA ficar protegida por `flag_transf_caixa`, sem
+antes checar se o próprio legado faz isso. Checado agora: as 3 rotinas
+reais de Efetivar em `Tesouraria\FrmManPrev.frm` (linhas 2113, 2373,
+3005 — os 3 pontos de entrada: efetivação individual, em lote, e uma
+terceira variante) fazem o MESMO `Insert Into Movimentacoes (Conta,
+Data_Liquidacao, Documento, Data_Documento, Data_Vencimento, Favorecido,
+Valor, Classe, Sub_Classe, Tipo, Memorando) Select ... From previsoes
+Where Codigo = ...` — **nenhuma delas grava `flag_transf_caixa` nem
+`cod_transf_caixa`**. Ou seja: no sistema legado, uma movimentação
+nascida de Previsão efetivada TAMBÉM não é protegida — fica igualmente
+editável pela tela de movimentações de lá. A migração já está fiel ao
+legado neste ponto, não faltando nada.
+
+**Por que faz sentido não proteger, mesmo entendendo o padrão**: o
+`flag_transf_caixa` existe pra proteger a movimentação de ficar
+dessincronizada de um registro-fonte externo que ela representa (a
+duplicata em Transferência p/Fluxo de Caixa, a comanda em Agrupamento).
+Uma Previsão efetivada não tem esse registro-fonte pra manter em sincronia
+— uma vez efetivada, ela já avançou (recorrência) ou já foi apagada
+(única vez), independente da movimentação resultante; essa movimentação
+passa a ser uma transação solta e real, do mesmo jeito que um lançamento
+direto digitado no Painel. Não há nada externo que possa "dessincronizar"
+se o usuário editar/excluir ela depois — proteger aqui seria mais
+restritivo que o próprio legado, sem ganho real. **Nenhuma alteração de
+código necessária.**
+
+<details>
+<summary>Registro original (2026-08-29), mantido riscado por histórico — presumia um gap que não existe</summary>
+
+~~**Gap conhecido, registrado (não corrigido nesta rodada)**: a
+movimentação gerada pela efetivação de uma Previsão (Fase 1, ex.: código
+27028) **não seta `flag_transf_caixa`** — ou seja, hoje ela aparece
+editável/excluível também pelo Painel de Movimentações, não só por
+Previsões. Achado confirmado ao vivo (`SELECT flag_transf_caixa FROM
+movimentacoes WHERE codigo=27028` → vazio). Diferente das movimentações
+geradas por Transferência p/Fluxo de Caixa e Agrupamento de Comandas
+(que SETAM o flag corretamente e por isso já ficam corretamente
+bloqueadas). Não é um bug que quebra algo agora (excluir uma efetivação
+pelo Painel só reverte o saldo normalmente, sem inconsistência), mas é
+uma divergência de escopo que vale corrigir numa próxima rodada — setar
+`flag_transf_caixa='V'` (ou similar) no INSERT de `_efetivar_um_sync`
+(`previsoes_service.py`) e ensinar `_excluir_lancamento_sync` a
+reconhecer esse valor específico com mensagem apontando pra "reabrir a
+previsão" em vez do texto genérico de "outra tela".~~
+
+</details>
+
+### ✅ Fase 3 — "Recursos extra" do Carlos (gráficos) — implementada e VALIDADA AO VIVO, 2026-08-29
+
+Pedido explícito do usuário no mesmo dia ("vamos fazer os gráficos"),
+depois de Carlos apresentar os dois casos (funcionalidade + valor) e o
+usuário sugerir o segundo por conta própria — **os dois gráficos
+respeitam o mesmo limite já fixado na decisão Híbrida: só dado
+REALIZADO/DECLARADO, nunca projeção/cenário inventado.**
+
+**1. Gráfico de saldo (Painel de Movimentações)** — linha/área compacta
+mostrando a evolução do **saldo realizado** ao longo do período
+selecionado, a partir do `saldo_anterior_periodo` já validado na Fase 2.
+- Backend: `painel_financeiro_service.py::_serie_saldo_conta_sync` +
+  `_serie_saldo_sync`/`serie_saldo` (novo endpoint `GET
+  /painel-financeiro/serie-saldo`) — agrupa `movimentacoes` por DIA
+  (período com data explícita) ou por MÊS (período "Tudo", pra não gerar
+  centenas de pontos ilegíveis), reaproveitando a MESMA fórmula assinada
+  de `_resumo_conta_sync` (nenhum cálculo novo inventado, só quebrado em
+  baldes). 4 novos testes unitários (28 no arquivo agora).
+- Frontend: `painel-financeiro.tsx::SaldoChart` — `<svg>` intrínseco
+  (mesmo padrão de `ChecklistVeiculoDiagrama.tsx`, sem lib nova
+  instalada), linha + área preenchida, cor verde/vermelha conforme o
+  saldo final do período ficou acima/abaixo do inicial. Renderizado
+  dentro do próprio card de Saldo/Totais, embaixo dos números.
+- **Validado ao vivo contra KONTACTO-TESTE** (conta 8/INTER): período
+  "Mês" (Agosto) → 1 ponto, `saldo=22.486,26`, bate exato com
+  `saldo_fim_periodo` do `/resumo`; período "Tudo" → 47 baldes mensais
+  (2018 a 2026), último ponto `22.486,26`, mesmo valor; `mes_ref=2026-07`
+  → 12 pontos diários, `saldo_inicial=16.559,87` e último ponto
+  `22.536,26`, ambos batendo exato com `/resumo` do mesmo mês
+  (`saldo_anterior_periodo`/`saldo_fim_periodo`) — os 3 cenários
+  conferidos cruzado contra o endpoint já validado na Fase 2, sem
+  nenhuma divergência de centavo.
+
+**2. Gráfico Receita x Despesa (Previsões)** — sugestão do próprio
+usuário, mais simples de justificar que o do Painel: cada Previsão já
+tem uma `data_vencimento` real, declarada pelo próprio usuário — somar
+Receber x Pagar não é projeção nenhuma, é soma de compromisso futuro já
+existente.
+- **100% frontend, sem endpoint novo** — `previsoes.tsx::
+  ReceitaDespesaBars` agrega o array `itens` que a tela já carrega (soma
+  `tipo=1` x `tipo=0`; `tipo=2`/Transferência fica de fora — não é
+  receita nem despesa, é troca entre contas próprias), renderiza como 2
+  barras horizontais proporcionais (View simples, sem SVG — mais barato
+  que o do Painel). Respeita os mesmos filtros já ativos na tela
+  (conta/tipo/período/busca), já que usa a mesma lista filtrada.
+- Card só aparece quando há previsões listadas (`itens.length > 0`),
+  posicionado entre os filtros e a lista.
+
+**Ícones "i"/Ajuda atualizados nos dois arquivos** (Modo Didático) —
+`AJUDA_ITENS` de `painel-financeiro.tsx` e `previsoes.tsx` ganharam 1
+entrada nova cada, explicando os respectivos gráficos em linguagem de
+usuário final, deixando claro que é dado realizado/declarado, não
+previsão inventada.
+
+Baseline preservado: 3001 testes backend passando (mesmos 4
+pré-existentes não relacionados), TypeScript sem novo erro (mesmos 12
+pré-existentes).
+
+### ✅ Fase 4 — Consolidação em "Painel Financeiro" único (Movimentações + Previsões + Relatórios), 2026-08-31
+
+**Pedido explícito do usuário** ("como mencionei no projeto de migração...
+quero as duas tela juntas... não preciso acessar outra tela" +
+"quero um painel de fluxo de caixa. quero tudo concentrado nele" + "é um
+painel financeiro. não pode está nada de fora"): as telas antes separadas
+(`/painel-financeiro` e `/previsoes`) viraram UMA tela só
+(`painel-financeiro.tsx`), com 3 ABAS — Painel de Movimentações,
+Previsões, Relatórios — em vez de rotas diferentes. `previsoes.tsx`
+(arquivo antigo) foi **removido** (código consolidado no arquivo único,
+sem duplicação); tile "Previsões" removido de `fluxo-caixa.tsx`, o tile
+"Painel Financeiro" agora aparece pra quem tem `PAINEL_MOV.ABRIR` OU
+`PREVISOES.ABRIR`.
+
+- **Abas visíveis por permissão**: cada aba só aparece se o usuário tiver
+  a permissão correspondente (`PAINEL_MOV.ABRIR`/`PREVISOES.ABRIR`); com
+  só 1 aba visível, a barra de abas nem renderiza. Todo o estado dos 2
+  fluxos (filtros, formulários, rateio) foi mantido lado a lado no mesmo
+  componente, com nomes de variável prefixados (`prevFConta`,
+  `prevSalvando`, etc.) pra não colidir com o estado do Painel — mesma
+  lógica de negócio de antes, zero regra reescrita, só reorganização de
+  arquivo.
+- **Achado real corrigido no meio da consolidação**: o gráfico Receita x
+  Despesa (Previsões) estava respeitando o filtro de Tipo da própria
+  lista — filtrar por "Pagar" zerava visualmente o lado "Receber" do
+  gráfico (achado do usuário, com screenshot). Corrigido: o gráfico
+  agora busca os totais À PARTE (`buscarTotaisGrafico`), sempre
+  ignorando o filtro de Tipo (respeita conta/período/busca), porque o
+  propósito do gráfico é justamente comparar os dois lados.
+
+**Cards de alerta do Painel viraram clicáveis** ("do card de pagar e
+receber nos leve as suas respectivas lista, que nos levarão as suas
+respectivas duplicatas"): "Contas a Receber em Atraso"/"Contas a Receber
+Hoje" navegam pra `/contas-receber?situacao=V`/`?situacao=A` — só quando
+o usuário tem `CONTAS_RECEBER.ABRIR` (sem a permissão, o card fica só
+informativo, sem seta/clique). `contas-receber.tsx` ganhou suporte a
+`useLocalSearchParams<{situacao}>` pra abrir já filtrado — nenhum
+endpoint novo precisou ser criado, o endpoint já aceitava
+`situacao=A/V/PG`.
+
+**Bug real achado e corrigido no mesmo dia (2026-08-31, rodada
+seguinte)**: "Pagamentos em Atraso"/"À Pagar Hoje" **não** navegam pra
+Contas a Pagar — o card ficava mostrando "R$ 4.875,32 · 12
+lançamento(s)" mas a tela de destino trazia "Nenhuma duplicata
+encontrada". Causa raiz: os 2 cards de Pagar são sourced de
+`previsoes WHERE tipo=0` (`_alertas_sync`, achado já documentado desde a
+Fase 2), **não** de `Duplicata_Pag_Venc` como os 2 cards de Receber —
+são fontes de dado genuinamente diferentes, herdadas assim direto do
+legado (`FrmPnlCon.frm` já trata os 2 lados de forma assimétrica).
+Navegar pra Contas a Pagar levava a uma tela que lê a fonte ERRADA pro
+que o card estava resumindo. **Corrigido**: os 2 cards de Pagar agora
+levam pra aba Previsões (dentro da MESMA tela, `setAba("previsoes")` +
+`setTipoFiltro(0)` + `setFiltroData("atraso"/"hoje")`) — a fonte real
+por trás do número que o card mostra. Gated por `can("PREVISOES.ABRIR")`
+em vez de `CONTAS_PAGAR.ABRIR`. O relatório "Duplicatas à Pagar em
+Aberto" (aba Relatórios) continua correto e inalterado — esse SIM é
+sourced de `Duplicata_Pag_Venc`, só o card de alerta estava errado.
+
+**Nova aba "Relatórios" — Fase 1 (5 de ~20 relatórios reais do menu do
+legado)**: o usuário colou um screenshot do menu real de Relatórios do
+`FrmPnlCon.frm` (grupos "Contas a Pagar"/"Contas a Receber"/
+"Previsão"/"Movimentação", ~20 relatórios ao todo). Confirmado via
+`AskUserQuestion` (2026-08-31): construir os 5 relatórios mais usados
+agora, registrar os demais ~15 como pendência explícita (não uma lacuna
+silenciosa).
+
+- **Saldos Atuais das Contas** — reaproveita `GET /api/contas-caixa`
+  (já existente), zero endpoint novo.
+- **Movimentação de Contas** — reaproveita o MESMO dado já carregado pela
+  aba Painel de Movimentações (`itens`), só reagrupado por conta com
+  subtotal (client-side, zero chamada nova).
+- **Receitas x Despesas por Mês** — endpoint novo,
+  `GET /painel-financeiro/receitas-despesas-mes`
+  (`_receitas_despesas_mes_sync`/`_receitas_despesas_mes_conta_sync`,
+  `painel_financeiro_service.py`) — mesma fórmula assinada já usada em
+  `_serie_saldo_conta_sync` (Fase 3), só devolvendo Receitas/Despesas
+  separados por mês em vez do net. 2 testes novos (30 no arquivo agora).
+  **Validado ao vivo contra KONTACTO-TESTE**: soma das 47 linhas mensais
+  bateu EXATO com os totais já validados do `/resumo` período "tudo"
+  (receitas 1.303.068,43 / despesas 1.280.582,17, sem diferença de
+  centavo).
+- **Duplicatas à Pagar em Aberto / Duplicatas à Receber em Aberto** —
+  reaproveitam `GET /api/contas-pagar`/`GET /api/contas-receber` com
+  `situacao=A` (endpoints já existentes e testados) — mostra até 30
+  linhas inline, cada uma clicável (leva pra tela cheia), com link
+  "Abrir Contas a Pagar/Receber →" pro resto. Gated por
+  `can("CONTAS_PAGAR.ABRIR")`/`can("CONTAS_RECEBER.ABRIR")` — some da
+  aba pra quem não tem a permissão, mesmo padrão dos cards de alerta.
+
+**Pendência registrada explicitamente — ~15 relatórios do legado NÃO
+implementados nesta rodada** (decisão consciente, não lacuna
+silenciosa): Duplicatas à Pagar por Banco, Duplicatas Pagas, Pagamentos
+por Data, Duplicatas Recebidas, Impressão de Boletos, Relatório de
+Cartões, Previsões por Favorecido, Previsão de Lançamentos, Cheques não
+compensados, Conta corrente por Classe, Lançamentos por Classe,
+Lançamentos por Centro Custo, Lançamentos por Documento, Movimentação
+por Favorecidos, Mov Favorecido Extrato, Receitas x Despesas por Classe,
+Receitas x Despesas por Favorecido, Saldos Consolidado Empresas
+(desabilitado até no próprio legado), Relatório Gerencial. Cada um
+precisaria de rastreio de fonte VB6 próprio antes de implementar (mesmo
+processo de sempre) — não presumir formato/campos sem checar.
+
+Baseline preservado depois da consolidação: 3009 testes backend passando
+(+2 desta rodada), TypeScript sem novo erro (mesmos 12 pré-existentes).
+
+### ⚠️ 2 pendências técnicas REAIS ainda em aberto, achadas ao vivo contra "KONTACTO REAL" (2026-08-31) — não confundir com o trabalho acima, que já foi concluído
+
+**1. ✅ "Saldo Previsto" do Painel — IMPLEMENTADO E VALIDADO AO VIVO,
+2026-08-31 (mesmo dia, rodada seguinte).** Rastreado até
+`FrmPnlCon.frm:3299` (`Saldo_Previsto = saldo_atual + saldo_pendencia -
+Previsoes_Despesas + Previsoes_Receitas`) e
+`Dao_Kash_Painel.vb::Previsoes_Por_Periodo` (linhas 203-696) — o legado
+**expande virtualmente cada previsão recorrente dentro do período
+selecionado** (Mensal no mês inteiro entra 1 vez; Semanal entraria
+várias vezes, projetando ocorrências futuras mesmo sem registro
+separado na tabela). Implementado em `painel_financeiro_service.py`:
+`_pendencia_conta_sync` (previsões vencidas antes do período, sem
+expansão — réplica da seção "PENDENCIAS" do .vb) +
+`_previsoes_expandidas_conta_sync`/`_avancar_mes_painel` (expansão real
+de recorrência dentro do período — diário/semanal/decendial/quinzenal
+por soma de dias, mensal…anual por soma de meses) +
+`_saldo_previsto_real_sync` (combina os dois, cai pro cálculo antigo
+baseado nos 4 alertas quando o período é "Tudo", que não tem
+equivalente no legado).
+
+**Achado real confirmado durante a implementação**: o fallback de "dia
+não existe no mês" usado NESTA expansão (`_avancar_mes_painel` — dia
+inválido vira dia 01 do mês SEGUINTE) é **DIFERENTE** do fallback já
+usado na Efetivação real de Previsões
+(`previsoes_service.avancar_data_frequencia` — decrementa pro último
+dia válido do MESMO mês, ex. 31/mar mensal → 30/abr). Confirmado
+rastreando as 2 fontes separadamente — o legado genuinamente usa 2
+algoritmos diferentes de "avançar recorrência" em 2 lugares diferentes,
+não é a mesma rotina reaproveitada por engano.
+
+**Os 2 checkboxes do cabeçalho do Painel legado, também implementados**
+(`FrmPnlCon.frm:922-930/160-166`, `pCheck5`="Previsões a partir de
+hoje"/`pCheck6`="Desconsiderar Pendências", mutuamente exclusivos na UI
+— achado do usuário, screenshot do legado): `partir_de_hoje` troca
+`data_inicial` por "hoje" (tanto na Pendência quanto na expansão);
+`desconsiderar_pendencias` zera o componente de Pendência por completo
+— réplica exata de `PCheck5_Click`/`PCheck6_Click`/linha 3274-3277.
+Frontend: 2 checkboxes no cabeçalho da aba Painel de Movimentações
+(`CheckboxToggle`, mutuamente exclusivos, mesmo padrão do legado).
+
+**Simplificações documentadas, deliberadas** (registradas no cabeçalho
+de `painel_financeiro_service.py`): (1) toda ocorrência projetada usa o
+valor CHEIO da previsão — não replica a nuance de
+`previsoes_centro_custo.repete_lancamento` (rateio parcial nas
+ocorrências seguintes à primeira); (2) não inclui previsões com
+`cod_transf_caixa>0` (o legado inclui algumas via
+`FiltroSituacaoDuplicata`) — consistente com o resto desta migração,
+que trata essas previsões como pertencentes só à Transferência p/Fluxo
+de Caixa.
+
+11 testes novos (`_avancar_mes_painel`, `_pendencia_conta_sync`,
+`_previsoes_expandidas_conta_sync` — única vez/diário/mensal/
+transferência —, `_saldo_previsto_real_sync` — fallback "Tudo",
+`desconsiderar_pendencias`, `partir_de_hoje`), todos passando de
+primeira (confirma que os cálculos manuais na cabeça bateram com a
+implementação). **Validado ao vivo contra KONTACTO-TESTE** (conta
+8/INTER, período Agosto/2026): recomputei os 3 cenários (padrão,
+`partir_de_hoje`, `desconsiderar_pendencias`) manualmente via script
+Python direto contra o banco, fora da API — os 3 bateram EXATO com a
+resposta da API (`-8542.04`/`-5709.29`/`-5611.72`), confirmando
+consistência interna da implementação.
+
+**2. "Fica só processando" ao Efetivar uma Previsão contra KONTACTO
+REAL — hipótese forte identificada 2026-08-31 (rodada seguinte),
+defesa real implementada; causa raiz ainda NÃO confirmada ao vivo (sem
+acesso a esse banco especificamente).**
+
+**Hipótese com precedente real e documentado neste mesmo projeto**:
+`AUTO_CLOSE` ligado no banco (`services/schema_ensure.py::
+ensure_auto_close_off`, achado original 2026-08-28 investigando timeout
+intermitente no BackOn VB6 de outro cliente real, `RJPNEUS-TESTE`) —
+quando ligado, o SQL Server fecha o banco INTEIRO assim que a última
+conexão encerra; a PRÓXIMA conexão precisa reabrir tudo do disco antes
+de responder qualquer query, o que em banco grande é lento o bastante
+pra "parecer travado até estourar timeout", especialmente depois de um
+período ocioso. `ensure_auto_close_off` já existe e já corrige isso —
+mas só APÓS a 1ª conexão bem-sucedida de cada `servidor`+`banco` por
+processo (cache `_AUTO_CLOSE_JA_GARANTIDO`, reinicia quando o backend
+reinicia). **Nesta sessão o backend foi reiniciado várias vezes** (pra
+carregar código novo) — cada reinício reseta esse cache, então a
+PRÓXIMA requisição contra "KONTACTO REAL" paga de novo o custo de
+reabrir o banco do zero, se `AUTO_CLOSE` estiver ligado lá. Isso bate
+exatamente com o padrão relatado ("fica só processando") e com o
+timing (o usuário testou logo depois de eu ter reiniciado o backend
+várias vezes na mesma sessão).
+
+**Não confirmado ao vivo** — não tenho acesso à conexão "KONTACTO
+REAL" pra checar `sys.databases.is_auto_close_on` diretamente; é a
+explicação mais provável dado o precedente já documentado neste
+projeto, não uma causa 100% verificada.
+
+**Defesa real implementada, independente da causa raiz ser essa ou
+não**: `apiSend` (`frontend/src/utils/api.ts`) ganhou um parâmetro
+opcional `timeoutMs` (`AbortController`, sem afetar nenhuma outra
+chamada existente — parâmetro é opcional, default preserva o
+comportamento de sempre) + `friendlyCatchError` reconhece `AbortError`
+e devolve uma mensagem clara em vez de silêncio infinito. Aplicado só
+na chamada de Efetivar (`painel-financeiro.tsx`, `timeoutMs=45000`) —
+antes, um travamento real (por AUTO_CLOSE, lock, ou qualquer outro
+motivo) deixava o spinner girando pra sempre sem nenhum feedback; agora
+o usuário recebe um erro real depois de 45s, sabendo que algo travou em
+vez de ficar sem informação nenhuma.
+
+**Ainda não implementado**: a tela própria de "Transferência Para
+Movimentação" que o legado abre antes de Efetivar (seleção de Data de
+Liquidação + Conta) — pedido original do usuário, registrado, não
+esquecido, só não veio junto nesta rodada focada no travamento em si.
+
 ---
 
 ## Contas a Receber (Financeiro)
@@ -16235,9 +17828,13 @@ a Receber.").
 **Pagamento parcial gera vencimento residual, real nos 2 lados**: se
 `Valor_Pag` &lt; valor original da parcela, o form gera um NOVO
 vencimento com o saldo restante (mesma `Duplicata`, novo
-`Desmembramento`) e incrementa `num_parcelas` — comportamento que a
-implementação atual **não replica** (hoje uma baixa parcial simplesmente
-marca a parcela como paga com o valor informado, sem gerar residual).
+`Desmembramento`) e incrementa `num_parcelas`. **Correção (2026-08-31,
+achado ao revisar a área pra responder "o que falta no ecossistema
+Receber"): esta nota estava desatualizada** — a implementação JÁ replica
+esse comportamento (`contas_receber_service._gerar_vencimento_residual`,
+chamada de dentro de `_baixar_parcela_core` sempre que `valor_pag` fica
+abaixo do valor da parcela) — não é mais um gap real, foi corrigido numa
+sessão posterior a esta nota sem que a nota em si fosse atualizada.
 
 ### Regra real do cancelamento (`Command2_Click`, modo `"C"` — botão vira "Excluir"/"Cancelar")
 
@@ -16257,6 +17854,91 @@ bloqueia cancelar se o vencimento faz parte de um agrupamento de
 comandas no caixa (`movimentacoes_agrupadas` + `COD_TRANSF_COMANDA`);
 se existir cheque pré-datado vinculado (`cheque` `origem='R'`), pergunta
 se remove o(s) cheque(s) também.
+
+**✅ IMPLEMENTADAS E VALIDADAS AO VIVO, 2026-08-29.** Rastreadas até a
+raiz num `.frm` diferente do que a nota de 28/08 fazia supor — não estão
+em `frmTraNFRec.frm`/`FrmManDur.frm`, e sim em `Revenda\FrmManPar.frm`
+(`Command2_Click`, linhas 2427-2456, ramo `CancelaPg = "C"`), o form real
+que executa a baixa/cancelamento em si (as outras 2 são só manutenção de
+cabeçalho, sem essa rotina).
+
+- **Guarda 1 (agrupamento)**: bloqueio incondicional — `EXISTS (SELECT 1
+  FROM movimentacoes_agrupadas WHERE cod_transf_comanda = <codigo_venc>)`
+  (simplificado do JOIN com `MOVIMENTACOES`/`FAVORECIDOS` do legado, que
+  não lê nenhum campo dessas 2 tabelas — puro desperdício de query, não
+  regra de negócio). Mesmo nome de tabela/coluna já usado em
+  `transferencia_caixa_service.py` (`movimentacoes_agrupadas.
+  cod_transf_comanda`), confirmado contra o schema real de KONTACTO-TESTE.
+- **Guarda 2 (cheque pré-datado)**: nunca bloqueia sozinha, só pergunta
+  no legado (`MsgBox vbYesNo`) — vira fluxo de 2 chamadas numa API REST
+  (mesmo padrão já usado em `previsoes_service._delete_sync` pra
+  "exige_autorizacao" de gerente): 1ª chamada sem `excluir_cheques`
+  devolve `{"exige_confirmacao_cheque": true, "qtd_cheques": N}` **sem
+  mexer em nada** (nenhum UPDATE roda antes da guarda 2); a 2ª chamada já
+  manda `excluir_cheques: true/false` decidido pelo usuário — os DOIS
+  valores completam o cancelamento (réplica fiel: mesmo respondendo "Não"
+  no legado, o cancelamento segue, só o cheque fica órfão na tabela —
+  comportamento real e intencional, não bug).
+- **Backend**: `_cancelar_baixa_core` (`contas_receber_service.py`)
+  ganhou parâmetros `origem_cheque`/`excluir_cheques` (default `None` —
+  Pagar nunca passa `origem_cheque`, então as 2 guardas ficam puladas
+  inteiras, preservando o comportamento de sempre desse lado). Lote de
+  cancelamento (`_processar_lote_sync`) passa `origem_cheque="R"` mas
+  NUNCA `excluir_cheques` — lote não pode perguntar; um item com cheque
+  vinculado vira falha isolada na lista de `falhas` (mesmo princípio de
+  isolamento já usado no resto do lote), o usuário decide cancelando esse
+  item específico fora do lote. 8 testes novos (bloqueio, confirmação,
+  excluir=true/false, lote isolando item com cheque, confirmação de que
+  Pagar não roda nenhuma das 2 queries novas).
+- **`ConfirmOptions`/`showConfirm`** (`FeedbackProvider.tsx`) ganhou
+  `onCancel` opcional — o botão "Cancelar" do diálogo genérico só fechava
+  antes; agora, quando informado, também dispara uma ação própria. Sem
+  isso não dava pra replicar o `MsgBox vbYesNo` real (as DUAS respostas
+  do usuário precisam de código próprio aqui — "excluir cheque" E "manter
+  cheque" completam o cancelamento, nenhuma delas é "desistir"). Mudança
+  aditiva, todo `showConfirm` já existente no app continua igual (parâmetro
+  novo, opcional, sem quebrar nenhuma chamada antiga).
+- **Frontend**: `contas-receber.tsx::executarCancelamento` — 1ª chamada
+  sem `excluir_cheques`; se a resposta pedir confirmação, abre um 2º
+  `showConfirm` ("Excluir cheque(s)" vs "Manter cheque(s)", os dois com
+  ação própria) e reenvia já decidido.
+- **Testado ao vivo contra KONTACTO-TESTE** (duplicata avulsa de teste,
+  cliente 900, R$10, baixada na conta 8/INTER):
+  - Guarda 1: inserida linha de teste em `movimentacoes_agrupadas`
+    apontando pro vencimento → cancelamento bloqueado com a mensagem
+    exata do legado, parcela continuou `PG` (nenhum UPDATE rodou).
+  - Guarda 2, `excluir_cheques` omitido: cheque de teste inserido
+    (`cheque.origem='R', doc_origem=<venc>`) → resposta
+    `exige_confirmacao_cheque: true, qtd_cheques: 1`, parcela continuou
+    `PG`.
+  - Guarda 2, `excluir_cheques=true`: parcela voltou pra `'A'`, cheque de
+    teste **excluído** (0 remanescentes).
+  - Guarda 2, `excluir_cheques=false`: parcela voltou pra `'A'`, cheque de
+    teste **mantido** (órfão na tabela, exatamente como o legado faz).
+  - **Bug de processo pego no meio do teste (não de código)**: o backend
+    não estava rodando com o código novo — projeto roda uvicorn SEM
+    `--reload`, e eu tinha esquecido de reiniciar depois de editar
+    `contas_receber_service.py`. 1º teste da Guarda 1 "passou" (cancelou
+    sem bloquear) porque rodou contra o binário antigo; percebido na hora
+    (resultado não batia com o esperado), backend reiniciado, teste
+    refeito do zero com o vencimento re-baixado — resultado correto
+    confirmado depois. Mesmo gotcha já documentado em memória
+    `feedback_backend_supervisor_duplicado`.
+  - Todos os dados de teste (duplicata avulsa, vencimento, os 2 cheques,
+    a linha de `movimentacoes_agrupadas`) removidos ao final — throwaway
+    puro, sem significado de negócio, mesmo critério já usado neste
+    projeto pra não deixar lixo de teste técnico no banco.
+- Baseline preservado: 3007 testes backend passando (mesmos 4
+  pré-existentes não relacionados), TypeScript sem novo erro (mesmos 12
+  pré-existentes).
+- **Achado registrado, fora do pedido original, não implementado**: o
+  cancelamento hoje não checa `controle.data_fecha_cx` (caixa fechado) —
+  rastreado no mesmo `Command2_Click`, a checagem de caixa fechado roda
+  ANTES até da ramificação `CancelaPg`, ou seja, no legado ela vale tanto
+  pra baixa quanto pra cancelamento; a migração só aplica essa guarda em
+  `_baixar_parcela_core`, não em `_cancelar_baixa_core`. Não implementado
+  agora por não fazer parte do pedido ("as 2 guardas"); registrar aqui
+  pra decisão futura do usuário.
 
 ### "Pagamento/Cancelamento Por Data" — operação em lote, não implementada em nenhum lado
 
@@ -16308,8 +17990,8 @@ parte do escopo de nenhuma paridade a implementar.
 | Geração de vencimento residual em baixa parcial | Sim (2 lados) | **Não** |
 | **Cancelar Pagamento/Recebimento** (estornar baixa) | Sim (2 lados, mesma tela em modo alternativo) | **Não existe nenhuma UI/endpoint pra isso hoje** |
 | Reversão de `Contas.saldo_atual`/`movimentacoes` ao cancelar | Sim (2 lados) | N/A (a baixa em si também não grava nada em `Contas`/`movimentacoes` hoje — ver achado "Fluxo de Caixa não reflete baixa" acima) |
-| Guarda de caixa fechado | Sim (2 lados) | **Não** |
-| Forma de Pagamento/Conta obrigatórios na baixa | Sim (2 lados) | **Não** (campos nem aparecem no modal) |
+| Guarda de caixa fechado | Sim (2 lados) | **✅ Implementado 2026-08-28** (`controle.data_fecha_cx`, sem bypass master) |
+| Forma de Pagamento/Conta obrigatórios na baixa | Sim (2 lados) | **✅ Implementado 2026-08-28** (campos já existiam na UI, agora obrigatórios) |
 | Valor pago ≤ valor da parcela | Só lado Receber | **Não** (nenhum lado valida isso hoje) |
 | "Pagamento/Cancelamento Por Data" (lote) | Sim (2 lados) | **Não** |
 | Baixa por "Montante" (várias duplicatas de uma vez) | Só lado Receber | **Não** |
@@ -16366,16 +18048,34 @@ uma investigação só por código Python já escrito tinha sugerido).
   normalmente), cancelamento e lote funcionando igual ao lado Receber.
   Dados de teste deixados no banco de propósito (mesmo padrão já usado
   neste projeto), marcados "TESTE Claude" nas observações.
-- **Fora de escopo, confirmado infeasível durante a investigação técnica**
-  (ver tabela acima): guarda de caixa fechado e reversão de `Contas.
-  saldo_atual`/`movimentacoes` ao cancelar — infraestrutura que ainda não
-  existe em NENHUM lugar desta migração (nem o lado "escrever no
-  fechamento de caixa", nem o lado "gravar movimentação de caixa" a
-  partir de nenhuma tela, incluindo Entrada/Saída de Caixa manual, que
-  tem a mesma lacuna documentada na própria fonte). Mesmo gap já
-  registrado em "Teste de ecossistema Contas a Pagar/Receber/Fluxo de
-  Caixa" acima — decisão de arquitetura maior, não resolvida por baixo
-  dos panos aqui.
+- **Atualização 2026-08-28, mesmo dia — 3 pendências respondidas pelo
+  Leandro, guarda de caixa fechado IMPLEMENTADA**:
+  1. Baixa/cancelamento de duplicata **não deve** mexer no saldo do Fluxo
+     de Caixa — resposta direta do Leandro: "quem faz isso é a rotina de
+     transferência pra fluxo de caixa" (`FrmTransfCaixa.frm`, ainda não
+     migrada, ver "Pendências do Sistema" > item 3 no CLAUDE.md). Ou seja,
+     o achado anterior ("Fluxo de Caixa não reflete baixa", registrado em
+     "Teste de ecossistema Contas a Pagar/Receber/Fluxo de Caixa" acima)
+     **não é um gap desta tela** — é a arquitetura correta, a peça que
+     falta é essa outra tela de transferência, não uma reversão automática
+     de saldo aqui.
+  2. Guarda de caixa fechado (`controle.data_fecha_cx`) e Forma de
+     Pagamento/Conta obrigatórios na baixa — Leandro confirmou "deve usar
+     os mesmos critérios de bloqueio que existem hoje, incluíndo bloqueio
+     por caixa já fechado". **Implementadas** em `_caixa_fechado_sync`/
+     `_baixar_parcela_core` (`contas_receber_service.py`, compartilhado
+     pelo lado Pagar) — cobre baixa individual, lote e Montante de uma vez
+     (todos passam pelo mesmo núcleo). Sem bypass de usuário master (o
+     legado tinha um bypass só no botão de LOTE, inconsistente com a
+     baixa individual — não replicado, ver "Não replicar truques VB6").
+     7 testes novos nos 2 lados. **Reversão de `Contas.saldo_atual`/
+     `movimentacoes` ao cancelar continua fora de escopo** — não é mais
+     "infraestrutura que falta", é decisão confirmada de arquitetura (item
+     1 acima): essa reversão nunca deveria acontecer aqui mesmo.
+  3. Centro de Resultados (rateio) e Emitir Fatura — Leandro: "também
+     ficam de fora", mesmo destino do Boleto avulso (já confirmado antes).
+     As 3 sub-telas do Contas a Receber seguem fora de escopo desta
+     migração.
 
 ---
 
@@ -16815,6 +18515,40 @@ colunas_difal_no_item`, `test_nfe_agrupada_service.py::test_sucesso_
 persiste_colunas_difal_no_item` (cada um confere as 4 colunas no SQL do
 INSERT + os valores nos parâmetros). Suíte completa: **2838 passed**
 (2836 + 2 líquidos), mesmas 4 falhas pré-existentes, zero regressão.
+
+---
+
+## Login (Web/Mobile) — "Mostrar senha" (2026-08-28) — IMPLEMENTADO
+
+**Pedido**: Adriana (suporte) solicitou um ícone de "olho" no campo Senha
+da tela de Login (`frontend/app/login.tsx`) pra revelar a senha digitada
+— **padrão desligado** (senha sempre mascarada até o usuário clicar).
+
+- Novo state `mostrarSenha` (`useState(false)`), ícone `Ionicons`
+  (`eye-outline`/`eye-off-outline`) posicionado à direita do campo,
+  dentro de um `View` com `position: "relative"`.
+- **Aplicado nos DOIS caminhos de renderização do campo Senha** — sem
+  quebrar a regra de segurança já existente (`isMasterUsernameTyped`):
+  - Conta normal (`TextInput` do React Native): `secureTextEntry={!mostrarSenha}`.
+  - Conta master (`KONTACTO`, `<input>` HTML cru mascarado via CSS
+    `WebkitTextSecurity`, pra impedir o gerenciador de senha do navegador
+    de oferecer salvar — ver comentário já existente no código): o
+    toggle só alterna `WebkitTextSecurity` entre `"disc"`/`"none"`,
+    **nunca reintroduz `type="password"`** — a defesa contra o
+    autofill do navegador continua intacta. `maskedSenhaInputStyle`
+    virou função (`(mostrar: boolean) => CSSProperties`) em vez de
+    const fixa, pra aceitar esse parâmetro.
+- `tsc --noEmit` → mesmos 12 erros pré-existentes, nenhum novo, nenhum
+  em `login.tsx`. **Não testado visualmente no navegador ainda** (sem
+  acesso a browser nesta sessão) — validar o alinhamento do ícone e o
+  toggle funcionando de fato antes de considerar 100% fechado.
+
+**Contexto de implantação registrado junto** (mesmo pedido, informação do
+usuário): **não existe ainda nenhuma implantação em Produção rodando em
+cliente real** — só Homologação com a própria equipe Kontacto, a partir
+de 2026-08-28. Relevante pra qualquer decisão futura sobre Canal
+Homologação/Produção (ver CLAUDE.md > "Padrões de UI" > seção 13) — hoje
+"Produção" ainda é um canal sem cliente real consumindo.
 
 ---
 

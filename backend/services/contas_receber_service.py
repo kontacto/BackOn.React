@@ -18,8 +18,10 @@ Fonte VB6 rastreada (linhagem real `backon.vbp`, ver PENDENCIAS.md >
 2026-08-28): listar/gerenciar duplicatas + lançamento avulso + baixa
 manual + exclusão com guarda. Boleto avulso (já coberto por Geração de
 Boletos/Cobranças), Centro de Resultados (rateio) e "Emitir Fatura" ficam
-de fora — usuário vai confirmar com Leandro antes de decidir escopo
-dessas 3 sub-telas.
+de fora — **confirmado com o Leandro, mesmo dia**: os 3 ficam fora desta
+migração (Boleto avulso já tinha sido confirmado antes; Centro de
+Resultados e Emitir Fatura vieram depois, resposta direta "também ficam
+de fora").
 
 **Baixa/Cancelamento/Lote/Montante — CORREÇÃO 2026-08-28**: a afirmação
 anterior ("baixa manual é funcionalidade NOVA, sem precedente") estava
@@ -29,10 +31,26 @@ cancelamento vive em 2 forms separados, nunca antes localizados:
 `Revenda/FrmManPar.frm` (Receber) e `Revenda/FrmManPap.frm` (Pagar), cada
 um com 2 modos (flag global `CancelaPg`/`CancelaPgP`: `"P"`=Pagamento,
 `"C"`=Cancelamento). Ver PENDENCIAS.md > "Baixa de Duplicatas — Achado
-Completo (2026-08-28)" pro rastreio completo campo-a-campo, e a decisão
-de escopo desta rodada (inclui lote "Por Data" e Montante; exclui guarda
-de caixa fechado e reversão de saldo/movimentações — infraestrutura que
-ainda não existe nesta migração, ver a mesma seção).
+Completo (2026-08-28)" pro rastreio completo campo-a-campo.
+
+**Guardas de "caixa fechado" e "Forma de Pagamento/Conta obrigatórios" —
+IMPLEMENTADAS 2026-08-28, mesmo dia**: confirmadas com o Leandro ("deve
+usar os mesmos critérios de bloqueio que existem hoje, incluíndo bloqueio
+por caixa já fechado") — ver `_caixa_fechado_sync`/`_baixar_parcela_core`
+abaixo. `controle.data_fecha_cx` (não `data_fecha_pagar`, coluna
+diferente na mesma tabela — confirmado direto na fonte VB6) é o mesmo
+global `Data_Fecha_Cx` que o legado usa nos 2 lados, sem bypass de
+usuário master (esse bypass só existe no botão de LOTE do legado,
+inconsistência não replicada de propósito — ver "Não replicar truques
+VB6" no CLAUDE.md). **Reversão de saldo/movimentações ao cancelar
+continua fora de escopo** — Leandro esclareceu que baixa/cancelamento de
+duplicata NUNCA deveria mexer no saldo do Fluxo de Caixa mesmo; quem faz
+essa ponte é uma tela separada e ainda não migrada, "Transferência para o
+Fluxo de Caixa" (`FrmTransfCaixa.frm` — ver "Pendências do Sistema" >
+item 3 no CLAUDE.md e "Teste de ecossistema Contas a Pagar/Receber/Fluxo
+de Caixa" no PENDENCIAS.md). Ou seja, o achado anterior ("Fluxo de Caixa
+não reflete baixa") não era um bug de escopo desta tela — é a arquitetura
+correta, só falta a tela de transferência que fecha o ciclo.
 
 **Regra real replicada de `FrmManDur.frm`**: parcela com `situacao='PG'` é
 imutável — nunca editada por `_editar_parcela_sync`, só através de
@@ -44,9 +62,12 @@ Duplicata/parcela paga vinculada — aqui a exclusão bloqueia se qualquer
 parcela já estiver paga (mesmo princípio de "Delete guards required" já
 padrão neste projeto)."""
 import asyncio
-from datetime import date, datetime
+import logging
+from datetime import date, datetime, timedelta
 
 from db.connection import _open_conn
+from services import recibo_service
+from services.contratos_service import _valor_por_extenso
 from services.transferencia_contas_service import _controle_flags_sync, _resolver_numero_duplicata_sync
 
 
@@ -90,6 +111,52 @@ def _listar_sync(servidor: str, banco: str, filtros: dict) -> dict:
                 "AND v.dt_vencimento BETWEEN %s AND %s)"
             )
             params.extend([filtros["data_ini"], filtros["data_fim"]])
+
+        # Filtros extras, rastreados de `FRMCONDUr.frm` ("Consulta de
+        # Duplicatas à Receber...") — achado do usuário 2026-08-31,
+        # integrados na tela de listagem já existente (não uma tela
+        # separada, réplica 1:1 do legado). Subconjunto de alto valor:
+        # Duplicata/Valor/Nº Boleto vivem em `Duplicata_Rec_Venc`, por
+        # isso entram como EXISTS (mesmo padrão já usado acima pro
+        # período) — Duplicata (nº) é exceção, mora direto em
+        # `Duplicata_Receber.duplicata`. Fora desta rodada, registrado:
+        # Banco de Faturamento, Segmento/Região/Rota/Tipo Cliente/
+        # Vendedor/Município/Bairro (comboboxes cruzando Cliente/
+        # Cliente_End), e o sub-filtro "Detalhado" por Orçamento/OS/
+        # Pedido/Nº Pedido Cliente (junta com `comanda_*`, específico do
+        # módulo Bar) — mais complexos, menor valor pra esta tela
+        # financeira, não pedidos explicitamente.
+        if filtros.get("duplicata_num"):
+            where.append("dr.duplicata = %s")
+            params.append(filtros["duplicata_num"])
+
+        if filtros.get("valor"):
+            where.append(
+                "EXISTS (SELECT 1 FROM Duplicata_Rec_Venc v WHERE v.duplicata = dr.codigo "
+                "AND CAST(v.valor + ISNULL(v.tarifa_banco,0) + ISNULL(v.outros_acres_pag,0) AS NUMERIC(15,2)) = %s)"
+            )
+            params.append(filtros["valor"])
+
+        if filtros.get("numero_boleto"):
+            where.append(
+                "EXISTS (SELECT 1 FROM Duplicata_Rec_Venc v WHERE v.duplicata = dr.codigo "
+                "AND v.numero_boleto = %s)"
+            )
+            params.append(filtros["numero_boleto"])
+
+        if filtros.get("situacao_duplicata") is not None:
+            where.append(
+                "EXISTS (SELECT 1 FROM Duplicata_Rec_Venc v WHERE v.duplicata = dr.codigo "
+                "AND ISNULL(v.situacao_duplicata,0) = %s)"
+            )
+            params.append(int(filtros["situacao_duplicata"]))
+
+        if filtros.get("recebido_ini") and filtros.get("recebido_fim"):
+            where.append(
+                "EXISTS (SELECT 1 FROM Duplicata_Rec_Venc v WHERE v.duplicata = dr.codigo "
+                "AND v.data_pag BETWEEN %s AND %s)"
+            )
+            params.extend([filtros["recebido_ini"], filtros["recebido_fim"]])
 
         sql = (
             "SELECT dr.codigo, dr.cliente, c.nome AS cliente_nome, c.fantasia AS cliente_fantasia, "
@@ -158,7 +225,8 @@ def _detalhe_sync(servidor: str, banco: str, codigo: int) -> dict:
 
         cur.execute(
             "SELECT codigo, duplicata, desmembramento, dt_vencimento, valor, situacao, "
-            "data_pag, valor_pag, desconto_pag, juros_pag, conta, forma_pag, obs_vencimento "
+            "data_pag, valor_pag, desconto_pag, juros_pag, conta, forma_pag, obs_vencimento, "
+            "ISNULL(situacao_duplicata,0) AS situacao_duplicata "
             "FROM Duplicata_Rec_Venc WHERE duplicata = %s ORDER BY desmembramento",
             (codigo,),
         )
@@ -177,6 +245,9 @@ def _detalhe_sync(servidor: str, banco: str, codigo: int) -> dict:
                 "conta": p.get("conta"),
                 "forma_pag": p.get("forma_pag"),
                 "observacao": p.get("obs_vencimento"),
+                # 0=Normal, 1=Jurídico, 2=Protestado — ver
+                # `_alterar_situacao_vencimento_sync` pro rastreio completo.
+                "situacao_duplicata": int(p.get("situacao_duplicata") or 0),
             })
 
         cur.execute(
@@ -191,6 +262,155 @@ def _detalhe_sync(servidor: str, banco: str, codigo: int) -> dict:
     except Exception as e:
         try:
             conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+# =============================================================================
+# "Notas Fiscais" — vincular/desvincular NF adicional numa duplicata já
+# existente. Réplica de `FrmManDur.frm::Command5_Click` (busca) +
+# `NF2_DblClick` (vincular) + `NF_DblClick` (desvincular). Achado do
+# usuário 2026-08-31.
+#
+# **Escopo desta rodada**: só "Notas Fiscais" (Receber). "N.F. de
+# Desconto" (Command6/`NFD_DblClick`, vincula uma nota de PAGAR como
+# abatimento — cruza módulo, incomum) fica de fora, registrado, não
+# construído sem confirmação.
+#
+# **Achado real, não presumido**: nem `NF2_DblClick` nem `NF_DblClick`
+# tocam `Duplicata_Receber.valor` nem `Duplicata_Rec_Venc` — só o grid em
+# tela (`TotNF`/`TotGeral`) é recalculado, informativo. Isso significa
+# que vincular/desvincular uma NF NÃO ajusta automaticamente o valor
+# total nem as parcelas da duplicata no legado — replicado fielmente
+# aqui: só a ligação (`Duplicata_Rec_Nf`) e o status da NF
+# (`Receber.situacao`) mudam. Se o valor da duplicata/parcelas precisar
+# refletir a NF nova, isso é responsabilidade separada do usuário (editar
+# parcela/vencimentos manualmente) — mesma divisão de responsabilidade já
+# existente no legado.
+# =============================================================================
+
+def _notas_disponiveis_sync(servidor: str, banco: str, codigo_duplicata: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}", "items": []}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT dr.cliente FROM Duplicata_Receber dr WHERE dr.codigo = %s",
+            (codigo_duplicata,),
+        )
+        dup = cur.fetchone()
+        if not dup:
+            cur.close(); conn.close()
+            return {"success": False, "message": "Duplicata não encontrada.", "items": []}
+
+        cur.execute("SELECT cgc_cpf FROM Cliente WHERE codigo = %s", (dup["cliente"],))
+        row = cur.fetchone()
+        cgc_cpf_raiz = (row.get("cgc_cpf") or "")[:8] if row else ""
+
+        # Mesmo critério do legado: outras NFs em aberto (`situacao='A'`)
+        # de QUALQUER cliente com a mesma raiz de CGC/CPF (matriz/filiais),
+        # não só do cliente exato da duplicata.
+        cur.execute(
+            "SELECT r.codigo, c.codigo AS codigo_cliente, c.nome, r.nota_fiscal, r.serie, r.valor "
+            "FROM Receber r JOIN Cliente c ON c.codigo = r.cliente "
+            "WHERE r.situacao = 'A' AND LEFT(c.cgc_cpf,8) = %s",
+            (cgc_cpf_raiz,),
+        )
+        items = [
+            {
+                "codigo": r["codigo"], "codigo_cliente": r["codigo_cliente"], "cliente_nome": r["nome"],
+                "nota_fiscal": r["nota_fiscal"], "serie": r.get("serie"), "valor": float(r.get("valor") or 0),
+            }
+            for r in (cur.fetchall() or [])
+        ]
+        cur.close(); conn.close()
+        return {"success": True, "items": items}
+    except Exception as e:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}", "items": []}
+
+
+def _vincular_nf_sync(servidor: str, banco: str, codigo_duplicata: int, nf_fiscal: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT codigo FROM Duplicata_Receber WHERE codigo = %s", (codigo_duplicata,))
+        if not cur.fetchone():
+            cur.close(); conn.close()
+            return {"success": False, "message": "Duplicata não encontrada."}
+
+        cur.execute(
+            "SELECT duplicata FROM Duplicata_Rec_Nf WHERE duplicata = %s AND nf_fiscal = %s",
+            (codigo_duplicata, nf_fiscal),
+        )
+        if cur.fetchone():
+            cur.close(); conn.close()
+            return {"success": False, "message": "Nota Fiscal já vinculada a esta duplicata."}
+
+        cur.execute("SELECT situacao FROM Receber WHERE codigo = %s", (nf_fiscal,))
+        nf = cur.fetchone()
+        if not nf:
+            cur.close(); conn.close()
+            return {"success": False, "message": "Nota Fiscal não encontrada."}
+        if nf.get("situacao") != "A":
+            cur.close(); conn.close()
+            return {"success": False, "message": "Esta Nota Fiscal não está mais em aberto."}
+
+        cur.execute("INSERT INTO Duplicata_Rec_Nf (duplicata, nf_fiscal) VALUES (%s,%s)", (codigo_duplicata, nf_fiscal))
+        cur.execute("UPDATE Receber SET situacao = 'DU' WHERE codigo = %s", (nf_fiscal,))
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+def _desvincular_nf_sync(servidor: str, banco: str, codigo_duplicata: int, nf_fiscal: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute(
+            "SELECT COUNT(*) AS qtd FROM Duplicata_Rec_Venc WHERE duplicata = %s AND situacao = 'PG'",
+            (codigo_duplicata,),
+        )
+        if cur.fetchone()["qtd"] > 0:
+            cur.close(); conn.close()
+            return {"success": False, "message": (
+                "Esta duplicata já possui vencimentos pagos — só é possível alterar dados sobre os vencimentos."
+            )}
+
+        cur.execute(
+            "SELECT duplicata FROM Duplicata_Rec_Nf WHERE duplicata = %s AND nf_fiscal = %s",
+            (codigo_duplicata, nf_fiscal),
+        )
+        if not cur.fetchone():
+            cur.close(); conn.close()
+            return {"success": False, "message": "Esta Nota Fiscal não está vinculada a esta duplicata."}
+
+        cur.execute("DELETE FROM Duplicata_Rec_Nf WHERE duplicata = %s AND nf_fiscal = %s", (codigo_duplicata, nf_fiscal))
+        cur.execute("UPDATE Receber SET situacao = 'A' WHERE codigo = %s", (nf_fiscal,))
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
         except Exception:
             pass
         return {"success": False, "message": f"Erro: {e}"}
@@ -356,13 +576,147 @@ def _gerar_vencimento_residual(cur, tabela_venc: str, tabela_cabecalho: str, dup
     cur.execute(f"UPDATE {tabela_cabecalho} SET num_parcelas = num_parcelas + 1 WHERE codigo = %s", (dup_codigo,))
 
 
+def _caixa_fechado_sync(cur, data_pag: str) -> bool:
+    """`controle.data_fecha_cx` — mesmo princípio de "Porting VB6 global
+    state" (CLAUDE.md): no legado é um global (`Data_Fecha_Cx`, setado uma
+    vez no login), aqui é re-derivado por chamada, nunca cacheado, porque
+    este backend atende múltiplas empresas/conexões concorrentes. Réplica
+    de `FrmManPap.frm`/`FrmManPar.frm`'s `Command2_Click`
+    (`CDate(Campo(5)) <= CDate(Data_Fecha_Cx)`) — bloqueia baixa com data
+    de pagamento igual ou anterior ao fechamento. Confirmado ao vivo
+    (ARGEN TESTE) que a coluna existe e tem dado real (`data_fecha_cx`,
+    não `data_fecha_pagar` — essa outra coluna existe na mesma tabela mas
+    não é a lida por este guard, confirmado direto na fonte). `data_pag`
+    sempre chega como `str` (`ContasReceberBaixaRequest.data_pag: str`),
+    formato `AAAA-MM-DD` — comparação lexicográfica basta."""
+    if not data_pag:
+        return False
+    cur.execute("SELECT TOP 1 data_fecha_cx FROM controle")
+    row = cur.fetchone()
+    data_fecha = row.get("data_fecha_cx") if row else None
+    if not data_fecha:
+        return False
+    data_fecha_str = data_fecha.isoformat() if hasattr(data_fecha, "isoformat") else str(data_fecha)
+    return data_pag[:10] <= data_fecha_str
+
+
+# =============================================================================
+# Cronograma de repasse de Cartão de Crédito/Débito — réplica de
+# `Gestor_Cartoes.bas::AtualizadrvCartao`, achado do usuário 2026-08-31
+# ("o que falta no ecossistema Receber"). RECEBER-ONLY — confirmado
+# rastreando a fonte que este mecanismo não existe do lado Pagar
+# (`FrmManPap.frm` nunca chama essa rotina). Chamado nos mesmos 2 pontos
+# do legado (`FrmManPar.frm::Command2_Click`): depois de toda baixa E
+# depois de todo cancelamento de baixa — idempotente (sempre apaga e
+# regrava o cronograma daquele vencimento).
+# =============================================================================
+
+def _ajustar_dia_util_sync(cur, data: date) -> date:
+    """Réplica exata da rolagem de `AtualizadrvCartao`: primeiro empurra
+    fim de semana (sábado +2, domingo +1) uma vez; depois, em loop,
+    empurra +1 dia enquanto a data cair num feriado cadastrado —
+    reaplicando a mesma regra de fim de semana a cada empurrão (mesmo
+    algoritmo do `.bas`, não uma versão "melhorada")."""
+    def _rola_fim_de_semana(d: date) -> date:
+        if d.weekday() == 5:  # sábado
+            return d + timedelta(days=2)
+        if d.weekday() == 6:  # domingo
+            return d + timedelta(days=1)
+        return d
+
+    data = _rola_fim_de_semana(data)
+    while True:
+        cur.execute("SELECT 1 AS achou FROM feriados WHERE data = %s", (data,))
+        if not cur.fetchone():
+            return data
+        data = _rola_fim_de_semana(data + timedelta(days=1))
+
+
+def _atualizar_cartao_sync(cur, duplicata: int, codigo_venc: int = 0) -> None:
+    """`codigo_venc=0` recalcula TODOS os vencimentos da duplicata (réplica
+    de `CodRecVenc=0` no `.bas`); um código específico recalcula só esse.
+    Nunca propaga exceção pro chamador — é um recurso complementar
+    (cronograma informativo de repasse), uma falha aqui não pode derrubar
+    a baixa/cancelamento em si (mesmo princípio de isolamento já usado em
+    `_get_empresa_sync`/`ensure_all_schema`)."""
+    try:
+        if codigo_venc:
+            cur.execute("SELECT codigo FROM Duplicata_Rec_Venc WHERE duplicata = %s AND codigo = %s", (duplicata, codigo_venc))
+        else:
+            cur.execute("SELECT codigo FROM Duplicata_Rec_Venc WHERE duplicata = %s", (duplicata,))
+        vencs = [r["codigo"] for r in cur.fetchall()]
+        data_limite = date.today() - timedelta(days=350)
+        for venc in vencs:
+            cur.execute("DELETE FROM duplicata_rec_venc_cartao WHERE sequencia_drv = %s", (venc,))
+            cur.execute("DELETE FROM duplicata_rec_venc_debito WHERE sequencia_drv = %s", (venc,))
+            for tipo_fp, tabela_destino in (("CC", "duplicata_rec_venc_cartao"), ("CD", "duplicata_rec_venc_debito")):
+                cur.execute(
+                    "SELECT drv.valor_pag, drv.data_pag, fp.prazo, fp.prazo_rec, fp.parcela_max "
+                    "FROM Duplicata_Rec_Venc drv JOIN forma_pagamento fp ON fp.codigo = drv.forma_pag "
+                    "WHERE drv.codigo = %s AND drv.data_pag >= %s AND drv.situacao = 'PG' AND fp.tipo = %s",
+                    (venc, data_limite, tipo_fp),
+                )
+                row = cur.fetchone()
+                if not row or not row.get("data_pag"):
+                    continue
+                parcelas = int(row.get("parcela_max") or 0) or 1
+                valor_parcela = round(float(row.get("valor_pag") or 0) / parcelas, 2)
+                data_corrente = row["data_pag"]
+                prazo = int(row.get("prazo") or 0)
+                prazo_rec = int(row.get("prazo_rec") or 0)
+                for _ in range(parcelas):
+                    data_corrente = data_corrente + timedelta(days=prazo)
+                    data_grava = _ajustar_dia_util_sync(cur, data_corrente + timedelta(days=prazo_rec))
+                    cur.execute(
+                        f"INSERT INTO {tabela_destino} (sequencia_drv, valor, bom_para) VALUES (%s, %s, %s)",
+                        (venc, valor_parcela, data_grava),
+                    )
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Falha ao recalcular cronograma de cartão/débito da duplicata %s", duplicata, exc_info=True,
+        )
+
+
+# =============================================================================
+# Cheque(s) pré-datado(s) recebido(s) na própria Baixa — réplica de
+# `FrmManPar.frm::Command2_Click`'s `GridCheques`/`GravaChequePre`
+# (`Geral/mdl_proc.bas`), achado do usuário 2026-08-31. RECEBER-ONLY —
+# mesma confirmação de `_atualizar_cartao_sync` acima (não existe em
+# `FrmManPap.frm`). Nunca chamado em Lote/Montante (o legado também só
+# tem essa grade na baixa individual).
+# =============================================================================
+
+def _gravar_cheque_pre_sync(cur, codigo_venc: int, data_pag: str, cheque: dict) -> None:
+    cur.execute(
+        "INSERT INTO cheque (tipo, banco, agencia, conta, numero_ch, valor, data, bom_para, origem, "
+        "doc_origem, obs, situacao, telefone, nome_cheque) VALUES (1, %s, %s, %s, %s, %s, %s, %s, 'R', %s, '', 1, %s, %s)",
+        (
+            cheque.get("banco"), cheque.get("agencia") or "", cheque.get("conta") or "",
+            cheque.get("numero_ch"), cheque.get("valor"), data_pag, cheque.get("bom_para") or data_pag,
+            codigo_venc, cheque.get("telefone") or "", cheque.get("nome_cheque") or "",
+        ),
+    )
+
+
 def _baixar_parcela_core(cur, tabela_venc: str, tabela_cabecalho: str, req: dict,
                           validar_valor_max: bool, campos_extra: tuple = ()) -> dict:
     """Núcleo da baixa — assume cursor/transação já abertos por quem
     chama (baixa individual, lote, ou montante); não comita/fecha
     conexão. `campos_extra` lista colunas específicas de um dos lados
     (hoje só `num_doc_pag`, exclusivo do Pagar — não existe em
-    `Duplicata_Rec_Venc`)."""
+    `Duplicata_Rec_Venc`).
+
+    **Guardas confirmadas com Leandro, 2026-08-28** ("deve usar os mesmos
+    critérios de bloqueio que existem hoje, incluíndo bloqueio por caixa
+    já fechado") — réplica de `Command2_Click` nos 2 forms legados
+    (`FrmManPap.frm`/`FrmManPar.frm`): caixa fechado bloqueia SEMPRE
+    (nenhum dos dois `Command2_Click` tem bypass de usuário master — só o
+    botão de LOTE, `Command7_Click`, tinha um bypass pra `UsuarioAtual =
+    "KONTACTO"`, inconsistência que não é replicada aqui de propósito,
+    ver "Não replicar truques VB6" no CLAUDE.md — a mesma regra vale pra
+    baixa individual, lote e Montante, todos passam por este núcleo).
+    Forma de Pagamento e Conta obrigatórios (só no modo baixa — nunca no
+    cancelamento, que é uma função à parte, `_cancelar_baixa_core`)."""
     codigo_venc = req["codigo_venc"]
     cur.execute(
         f"SELECT codigo, duplicata, situacao, valor, dt_vencimento FROM {tabela_venc} WHERE codigo = %s",
@@ -373,6 +727,13 @@ def _baixar_parcela_core(cur, tabela_venc: str, tabela_cabecalho: str, req: dict
         return {"success": False, "message": "Parcela não encontrada."}
     if parcela["situacao"] == "PG":
         return {"success": False, "message": "Esta parcela já está paga."}
+
+    if _caixa_fechado_sync(cur, req.get("data_pag")):
+        return {"success": False, "message": "Caixa já fechado! Transação não permitida."}
+    if not req.get("forma_pag"):
+        return {"success": False, "message": "Defina a Forma de Pagamento."}
+    if not req.get("conta"):
+        return {"success": False, "message": "Defina a Conta."}
 
     valor_pag = float(req["valor_pag"])
     valor_parcela = float(parcela["valor"] or 0)
@@ -406,27 +767,66 @@ def _baixar_parcela_core(cur, tabela_venc: str, tabela_cabecalho: str, req: dict
         _gerar_vencimento_residual(cur, tabela_venc, tabela_cabecalho, dup_codigo, parcela["dt_vencimento"], saldo)
 
     _rollup_cabecalho(cur, tabela_venc, tabela_cabecalho, dup_codigo)
-    return {"success": True}
+    return {"success": True, "duplicata": dup_codigo}
 
 
-def _cancelar_baixa_core(cur, tabela_venc: str, tabela_cabecalho: str, codigo_venc: int) -> dict:
+def _cancelar_baixa_core(cur, tabela_venc: str, tabela_cabecalho: str, codigo_venc: int,
+                          origem_cheque: str = None, excluir_cheques: bool = None) -> dict:
     """Núcleo do cancelamento — mesmo princípio de `_baixar_parcela_core`
     (cursor já aberto, não comita). Zera exatamente os campos que o
     legado zera (`Command2_Click`, modo `"C"`) — não limpa banco/agência/
-    forma/conta/tarifa/boleto/documento/observação, réplica fiel."""
+    forma/conta/tarifa/boleto/documento/observação, réplica fiel.
+
+    `origem_cheque` ('R' só quando chamado do lado Receber, `None` no
+    Pagar) liga as 2 guardas exclusivas do lado Receber, rastreadas em
+    `Revenda\\FrmManPar.frm::Command2_Click` (modo Cancelamento) —
+    ver PENDENCIAS.md > "Baixa de Duplicatas" pro trecho VB6 completo:
+    1. **Agrupamento de comandas no caixa** (`movimentacoes_agrupadas.
+       cod_transf_comanda`) — bloqueio incondicional, sem exceção pro
+       usuário master (mesmo padrão já usado no resto desta migração pra
+       guarda de negócio real, não de permissão).
+    2. **Cheque pré-datado vinculado** (`cheque` `origem='R'`) — nunca
+       bloqueia sozinho, só PERGUNTA no legado (`MsgBox vbYesNo`). Numa
+       API stateless isso vira 2 passos: 1ª chamada sem `excluir_cheques`
+       devolve `exige_confirmacao_cheque=True` sem mexer em nada; a
+       chamada seguinte já manda `excluir_cheques` (True/False) decidido
+       pelo usuário, e só aí o cancelamento prossegue de verdade — mesmo
+       padrão 2-passos já usado em `previsoes_service._delete_sync` pra
+       "exige_autorizacao" de gerente."""
     cur.execute(f"SELECT codigo, duplicata, situacao FROM {tabela_venc} WHERE codigo = %s", (codigo_venc,))
     parcela = cur.fetchone()
     if not parcela:
         return {"success": False, "message": "Parcela não encontrada."}
     if parcela["situacao"] != "PG":
         return {"success": False, "message": "Esta parcela não está paga."}
+
+    qtd_cheques = 0
+    if origem_cheque:
+        cur.execute("SELECT COUNT(*) AS qtd FROM movimentacoes_agrupadas WHERE cod_transf_comanda = %s", (codigo_venc,))
+        if (cur.fetchone() or {}).get("qtd", 0) > 0:
+            return {"success": False, "message": "Este lançamento faz parte de um agrupamento de comandas no caixa, impossibilitando a exclusão!"}
+
+        cur.execute("SELECT COUNT(*) AS qtd FROM cheque WHERE origem = %s AND doc_origem = %s", (origem_cheque, codigo_venc))
+        qtd_cheques = (cur.fetchone() or {}).get("qtd", 0)
+        if qtd_cheques > 0 and excluir_cheques is None:
+            return {
+                "success": False,
+                "exige_confirmacao_cheque": True,
+                "qtd_cheques": qtd_cheques,
+                "message": f"Existe(m) {qtd_cheques} cheque(s) associado(s) a esta duplicata. Deseja excluir também?",
+            }
+
     cur.execute(
         f"UPDATE {tabela_venc} SET situacao = 'A', data_pag = NULL, valor_pag = 0, desconto_pag = 0, "
         "outros_desc_pag = 0, juros_pag = 0, outros_acres_pag = 0 WHERE codigo = %s",
         (codigo_venc,),
     )
     _rollup_cabecalho(cur, tabela_venc, tabela_cabecalho, parcela["duplicata"])
-    return {"success": True}
+
+    if origem_cheque and qtd_cheques > 0 and excluir_cheques:
+        cur.execute("DELETE FROM cheque WHERE origem = %s AND doc_origem = %s", (origem_cheque, codigo_venc))
+
+    return {"success": True, "duplicata": parcela["duplicata"]}
 
 
 def _baixar_parcela_sync(servidor: str, banco: str, req: dict) -> dict:
@@ -442,6 +842,11 @@ def _baixar_parcela_sync(servidor: str, banco: str, req: dict) -> dict:
         if not resultado["success"]:
             cur.close(); conn.close()
             return resultado
+        # Cheque(s) pré-datado(s) informado(s) na própria baixa — réplica
+        # de `GridCheques`/`GravaChequePre`, achado do usuário 2026-08-31.
+        for cheque in (req.get("cheques") or []):
+            _gravar_cheque_pre_sync(cur, req["codigo_venc"], req["data_pag"], cheque)
+        _atualizar_cartao_sync(cur, resultado["duplicata"], req["codigo_venc"])
         conn.commit()
         cur.close(); conn.close()
         return {"success": True}
@@ -460,10 +865,14 @@ def _cancelar_baixa_sync(servidor: str, banco: str, req: dict) -> dict:
         return {"success": False, "message": f"Falha conexão: {e}"}
     try:
         cur = conn.cursor(as_dict=True)
-        resultado = _cancelar_baixa_core(cur, "Duplicata_Rec_Venc", "Duplicata_Receber", req["codigo_venc"])
+        resultado = _cancelar_baixa_core(
+            cur, "Duplicata_Rec_Venc", "Duplicata_Receber", req["codigo_venc"],
+            origem_cheque="R", excluir_cheques=req.get("excluir_cheques"),
+        )
         if not resultado["success"]:
             cur.close(); conn.close()
             return resultado
+        _atualizar_cartao_sync(cur, resultado["duplicata"], req["codigo_venc"])
         conn.commit()
         cur.close(); conn.close()
         return {"success": True}
@@ -548,7 +957,13 @@ def _processar_lote_sync(servidor: str, banco: str, req: dict) -> dict:
         for codigo_venc in (req.get("vencimentos") or []):
             try:
                 if modo == "cancelar":
-                    r = _cancelar_baixa_core(cur, "Duplicata_Rec_Venc", "Duplicata_Receber", codigo_venc)
+                    # excluir_cheques nunca é passado aqui — lote não pode
+                    # perguntar; item com cheque vinculado vira falha
+                    # isolada (mensagem já explica o motivo), usuário
+                    # decide cancelando esse item individualmente.
+                    r = _cancelar_baixa_core(cur, "Duplicata_Rec_Venc", "Duplicata_Receber", codigo_venc, origem_cheque="R")
+                    if r["success"]:
+                        _atualizar_cartao_sync(cur, r["duplicata"], codigo_venc)
                 else:
                     cur.execute("SELECT valor FROM Duplicata_Rec_Venc WHERE codigo = %s", (codigo_venc,))
                     row = cur.fetchone()
@@ -561,6 +976,8 @@ def _processar_lote_sync(servidor: str, banco: str, req: dict) -> dict:
                         "conta": req.get("conta"), "forma_pag": req.get("forma_pag"),
                     }
                     r = _baixar_parcela_core(cur, "Duplicata_Rec_Venc", "Duplicata_Receber", item_req, validar_valor_max=False)
+                    if r["success"]:
+                        _atualizar_cartao_sync(cur, r["duplicata"], codigo_venc)
                 if r["success"]:
                     processados += 1
                 else:
@@ -611,6 +1028,7 @@ def _baixar_montante_sync(servidor: str, banco: str, req: dict) -> dict:
             }
             r = _baixar_parcela_core(cur, "Duplicata_Rec_Venc", "Duplicata_Receber", item_req, validar_valor_max=False)
             if r["success"]:
+                _atualizar_cartao_sync(cur, r["duplicata"], codigo_venc)
                 saldo_restante = round(saldo_restante - valor_aplicado, 2)
                 tocados.append(codigo_venc)
         conn.commit()
@@ -654,6 +1072,39 @@ def _editar_parcela_sync(servidor: str, banco: str, req: dict) -> dict:
         return {"success": False, "message": f"Erro: {e}"}
 
 
+# "Cadastro de Vencimentos" — combo Situação (`FrmManDur.frm`, Situacao)
+# grava só `duplicata_rec_venc.situacao_duplicata`, 0-based (`ListIndex`
+# gravado direto): 0=Normal, 1=Jurídico, 2=Protestado. Endpoint dedicado,
+# nunca reaproveita `_editar_parcela_sync` (aquele sobrescreve dt_vencimento/
+# valor incondicionalmente). Achado do usuário 2026-08-31: essa situação é
+# o que `_alertas_sync` (Painel Financeiro) já filtra pra "Contas a Receber
+# em Atraso/Hoje" (`ISNULL(situacao_duplicata,0)=0` — só Normal entra).
+def _alterar_situacao_vencimento_sync(servidor: str, banco: str, codigo_venc: int, situacao_duplicata: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT codigo FROM Duplicata_Rec_Venc WHERE codigo = %s", (codigo_venc,))
+        if not cur.fetchone():
+            cur.close(); conn.close()
+            return {"success": False, "message": "Vencimento não encontrado."}
+        cur.execute(
+            "UPDATE Duplicata_Rec_Venc SET situacao_duplicata = %s WHERE codigo = %s",
+            (situacao_duplicata, codigo_venc),
+        )
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": True}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
 # =============================================================================
 # Exclusão — com guarda (melhoria deliberada vs. o legado, ver docstring).
 # =============================================================================
@@ -683,6 +1134,20 @@ def _excluir_sync(servidor: str, banco: str, codigo_duplicata: int) -> dict:
         cur.execute("SELECT nf_fiscal FROM Duplicata_Rec_Nf WHERE duplicata = %s", (codigo_duplicata,))
         receber_codigos = [r["nf_fiscal"] for r in (cur.fetchall() or [])]
 
+        # Bug real corrigido 2026-08-31, achado do usuário (#017, "previsões
+        # com memorando cosmético"): esta função apagava `Duplicata_Rec_Venc`
+        # sem antes limpar as previsões vinculadas por Transferência p/Fluxo
+        # de Caixa (`cod_transf_caixa` aponta pro `codigo` do vencimento) —
+        # deixava a previsão órfã, referenciando um vencimento que não
+        # existe mais. Mesma limpeza já usada em `_alterar_numero_sync`
+        # (#028), aplicada aqui também, ANTES do DELETE de Duplicata_Rec_Venc
+        # (senão o JOIN não teria mais o que casar).
+        cur.execute(
+            "DELETE p FROM Previsoes p INNER JOIN Duplicata_Rec_Venc v ON v.codigo = p.cod_transf_caixa "
+            "WHERE p.flag_transf_caixa = 'R' AND v.duplicata = %s",
+            (codigo_duplicata,),
+        )
+
         cur.execute("DELETE FROM Duplicata_Rec_Venc WHERE duplicata = %s", (codigo_duplicata,))
         cur.execute("DELETE FROM Duplicata_Rec_Nf WHERE duplicata = %s", (codigo_duplicata,))
         cur.execute("DELETE FROM Duplicata_Receber WHERE codigo = %s", (codigo_duplicata,))
@@ -708,6 +1173,120 @@ def _excluir_sync(servidor: str, banco: str, codigo_duplicata: int) -> dict:
         except Exception:
             pass
         return {"success": False, "message": f"Erro: {e}"}
+
+
+# =============================================================================
+# Alterar Número da Duplicata — réplica de `FrmManDur.frm::Command15_Click`.
+# Achado do usuário 2026-08-31. Efeito colateral real do legado, replicado
+# fielmente (não é gambiarra de VB6, é regra de negócio real): o vínculo
+# previsão→vencimento embute o NÚMERO ANTIGO da duplicata no memorando/
+# referência (`Transferência p/Fluxo de Caixa`, `cod_transf_caixa` aponta
+# pro `Duplicata_Rec_Venc.codigo`, mas o texto/contexto da previsão fica
+# referenciando a duplicata antiga) — renumerar sem limpar deixaria a
+# previsão órfã/desatualizada. Por isso: apaga as previsões vinculadas
+# (`flag_transf_caixa='R'`) de TODOS os vencimentos desta duplicata, e
+# reseta `transf_previsao` pra permitir gerar uma transferência nova sob o
+# número atualizado.
+# =============================================================================
+
+def _alterar_numero_sync(servidor: str, banco: str, codigo_duplicata: int, novo_numero: int) -> dict:
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        cur.execute("SELECT codigo FROM Duplicata_Receber WHERE codigo = %s", (codigo_duplicata,))
+        if not cur.fetchone():
+            cur.close(); conn.close()
+            return {"success": False, "message": "Duplicata não encontrada."}
+
+        cur.execute(
+            "SELECT codigo FROM Duplicata_Receber WHERE codigo <> %s AND duplicata = %s",
+            (codigo_duplicata, novo_numero),
+        )
+        if cur.fetchone():
+            cur.close(); conn.close()
+            return {"success": False, "message": "Já existe uma duplicata cadastrada com esse número."}
+
+        cur.execute("UPDATE Duplicata_Receber SET duplicata = %s WHERE codigo = %s", (novo_numero, codigo_duplicata))
+        cur.execute(
+            "DELETE p FROM Previsoes p INNER JOIN Duplicata_Rec_Venc v ON v.codigo = p.cod_transf_caixa "
+            "WHERE p.flag_transf_caixa = 'R' AND v.duplicata = %s",
+            (codigo_duplicata,),
+        )
+        cur.execute("UPDATE Duplicata_Rec_Venc SET transf_previsao = '' WHERE duplicata = %s", (codigo_duplicata,))
+
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": True, "duplicata": novo_numero}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+# =============================================================================
+# "Emitir Recibo" — achado de análise 2026-08-31 (Áureo/Carlos): a tela de
+# Baixa do legado (`Revenda/FrmManPar.frm`) já tem um botão "&Emitir
+# Recibo" (Command13) — mas o Command13_Click está inteiramente comentado/
+# morto na fonte real, nunca chega a abrir `FrmManRecibo`. O comentário
+# morto já documenta a intenção original: pré-preencher Recebemos/Valor/
+# Data a partir do pagamento em questão. Esta função completa essa
+# intenção — não é comportamento inventado sem precedente na fonte, só
+# termina o que ficou desligado por lá. Numeração/gravação reaproveitam o
+# núcleo compartilhado `recibo_service._gravar_recibo_numerado_sync`
+# (extraído de `contratos_service._gerar_recibo_sync`, que já emite Recibo
+# pra Faturar Contratos com a mesma tabela/numeração).
+#
+# Emitido pra QUALQUER parcela já paga (`Duplicata_Rec_Venc.situacao =
+# 'PG'`), não só logo após a baixa — o usuário revisa/edita Recebemos/
+# Valor/Referente/Assinatura antes de confirmar (mesmo princípio do
+# formulário legado standalone `frmmanrecibo.frm`, que também nunca grava
+# sem esses campos preenchidos manualmente).
+# =============================================================================
+
+def _emitir_recibo_sync(
+    servidor: str, banco: str, *, recebemos: str, valor: float, referente: str,
+    data_recibo: str | None = None, assinatura: str | None = None,
+) -> dict:
+    recebemos = (recebemos or "").strip()
+    referente = (referente or "").strip()
+    if not recebemos:
+        return {"success": False, "message": "Informe quem está pagando (Recebemos de)."}
+    if not valor or valor <= 0:
+        return {"success": False, "message": "Informe um valor válido para o recibo."}
+    if not referente:
+        return {"success": False, "message": "Informe a que o recibo se refere."}
+    dt = None
+    if data_recibo:
+        try:
+            dt = date.fromisoformat(data_recibo)
+        except ValueError:
+            dt = None
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        resultado = recibo_service._gravar_recibo_numerado_sync(
+            cur, recebemos=recebemos, valor=valor, referente=referente,
+            data_recibo=dt, assinatura=(assinatura or "").strip() or None,
+        )
+        conn.commit()
+        cur.close(); conn.close()
+        resultado["success"] = True
+        resultado["valor_extenso"] = _valor_por_extenso(valor)
+        return resultado
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro ao emitir recibo: {e}"}
 
 
 # =============================================================================
@@ -777,9 +1356,80 @@ async def editar_parcela(servidor: str, banco: str, req: dict) -> dict:
     return await asyncio.to_thread(_editar_parcela_sync, servidor, banco, req)
 
 
+async def alterar_situacao_vencimento(servidor: str, banco: str, codigo_venc: int, situacao_duplicata: int) -> dict:
+    return await asyncio.to_thread(_alterar_situacao_vencimento_sync, servidor, banco, codigo_venc, situacao_duplicata)
+
+
+def _alterar_situacao_vencimento_lote_sync(servidor: str, banco: str, codigos_venc: list, situacao_duplicata: int) -> dict:
+    # Alteração em lote (achado do usuário 2026-08-31, "permitir fazer
+    # essa alteração em lote") — mesma UPDATE de `_alterar_situacao_
+    # vencimento_sync`, só que pra vários vencimentos de uma vez, cada um
+    # isolado em seu próprio try/except (mesmo padrão de `_efetivar_sync`
+    # em previsoes_service.py — um item falhar não derruba o lote inteiro).
+    try:
+        conn = _open_conn(servidor, banco)
+    except Exception as e:
+        return {"success": False, "message": f"Falha conexão: {e}"}
+    try:
+        cur = conn.cursor(as_dict=True)
+        sucesso, falhas = [], []
+        for codigo_venc in codigos_venc:
+            try:
+                cur.execute("SELECT codigo FROM Duplicata_Rec_Venc WHERE codigo = %s", (int(codigo_venc),))
+                if not cur.fetchone():
+                    falhas.append({"codigo": codigo_venc, "message": "Vencimento não encontrado."})
+                    continue
+                cur.execute(
+                    "UPDATE Duplicata_Rec_Venc SET situacao_duplicata = %s WHERE codigo = %s",
+                    (situacao_duplicata, int(codigo_venc)),
+                )
+                sucesso.append(codigo_venc)
+            except Exception as e:
+                falhas.append({"codigo": codigo_venc, "message": str(e)})
+        conn.commit()
+        cur.close(); conn.close()
+        return {"success": len(falhas) == 0, "alterados": sucesso, "falhas": falhas}
+    except Exception as e:
+        try:
+            conn.rollback(); conn.close()
+        except Exception:
+            pass
+        return {"success": False, "message": f"Erro: {e}"}
+
+
+async def alterar_situacao_vencimento_lote(servidor: str, banco: str, codigos_venc: list, situacao_duplicata: int) -> dict:
+    return await asyncio.to_thread(_alterar_situacao_vencimento_lote_sync, servidor, banco, codigos_venc, situacao_duplicata)
+
+
 async def excluir(servidor: str, banco: str, codigo_duplicata: int) -> dict:
     return await asyncio.to_thread(_excluir_sync, servidor, banco, codigo_duplicata)
 
 
+async def alterar_numero(servidor: str, banco: str, codigo_duplicata: int, novo_numero: int) -> dict:
+    return await asyncio.to_thread(_alterar_numero_sync, servidor, banco, codigo_duplicata, novo_numero)
+
+
+async def notas_disponiveis(servidor: str, banco: str, codigo_duplicata: int) -> dict:
+    return await asyncio.to_thread(_notas_disponiveis_sync, servidor, banco, codigo_duplicata)
+
+
+async def vincular_nf(servidor: str, banco: str, codigo_duplicata: int, nf_fiscal: int) -> dict:
+    return await asyncio.to_thread(_vincular_nf_sync, servidor, banco, codigo_duplicata, nf_fiscal)
+
+
+async def desvincular_nf(servidor: str, banco: str, codigo_duplicata: int, nf_fiscal: int) -> dict:
+    return await asyncio.to_thread(_desvincular_nf_sync, servidor, banco, codigo_duplicata, nf_fiscal)
+
+
 async def list_tipos_mov(servidor: str, banco: str) -> dict:
     return await asyncio.to_thread(_list_tipos_mov_sync, servidor, banco)
+
+
+async def emitir_recibo(
+    servidor: str, banco: str, *, recebemos: str, valor: float, referente: str,
+    data_recibo: str | None = None, assinatura: str | None = None,
+) -> dict:
+    return await asyncio.to_thread(
+        _emitir_recibo_sync, servidor, banco, recebemos=recebemos, valor=valor,
+        referente=referente, data_recibo=data_recibo, assinatura=assinatura,
+    )

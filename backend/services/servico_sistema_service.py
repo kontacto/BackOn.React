@@ -36,7 +36,24 @@ from typing import Optional
 
 from db.connection import _open_conn
 
-_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+# Achado real (Adriana/suporte, 2026-08-28, instalação real "KONTACTO
+# APP"): `.resolve()` aqui RESOLVE a junction `current-backend` pro seu
+# alvo real (`releases\<commit>\backend`) — em qualquer instalação real
+# (ver `bootstrap-install.ps1`/"Guia de Instalacao.md"), o backend roda
+# de DENTRO da junction `<InstallDir>\current-backend`, cujo pai é
+# `<InstallDir>` (onde `updater\` mora de verdade, ao lado de
+# `current-backend`/`current-frontend` — nunca dentro de `releases\`).
+# Resolver a junction troca `<InstallDir>` por `<InstallDir>\releases\
+# <commit>`, e a conta de `_UPDATER_DIR` abaixo erra o caminho de
+# `apply_update.ps1` (erro real reportado: "F:\BackOn\releases\updater\
+# apply_update.ps1" não existe — o real seria "F:\BackOn\updater\...").
+# `bootstrap-install.ps1` registra a Tarefa Agendada rodando DE DENTRO da
+# junction exatamente pra manter esse caminho ESTÁVEL entre atualizações
+# — nunca resolver essa junction é o comportamento correto, não um
+# detalhe incidental. Só funcionava sem bug no repositório de
+# desenvolvimento porque lá não existe junction nenhuma (backend/ e
+# updater/ já são pastas irmãs de verdade).
+_BACKEND_ROOT = Path(__file__).parent.parent
 _UPDATER_DIR = _BACKEND_ROOT.parent / "updater"
 _APPLY_SCRIPT = _UPDATER_DIR / "apply_update.ps1"
 _UPDATER_CONFIG_PATH = _UPDATER_DIR / "config.json"
@@ -58,6 +75,22 @@ _CONFIG_PADRAO = {
     "pendente_desde": None,
     "ultima_verificacao": None,
     "ultimo_erro": None,
+    "manutencao_indices_ativo": True,
+    "manutencao_indices_dias_semana": "0,1,2,3,4,5,6",
+    "manutencao_indices_hora": "03:00",
+    "manutencao_indices_ultima_execucao": None,
+    "manutencao_indices_ultimo_resultado": None,
+    # Extensão 2026-08-31 (Áureo, análise DBA de RJPNEUS-TESTE) — ver
+    # services/manutencao_indices_service.py pro racional completo de
+    # cada campo novo.
+    "manutencao_indices_orcamento_minutos": 120,
+    "checkdb_ativo": True,
+    "checkdb_dias_semana": "0",
+    "checkdb_hora": "04:00",
+    "checkdb_ultima_execucao": None,
+    "checkdb_ultimo_resultado": None,
+    "espaco_pct_usado": None,
+    "espaco_verificado_em": None,
 }
 
 
@@ -84,7 +117,12 @@ def _ensure_servico_sistema_atualizacao_table(cur) -> None:
         "commit_pendente NVARCHAR(40) NULL, "
         "pendente_desde DATETIME NULL, "
         "ultima_verificacao DATETIME NULL, "
-        "ultimo_erro NVARCHAR(500) NULL)"
+        "ultimo_erro NVARCHAR(500) NULL, "
+        "manutencao_indices_ativo BIT NOT NULL DEFAULT 1, "
+        "manutencao_indices_dias_semana NVARCHAR(20) NOT NULL DEFAULT '0,1,2,3,4,5,6', "
+        "manutencao_indices_hora NVARCHAR(5) NOT NULL DEFAULT '03:00', "
+        "manutencao_indices_ultima_execucao DATETIME NULL, "
+        "manutencao_indices_ultimo_resultado NVARCHAR(500) NULL)"
     )
     # `canal` adicionado 2026-08-28 (Homologação/Produção) — instalação já
     # existente (ex.: a máquina real do Juan/Kontacto) pode ter a tabela
@@ -107,6 +145,85 @@ def _ensure_servico_sistema_atualizacao_table(cur) -> None:
         "AND name = 'cel_suporte') "
         "ALTER TABLE servico_sistema_atualizacao ADD cel_suporte NVARCHAR(20) NULL"
     )
+    # Manutenção automática de índices/estatística (2026-08-28) — ver
+    # services/manutencao_indices_service.py. Config mora aqui porque é a
+    # mesma ideia de "config de serviço em background desta instalação"
+    # que a Atualização já é, não uma tabela nova. `dias_semana` segue a
+    # mesma convenção 0=domingo..6=sábado já usada em `Web_DiasSemana`
+    # (produto_completo_service.py). `ativo` liga por padrão (decisão do
+    # usuário: roda automático em todo banco) — existe só como "desliga
+    # de emergência" por instalação, sem precisar mexer em código.
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'manutencao_indices_ativo') "
+        "ALTER TABLE servico_sistema_atualizacao ADD manutencao_indices_ativo BIT NOT NULL DEFAULT 1"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'manutencao_indices_dias_semana') "
+        "ALTER TABLE servico_sistema_atualizacao ADD manutencao_indices_dias_semana NVARCHAR(20) NOT NULL DEFAULT '0,1,2,3,4,5,6'"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'manutencao_indices_hora') "
+        "ALTER TABLE servico_sistema_atualizacao ADD manutencao_indices_hora NVARCHAR(5) NOT NULL DEFAULT '03:00'"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'manutencao_indices_ultima_execucao') "
+        "ALTER TABLE servico_sistema_atualizacao ADD manutencao_indices_ultima_execucao DATETIME NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'manutencao_indices_ultimo_resultado') "
+        "ALTER TABLE servico_sistema_atualizacao ADD manutencao_indices_ultimo_resultado NVARCHAR(500) NULL"
+    )
+    # Extensão 2026-08-31 (Áureo, análise DBA de RJPNEUS-TESTE — ver
+    # PENDENCIAS.md) — 4 recursos novos de manutenção, ver
+    # services/manutencao_indices_service.py pro racional completo:
+    # orçamento de tempo/circuit breaker pro REBUILD, agenda própria de
+    # `DBCC CHECKDB`, e cache da última checagem de espaço vs. teto do
+    # SQL Server Express (10GB).
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'manutencao_indices_orcamento_minutos') "
+        "ALTER TABLE servico_sistema_atualizacao ADD manutencao_indices_orcamento_minutos INT NOT NULL DEFAULT 120"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'checkdb_ativo') "
+        "ALTER TABLE servico_sistema_atualizacao ADD checkdb_ativo BIT NOT NULL DEFAULT 1"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'checkdb_dias_semana') "
+        "ALTER TABLE servico_sistema_atualizacao ADD checkdb_dias_semana NVARCHAR(20) NOT NULL DEFAULT '0'"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'checkdb_hora') "
+        "ALTER TABLE servico_sistema_atualizacao ADD checkdb_hora NVARCHAR(5) NOT NULL DEFAULT '04:00'"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'checkdb_ultima_execucao') "
+        "ALTER TABLE servico_sistema_atualizacao ADD checkdb_ultima_execucao DATETIME NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'checkdb_ultimo_resultado') "
+        "ALTER TABLE servico_sistema_atualizacao ADD checkdb_ultimo_resultado NVARCHAR(500) NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'espaco_pct_usado') "
+        "ALTER TABLE servico_sistema_atualizacao ADD espaco_pct_usado FLOAT NULL"
+    )
+    cur.execute(
+        "IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('servico_sistema_atualizacao') "
+        "AND name = 'espaco_verificado_em') "
+        "ALTER TABLE servico_sistema_atualizacao ADD espaco_verificado_em DATETIME NULL"
+    )
 
 
 def _get_config_sync(servidor: str, banco: str) -> dict:
@@ -120,7 +237,11 @@ def _get_config_sync(servidor: str, banco: str) -> dict:
         conn.commit()
         cur.execute(
             "SELECT TOP 1 manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte, "
-            "commit_atual, commit_anterior, commit_pendente, pendente_desde, ultima_verificacao, ultimo_erro "
+            "commit_atual, commit_anterior, commit_pendente, pendente_desde, ultima_verificacao, ultimo_erro, "
+            "manutencao_indices_ativo, manutencao_indices_dias_semana, manutencao_indices_hora, "
+            "manutencao_indices_ultima_execucao, manutencao_indices_ultimo_resultado, "
+            "manutencao_indices_orcamento_minutos, checkdb_ativo, checkdb_dias_semana, checkdb_hora, "
+            "checkdb_ultima_execucao, checkdb_ultimo_resultado, espaco_pct_usado, espaco_verificado_em "
             "FROM servico_sistema_atualizacao ORDER BY codigo DESC"
         )
         row = cur.fetchone()
@@ -166,6 +287,45 @@ def _save_config_sync(servidor: str, banco: str, dados: dict) -> dict:
     # apoio_fiscal_service.py::notificar_rejeicao_sync).
     cel_suporte = (dados.get("cel_suporte") or "").strip()
 
+    # Manutenção automática de índices (2026-08-28) — ver
+    # services/manutencao_indices_service.py pro que essas 3 colunas
+    # controlam. Validação frouxa de propósito (mesmo espírito de
+    # `cel_suporte` acima): formato errado cai no default seguro em vez
+    # de bloquear o Gravar por um campo que não é crítico.
+    manutencao_ativo = bool(dados.get("manutencao_indices_ativo", True))
+    dias_raw = (dados.get("manutencao_indices_dias_semana") or "").strip()
+    dias_validos = {p.strip() for p in dias_raw.split(",") if p.strip().isdigit() and 0 <= int(p.strip()) <= 6}
+    manutencao_dias = ",".join(sorted(dias_validos, key=int)) if dias_validos else "0,1,2,3,4,5,6"
+    hora_raw = (dados.get("manutencao_indices_hora") or "").strip()
+    manutencao_hora = "03:00"
+    if len(hora_raw) == 5 and hora_raw[2] == ":" and hora_raw[:2].isdigit() and hora_raw[3:].isdigit():
+        h, m = int(hora_raw[:2]), int(hora_raw[3:])
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            manutencao_hora = hora_raw
+
+    # Extensão 2026-08-31 (Áureo) — orçamento de tempo (circuit breaker
+    # do REBUILD) + agenda própria de CHECKDB. Mesma validação frouxa dos
+    # campos de manutenção acima: formato errado cai no default seguro,
+    # nunca bloqueia o Gravar por um campo não-crítico.
+    raw_orcamento = dados.get("manutencao_indices_orcamento_minutos")
+    try:
+        orcamento_minutos = int(raw_orcamento) if raw_orcamento not in (None, "") else 120
+        if orcamento_minutos < 1:
+            orcamento_minutos = 120
+    except (TypeError, ValueError):
+        orcamento_minutos = 120
+
+    checkdb_ativo = bool(dados.get("checkdb_ativo", True))
+    checkdb_dias_raw = (dados.get("checkdb_dias_semana") or "").strip()
+    checkdb_dias_validos = {p.strip() for p in checkdb_dias_raw.split(",") if p.strip().isdigit() and 0 <= int(p.strip()) <= 6}
+    checkdb_dias = ",".join(sorted(checkdb_dias_validos, key=int)) if checkdb_dias_validos else "0"
+    checkdb_hora_raw = (dados.get("checkdb_hora") or "").strip()
+    checkdb_hora = "04:00"
+    if len(checkdb_hora_raw) == 5 and checkdb_hora_raw[2] == ":" and checkdb_hora_raw[:2].isdigit() and checkdb_hora_raw[3:].isdigit():
+        h, m = int(checkdb_hora_raw[:2]), int(checkdb_hora_raw[3:])
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            checkdb_hora = checkdb_hora_raw
+
     try:
         conn = _open_conn(servidor, banco)
     except Exception as e:
@@ -179,14 +339,23 @@ def _save_config_sync(servidor: str, banco: str, dados: dict) -> dict:
         if existente:
             cur.execute(
                 "UPDATE servico_sistema_atualizacao SET manifest_url=%s, pasta_backend=%s, "
-                "pasta_frontend=%s, intervalo_minutos=%s, canal=%s, cel_suporte=%s WHERE codigo=%s",
-                (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte, existente["codigo"]),
+                "pasta_frontend=%s, intervalo_minutos=%s, canal=%s, cel_suporte=%s, "
+                "manutencao_indices_ativo=%s, manutencao_indices_dias_semana=%s, manutencao_indices_hora=%s, "
+                "manutencao_indices_orcamento_minutos=%s, checkdb_ativo=%s, checkdb_dias_semana=%s, checkdb_hora=%s "
+                "WHERE codigo=%s",
+                (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte,
+                 manutencao_ativo, manutencao_dias, manutencao_hora,
+                 orcamento_minutos, checkdb_ativo, checkdb_dias, checkdb_hora, existente["codigo"]),
             )
         else:
             cur.execute(
-                "INSERT INTO servico_sistema_atualizacao (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte) "
-                "VALUES (%s,%s,%s,%s,%s,%s)",
-                (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte),
+                "INSERT INTO servico_sistema_atualizacao (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte, "
+                "manutencao_indices_ativo, manutencao_indices_dias_semana, manutencao_indices_hora, "
+                "manutencao_indices_orcamento_minutos, checkdb_ativo, checkdb_dias_semana, checkdb_hora) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte,
+                 manutencao_ativo, manutencao_dias, manutencao_hora,
+                 orcamento_minutos, checkdb_ativo, checkdb_dias, checkdb_hora),
             )
         conn.commit()
         cur.close()
@@ -239,7 +408,11 @@ def _escrever_config_ps1(dados: dict) -> None:
     `apply_update.ps1` já sabe ler (ver a extensão do script — campos
     `currentBackendDir`/`currentFrontendDir` novos, opcionais)."""
     pasta_backend = dados.get("pasta_backend") or ""
-    install_dir = str(Path(pasta_backend).resolve().parent) if pasta_backend else str(_UPDATER_DIR)
+    # Mesmo achado do módulo (ver comentário em `_BACKEND_ROOT` acima) —
+    # `pasta_backend` é a junction `current-backend`; `.resolve()` a
+    # trocaria pelo alvo real (`releases\<commit>\backend`), errando o
+    # `installDir` gravado em `config.json`.
+    install_dir = str(Path(pasta_backend).parent) if pasta_backend else str(_UPDATER_DIR)
     # `canal` traduzido pro texto que `apply_update.ps1` espera
     # (`Homologacao`/`Producao`) — ver `Invoke-Download` nesse script pro
     # ponto que lê isso e decide se respeita `manifest.estavel`.

@@ -5,8 +5,9 @@ from typing import Optional
 from fastapi import APIRouter, Request
 
 from models.schemas import (
-    ContasPagarAvulsaRequest, ContasPagarBaixaRequest, ContasPagarCancelarBaixaRequest,
-    ContasPagarEditarParcelaRequest, ContasPagarExcluirRequest, ContasPagarLoteRequest,
+    ContasPagarAlterarNumeroRequest, ContasPagarAvulsaRequest, ContasPagarBaixaRequest,
+    ContasPagarCancelarBaixaRequest, ContasPagarDesvincularNfRequest, ContasPagarEditarParcelaRequest,
+    ContasPagarExcluirRequest, ContasPagarLoteRequest, ContasPagarVincularNfRequest,
 )
 from services import contas_pagar_service, log_auditoria_service
 
@@ -21,8 +22,16 @@ def _ip(request: Request) -> Optional[str]:
 async def listar(
     servidor: str, banco: str, situacao: Optional[str] = None, fornecedor: Optional[int] = None,
     busca: Optional[str] = None, data_ini: Optional[str] = None, data_fim: Optional[str] = None,
+    duplicata_num: Optional[int] = None, desmembramento: Optional[str] = None, valor: Optional[float] = None,
+    numero_boleto: Optional[float] = None, num_doc_pag: Optional[str] = None,
+    emissao_ini: Optional[str] = None, emissao_fim: Optional[str] = None,
 ):
-    filtros = {"situacao": situacao, "fornecedor": fornecedor, "busca": busca, "data_ini": data_ini, "data_fim": data_fim}
+    filtros = {
+        "situacao": situacao, "fornecedor": fornecedor, "busca": busca, "data_ini": data_ini, "data_fim": data_fim,
+        "duplicata_num": duplicata_num, "desmembramento": desmembramento, "valor": valor,
+        "numero_boleto": numero_boleto, "num_doc_pag": num_doc_pag,
+        "emissao_ini": emissao_ini, "emissao_fim": emissao_fim,
+    }
     return await contas_pagar_service.listar(servidor, banco, filtros)
 
 
@@ -126,6 +135,53 @@ async def excluir(req: ContasPagarExcluirRequest, request: Request):
             usuario=req.usuario_alteracao, classe=req.classe,
             referencia=str(req.codigo_duplicata),
             descricao="Exclusão de duplicata a pagar",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.get("/contas-pagar/{codigo}/notas-disponiveis")
+async def notas_disponiveis(codigo: int, servidor: str, banco: str):
+    return await contas_pagar_service.notas_disponiveis(servidor, banco, codigo)
+
+
+@router.post("/contas-pagar/vincular-nf")
+async def vincular_nf(req: ContasPagarVincularNfRequest, request: Request):
+    result = await contas_pagar_service.vincular_nf(req.servidor, req.banco, req.codigo_duplicata, req.nf_fiscal)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="CONTAS_PAGAR", comando="GRAVAR",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(req.codigo_duplicata),
+            descricao=f"Nota Fiscal {req.nf_fiscal} vinculada à duplicata",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/contas-pagar/desvincular-nf")
+async def desvincular_nf(req: ContasPagarDesvincularNfRequest, request: Request):
+    result = await contas_pagar_service.desvincular_nf(req.servidor, req.banco, req.codigo_duplicata, req.nf_fiscal)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="CONTAS_PAGAR", comando="GRAVAR",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(req.codigo_duplicata),
+            descricao=f"Nota Fiscal {req.nf_fiscal} desvinculada da duplicata",
+            ip_origem=_ip(request), plataforma=req.plataforma,
+        )
+    return result
+
+
+@router.post("/contas-pagar/alterar-numero")
+async def alterar_numero(req: ContasPagarAlterarNumeroRequest, request: Request):
+    result = await contas_pagar_service.alterar_numero(req.servidor, req.banco, req.codigo_duplicata, req.novo_numero)
+    if result.get("success"):
+        await log_auditoria_service.registrar_log(
+            req.servidor, req.banco, tela="CONTAS_PAGAR", comando="GRAVAR",
+            usuario=req.usuario_alteracao, classe=req.classe,
+            referencia=str(req.codigo_duplicata),
+            descricao=f"Número da duplicata alterado para {req.novo_numero}",
             ip_origem=_ip(request), plataforma=req.plataforma,
         )
     return result

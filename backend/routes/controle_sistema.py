@@ -126,8 +126,8 @@ async def get_controle_sistema(servidor: str, banco: str):
 
 @router.post("/controle-sistema")
 async def save_controle_sistema(req: SalvarControleRequest, request: Request):
-    antes_c = await log_auditoria_service.get_row_by_pk(req.servidor, req.banco, "controle", "empresa", controle_sistema_service.EMPRESA)
-    antes_a = await log_auditoria_service.get_row_by_pk(req.servidor, req.banco, "controle_aux", "empresa_aux", controle_sistema_service.EMPRESA)
+    antes_c = await controle_sistema_service.get_row_sem_filtro(req.servidor, req.banco, "controle")
+    antes_a = await controle_sistema_service.get_row_sem_filtro(req.servidor, req.banco, "controle_aux")
     result = await controle_sistema_service.save_controle_sistema(req.servidor, req.banco, req.dados)
     if result.get("success"):
         campos = (
@@ -145,7 +145,7 @@ async def save_controle_sistema(req: SalvarControleRequest, request: Request):
 
 @router.post("/controle-sistema/nf-principal")
 async def save_nf_principal(req: SalvarGrupoRequest, request: Request):
-    antes = await log_auditoria_service.get_row_by_pk(req.servidor, req.banco, "controle", "empresa", controle_sistema_service.EMPRESA)
+    antes = await controle_sistema_service.get_row_sem_filtro(req.servidor, req.banco, "controle")
     result = await controle_sistema_service.save_nf_principal(req.servidor, req.banco, req.dados)
     if result.get("success"):
         campos = log_auditoria_service.diff_campos(antes, req.dados, controle_sistema_service.CAMPOS_NF_PRINCIPAL)
@@ -156,7 +156,7 @@ async def save_nf_principal(req: SalvarGrupoRequest, request: Request):
 
 @router.post("/controle-sistema/nfce-numeracao")
 async def save_nfce_numeracao(req: SalvarGrupoRequest, request: Request):
-    antes = await log_auditoria_service.get_row_by_pk(req.servidor, req.banco, "controle_aux", "empresa_aux", controle_sistema_service.EMPRESA)
+    antes = await controle_sistema_service.get_row_sem_filtro(req.servidor, req.banco, "controle_aux")
     result = await controle_sistema_service.save_nfce_numeracao(req.servidor, req.banco, req.dados)
     if result.get("success"):
         campos = log_auditoria_service.diff_campos(antes, req.dados, controle_sistema_service.CAMPOS_NFCE_NUMERACAO)
@@ -167,7 +167,7 @@ async def save_nfce_numeracao(req: SalvarGrupoRequest, request: Request):
 
 @router.post("/controle-sistema/mdfe-numeracao")
 async def save_mdfe_numeracao(req: SalvarGrupoRequest, request: Request):
-    antes = await log_auditoria_service.get_row_by_pk(req.servidor, req.banco, "controle_aux", "empresa_aux", controle_sistema_service.EMPRESA)
+    antes = await controle_sistema_service.get_row_sem_filtro(req.servidor, req.banco, "controle_aux")
     result = await controle_sistema_service.save_mdfe_numeracao(req.servidor, req.banco, req.dados)
     if result.get("success"):
         campos = log_auditoria_service.diff_campos(antes, req.dados, controle_sistema_service.CAMPOS_MDFE_NUMERACAO)

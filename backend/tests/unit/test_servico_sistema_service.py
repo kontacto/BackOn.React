@@ -62,11 +62,12 @@ class TestEnsureTable:
                 queries.append(q)
 
         svc._ensure_servico_sistema_atualizacao_table(Cur())
-        # 3 statements: CREATE TABLE (idempotente, instalação nova) + ALTER
-        # TABLE ADD canal + ALTER TABLE ADD cel_suporte (idempotentes,
-        # cobrem instalação já existente sem as colunas novas — ver
-        # comentário no service, 2026-08-28).
-        assert len(queries) == 3
+        # 16 statements: CREATE TABLE (idempotente, instalação nova) + ALTER
+        # TABLE ADD canal + cel_suporte + as 5 colunas de manutenção de
+        # índices (2026-08-28) + as 8 colunas da extensão 2026-08-31
+        # (orçamento de tempo, CHECKDB, espaço vs. teto Express) —
+        # idempotentes, cobrem instalação já existente sem as colunas novas.
+        assert len(queries) == 16
         assert "servico_sistema_atualizacao" in queries[0]
         assert "IF NOT EXISTS" in queries[0]
 
@@ -172,7 +173,7 @@ class TestSaveConfig:
         })
         assert r["success"] is True
         insert_params = [p for q, p in cur.queries if q.strip().upper().startswith("INSERT")][0]
-        assert insert_params[-2] == "P"
+        assert insert_params[4] == "P"  # canal — índice fixo, não mais o penúltimo (colunas de manutenção de índices vieram depois)
 
     def test_canal_ausente_default_homologacao(self, monkeypatch, tmp_path):
         cur = FakeCursor(one=[None])
@@ -186,7 +187,7 @@ class TestSaveConfig:
         })
         assert r["success"] is True
         insert_params = [p for q, p in cur.queries if q.strip().upper().startswith("INSERT")][0]
-        assert insert_params[-2] == "H"
+        assert insert_params[4] == "H"  # canal — índice fixo, ver comentário acima
 
     def test_atualiza_quando_ja_existe_linha(self, monkeypatch, tmp_path):
         cur = FakeCursor(one=[{"codigo": 1}])
@@ -201,6 +202,61 @@ class TestSaveConfig:
         assert r["success"] is True
         update_q = [q for q, p in cur.queries if q.strip().upper().startswith("UPDATE")]
         assert len(update_q) == 1
+
+    def test_orcamento_e_checkdb_default_seguro_quando_ausentes(self, monkeypatch, tmp_path):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_CONN_FILE", tmp_path / "updater_conn.json")
+        r = svc._save_config_sync("srv", "bd", {
+            "manifest_url": "https://x/manifest.json?sig=abc",
+            "pasta_backend": "C:\\BackOn\\current-backend",
+            "pasta_frontend": "C:\\BackOn\\current-frontend",
+            "intervalo_minutos": 30,
+        })
+        assert r["success"] is True
+        insert_params = [p for q, p in cur.queries if q.strip().upper().startswith("INSERT")][0]
+        # ordem: manifest,pasta_backend,pasta_frontend,intervalo,canal,cel_suporte,
+        # manut_ativo,manut_dias,manut_hora,orcamento,checkdb_ativo,checkdb_dias,checkdb_hora
+        assert insert_params[9] == 120
+        assert insert_params[10] is True
+        assert insert_params[11] == "0"
+        assert insert_params[12] == "04:00"
+
+    def test_grava_orcamento_e_checkdb_configurados(self, monkeypatch, tmp_path):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_CONN_FILE", tmp_path / "updater_conn.json")
+        r = svc._save_config_sync("srv", "bd", {
+            "manifest_url": "https://x/manifest.json?sig=abc",
+            "pasta_backend": "C:\\BackOn\\current-backend",
+            "pasta_frontend": "C:\\BackOn\\current-frontend",
+            "intervalo_minutos": 30,
+            "manutencao_indices_orcamento_minutos": 45,
+            "checkdb_ativo": False,
+            "checkdb_dias_semana": "0,3",
+            "checkdb_hora": "05:30",
+        })
+        assert r["success"] is True
+        insert_params = [p for q, p in cur.queries if q.strip().upper().startswith("INSERT")][0]
+        assert insert_params[9] == 45
+        assert insert_params[10] is False
+        assert insert_params[11] == "0,3"
+        assert insert_params[12] == "05:30"
+
+    def test_orcamento_invalido_cai_no_default(self, monkeypatch, tmp_path):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_CONN_FILE", tmp_path / "updater_conn.json")
+        r = svc._save_config_sync("srv", "bd", {
+            "manifest_url": "https://x/manifest.json?sig=abc",
+            "pasta_backend": "C:\\BackOn\\current-backend",
+            "pasta_frontend": "C:\\BackOn\\current-frontend",
+            "intervalo_minutos": 30,
+            "manutencao_indices_orcamento_minutos": "abc",
+        })
+        assert r["success"] is True
+        insert_params = [p for q, p in cur.queries if q.strip().upper().startswith("INSERT")][0]
+        assert insert_params[9] == 120
 
 
 class TestGetStatus:
