@@ -111,6 +111,99 @@ class TestGetConfig:
         assert "Falha conexão" in r["message"]
 
 
+class TestReconciliaCommitAtual:
+    # "Versão atual" ficava sempre em branco — achado real 2026-09-01
+    # (máquina "SUPORTE"/Adriana): `commit_atual` era coluna/campo exposto
+    # na tela, mas nunca gravado em lugar nenhum (Apply/Rollback rodam
+    # DETACHED, o Python nunca sabe quando terminam). Corrigido lendo
+    # `state.json` (`_ler_commit_atual`) e sincronizando o banco toda vez
+    # que a config é carregada.
+    def test_sincroniza_quando_state_diverge_do_banco(self, monkeypatch):
+        row = {"codigo": 1, "manifest_url": "x", "pasta_backend": "b", "pasta_frontend": "f",
+               "intervalo_minutos": 30, "canal": "H", "cel_suporte": "",
+               "commit_atual": None, "commit_anterior": None, "commit_pendente": None,
+               "pendente_desde": None, "ultima_verificacao": None, "ultimo_erro": None}
+        cur = FakeCursor(one=[row])
+        conn = _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_ler_commit_atual", lambda: "a8e8fcd")
+        r = svc._get_config_sync("srv", "bd")
+        assert r["success"] is True
+        assert r["dados"]["commit_atual"] == "a8e8fcd"
+        assert r["dados"]["commit_anterior"] is None
+        assert conn.committed is True
+        update = [q for q, p in cur.queries if q.startswith("UPDATE servico_sistema_atualizacao SET commit_atual")]
+        assert len(update) == 1
+
+    def test_desloca_commit_anterior_ao_sincronizar(self, monkeypatch):
+        row = {"codigo": 1, "manifest_url": "x", "pasta_backend": "b", "pasta_frontend": "f",
+               "intervalo_minutos": 30, "canal": "H", "cel_suporte": "",
+               "commit_atual": "aaa1111", "commit_anterior": None, "commit_pendente": None,
+               "pendente_desde": None, "ultima_verificacao": None, "ultimo_erro": None}
+        cur = FakeCursor(one=[row])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_ler_commit_atual", lambda: "bbb2222")
+        r = svc._get_config_sync("srv", "bd")
+        assert r["dados"]["commit_atual"] == "bbb2222"
+        assert r["dados"]["commit_anterior"] == "aaa1111"
+
+    def test_nao_atualiza_quando_ja_esta_sincronizado(self, monkeypatch):
+        row = {"codigo": 1, "manifest_url": "x", "pasta_backend": "b", "pasta_frontend": "f",
+               "intervalo_minutos": 30, "canal": "H", "cel_suporte": "",
+               "commit_atual": "a8e8fcd", "commit_anterior": None, "commit_pendente": None,
+               "pendente_desde": None, "ultima_verificacao": None, "ultimo_erro": None}
+        cur = FakeCursor(one=[row])
+        conn = _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_ler_commit_atual", lambda: "a8e8fcd")
+        r = svc._get_config_sync("srv", "bd")
+        assert r["dados"]["commit_atual"] == "a8e8fcd"
+        update = [q for q, p in cur.queries if q.startswith("UPDATE servico_sistema_atualizacao SET commit_atual")]
+        assert len(update) == 0
+
+    def test_sem_state_json_nao_mexe_no_banco(self, monkeypatch):
+        row = {"codigo": 1, "manifest_url": "x", "pasta_backend": "b", "pasta_frontend": "f",
+               "intervalo_minutos": 30, "canal": "H", "cel_suporte": "",
+               "commit_atual": None, "commit_anterior": None, "commit_pendente": None,
+               "pendente_desde": None, "ultima_verificacao": None, "ultimo_erro": None}
+        cur = FakeCursor(one=[row])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_ler_commit_atual", lambda: None)
+        r = svc._get_config_sync("srv", "bd")
+        assert r["dados"]["commit_atual"] is None
+        update = [q for q, p in cur.queries if q.startswith("UPDATE servico_sistema_atualizacao SET commit_atual")]
+        assert len(update) == 0
+
+    def test_sem_linha_no_banco_nao_quebra(self, monkeypatch):
+        cur = FakeCursor(one=[None])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_ler_commit_atual", lambda: "a8e8fcd")
+        r = svc._get_config_sync("srv", "bd")
+        assert r["success"] is True
+        assert r["dados"]["commit_atual"] is None
+
+    def test_resposta_nunca_expoe_codigo_interno(self, monkeypatch):
+        row = {"codigo": 1, "manifest_url": "x", "pasta_backend": "b", "pasta_frontend": "f",
+               "intervalo_minutos": 30, "canal": "H", "cel_suporte": "",
+               "commit_atual": "aaa1111", "commit_anterior": None, "commit_pendente": None,
+               "pendente_desde": None, "ultima_verificacao": None, "ultimo_erro": None}
+        cur = FakeCursor(one=[row])
+        _patch(monkeypatch, cur)
+        monkeypatch.setattr(svc, "_ler_commit_atual", lambda: None)
+        r = svc._get_config_sync("srv", "bd")
+        assert "codigo" not in r["dados"]
+
+
+class TestLerCommitAtual:
+    def test_le_campo_commit_do_state_json(self, monkeypatch, tmp_path):
+        state_path = tmp_path / "state.json"
+        state_path.write_text(json.dumps({"commit": "a8e8fcd", "pendingCommit": None}), encoding="utf-8-sig")
+        monkeypatch.setattr(svc, "_UPDATER_STATE_PATH", state_path)
+        assert svc._ler_commit_atual() == "a8e8fcd"
+
+    def test_sem_arquivo_devolve_none(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(svc, "_UPDATER_STATE_PATH", tmp_path / "nao-existe.json")
+        assert svc._ler_commit_atual() is None
+
+
 class TestSaveConfig:
     def test_rejeita_intervalo_abaixo_do_minimo(self, monkeypatch):
         r = svc._save_config_sync("srv", "bd", {"intervalo_minutos": 2})

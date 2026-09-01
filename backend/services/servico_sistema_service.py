@@ -236,7 +236,7 @@ def _get_config_sync(servidor: str, banco: str) -> dict:
         _ensure_servico_sistema_atualizacao_table(cur)
         conn.commit()
         cur.execute(
-            "SELECT TOP 1 manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte, "
+            "SELECT TOP 1 codigo, manifest_url, pasta_backend, pasta_frontend, intervalo_minutos, canal, cel_suporte, "
             "commit_atual, commit_anterior, commit_pendente, pendente_desde, ultima_verificacao, ultimo_erro, "
             "manutencao_indices_ativo, manutencao_indices_dias_semana, manutencao_indices_hora, "
             "manutencao_indices_ultima_execucao, manutencao_indices_ultimo_resultado, "
@@ -245,9 +245,36 @@ def _get_config_sync(servidor: str, banco: str) -> dict:
             "FROM servico_sistema_atualizacao ORDER BY codigo DESC"
         )
         row = cur.fetchone()
+        dados = _row_to_dict(row) if row else dict(_CONFIG_PADRAO)
+        dados.pop("codigo", None)
+
+        # Reconciliação com `state.json` — achado real 2026-09-01 (máquina
+        # "SUPORTE"/Adriana): `commit_atual`/`commit_anterior` eram colunas
+        # da tabela, expostas na tela ("Versão atual"), mas NUNCA gravadas
+        # em lugar nenhum do código — `-Mode ApplyPending`/`Rollback`
+        # rodam como subprocesso DETACHED (ver `_disparar_ps1_detached`),
+        # o Python nunca fica sabendo quando terminam pra atualizar o
+        # banco. "Versão atual" ficava sempre em branco, mesmo depois de
+        # uma atualização aplicada com sucesso (inclusive aplicada
+        # manualmente via `apply_update.ps1 -Mode Full` direto no
+        # PowerShell, sem passar pela tela). Corrigido lendo o valor real
+        # (`state.json`'s campo `commit`, a mesma fonte de verdade que
+        # `apply_update.ps1` já usa) toda vez que a config é carregada —
+        # sincroniza o banco se estiver desatualizado, sem depender de
+        # capturar o momento exato em que o subprocesso termina.
+        commit_local = _ler_commit_atual()
+        if row and commit_local and commit_local != dados.get("commit_atual"):
+            commit_anterior = dados.get("commit_atual")
+            cur.execute(
+                "UPDATE servico_sistema_atualizacao SET commit_atual=%s, commit_anterior=%s WHERE codigo=%s",
+                (commit_local, commit_anterior, row["codigo"]),
+            )
+            conn.commit()
+            dados["commit_atual"] = commit_local
+            dados["commit_anterior"] = commit_anterior
+
         cur.close()
         conn.close()
-        dados = _row_to_dict(row) if row else dict(_CONFIG_PADRAO)
         return {"success": True, "dados": dados}
     except Exception as e:
         try:
@@ -476,7 +503,7 @@ def _reverter_atualizacao_sync(servidor: str, banco: str) -> dict:
     return {"success": True, "message": "Reversão iniciada — o sistema vai reiniciar em instantes."}
 
 
-def _ler_pending_commit() -> Optional[str]:
+def _ler_updater_state() -> Optional[dict]:
     if not _UPDATER_STATE_PATH.is_file():
         return None
     try:
@@ -488,10 +515,25 @@ def _ler_pending_commit() -> Optional[str]:
         # exceção era engolida em silêncio — o commit pendente nunca era
         # visto pelo lado Python mesmo com o download tendo funcionado.
         # "utf-8-sig" remove o BOM se presente e funciona igual sem ele.
-        state = json.loads(_UPDATER_STATE_PATH.read_text(encoding="utf-8-sig"))
-        return state.get("pendingCommit")
+        return json.loads(_UPDATER_STATE_PATH.read_text(encoding="utf-8-sig"))
     except Exception:
         return None
+
+
+def _ler_pending_commit() -> Optional[str]:
+    state = _ler_updater_state()
+    return state.get("pendingCommit") if state else None
+
+
+def _ler_commit_atual() -> Optional[str]:
+    """Commit REALMENTE aplicado e rodando nesta instalação — campo
+    `commit` de `state.json` (`apply_update.ps1` é quem grava, ver
+    `$State.commit` no script). Achado real 2026-09-01 (máquina
+    "SUPORTE"/Adriana): esse valor nunca era sincronizado pro banco —
+    "Versão atual" na tela ficava sempre em branco. Ver reconciliação em
+    `_get_config_sync`."""
+    state = _ler_updater_state()
+    return state.get("commit") if state else None
 
 
 def _atualizar_status_pos_verificacao_sync(servidor: str, banco: str, commit_pendente: Optional[str], erro: Optional[str]) -> None:
